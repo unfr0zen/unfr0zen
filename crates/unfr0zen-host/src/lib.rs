@@ -10,6 +10,7 @@ pub mod flow;
 pub mod j49;
 pub mod nand;
 pub mod progress;
+pub mod update;
 pub mod usb;
 
 pub use device::{Device, WAIT_USB_BOOT_STAGE};

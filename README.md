@@ -17,6 +17,19 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 | Nest Learning Thermostat (2nd generation) | `j49` | TI AM3703 |
 | Nest Learning Thermostat (1st generation, experimental) | `diamond` | TI AM3703 |
 
+Release builds keep themselves current from that page: the window checks for a
+newer release when it starts and offers to install it next to its version, and
+`unfr0zen update` does the same for the command-line tool. On macOS the window
+replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
+commits past a tag, or local changes) never update.
+
+The thermostat's display connects to the computer through the micro-USB port on
+its back, with a cable that carries data (a charge-only cable won't work).
+MQTT, Matter and Zigbee are nestlocal's: choosing any of them installs it on the
+thermostat. With MQTT or Matter, the thermostat then reaches the broker or the
+controller over Wi-Fi, joined from its own menu (Settings → Network); the
+network doesn't need internet access.
+
 The Gen 1 Diamond path has no stock NAND or physical-unit verification. Diamond
 and j49 share the ROM identity `0451:d00e`, which is taken as j49; their app
 identities differ. Start a Gen 1 while it runs its firmware, or pass

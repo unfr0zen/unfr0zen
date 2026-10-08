@@ -12,12 +12,15 @@ mod macos_about;
 mod run;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::flow::default_data_dir;
+use unfr0zen_host::update;
 use unfr0zen_host::WAIT_USB_BOOT_STAGE;
 use unfr0zen_host::{Config, Device, PatchInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
 
@@ -81,6 +84,7 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let restart = Arc::new(AtomicBool::new(false));
     let result = eframe::run_native("unfr0zen", options, Box::new(|cc| {
         // Dark whatever the system uses: egui's widgets, and the parts the
         // OS draws (title bar, window appearance, Wayland decorations).
@@ -94,7 +98,96 @@ fn main() -> eframe::Result<()> {
         Ok(Box::new(App::default()))
     }));
     drop(instance);
+    // The new version starts once this one has let go of the instance lock.
+    if restart.load(Ordering::Relaxed) {
+        if let Err(e) = update::relaunch(update::App::Gui) {
+            log::error!("{e}");
+        }
+    }
     result
+}
+
+/// Where an update from GitHub's releases stands.
+#[derive(Clone, Default)]
+enum UpdateState {
+    #[default]
+    None,
+    Available(update::Available),
+    Installing(String),
+    Installed(String),
+    Failed(String),
+}
+
+/// The update check made at start, and the install it can lead to; both on
+/// background threads, so the window never waits on the network.
+#[derive(Default)]
+struct Updates {
+    state: Arc<Mutex<UpdateState>>,
+    restart: Arc<AtomicBool>,
+}
+
+impl Updates {
+    fn check(ctx: &egui::Context, restart: Arc<AtomicBool>) -> Updates {
+        let updates = Updates { restart, ..Updates::default() };
+        let (state, ctx) = (updates.state.clone(), ctx.clone());
+        std::thread::spawn(move || match update::check(update::App::Gui, BUILD_VERSION) {
+            Ok(Some(release)) => {
+                *state.lock().unwrap() = UpdateState::Available(release);
+                ctx.request_repaint();
+            }
+            Ok(None) => {}
+            // Offline, or the release repository unreachable: nothing to offer.
+            Err(e) => log::warn!("{e}"),
+        });
+        updates
+    }
+
+    fn install(&self, ctx: &egui::Context, release: update::Available) {
+        *self.state.lock().unwrap() = UpdateState::Installing(release.tag.clone());
+        let (state, ctx) = (self.state.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let next = match update::install(update::App::Gui, &release) {
+                Ok(()) => UpdateState::Installed(release.tag),
+                Err(e) => {
+                    log::error!("{e}");
+                    UpdateState::Failed(e.to_string())
+                }
+            };
+            *state.lock().unwrap() = next;
+            ctx.request_repaint();
+        });
+    }
+
+    /// The version row: this build's version, and what an update offers.
+    fn ui(&self, ui: &mut egui::Ui, running: bool) {
+        let state = self.state.lock().unwrap().clone();
+        match state {
+            UpdateState::None => {
+                ui.weak(BUILD_VERSION);
+            }
+            UpdateState::Available(release) if running => {
+                ui.weak(format!("{BUILD_VERSION} · {} available", release.tag));
+            }
+            UpdateState::Available(release) => {
+                if ui.link(format!("{BUILD_VERSION} · {} available, update", release.tag))
+                    .on_hover_text(&release.url).clicked() {
+                    self.install(ui.ctx(), release);
+                }
+            }
+            UpdateState::Installing(tag) => {
+                ui.weak(format!("{BUILD_VERSION} · installing {tag}…"));
+            }
+            UpdateState::Installed(tag) => {
+                if ui.link(format!("{tag} installed, restart")).clicked() {
+                    self.restart.store(true, Ordering::Relaxed);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            UpdateState::Failed(error) => {
+                ui.weak(format!("{BUILD_VERSION} · update failed")).on_hover_text(error);
+            }
+        }
+    }
 }
 
 /// The patch options the form offers, as strings the user types.
@@ -281,6 +374,7 @@ struct LogContext {
     outcome: Option<Result<String, String>>,
     /// The unit the run found: device and silicon, once read.
     device: Option<String>,
+    updates: Updates,
 }
 
 struct Row {
@@ -466,8 +560,9 @@ impl eframe::App for App {
             // is replaced with the version in the center.
             ui.allocate_ui(egui::vec2(ui.available_width(), 22.0), |ui| {
                 let rect = ui.max_rect();
+                let running = self.running();
                 if cfg!(target_os = "macos") {
-                    ui.centered_and_justified(|ui| ui.weak(BUILD_VERSION));
+                    ui.centered_and_justified(|ui| { self.updates.ui(ui, running); ui.weak(BUILD_VERSION); });
                 }
                 let button_rect = egui::Rect::from_center_size(
                     egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(24.0, 22.0));

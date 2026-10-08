@@ -14,8 +14,11 @@ hidapi = "2"
 log = "0.4"
 nusb = "0.2"
 regex = "1"
+self-replace = "1"
+self_update = { version = "1.3", default-features = false, features = ["ureq", "rustls", "github", "compression-tar-gz", "compression-zip-deflate"] }
 serialport = "4"
 sha2 = "0.10"
+tempfile = "3"
 
 
 [build-dependencies]
