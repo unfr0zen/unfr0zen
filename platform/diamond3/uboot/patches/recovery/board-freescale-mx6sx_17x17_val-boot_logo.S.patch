@@ -1,0 +1,16 @@
+diff --git a/board/freescale/mx6sx_17x17_val/boot_logo.S b/board/freescale/mx6sx_17x17_val/boot_logo.S
+new file mode 100644
+index 00000000000..310d1ce5e12
+--- /dev/null
++++ b/board/freescale/mx6sx_17x17_val/boot_logo.S
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/* The boot logo: a gzipped 24-bit BMP, from scripts/uboot_logo.py. */
++
++	.section .rodata.boot_logo, "a"
++	.balign 4
++	.global boot_logo_gz
++boot_logo_gz:
++	.incbin NEST_BOOT_LOGO
++	.global boot_logo_gz_end
++boot_logo_gz_end:

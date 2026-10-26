@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=unfr0zen
+Comment=diamond3 USB recovery
+Exec=unfr0zen
+Icon=dev.unfr0zen.gui
+Terminal=false
+Categories=Utility;
+StartupWMClass=dev.unfr0zen.gui

@@ -1,0 +1,101 @@
+diff --git a/arch/arm/dts/imx6sx-14x14-val.dts b/arch/arm/dts/imx6sx-14x14-val.dts
+index 527ee558d94..9d39010e066 100644
+--- a/arch/arm/dts/imx6sx-14x14-val.dts
++++ b/arch/arm/dts/imx6sx-14x14-val.dts
+@@ -229,9 +229,9 @@
+ &gpmi {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pinctrl_gpmi_nand_1>;
+-	status = "disabled"; /* pin conflict with qspi*/
+-	nand-on-flash-bbt;
+-	fsl,use-minimum-ecc;
++	status = "okay";
++	/* Recovery: use an in-memory BBT; never create one on flash. */
++	/* Stock Nest NAND uses legacy BCH18/512, not minimum BCH4. */
+ };
+ 
+ &i2c1 {
+@@ -381,8 +381,8 @@
+ 	pinctrl-names = "default", "gpio";
+ 	pinctrl-0 = <&pinctrl_i2c4_1>;
+ 	pinctrl-1 = <&pinctrl_i2c4_1_gpio>;
+-	scl-gpios = <&gpio1 20 GPIO_ACTIVE_HIGH>;
+-	sda-gpios = <&gpio1 21 GPIO_ACTIVE_HIGH>;
++	scl-gpios = <&gpio7 11 GPIO_ACTIVE_HIGH>;
++	sda-gpios = <&gpio7 10 GPIO_ACTIVE_HIGH>;
+ 	status = "okay";
+ };
+ 
+@@ -418,26 +418,30 @@
+ 	display = <&display0>;
+ 	status = "okay";
+ 
++	/*
++	 * The diamond3 panel, as the stock kernel's fdt@3 drives it. 24 is
++	 * RGB888 unpacked in a 32 bpp framebuffer, mxsfb's name for fdt@3's 32.
++	 */
+ 	display0: display@0 {
+-		bits-per-pixel = <16>;
++		bits-per-pixel = <24>;
+ 		bus-width = <24>;
+ 
+ 		display-timings {
+ 			native-mode = <&timing0>;
+ 			timing0: timing0 {
+-				clock-frequency = <33500000>;
+-				hactive = <800>;
+-				vactive = <480>;
+-				hback-porch = <89>;
+-				hfront-porch = <164>;
+-				vback-porch = <23>;
+-				vfront-porch = <10>;
++				clock-frequency = <19698480>;
++				hactive = <480>;
++				vactive = <640>;
++				hback-porch = <6>;
++				hfront-porch = <6>;
++				vback-porch = <6>;
++				vfront-porch = <6>;
+ 				hsync-len = <10>;
+-				vsync-len = <10>;
++				vsync-len = <2>;
+ 				hsync-active = <0>;
+ 				vsync-active = <0>;
+ 				de-active = <1>;
+-				pixelclk-active = <0>;
++				pixelclk-active = <1>;
+ 			};
+ 		};
+ 	};
+@@ -526,9 +530,8 @@
+ };
+ 
+ &usbotg1 {
+-	vbus-supply = <&reg_usb_otg1_vbus>;
+-	pinctrl-names = "default";
+-	pinctrl-0 = <&pinctrl_usbotg1_1>;
++	dr_mode = "peripheral";
++	/* Preserve board wiring; do not drive the validation-board VBUS GPIO. */
+ 	disable-over-current;
+ 	status = "okay";
+ };
+@@ -860,15 +863,15 @@
+ 	i2c4 {
+ 		pinctrl_i2c4_1: i2c4grp-1 {
+ 			fsl,pins = <
+-				MX6SX_PAD_CSI_DATA07__I2C4_SDA          0x4001b8b1
+-				MX6SX_PAD_CSI_DATA06__I2C4_SCL          0x4001b8b1
++				MX6SX_PAD_USB_H_DATA__I2C4_SDA          0x4001b8b1
++				MX6SX_PAD_USB_H_STROBE__I2C4_SCL        0x4001b8b1
+ 			>;
+ 		};
+ 
+ 		pinctrl_i2c4_1_gpio: i2c4grp-1-gpio {
+ 			fsl,pins = <
+-				MX6SX_PAD_CSI_DATA07__GPIO1_IO_21       0x1b8b1
+-				MX6SX_PAD_CSI_DATA06__GPIO1_IO_20       0x1b8b1
++				MX6SX_PAD_USB_H_DATA__GPIO7_IO_10       0x1b8b1
++				MX6SX_PAD_USB_H_STROBE__GPIO7_IO_11     0x1b8b1
+ 			>;
+ 		};
+ 

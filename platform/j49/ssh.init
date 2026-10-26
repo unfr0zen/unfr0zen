@@ -1,0 +1,25 @@
+#!/bin/sh
+# dropbear for unfr0zen's --ssh on a j49, which has no SSH server of its
+# own: root logs in with its password. The host keys live in system-config,
+# so they outlive slot updates; made once, in the background, as RSA takes a
+# while on this CPU.
+KEYS=/media/system-config/dropbear
+PIDFILE=/var/run/dropbear.pid
+DROPBEAR=/usr/sbin/dropbearmulti
+
+case "$1" in
+start)
+    (
+        mkdir -p "$KEYS"
+        for type in ed25519 ecdsa rsa; do
+            [ -s "$KEYS/dropbear_${type}_host_key" ] ||
+                "$DROPBEAR" dropbearkey -t "$type" -f "$KEYS/dropbear_${type}_host_key" > /dev/null 2>&1
+        done
+        "$DROPBEAR" dropbear -r "$KEYS/dropbear_ed25519_host_key" -r "$KEYS/dropbear_ecdsa_host_key" \
+            -r "$KEYS/dropbear_rsa_host_key" -P "$PIDFILE"
+    ) &
+    ;;
+stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")"
+    ;;
+esac

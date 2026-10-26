@@ -1,0 +1,36 @@
+--- a/ezsp-spi-serial-controller-autoselect.h
++++ b/ezsp-spi-serial-controller-autoselect.h
+@@ -69,7 +69,7 @@
+ // P[1].3 - SCLK
+ // P[1].4 - nSSEL (IRQC)
+ // P[1].6 - nWAKE (IRQB) [only PHY_DUAL / PHY_PRO2PLUS]
+-// P[2].7 - nHOST_INT
++// P[1].7 - nHOST_INT (Nest gen3; the SDK has P[2].7)
+ // serial controller abstraction
+   #define SCx_REG(reg) SC1->reg
+   #define SCx_MODE(mode) SC_MODE_MODE_##mode
+@@ -100,18 +100,18 @@
+   #define nSSEL_INT           IRQC_IRQn
+   #define nSSEL_GPIOFLAG      EVENT_GPIO_FLAG_IRQC
+   #define nSSEL_ISR           halIrqCIsr
+-// nHOST_INT: P[2].7, configured as a push-pull output
++// nHOST_INT: P[1].7 (Nest gen3), configured as a push-pull output
+   #define CFG_nHOST_INT(cfg)  do { uint32_t temp;                                   \
+-                                   temp = GPIO->P[2].CFGH & ~_GPIO_P_CFGH_Px7_MASK; \
++                                   temp = GPIO->P[1].CFGH & ~_GPIO_P_CFGH_Px7_MASK; \
+                                    temp |= cfg << _GPIO_P_CFGH_Px7_SHIFT;           \
+-                                   GPIO->P[2].CFGH = temp; } while (0)
+-  #define SET_nHOST_INT()     do { GPIO->P[2].SET = GPIO_P_SET_Px7; } while (0)
+-  #define CLR_nHOST_INT()     do { GPIO->P[2].CLR = GPIO_P_CLR_Px7; } while (0)
++                                   GPIO->P[1].CFGH = temp; } while (0)
++  #define SET_nHOST_INT()     do { GPIO->P[1].SET = GPIO_P_SET_Px7; } while (0)
++  #define CLR_nHOST_INT()     do { GPIO->P[1].CLR = GPIO_P_CLR_Px7; } while (0)
+ 
+ // nSSEL_INT is not used on this serial controller
+   #define CFG_nSSEL_INT(cfg)  do {} while (0)
+ 
+- #if     (PHY_DUAL || PHY_PRO2PLUS)
++ #if     1 // Nest gen3 wires nWAKE to P[1].6, as PHY_DUAL || PHY_PRO2PLUS boards do
+ // nWAKE: P[1].6, configured as input with a pull-up
+ // nWAKE interrupt: IRQB (fixed at pin P[1].6, falling edge with no filtering)
+   #define CFG_nWAKE(cfg)      do { uint32_t temp;                                   \

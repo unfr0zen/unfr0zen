@@ -1,0 +1,91 @@
+blueprint:
+  name: Nest weather (unfr0zen)
+  description: >-
+    Sends the outdoor temperature and humidity, conditions and forecast to a
+    Nest thermostat running unfr0zen, every 15 minutes. Temperatures must be
+    in °C.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/weather.yaml
+  input:
+    thermostat:
+      name: Thermostat
+      description: The Nest thermostat running unfr0zen's nestlocal.
+      selector:
+        device:
+          filter:
+            - integration: mqtt
+              manufacturer: Google Nest
+    temperature:
+      name: Outdoor temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+    humidity:
+      name: Outdoor humidity
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: humidity
+    weather:
+      name: Weather
+      description: For the conditions and the forecast, such as Met.no's.
+      selector:
+        entity:
+          filter:
+            - domain: weather
+
+mode: single
+triggers:
+  - trigger: time_pattern
+    minutes: /15
+  - trigger: homeassistant
+    event: start
+variables:
+  thermostat: !input thermostat
+  temperature: !input temperature
+  humidity: !input humidity
+  weather: !input weather
+actions:
+  - variables:
+      topic: "nestlocal/{{ device_attr(thermostat, 'serial_number') }}/set/"
+      # daily when the entity has it, else twice_daily (NWS)
+      daily_type: >-
+        {{ 'daily' if (state_attr(weather, 'supported_features') | int(0)) % 2
+           else 'twice_daily' }}
+  # A reading that is not a number (unavailable, ...) is ignored and the
+  # last one stays.
+  - action: mqtt.publish
+    data:
+      topic: "{{ topic }}outdoor_temperature"
+      payload: "{{ states(temperature) }}"
+      retain: true
+  - action: mqtt.publish
+    data:
+      topic: "{{ topic }}outdoor_humidity"
+      payload: "{{ states(humidity) }}"
+      retain: true
+  - action: weather.get_forecasts
+    target:
+      entity_id: "{{ weather }}"
+    data:
+      type: hourly
+    response_variable: hourly
+  - action: weather.get_forecasts
+    target:
+      entity_id: "{{ weather }}"
+    data:
+      type: "{{ daily_type }}"
+    response_variable: daily
+  - action: mqtt.publish
+    data:
+      topic: "{{ topic }}weather"
+      retain: true
+      payload: >-
+        {{ {"condition": states(weather),
+            "next_rising": state_attr('sun.sun', 'next_rising'),
+            "next_setting": state_attr('sun.sun', 'next_setting'),
+            "hourly": hourly[weather].forecast[:48],
+            "daily": daily[weather].forecast[:14]} | to_json }}

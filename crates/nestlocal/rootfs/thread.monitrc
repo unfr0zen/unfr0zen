@@ -1,0 +1,9 @@
+
+check process nestlocal-thread-rcp with pidfile /run/nestlocal-thread-rcp.pid
+  start program = "/etc/init.d/nestlocal-thread start" with timeout 180 seconds
+  stop program = "/etc/init.d/nestlocal-thread stop"
+
+check process nestlocal-thread-daemon with pidfile /run/nestlocal-thread-daemon.pid
+  depends on nestlocal-thread-rcp
+  start program = "/etc/init.d/nestlocal-thread start" with timeout 180 seconds
+  stop program = "/etc/init.d/nestlocal-thread stop"

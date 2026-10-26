@@ -1,0 +1,26 @@
+[package]
+name = "unfr0zen-host"
+version = "0.1.0"
+edition.workspace = true
+description = "unfr0zen on the host: USB transports, embedded firmware, and the recovery flow behind a progress interface"
+
+[dependencies]
+unfr0zen-core = { path = "../unfr0zen-core" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+crc32fast = "1"
+flate2 = "1"
+getrandom = { version = "0.3", features = ["std"] }
+hidapi = "2"
+log = "0.4"
+nusb = "0.2"
+regex = "1"
+serialport = "4"
+sha2 = "0.10"
+
+
+[build-dependencies]
+flate2 = "1"
+lzma-rs = "0.3"
+serde_json = "1"
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }

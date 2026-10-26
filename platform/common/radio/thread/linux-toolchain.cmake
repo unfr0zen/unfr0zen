@@ -1,0 +1,7 @@
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR arm)
+set(CMAKE_C_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zigcc")
+set(CMAKE_CXX_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zigcxx")
+set(CMAKE_C_FLAGS_INIT "-Os -fno-sanitize=all -Wno-error=date-time")
+set(CMAKE_CXX_FLAGS_INIT "-Os -fno-sanitize=all -Wno-error=date-time")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static")

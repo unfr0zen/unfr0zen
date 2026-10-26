@@ -1,0 +1,69 @@
+diff --git a/drivers/usb/gadget/ci_udc.c b/drivers/usb/gadget/ci_udc.c
+index 329f5cab65b..ad2e079b9d3 100644
+--- a/drivers/usb/gadget/ci_udc.c
++++ b/drivers/usb/gadget/ci_udc.c
+@@ -824,7 +824,7 @@ void udc_irq(void)
+ 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
+ 	unsigned n = readl(&udc->usbsts);
+ 	writel(n, &udc->usbsts);
+-	int bit, i, num, in;
++	int bit, i, num, in, setup_pending;
+ 
+ 	n &= (STS_SLI | STS_URI | STS_PCI | STS_UI | STS_UEI);
+ 	if (n == 0)
+@@ -867,9 +867,8 @@ void udc_irq(void)
+ #else
+ 		n = readl(&udc->epstat);
+ #endif
+-		if (n & EPT_RX(0))
+-			handle_setup();
+-
++		/* Finish the old EP0 request before reusing it for a new SETUP. */
++		setup_pending = n & EPT_RX(0);
+ 		n = readl(&udc->epcomp);
+ 		if (n != 0)
+ 			writel(n, &udc->epcomp);
+@@ -885,6 +884,8 @@ void udc_irq(void)
+ 					handle_ep_complete(&controller.ep[i]);
+ 			}
+ 		}
++		if (setup_pending)
++			handle_setup();
+ 	}
+ }
+ 
+@@ -1138,6 +1139,7 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
+ {
+ 	int ret;
+ 
++	writel(0xC1DC0001, (void *)0x0093803C);
+ 	if (!driver)
+ 		return -EINVAL;
+ 	if (!driver->bind || !driver->setup || !driver->disconnect)
+@@ -1148,22 +1150,26 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
+ #else
+ 	ret = usb_lowlevel_init(0, USB_INIT_DEVICE, (void **)&controller.ctrl);
+ #endif
++	writel(0xC1DC0000 | (ret & 0xFFFF), (void *)0x00938040);
+ 	if (ret)
+ 		return ret;
+ 
+ 	ret = ci_udc_probe();
++	writel(0xC1DC0000 | (ret & 0xFFFF), (void *)0x00938044);
+ 	if (ret) {
+ 		DBG("udc probe failed, returned %d\n", ret);
+ 		return ret;
+ 	}
+ 
+ 	ret = driver->bind(&controller.gadget);
++	writel(0xC1DC0000 | (ret & 0xFFFF), (void *)0x00938048);
+ 	if (ret) {
+ 		DBG("driver->bind() returned %d\n", ret);
+ 		return ret;
+ 	}
+ 	controller.driver = driver;
+ 
++	writel(0xC1DCDDDD, (void *)0x0093804C);
+ 	return 0;
+ }
+ 

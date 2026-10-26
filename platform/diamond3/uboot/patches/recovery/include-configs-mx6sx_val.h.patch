@@ -1,0 +1,16 @@
+diff --git a/include/configs/mx6sx_val.h b/include/configs/mx6sx_val.h
+index aed76316812..60701fc2072 100644
+--- a/include/configs/mx6sx_val.h
++++ b/include/configs/mx6sx_val.h
+@@ -65,7 +65,10 @@
+ 	"initrd_high=0xffffffff\0" \
+ 	"bootcmd_mfg=run mfgtool_args;bootz ${loadaddr} ${initrd_addr} ${fdt_addr};\0" \
+ 
+-#if defined(CONFIG_NAND_BOOT)
++#if defined(CONFIG_NEST_USB_RECOVERY)
++/* Keep CONFIG_BOOTCOMMAND; omit NAND and manufacturing boot overrides. */
++#define CFG_EXTRA_ENV_SETTINGS ""
++#elif defined(CONFIG_NAND_BOOT)
+ #define CFG_EXTRA_ENV_SETTINGS \
+ 	CFG_MFG_ENV_SETTINGS \
+ 	"panel=Hannstar-XGA\0" \

@@ -1,0 +1,181 @@
+diff --git a/drivers/usb/gadget/f_acm.c b/drivers/usb/gadget/f_acm.c
+index b2ddd1ada8b..357c1dffc88 100644
+--- a/drivers/usb/gadget/f_acm.c
++++ b/drivers/usb/gadget/f_acm.c
+@@ -13,6 +13,8 @@
+ #include <common.h>
+ #include <console.h>
+ #include <errno.h>
++#include <fastboot.h>
++#include <asm/io.h>
+ #include <g_dnl.h>
+ #include <malloc.h>
+ #include <memalign.h>
+@@ -64,6 +66,8 @@ static inline struct f_acm *func_to_acm(struct usb_function *f)
+ static inline struct f_acm *stdio_to_acm(struct stdio_dev *s)
+ {
+ 	/* stdio dev is cloned on registration, do not use container_of */
++	if (IS_ENABLED(CONFIG_NEST_USB_RECOVERY))
++		return default_acm_function;
+ 	return s->priv;
+ }
+ 
+@@ -239,18 +243,21 @@ static int acm_bind(struct usb_configuration *c, struct usb_function *f)
+ 		return -ENODEV;
+ 
+ 	f_acm->ep_in = ep;
++	ep->driver_data = f_acm; /* claim before choosing another endpoint */
+ 
+ 	ep = usb_ep_autoconfig(gadget, &acm_fs_out_desc);
+ 	if (!ep)
+-		return -ENODEV;
++		goto release_in;
+ 
+ 	f_acm->ep_out = ep;
++	ep->driver_data = f_acm;
+ 
+ 	ep = usb_ep_autoconfig(gadget, &acm_fs_notify_desc);
+ 	if (!ep)
+-		return -ENODEV;
++		goto release_out;
+ 
+ 	f_acm->ep_notify = ep;
++	ep->driver_data = f_acm;
+ 
+ 	if (gadget_is_dualspeed(gadget)) {
+ 		/* Assume endpoint addresses are the same for both speeds */
+@@ -260,6 +267,12 @@ static int acm_bind(struct usb_configuration *c, struct usb_function *f)
+ 	}
+ 
+ 	return 0;
++
++release_out:
++	f_acm->ep_out->driver_data = NULL;
++release_in:
++	f_acm->ep_in->driver_data = NULL;
++	return -ENODEV;
+ }
+ 
+ static void acm_unbind(struct usb_configuration *c, struct usb_function *f)
+@@ -269,6 +282,10 @@ static void acm_unbind(struct usb_configuration *c, struct usb_function *f)
+ 	if (default_acm_function == f_acm)
+ 		default_acm_function = NULL;
+ 
++	f_acm->ep_in->driver_data = NULL;
++	f_acm->ep_out->driver_data = NULL;
++	f_acm->ep_notify->driver_data = NULL;
++
+ 	buf_free(&f_acm->rx_buf);
+ 	buf_free(&f_acm->tx_buf);
+ 
+@@ -522,7 +539,8 @@ static bool acm_connected(struct stdio_dev *dev)
+ 	/* give a chance to process udc irq */
+ 	usb_gadget_handle_interrupts(f_acm->controller_index);
+ 
+-	return f_acm->connected;
++	/* Wait for the host to open the TTY before emitting the boot prompt. */
++	return f_acm->connected && (f_acm->handshake_bits & ACM_CTRL_DTR);
+ }
+ 
+ static int acm_add(struct usb_configuration *c)
+@@ -566,6 +584,8 @@ DECLARE_GADGET_BIND_CALLBACK(usb_serial_acm, acm_add);
+ static int acm_stdio_tstc(struct stdio_dev *dev)
+ {
+ 	struct f_acm *f_acm = stdio_to_acm(dev);
++	if (!f_acm)
++		return 0;
+ 
+ 	usb_gadget_handle_interrupts(f_acm->controller_index);
+ 
+@@ -589,6 +609,8 @@ static int acm_stdio_getc(struct stdio_dev *dev)
+ static void acm_stdio_putc(struct stdio_dev *dev, const char c)
+ {
+ 	struct f_acm *f_acm = stdio_to_acm(dev);
++	if (!f_acm)
++		return;
+ 
+ 	if (c == '\n')
+ 		buf_push(&f_acm->tx_buf, "\r", 1);
+@@ -604,6 +626,8 @@ static void acm_stdio_putc(struct stdio_dev *dev, const char c)
+ static void acm_stdio_puts(struct stdio_dev *dev, const char *str)
+ {
+ 	struct f_acm *f_acm = stdio_to_acm(dev);
++	if (!f_acm)
++		return;
+ 
+ 	while (*str) {
+ 		if (*str == '\n')
+@@ -618,23 +642,40 @@ static void acm_stdio_puts(struct stdio_dev *dev, const char *str)
+ 	__acm_tx(f_acm);
+ }
+ 
++__weak int board_usb_console_ready(void)
++{
++	return 0;
++}
++
+ static int acm_stdio_start(struct stdio_dev *dev)
+ {
+ 	int ret;
++	/* Recovery is ACM plus fastboot: bulk transfers to and from its buffer. */
++	bool fastboot = IS_ENABLED(CONFIG_NEST_USB_RECOVERY);
+ 
++	writel(0xACE00001, (void *)0x00938074);
+ 	if (dev->priv) { /* function already exist */
++		writel(0xACE00002, (void *)0x00938074);
+ 		return 0;
+ 	}
+ 
+-	ret = g_dnl_register("usb_serial_acm");
++	if (fastboot)
++		fastboot_init(NULL, 0);
++	writel(0xACE00003, (void *)0x00938074);
++	ret = g_dnl_register(fastboot ? "usb_recovery_acm_fastboot" :
++			     "usb_serial_acm");
++	writel(0xACE00000 | (ret & 0xFFFF), (void *)0x00938078);
+ 	if (ret)
+ 		return ret;
+ 
+ 	if (default_acm_function)
+ 		dev->priv = default_acm_function;
+-	else
++	else {
++		writel(0xACE0DEAD, (void *)0x00938074);
+ 		return -ENODEV;
++	}
+ 
++	writel(0xACE00004, (void *)0x00938074);
+ 	while (!acm_connected(dev)) {
+ 		if (ctrlc())
+ 			return -ECANCELED;
+@@ -642,6 +683,11 @@ static int acm_stdio_start(struct stdio_dev *dev)
+ 		schedule();
+ 	}
+ 
++	ret = board_usb_console_ready();
++	if (ret)
++		return ret;
++
++	writel(0xACE0DDDD, (void *)0x00938074);
+ 	return 0;
+ }
+ 
+@@ -655,7 +701,8 @@ static int acm_stdio_stop(struct stdio_dev *dev)
+ 
+ int drv_usbacm_init(void)
+ {
+-	struct stdio_dev stdio;
++	struct stdio_dev stdio = { 0 };
++	int ret;
+ 
+ 	strcpy(stdio.name, "usbacm");
+ 	stdio.flags = DEV_FLAGS_INPUT | DEV_FLAGS_OUTPUT;
+@@ -668,5 +715,7 @@ int drv_usbacm_init(void)
+ 	stdio.priv = NULL;
+ 	stdio.ext = 0;
+ 
+-	return stdio_register(&stdio);
++	ret = stdio_register(&stdio);
++	writel(0xACE10000 | (ret & 0xFFFF), (void *)0x00938084);
++	return ret;
+ }

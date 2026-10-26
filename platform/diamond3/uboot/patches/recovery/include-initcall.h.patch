@@ -1,0 +1,24 @@
+diff --git a/include/initcall.h b/include/initcall.h
+index 69ce2680705..e078dd06dde 100644
+--- a/include/initcall.h
++++ b/include/initcall.h
+@@ -9,6 +9,7 @@
+ typedef int (*init_fnc_t)(void);
+ 
+ #include <log.h>
++#include <asm/io.h>
+ #ifdef CONFIG_EFI_APP
+ #include <efi.h>
+ #endif
+@@ -43,7 +44,11 @@ static inline int initcall_run_list(const init_fnc_t init_sequence[])
+ 		else
+ 			debug("initcall: %p\n", (char *)*init_fnc_ptr - reloc_ofs);
+ 
++		writel((ulong)*init_fnc_ptr - reloc_ofs, (void *)0x00938068);
++		writel(0xFFFFFFFF, (void *)0x0093806C);
++		writel(reloc_ofs, (void *)0x00938070);
+ 		ret = (*init_fnc_ptr)();
++		writel(ret, (void *)0x0093806C);
+ 		if (ret) {
+ 			printf("initcall sequence %p failed at call %p (err=%d)\n",
+ 			       init_sequence,

@@ -1,0 +1,63 @@
+diff --git a/drivers/fastboot/fb_command.c b/drivers/fastboot/fb_command.c
+index 71cfaec6e9d..e4599873e19 100644
+--- a/drivers/fastboot/fb_command.c
++++ b/drivers/fastboot/fb_command.c
+@@ -41,6 +41,9 @@ static void oem_partconf(char *, char *);
+ static void oem_bootbus(char *, char *);
+ static void run_ucmd(char *, char *);
+ static void run_acmd(char *, char *);
++static void upload(char *, char *);
++
++u32 fastboot_upload_size;
+ 
+ static const struct {
+ 	const char *command;
+@@ -106,6 +109,10 @@ static const struct {
+ 		.command = "oem run",
+ 		.dispatch = CONFIG_IS_ENABLED(FASTBOOT_OEM_RUN, (run_ucmd), (NULL))
+ 	},
++	[FASTBOOT_COMMAND_UPLOAD] = {
++		.command = "upload",
++		.dispatch = upload
++	},
+ 	[FASTBOOT_COMMAND_UCMD] = {
+ 		.command = "UCmd",
+ 		.dispatch = CONFIG_IS_ENABLED(FASTBOOT_UUU_SUPPORT, (run_ucmd), (NULL))
+@@ -133,7 +140,8 @@ int fastboot_handle_command(char *cmd_string, char *response)
+ 	strsep(&cmd_parameter, ":");
+ 
+ 	for (i = 0; i < FASTBOOT_COMMAND_COUNT; i++) {
+-		if (!strcmp(commands[i].command, cmd_string)) {
++		/* Commands this build leaves out have no entry. */
++		if (commands[i].command && !strcmp(commands[i].command, cmd_string)) {
+ 			if (commands[i].dispatch) {
+ 				commands[i].dispatch(cmd_parameter,
+ 							response);
+@@ -183,6 +191,27 @@ static void getvar(char *cmd_parameter, char *response)
+  * @cmd_parameter: Pointer to command parameter
+  * @response: Pointer to fastboot response buffer
+  */
++/**
++ * upload() - Send RAM at fastboot_buf_addr to the host ("fastboot get_staged")
++ *
++ * @cmd_parameter: Pointer to command parameter
++ * @response: Pointer to fastboot response buffer
++ *
++ * Sends $fastboot_upload_size bytes (hex) if set, else the last download.
++ * The USB function streams the data after this DATA response.
++ */
++static void upload(char *cmd_parameter, char *response)
++{
++	u32 size = env_get_hex("fastboot_upload_size", fastboot_bytes_received);
++
++	if (!size || size > fastboot_buf_size) {
++		fastboot_fail("upload size outside the buffer", response);
++		return;
++	}
++	fastboot_upload_size = size;
++	fastboot_response("DATA", response, "%08x", size);
++}
++
+ static void download(char *cmd_parameter, char *response)
+ {
+ 	char *tmp;

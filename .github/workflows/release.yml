@@ -1,0 +1,117 @@
+name: release
+
+# vX.Y.Z (or vX.Y.Z-rcN, a pre-release) on main: build.yml's build, its files
+# published as a release here, with the pull requests merged since the
+# previous release as its notes.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  # A draft release here, with the notes, for build.yml's app jobs to upload
+  # their files into. Release assets do not count against the account's
+  # 500 MB of artifact storage, which GitHub meters in GB-hours over the month
+  # rather than by what is stored now, so release files never go through
+  # artifacts. Checked and drafted before the apps build, so a bad tag fails
+  # in seconds.
+  draft:
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: write
+      # The notes list the merged pull requests.
+      pull-requests: read
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    # By tag: the build has not made this run's image yet, and this job only
+    # needs git, curl and python3 from it.
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build:trixie
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Draft release
+        id: draft
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [[ $GITHUB_REF_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || { echo "$GITHUB_REF_NAME is not a release tag"; exit 0; }
+          git fetch --quiet --tags --force --no-recurse-submodules origin main
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+          previous=$(git tag --list 'v*' --sort=-v:refname --merged HEAD | grep -vx "$GITHUB_REF_NAME" \
+                     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' | head -1 || true)
+          API="$api" PREVIOUS="$previous" python3 - > release.json <<'NOTES'
+          import json, os, urllib.request
+          from datetime import datetime, timezone
+
+          def get(path):
+              request = urllib.request.Request(os.environ["API"] + path,
+                                               headers={"Authorization": "Bearer " + os.environ["TOKEN"],
+                                                        "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(request) as response:
+                  return json.load(response)
+
+          tag, previous = os.environ["GITHUB_REF_NAME"], os.environ["PREVIOUS"]
+          # Since the previous release was made, not since its commit: a pull
+          # request merged in between went out after it. GitHub's created_at is
+          # the tagged commit's date, so published_at is the one that means
+          # this.
+          if previous:
+              release = get(f"/releases/tags/{previous}")
+              since = datetime.fromisoformat(release["published_at"] or release["created_at"])
+          else:
+              since = datetime.min.replace(tzinfo=timezone.utc)
+          merged, page = [], 1
+          while batch := get(f"/pulls?state=closed&per_page=100&page={page}"):
+              merged += [p for p in batch if p.get("merged_at") and datetime.fromisoformat(p["merged_at"]) > since]
+              page += 1
+          merged.sort(key=lambda p: p["merged_at"])
+          lines = [f"- {p['title']}" for p in merged] or ["- No pull requests merged"]
+          body = "## Changes" + (f" since {previous}" if previous else "") + "\n\n" + "\n".join(lines) + "\n"
+          print(json.dumps({"tag_name": tag, "name": tag, "prerelease": "-rc" in tag, "body": body}))
+          NOTES
+          python3 -c 'import json; print(json.load(open("release.json"))["body"])'
+          id=$(python3 -c 'import json, sys; r = json.load(open("release.json")); r["draft"] = True; print(json.dumps(r))' \
+               | curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
+                   -d @- "$api/releases" | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])')
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "Drafted $GITHUB_REF_NAME as release $id"
+
+  # The whole build, as on a branch push, uploading into the draft.
+  build:
+    needs: draft
+    uses: ./.github/workflows/build.yml
+    with:
+      release-id: ${{ needs.draft.outputs.id }}
+    secrets: inherit
+    permissions:
+      contents: write
+
+  # Every app built: the draft is published.
+  publish:
+    if: needs.draft.outputs.id != ''
+    needs: [draft, build]
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: write
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build@${{ needs.build.outputs.image-digest }}
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+    steps:
+      - name: Release
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ needs.draft.outputs.id }}
+        run: |
+          curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
+            -d '{"draft": false}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$ID" > /dev/null
+          echo "Published $GITHUB_REF_NAME to $GITHUB_REPOSITORY"

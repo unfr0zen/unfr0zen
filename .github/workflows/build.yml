@@ -1,0 +1,558 @@
+name: build
+
+# Pushes to main, pull requests, by hand, or called by release.yml for a
+# release tag. Tags pushed on their own build nothing here: release.yml owns
+# them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-id:
+        description: The draft release the app jobs upload their files into.
+        type: string
+        default: ''
+    outputs:
+      image-digest:
+        description: The build image, for release.yml's publish job.
+        value: ${{ jobs.image.outputs.digest }}
+
+# A pull request's newer push cancels its older run: overlapping runs share
+# each runner's cargo caches. Other runs never cancel each other.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # A pull request's run waits here for approval in the pull-request
+  # environment before any job reaches the self-hosted runners; pushes to main
+  # and release tags go straight through.
+  approve:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'pull-request' || '' }}
+    permissions: {}
+    steps:
+      - run: 'true'
+
+  # The build image, from this repository's Dockerfile, into zot for the jobs
+  # below to pull. This job runs on the host itself: Actions resolves and pulls
+  # a job's container before any of its steps run, so the job that builds the
+  # image cannot be one that uses it.
+  image:
+    needs: approve
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # The Dockerfile over the API rather than actions/checkout, because this
+      # job is the only one not in a container: it runs as the runner's own
+      # user, while the jobs below check out as root inside theirs, and they
+      # share one _work tree. A checkout here inherits their root-owned .git and
+      # cannot write it.
+      - name: Fetch the Dockerfile
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.github.raw' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/Dockerfile?ref=$GITHUB_SHA" \
+            -o "$RUNNER_TEMP/Dockerfile"
+
+      # Over stdin, with no build context: the Dockerfile needs none, and
+      # sending one would upload the whole worktree. Same invocation
+      # scripts/build-firmware.sh uses on macOS.
+      - name: Build the build image
+        id: build
+        shell: bash
+        env:
+          ZOT: 10.0.20.16:8080
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+        run: |
+          # Built once per Dockerfile and reused from zot until the Dockerfile
+          # changes, so the rust base tag and the apt packages only move
+          # when it is edited.
+          tag=dockerfile-$(sha256sum "$RUNNER_TEMP/Dockerfile" | cut -d' ' -f1)
+          status=$(curl -sS -o /dev/null -D "$RUNNER_TEMP/headers" -w '%{http_code}' -I \
+            -u "$ZOT_USER:$ZOT_TOKEN" -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            "http://$ZOT/v2/unfr0zen-build/manifests/$tag")
+          case $status in
+            200)
+              digest=$(tr -d '\r' < "$RUNNER_TEMP/headers" | sed -n 's/^docker-content-digest: //Ip')
+              [ -n "$digest" ] || { echo "::error::no digest for unfr0zen-build:$tag"; exit 1; }
+              echo "unfr0zen-build:$tag is already in zot: $digest"
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            404) ;;
+            *) echo "::error::zot answered $status for unfr0zen-build:$tag"; exit 1 ;;
+          esac
+          echo "$ZOT_TOKEN" | docker login "$ZOT" -u "$ZOT_USER" --password-stdin
+          # buildx, not docker build and push: zot speaks OCI and answers
+          # docker's own manifest type with a 415. buildkit runs in a container
+          # of its own and does not read the daemon's insecure-registries, so it
+          # has to be told separately that zot is plain HTTP.
+          cat > "$RUNNER_TEMP/buildkitd.toml" <<TOML
+          [registry."$ZOT"]
+            http = true
+            insecure = true
+          # Bounded build cache: the runners' cache volume is shared with
+          # the cargo caches and must not fill.
+          [worker.oci]
+            gc = true
+            reservedSpace = "2GB"
+            maxUsedSpace = "8GB"
+            minFreeSpace = "20GB"
+          TOML
+          docker buildx inspect zot > /dev/null 2>&1 \
+            || docker buildx create --name zot --driver docker-container \
+                 --config "$RUNNER_TEMP/buildkitd.toml" --bootstrap
+          # No provenance, so this is one manifest rather than an index with
+          # attestations beside it, and the digest below names the image itself.
+          docker buildx build --builder zot \
+            --tag "$ZOT/unfr0zen-build:$tag" --tag "$ZOT/unfr0zen-build:trixie" \
+            --output type=registry,oci-mediatypes=true \
+            --provenance=false \
+            --metadata-file "$RUNNER_TEMP/meta.json" \
+            - < "$RUNNER_TEMP/Dockerfile"
+          # The jobs below pull this exact image by digest, never by the tag, so
+          # an overlapping run pushing :trixie cannot change what they get. The
+          # tag is pushed all the same, for anyone pulling it by hand.
+          digest=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["containerimage.digest"])' "$RUNNER_TEMP/meta.json")
+          [ -n "$digest" ] || { echo "::error::no digest in the buildx metadata"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  # The gen3 releases zbwake.ko is built for (platform/diamond3/zbwake/releases), as the
+  # zbwake job's matrix. Over the API, as the image job fetches the
+  # Dockerfile: a host job cannot check out.
+  zbwake-releases:
+    needs: approve
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+    outputs:
+      releases: ${{ steps.list.outputs.releases }}
+    steps:
+      - id: list
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          releases=$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
+            -H 'Accept: application/vnd.github.raw' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/platform/diamond3/zbwake/releases?ref=$GITHUB_SHA")
+          echo "releases=[$(printf '%s\n' $releases | sed 's/.*/"&"/' | paste -sd,)]" >> "$GITHUB_OUTPUT"
+
+  # zbwake.ko, the kernel module nestlocal uses to let the Zigbee radio wake
+  # the unit, for each gen3 release, in parallel. Each is kept in zot as an
+  # OCI artifact beside the firmware, tagged zbwake- and a digest of its
+  # inputs (the build image, platform/diamond3/zbwake/ and the release), so it is only built
+  # again when one of them changes; the firmware job pulls them by the same
+  # tags.
+  zbwake:
+    needs: [image, zbwake-releases]
+    runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        release: ${{ fromJSON(needs.zbwake-releases.outputs.releases) }}
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build@${{ needs.image.outputs.digest }}
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+    env:
+      ZOT: 10.0.20.16:8080
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: key
+        run: |
+          inputs="zbwake-${{ needs.image.outputs.digest }}-${{ hashFiles('platform/diamond3/zbwake/**') }}-${{ matrix.release }}"
+          echo "key=$(printf %s "$inputs" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Look for it in zot
+        id: built
+        env:
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+          TAG: ${{ steps.key.outputs.key }}
+        run: |
+          echo "$ZOT_TOKEN" | oras login --plain-http -u "$ZOT_USER" --password-stdin "$ZOT"
+          if error=$(oras manifest fetch --plain-http "$ZOT/unfr0zen-firmware:zbwake-$TAG" 2>&1 > /dev/null); then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            case $error in
+              *'not found'*) ;;
+              *) echo "::error::$error"; exit 1 ;;
+            esac
+          fi
+
+      - name: Build it
+        if: steps.built.outputs.hit != 'true'
+        run: sh platform/diamond3/zbwake/build.sh build/zbwake "${{ matrix.release }}"
+
+      # From its directory, so that it pulls as RELEASE.ko.
+      - name: Store it
+        if: steps.built.outputs.hit != 'true'
+        env:
+          TAG: ${{ steps.key.outputs.key }}
+        working-directory: build/zbwake
+        run: oras push --plain-http "$ZOT/unfr0zen-firmware:zbwake-$TAG" "${{ matrix.release }}.ko"
+
+  # The j49's kernel with a USB serial port and its x-loader, which build in
+  # Ubuntu 14.04 containers of their own (platform/j49/kernel.sh, xloader.sh), so
+  # on the host, with their scripts over the API as the image job fetches the
+  # Dockerfile. Kept in zot, tagged j49-kernel- and the scripts' digest; the
+  # firmware job pulls them by the same tag.
+  j49-kernel:
+    needs: [image]
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+    env:
+      ZOT: 10.0.20.16:8080
+    steps:
+      - name: Fetch the script
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/platform/j49/zbwake"
+          for file in platform/j49/kernel.sh platform/j49/zbwake/zbwake.c platform/j49/xloader.sh; do
+            curl -fsSL -H "Authorization: Bearer $TOKEN" \
+              -H 'Accept: application/vnd.github.raw' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/$file?ref=$GITHUB_SHA" \
+              -o "$RUNNER_TEMP/$file"
+          done
+
+      - name: Look for it in zot, else build and store it
+        env:
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+          IMAGE: 10.0.20.16:8080/unfr0zen-build@${{ needs.image.outputs.digest }}
+        run: |
+          tag=j49-kernel-$(cat "$RUNNER_TEMP/platform/j49/kernel.sh" "$RUNNER_TEMP/platform/j49/zbwake/zbwake.c" "$RUNNER_TEMP/platform/j49/xloader.sh" | sha256sum | cut -d' ' -f1)
+          # oras from the build image, which has it; the host need not.
+          oras() {
+            docker run --rm -i --network host -v "$RUNNER_TEMP:$RUNNER_TEMP" -w "$RUNNER_TEMP/out" \
+              -e ZOT_USER -e ZOT_TOKEN "$IMAGE" sh -ec \
+              'echo "$ZOT_TOKEN" | oras login --plain-http -u "$ZOT_USER" --password-stdin "$0" > /dev/null; oras "$@"' "$ZOT" "$@"
+          }
+          echo "$ZOT_TOKEN" | docker login "$ZOT" -u "$ZOT_USER" --password-stdin
+          mkdir -p "$RUNNER_TEMP/out"
+          if error=$(oras manifest fetch --plain-http "$ZOT/unfr0zen-firmware:$tag" 2>&1 > /dev/null); then
+            exit 0
+          fi
+          case $error in
+            *'not found'*) ;;
+            *) echo "::error::$error"; exit 1 ;;
+          esac
+          sh "$RUNNER_TEMP/platform/j49/kernel.sh" "$RUNNER_TEMP/out"
+          sh "$RUNNER_TEMP/platform/j49/xloader.sh" "$RUNNER_TEMP/out"
+          oras push --plain-http "$ZOT/unfr0zen-firmware:$tag" uImage zbwake.ko x-load.bin
+
+  # The recovery firmware and nestlocal, built once for every target's app.
+  firmware:
+    needs: [image, zbwake, j49-kernel]
+    runs-on: [self-hosted, linux, x64]
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    # The image is built on the runner from the Dockerfile in this repository,
+    # so it cannot drift from it, and it is served from zot on the same VLAN. Crates and
+    # nestlocal's objects live in host directories the runner keeps between
+    # jobs: multi-gigabyte trees that have no business crossing the WAN to
+    # GitHub's cache service. The crate registry sits on the NFS share, which
+    # the build mostly reads; the target directory goes on the local NVMe,
+    # because a live one stats and writes small files all day and that is what
+    # NFS is worst at.
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build@${{ needs.image.outputs.digest }}
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+      volumes:
+        - /srv/ci-cache/local/cargo-registry/firmware:/usr/local/cargo/registry
+        - /srv/ci-cache/local/nestlocal-target:/cache/nestlocal-target
+    env:
+      NESTLOCAL_TARGET_DIR: /cache/nestlocal-target
+    steps:
+      - uses: actions/checkout@v7
+
+      # JOBS is build_uboot.sh's make -j; its default of 8 would leave the
+      # runner's remaining cores idle, and this job has the host to itself.
+      - name: Inputs
+        run: |
+          echo "UBOOT=$(git rev-parse HEAD:platform/diamond3/uboot/upstream)" >> "$GITHUB_ENV"
+          echo "DOOM=$(git rev-parse HEAD:platform/common/doom/doomgeneric)" >> "$GITHUB_ENV"
+          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+
+      # The firmware's tag in zot: a digest of its inputs, since a tag is at
+      # most 128 characters and cannot hold the image digest's colon.
+      - id: key
+        run: |
+          inputs="firmware-build-$UBOOT-$DOOM-${{ needs.image.outputs.digest }}-${{ hashFiles('scripts/**', 'platform/common/doom/**', 'platform/common/radio/**', 'platform/common/nlclient/src/**', 'platform/diamond3/**', 'platform/j49/**', 'crates/nestlocal/**', 'Cargo.toml', 'Cargo.lock', 'Dockerfile') }}"
+          echo "key=$(printf %s "$inputs" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # The firmware itself, for exactly these inputs (the U-Boot commit,
+      # patches and configs, the bootstrap sources, the radio, nestlocal, and
+      # the toolchain by image digest, because the rust base tag and everything
+      # apt installs both float under an unchanged Dockerfile): on a hit there
+      # is nothing to build, not even U-Boot to check out.
+      # Kept in zot beside the build image, as an OCI artifact, rather than in
+      # GitHub's cache, so it never crosses the WAN. It is also how the app
+      # jobs get the firmware: GitHub Free gives the whole account 500 MB of
+      # artifact storage, which neither workflow uses.
+      - name: Fetch the firmware
+        id: built
+        env:
+          ZOT: 10.0.20.16:8080
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+          TAG: ${{ steps.key.outputs.key }}
+        run: |
+          echo "$ZOT_TOKEN" | oras login --plain-http -u "$ZOT_USER" --password-stdin "$ZOT"
+          # Only a missing tag means build; any other failure (auth, network)
+          # fails the job rather than rebuilding behind its back.
+          if error=$(oras manifest fetch --plain-http "$ZOT/unfr0zen-firmware:$TAG" 2>&1 > /dev/null); then
+            oras pull --plain-http "$ZOT/unfr0zen-firmware:$TAG"
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            case $error in
+              *'not found'*) ;;
+              *) echo "::error::$error"; exit 1 ;;
+            esac
+          fi
+
+      # The zbwake job's modules, by its tags, for nestlocal to carry:
+      # build-firmware.sh finds them all present and newer than their sources, so
+      # it builds none.
+      - name: Fetch zbwake.ko
+        if: steps.built.outputs.hit != 'true'
+        env:
+          ZOT: 10.0.20.16:8080
+          IMAGE: ${{ needs.image.outputs.digest }}
+          ZBWAKE: ${{ hashFiles('platform/diamond3/zbwake/**') }}
+        run: |
+          for release in $(cat platform/diamond3/zbwake/releases); do
+            tag=$(printf %s "zbwake-$IMAGE-$ZBWAKE-$release" | sha256sum | cut -d' ' -f1)
+            oras pull --plain-http -o build/zbwake "$ZOT/unfr0zen-firmware:zbwake-$tag"
+          done
+          touch build/zbwake/*.ko
+
+      # The j49-kernel job's uImage and x-loader: build-firmware.sh finds them
+      # newer than their scripts, so it builds neither (this container has no Docker).
+      - name: Fetch the j49 kernel and x-loader
+        if: steps.built.outputs.hit != 'true'
+        env:
+          ZOT: 10.0.20.16:8080
+        run: |
+          oras pull --plain-http -o build/j49 "$ZOT/unfr0zen-firmware:j49-kernel-$(cat platform/j49/kernel.sh platform/j49/zbwake/zbwake.c platform/j49/xloader.sh | sha256sum | cut -d' ' -f1)"
+          touch build/j49/uImage build/j49/zbwake.ko build/j49/x-load.bin
+
+      - name: Build firmware
+        if: steps.built.outputs.hit != 'true'
+        run: |
+          git submodule update --init --depth 1 platform/diamond3/uboot/upstream platform/common/doom/doomgeneric
+          scripts/build-firmware.sh
+
+      # oras packs the directory as one tarred layer and unpacks it on pull.
+      - name: Store the firmware
+        if: steps.built.outputs.hit != 'true'
+        env:
+          ZOT: 10.0.20.16:8080
+          TAG: ${{ steps.key.outputs.key }}
+        run: oras push --plain-http "$ZOT/unfr0zen-firmware:$TAG" build
+
+  # Every test the build image can run: the workspace's Rust tests, the
+  # nlclient screen's host tests, the radio's dispatcher and image checks, the
+  # radio firmware under ARM emulation, and the Thread diagnostics producer. The ones needing the stock nlclient or NAND
+  # images (not in this repository) skip. A failure here also fails a release,
+  # since release.yml runs this workflow.
+  test:
+    needs: [image, firmware]
+    runs-on: [self-hosted, linux, x64]
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build@${{ needs.image.outputs.digest }}
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+      volumes:
+        - /srv/ci-cache/local/cargo-registry/test:/usr/local/cargo/registry
+        - /srv/ci-cache/local/target/test:/cache/target
+    env:
+      CARGO_TARGET_DIR: /cache/target
+      # Beside the four app jobs' three each.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v7
+
+      # unfr0zen-host embeds the firmware, so its tests need it built.
+      - name: Fetch the firmware
+        env:
+          ZOT: 10.0.20.16:8080
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+          TAG: ${{ needs.firmware.outputs.key }}
+        run: |
+          echo "$ZOT_TOKEN" | oras login --plain-http -u "$ZOT_USER" --password-stdin "$ZOT"
+          oras pull --plain-http "$ZOT/unfr0zen-firmware:$TAG"
+
+      - name: Rust
+        run: cargo test --workspace --locked
+
+      # Installed here rather than in the Dockerfile: a Dockerfile change
+      # makes every runner pull a whole new build image.
+      - name: Clippy
+        run: |
+          rustup component add clippy
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+
+      - name: nlclient navigation
+        run: |
+          clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/custom_flow_test.c -o /tmp/custom-flow-test
+          /tmp/custom-flow-test
+
+      # The image checks read the radio images from the restored firmware.
+      - name: radio
+        run: python3 -m unittest discover -s platform/common/radio/tests -v
+
+      # The built image's ARM code under Unicorn: source matching and the PHY's
+      # early-ACK ISR, the radio's measurements and entropy, and the selection
+      # between its Thread and Zigbee personalities.
+      - name: radio firmware
+        run: |
+          for test in source-match radio personality; do
+            python3 platform/common/radio/thread/test-$test.py build/radio/radio.elf
+          done
+          # The EM357's Thread image has no Zigbee personality to select.
+          for test in source-match radio; do
+            python3 platform/common/radio/thread/test-$test.py build/radio-em357-thread/radio.elf
+          done
+
+      # The daemon's nest-diag producer against mocked OpenThread APIs: only
+      # OpenThread's headers are needed, at the revision the firmware pins.
+      - name: Thread diagnostics
+        run: |
+          revision=$(sed -n 's/^revision=//p' platform/common/radio/thread/fetch-openthread.sh)
+          git init -q /tmp/openthread
+          git -C /tmp/openthread fetch -q --depth 1 https://github.com/openthread/openthread.git "$revision"
+          git -C /tmp/openthread checkout -q FETCH_HEAD
+          c++ -std=c++11 -Wall -Wextra -Werror -I /tmp/openthread/include \
+            platform/common/radio/thread/test-diagnostics.cpp -o /tmp/test-thread-diag
+          /tmp/test-thread-diag > /dev/null
+
+  # The app for each target, the targets side by side. On Linux and macOS the
+  # same executable is the command-line tool when given arguments.
+  app:
+    name: app (${{ matrix.platform }})
+    needs: [image, firmware]
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: write
+    # Crates and compiled dependencies: a registry and a target directory per
+    # job, both on the local disk and both kept by the runner between jobs, so
+    # nothing is uploaded or downloaded to reuse them. The registries are not
+    # shared because cargo's lock lives at $CARGO_HOME/.package-cache, outside
+    # the mount, so the jobs would each take their own and write the same cache
+    # with nothing excluding them.
+    container:
+      image: 10.0.20.16:8080/unfr0zen-build@${{ needs.image.outputs.digest }}
+      credentials:
+        username: ${{ secrets.ZOT_USER }}
+        password: ${{ secrets.ZOT_TOKEN }}
+      volumes:
+        - /srv/ci-cache/local/cargo-registry/${{ matrix.platform }}:/usr/local/cargo/registry
+        - /srv/ci-cache/local/target/${{ matrix.platform }}:/cache/target
+    strategy:
+      # Every target at once, as many as there are runners (four per host),
+      # with cargo given a quarter of a host's cores each so the rustc count
+      # matches them rather than oversubscribing fourfold: four jobs
+      # each defaulting to nproc put ~48 rustc on a 12-core runner, peaked at
+      # 99.3% of the memory it is allowed and got a job killed mid-link. It is
+      # that ratio that was wrong, not the job count -- two at a time then
+      # measured 6G of 14G without breaching memory.high once. fail-fast stays
+      # off so one target failing still reports the others.
+      fail-fast: false
+      matrix:
+        include:
+          # Linux against glibc 2.28, so the binaries also run on older distributions.
+          - platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            build: cargo zigbuild --target x86_64-unknown-linux-gnu.2.28
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            build: cargo zigbuild --target aarch64-unknown-linux-gnu.2.28
+          - platform: linux-riscv64
+            target: riscv64gc-unknown-linux-gnu
+            build: cargo zigbuild --target riscv64gc-unknown-linux-gnu.2.28
+          - platform: windows-x86_64
+            target: x86_64-pc-windows-gnu
+            build: cargo build --target x86_64-pc-windows-gnu
+          - platform: windows-arm64
+            target: aarch64-pc-windows-gnullvm
+            build: cargo zigbuild --target aarch64-pc-windows-gnullvm
+          # One build, three bundles: universal2 builds both architectures and
+          # merges them, so the single-architecture binaries come with it.
+          - platform: macos
+            target: universal2-apple-darwin
+            build: cargo zigbuild --target universal2-apple-darwin
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      CARGO_TARGET_DIR: /cache/target
+      CARGO_BUILD_JOBS: 3
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        run: |
+          git fetch --tags --force --unshallow --no-recurse-submodules origin
+          echo "VERSION=$(git describe --tags --always --dirty)" >> "$GITHUB_ENV"
+
+      - name: Fetch the firmware
+        env:
+          ZOT: 10.0.20.16:8080
+          ZOT_USER: ${{ secrets.ZOT_USER }}
+          ZOT_TOKEN: ${{ secrets.ZOT_TOKEN }}
+          TAG: ${{ needs.firmware.outputs.key }}
+        run: |
+          echo "$ZOT_TOKEN" | oras login --plain-http -u "$ZOT_USER" --password-stdin "$ZOT"
+          oras pull --plain-http "$ZOT/unfr0zen-firmware:$TAG"
+
+      - name: Build unfr0zen
+        run: ${{ matrix.build }} --release --locked --bin unfr0zen
+
+      # Linux binaries in tarballs, which keep them executable; Windows and the
+      # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
+      # without compression or extra fields so every unzipper reads them.
+      - name: Package
+        run: |
+          out=$CARGO_TARGET_DIR/${{ matrix.target }}/release
+          mkdir -p dist
+          case $PLATFORM in
+            linux-*)
+              tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen ;;
+            windows-*)
+              zip -0 -jqX dist/unfr0zen-$PLATFORM-$VERSION.zip "$out/unfr0zen.exe" ;;
+            macos)
+              for arch in universal:universal2 arm64:aarch64 x86_64:x86_64; do
+                UNFR0ZEN_BINARY="$CARGO_TARGET_DIR/${arch#*:}-apple-darwin/release/unfr0zen" sh scripts/make_macos_app.sh
+                (cd dist && zip -0 -qryX unfr0zen-macos-${arch%%:*}-$VERSION.zip unfr0zen.app && rm -rf unfr0zen.app)
+              done ;;
+          esac
+          ls -l dist
+
+      # Only when release.yml calls: straight into its draft release, not
+      # through artifact storage.
+      - if: inputs.release-id != ''
+        name: Upload to the draft release
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ID: ${{ inputs.release-id }}
+        run: |
+          for file in dist/*; do
+            curl -fsS -X POST -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
+              -H 'Content-Type: application/octet-stream' --data-binary "@$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$ID/assets?name=$(basename "$file")" > /dev/null
+            echo "uploaded $(basename "$file")"
+          done

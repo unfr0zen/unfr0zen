@@ -1,0 +1,38 @@
+[package]
+name = "nestlocal"
+default-run = "nestlocal"
+version = "0.1.0"
+edition.workspace = true
+description = "Nest's service stood in for on the thermostat itself, bridged to Home Assistant over MQTT"
+
+[dependencies]
+bytes = "1"
+png = "0.17"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+http-body = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+libc = "0.2"
+log = "0.4"
+md-5 = "0.10"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "sync", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+
+# Matter (-matter): rs-matter pinned to the commit validated with Home
+# Assistant's Matter server; pure Rust crypto and mDNS.
+rs-matter = { git = "https://github.com/project-chip/rs-matter", rev = "5bb06ae", features = ["async-io", "persistent-subscriptions"] }
+async-io = "2"
+async-channel = "2"
+embassy-futures = "0.1"
+embassy-time = { version = "0.5", features = ["std"] }
+embassy-time-queue-utils = { version = "0.3", features = ["generic-queue-64"] }
+futures-lite = "2"
+if-addrs = "0.15"
+rand = { version = "0.10", features = ["std", "std_rng", "thread_rng"] }
+socket2 = "0.6"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }

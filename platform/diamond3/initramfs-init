@@ -1,0 +1,39 @@
+#!/bin/sh
+# unfr0zen initramfs /init (unfr0zen.py --initramfs).
+#
+# Mounts the root volume named by unfr0zen.slot= read-only, loads that
+# volume's own USB gadget modules the way its usb-gadget script does, and
+# serves a shell on the ACM gadget for the host to drive. The host decides
+# every write. Nothing here feeds the watchdog: if anything hangs, it resets
+# the unit.
+/bin/busybox mkdir -p /sbin /usr/bin /usr/sbin
+/bin/busybox --install -s
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+fail() {
+    echo "unfr0zen initramfs: $*" > /dev/kmsg
+    sleep 5
+    reboot -f
+}
+
+slot=$(sed -n 's/.*unfr0zen\.slot=\(root[01]\).*/\1/p' /proc/cmdline)
+[ -n "$slot" ] || fail "no unfr0zen.slot= on the kernel command line"
+mount -t ubifs -o ro "ubi0:$slot" /mnt || fail "cannot mount ubi0:$slot"
+# The kernel's own module requests (usbfunc:acm) run /sbin/modprobe too.
+ln -s /mnt/lib/modules /lib/modules
+modprobe usb_f_acm || fail "cannot load usb_f_acm"
+modprobe g_acm_ms idVendor=0x0525 idProduct=0xa4a7 luns=1 removable=1 \
+    || fail "cannot load g_acm_ms"
+for _ in $(seq 30); do
+    [ -c /dev/ttyGS0 ] && break
+    sleep 1
+done
+[ -c /dev/ttyGS0 ] || fail "no /dev/ttyGS0"
+stty -F /dev/ttyGS0 raw -echo
+# Through a pipe the shell is not interactive: no prompts in its output.
+while true; do
+    cat /dev/ttyGS0 | sh > /dev/ttyGS0 2>&1
+done

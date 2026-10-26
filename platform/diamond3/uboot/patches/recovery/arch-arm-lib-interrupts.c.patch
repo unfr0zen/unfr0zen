@@ -1,0 +1,119 @@
+diff --git a/arch/arm/lib/interrupts.c b/arch/arm/lib/interrupts.c
+index 6dc27d1d589..788c666751f 100644
+--- a/arch/arm/lib/interrupts.c
++++ b/arch/arm/lib/interrupts.c
+@@ -50,6 +50,58 @@ int disable_interrupts(void)
+ 	return 0;
+ }
+ 
++/*
++ * Recovery reports on the USB console, which an exception usually takes down
++ * with it. Keep the first exception of each run in OCRAM, which survives the
++ * watchdog reset, for the host to read over ROM SDP:
++ *   0x938100 0xE7C0DE00 | type (1 undef, 2 swi, 3 prefetch, 4 data, 5 unused,
++ *            6 fiq, 7 irq), then the run nonce (0x938058), pc, lr, sp, cpsr,
++ *            DFSR, DFAR, IFSR, IFAR, gd->reloc_off, r0-r3, exception count
++ *   0x938140 32 words from sp
++ */
++#define RECOVERY_EXC	((u32 *)0x00938100)
++
++static void recovery_record(u32 type, struct pt_regs *regs)
++{
++	u32 *rec = RECOVERY_EXC;
++	u32 nonce = *(u32 *)0x00938058;
++	u32 *stack = (u32 *)regs->ARM_sp;
++	u32 dfsr, dfar, ifsr, ifar;
++	int i;
++
++	if (!IS_ENABLED(CONFIG_NEST_USB_RECOVERY))
++		return;
++	if ((rec[0] & 0xFFFFFF00) == 0xE7C0DE00 && rec[1] == nonce) {
++		rec[15]++;	/* keep the first exception of this run */
++		return;
++	}
++	asm volatile("mrc p15, 0, %0, c5, c0, 0" : "=r" (dfsr));
++	asm volatile("mrc p15, 0, %0, c6, c0, 0" : "=r" (dfar));
++	asm volatile("mrc p15, 0, %0, c5, c0, 1" : "=r" (ifsr));
++	asm volatile("mrc p15, 0, %0, c6, c0, 2" : "=r" (ifar));
++	rec[1] = nonce;
++	rec[2] = regs->ARM_pc;	/* raw: data abort +8, undef/prefetch +4 */
++	rec[3] = regs->ARM_lr;
++	rec[4] = regs->ARM_sp;
++	rec[5] = regs->ARM_cpsr;
++	rec[6] = dfsr;
++	rec[7] = dfar;
++	rec[8] = ifsr;
++	rec[9] = ifar;
++	rec[10] = gd->reloc_off;
++	rec[11] = regs->ARM_r0;
++	rec[12] = regs->ARM_r1;
++	rec[13] = regs->ARM_r2;
++	rec[14] = regs->ARM_r3;
++	rec[15] = 1;
++	/* Only copy a stack that is plausibly DDR, 4-byte aligned. */
++	if ((ulong)stack >= 0x80000000 && (ulong)stack < 0xA0000000 - 128 &&
++	    !((ulong)stack & 3))
++		for (i = 0; i < 32; i++)
++			rec[16 + i] = stack[i];
++	rec[0] = 0xE7C0DE00 | type;
++}
++
+ void bad_mode (void)
+ {
+ 	panic ("Resetting CPU ...\n");
+@@ -138,6 +190,7 @@ static inline void fixup_pc(struct pt_regs *regs, int offset)
+ void do_undefined_instruction (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(1, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("undefined instruction\n");
+ 	fixup_pc(pt_regs, -4);
+ 	show_regs (pt_regs);
+@@ -148,6 +201,7 @@ void do_undefined_instruction (struct pt_regs *pt_regs)
+ void do_software_interrupt (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(2, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("software interrupt\n");
+ 	fixup_pc(pt_regs, -4);
+ 	show_regs (pt_regs);
+@@ -158,6 +212,7 @@ void do_software_interrupt (struct pt_regs *pt_regs)
+ void do_prefetch_abort (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(3, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("prefetch abort\n");
+ 	fixup_pc(pt_regs, -8);
+ 	show_regs (pt_regs);
+@@ -168,6 +223,7 @@ void do_prefetch_abort (struct pt_regs *pt_regs)
+ void do_data_abort (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(4, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("data abort\n");
+ 	fixup_pc(pt_regs, -8);
+ 	show_regs (pt_regs);
+@@ -178,6 +234,7 @@ void do_data_abort (struct pt_regs *pt_regs)
+ void do_not_used (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(5, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("not used\n");
+ 	fixup_pc(pt_regs, -8);
+ 	show_regs (pt_regs);
+@@ -188,6 +245,7 @@ void do_not_used (struct pt_regs *pt_regs)
+ void do_fiq (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(6, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("fast interrupt request\n");
+ 	fixup_pc(pt_regs, -8);
+ 	show_regs (pt_regs);
+@@ -198,6 +256,7 @@ void do_fiq (struct pt_regs *pt_regs)
+ void do_irq (struct pt_regs *pt_regs)
+ {
+ 	efi_restore_gd();
++	recovery_record(7, pt_regs);	/* before printf: the console may be gone */
+ 	printf ("interrupt request\n");
+ 	fixup_pc(pt_regs, -8);
+ 	show_regs (pt_regs);

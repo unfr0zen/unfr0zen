@@ -1,0 +1,28 @@
+diff --git a/common/main.c b/common/main.c
+index 682f3359ea3..74bf6cf7a20 100644
+--- a/common/main.c
++++ b/common/main.c
+@@ -17,6 +17,7 @@
+ #include <net.h>
+ #include <version_string.h>
+ #include <efi_loader.h>
++#include <asm/io.h>
+ 
+ static void run_preboot_environment_command(void)
+ {
+@@ -61,10 +62,15 @@ void main_loop(void)
+ 	}
+ 
+ 	s = bootdelay_process();
++	writel(0xB00700A0, (void *)0x0093807C);
++	if (s)
++		writel((uintptr_t)s, (void *)0x00938080);
+ 	if (cli_process_fdt(&s))
+ 		cli_secure_boot_cmd(s);
+ 
++	writel(0xB00700A1, (void *)0x0093807C);
+ 	autoboot_command(s);
++	writel(0xB00700A2, (void *)0x0093807C);
+ 
+ 	cli_loop();
+ 	panic("No CLI available");

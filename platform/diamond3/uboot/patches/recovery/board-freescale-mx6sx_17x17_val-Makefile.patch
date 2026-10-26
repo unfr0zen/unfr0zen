@@ -1,0 +1,14 @@
+diff --git a/board/freescale/mx6sx_17x17_val/Makefile b/board/freescale/mx6sx_17x17_val/Makefile
+index b44bb36c4fd..f01b282e9f5 100644
+--- a/board/freescale/mx6sx_17x17_val/Makefile
++++ b/board/freescale/mx6sx_17x17_val/Makefile
+@@ -4,3 +4,9 @@
+ #
+ 
+ obj-y  := mx6sx_17x17_val.o
++
++# The display and its boot logo; scripts/build_uboot.sh passes the logo's
++# path as NEST_BOOT_LOGO.
++obj-$(CONFIG_VIDEO_MXS) += display.o boot_logo.o
++AFLAGS_boot_logo.o := -DNEST_BOOT_LOGO='"$(NEST_BOOT_LOGO)"'
++$(obj)/boot_logo.o: $(NEST_BOOT_LOGO)

@@ -1,0 +1,6 @@
+#!/bin/sh
+# As cargo-zigbuild: zig on PATH, else the pip ziglang module.
+if command -v zig >/dev/null 2>&1; then
+  exec zig cc -target arm-linux-musleabihf -mcpu=cortex_a9 "$@" -fno-sanitize=all
+fi
+exec python3 -m ziglang cc -target arm-linux-musleabihf -mcpu=cortex_a9 "$@" -fno-sanitize=all

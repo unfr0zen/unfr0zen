@@ -1,0 +1,124 @@
+diff --git a/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c b/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
+index 1ee54b025da..cfb62ceef73 100644
+--- a/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
++++ b/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
+@@ -16,6 +16,12 @@
+ #include <linux/delay.h>
+ #include <linux/sizes.h>
+ #include <common.h>
++#include <cpu_func.h>
++#include <cyclic.h>
++#include <fsl_wdog.h>
++#include <g_dnl.h>
++#include <usb.h>
++#include <linux/usb/gadget.h>
+ #include <fsl_esdhc_imx.h>
+ #include <mmc.h>
+ #include <miiphy.h>
+@@ -264,11 +270,41 @@ void ldo_mode_set(int ldo_bypass)
+ 
+ int dram_init(void)
+ {
+-	gd->ram_size = PHYS_SDRAM_SIZE;
++	/* Report the full 512 MiB so bootm passes it in the kernel FDT. */
++	gd->ram_size = SZ_512M;
+ 
+ 	return 0;
+ }
+ 
++phys_size_t board_get_usable_ram_top(phys_size_t total_size)
++{
++	/* Recovery build: keep relocation in the lower 128 MiB. */
++	return CFG_SYS_SDRAM_BASE + SZ_128M;
++}
++
++void v7_invalidate_dcache_all(void);
++
++void board_quiesce_devices(void)
++{
++#ifdef CONFIG_SYS_DCACHE_OFF
++	/*
++	 * SYS_DCACHE_OFF makes cleanup_before_linux() skip the D-cache
++	 * invalidate, and the zImage decompressor enables the D-cache without
++	 * one. Discard any stale L1 lines left from the boot ROM first.
++	 */
++	v7_invalidate_dcache_all();
++#else
++	/*
++	 * With the D-cache on, the loaded image is still partly in dirty cache
++	 * lines here. cleanup_before_linux()'s dcache_disable() flushes and
++	 * invalidates it; flush it to DRAM first so nothing invalidates those
++	 * lines away before they are written back.
++	 */
++	flush_dcache_all();
++#endif
++	invalidate_icache_all();
++}
++
+ static iomux_v3_cfg_t const uart1_pads[] = {
+ 	MX6_PAD_GPIO1_IO04__UART1_TX | MUX_PAD_CTRL(UART_PAD_CTRL),
+ 	MX6_PAD_GPIO1_IO05__UART1_RX | MUX_PAD_CTRL(UART_PAD_CTRL),
+@@ -687,6 +723,7 @@ int board_ehci_hcd_init(int port)
+ 
+ int board_init(void)
+ {
++	writel(0xB0070001, (void *)0x00938060);
+ 	/* address of boot parameters */
+ 	gd->bd->bi_boot_params = PHYS_SDRAM + 0x100;
+ 
+@@ -732,8 +769,43 @@ static const struct boot_mode board_boot_modes[] = {
+ };
+ #endif
+ 
++#ifdef CONFIG_NEST_USB_RECOVERY
++static void recovery_watchdog_service(void *ctx)
++{
++	struct watchdog_regs *wdog = (void *)WDOG1_BASE_ADDR;
++
++	writew(0x5555, &wdog->wsr);
++	writew(0xaaaa, &wdog->wsr);
++}
++
++int board_usb_console_ready(void)
++{
++	static struct cyclic_info *watchdog;
++
++	/* Preserve the wrapper's deadline until ACM and host DTR are ready. */
++	if (!watchdog) {
++		watchdog = cyclic_register(recovery_watchdog_service, 100000,
++					   "recovery-watchdog", NULL);
++		if (!watchdog)
++			return -ENOMEM;
++	}
++	recovery_watchdog_service(NULL);
++	writel(0x57444731, (void *)0x00938088); /* WDG1: servicing enabled */
++	return 0;
++}
++#endif
++
++#ifdef CONFIG_VIDEO_MXS
++void board_display_init(void);
++#endif
++
+ int board_late_init(void)
+ {
++	int usb_ret;
++	writel(0xB0070002, (void *)0x00938060);
++#ifdef CONFIG_VIDEO_MXS
++	board_display_init();
++#endif
+ #ifdef CONFIG_CMD_BMODE
+ 	add_board_boot_modes(board_boot_modes);
+ #endif
+@@ -742,6 +814,11 @@ int board_late_init(void)
+ 	board_late_mmc_env_init();
+ #endif
+ 
++	usb_ret = usb_gadget_initialize(0);
++	writel(usb_ret, (void *)0x00938064);
++
++	/* ACM starts through the console environment callback in bootcmd. */
++	writel(0xB0070003, (void *)0x00938060);
+ 	return 0;
+ }
+ 

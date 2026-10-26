@@ -1,0 +1,226 @@
+{
+  "description": "Reviewed address-independent ARM instruction shapes. Reference hashes document provenance; discovery does not select by hash. Keep all functions and layout from one reviewed variant together. New shapes require ABI review and guest testing.",
+  "variants": [
+    {
+      "label": "2025",
+      "reference_sha256": "d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52",
+      "layout": {
+        "PRIMARY_SIZE": 320,
+        "COMMON_OFFSET": 164,
+        "LAYER_VTABLE_SIZE": 376,
+        "SCREEN_VTABLE_SIZE": 196,
+        "LAYER_COMMON_VPTR": 204,
+        "LAYER_SECOND_VPTR": 336,
+        "LAYER_THIRD_VPTR": 356,
+        "SCREEN_SECOND_VPTR": 156,
+        "SCREEN_THIRD_VPTR": 176,
+        "SCREEN_TITLE_SLOT": 136,
+        "LEGACY_CLICK": 0,
+        "TIMER_EVENT_FIRST": 1073741866,
+        "TIMER_EVENT_SECOND": 1073741867,
+        "RENAME_SYSCALL": 0
+      },
+      "functions": {
+        "native_layer_ctor": "e3b8104dacf36b35a08d05005f1e2c079c05a64e002190353f2ee84b0335e912",
+        "native_screen_ctor": "68be25502b5e767394ff73f0047d9aa449c938c6e3fa3218deb076adf6d5e649",
+        "native_layer_lookup": "68ddbc5b352d8086e8333f975a3197c74c3d0b3803dd1eab4d9f84aba75c1fca",
+        "native_attach": "ae9c42a711a1b04a317d84b166fd93313e22c3c46669dd971a52af3a8275e7da",
+        "native_screen_init": "a1cb32cb1874f9b17b3fbed2d2842bdc0d816263c2b99b7d4dd80393008e80d2",
+        "native_layer_init": "d5d22e258843d2d204fe858f48156f97ce1af030304e8383606a0552f6a65e2e",
+        "native_select": "41c0d756bc0da802cf27ce3a8b794883489b2b8a557add6e5c398de0de22d444",
+        "native_layer_wheel": "968a3e5d135b8286c5a13290783c22d59d6c506a8de5760072df85964a91bf57",
+        "native_screen_event": "b887835731000202bbebb4ec7a2a5a85167b41291541b5612ad3aee0c02705cd",
+        "native_screen_enter": "950e294d4b5b5d2ff3170fb905562d8ebb2cd87fe4cf8689504651acffc033c3",
+        "native_rebuild_title": "bc088d2f89f7fbf2687ab42528a3cbfc61978e8f196cbb17057783c92d469ce7",
+        "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
+        "native_config_layout": "fe3092d9c20819607c6c5b82657f56aea9da28af3fa74d2cdc050e7f3472e48c",
+        "native_image_load": "17c86a2969f1912b2dbf0d06af67405b2b6216e96f296c3ddf44b16e487a39a6",
+        "native_style": "0ae5bf53a4aa76920b00b82d53725c95e2a81fd6e40551ad1afe10c11030a0aa",
+        "native_config_y": "f1545be4403ddf205f6943b5301d0e514712bf7d0a79890d9058788a6d48a678",
+        "native_config_draw": "8af16f1c0d61489ac8316474e2ae585ffd0c2d58797355ce2853730292641a0a",
+        "native_image_width": "5155260da9eaf6266914ded44328c89cd7e9f3c243e6c756177e9c71d0e68f01",
+        "native_scroll_draw": "2db00602dcd015c5381ac2aa8699b08e7a9d687c48c2ab2f588aa167b4f1f463",
+        "native_image_height": "0b23710ac6e066a7b2b8f0bb241607fcd99a680f614d56e58f9b0349d47a6fe4",
+        "native_layer_event": "b29ba6decd1d29ffef0e139e9c6c4871a931127b586e18337cc43d669c17ea6b",
+        "account_factory": "ad46ef9e10ce0f300d71594562549d697e319fe1478ab7e94ec04a84768d351c",
+        "layer_factory": "47a41995d96e18f77b872c80cea2f96a81dfd4e533d0f2c0bd56c8aa16327a06",
+        "screen_factory": "044ae94eebc781694c2b2e9e65c6d216581321e0980c318f5e3e79e41021f4a7",
+        "screen_composition": "63c3f84ec48ea1bdbbda964c27fd9f986c15c10269068ce714f1502080c3bfe9",
+        "layer_enter": "5bb74b3088da82fcb9f455f86802414248c5b5e9e53c2cba0e2674db93bd8f96",
+        "layer_draw": "4e9030b63d3142189c5ba94f4378fa5615c7f042468a123c52e5a9c40db6a70c",
+        "image_helper": "0ee8c283a14650dd432512d3249a6428f034d5e22a60bbd03b30263a5bce4a61",
+        "layer_event": "55aa4a24971aef53d8fd257468c4761c924790459e0a721d6a2cb66567c42c7d",
+        "layout_wrapper": "48ae9c26702fe8c7de1e2b66f910949ca6108cc10f6ac028b8415dde3345e7a5",
+        "screen_title": "28ebe377901781fc1d4944edd7aae16932bce2670178bb2b92dabe1ce13e2294",
+        "generic_event": "54b61aa2bd736a741153ccc27184fd91f70c93b2fb9a412613a8cbc9fbda9397"
+      }
+    },
+    {
+      "label": "2019-gen3",
+      "reference_sha256": "bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d",
+      "layout": {
+        "PRIMARY_SIZE": 320,
+        "COMMON_OFFSET": 164,
+        "LAYER_VTABLE_SIZE": 376,
+        "SCREEN_VTABLE_SIZE": 192,
+        "LAYER_COMMON_VPTR": 204,
+        "LAYER_SECOND_VPTR": 336,
+        "LAYER_THIRD_VPTR": 356,
+        "SCREEN_SECOND_VPTR": 152,
+        "SCREEN_THIRD_VPTR": 172,
+        "SCREEN_TITLE_SLOT": 132,
+        "LEGACY_CLICK": 1,
+        "TIMER_EVENT_FIRST": 1073741863,
+        "TIMER_EVENT_SECOND": 1073741864,
+        "RENAME_SYSCALL": 1
+      },
+      "functions": {
+        "native_layer_ctor": "9ca7a002d17172ae9e4c0002ecca9c8be3b717ee84aa4be8bb397e6c54548cbd",
+        "native_screen_ctor": "50f063d4ab0124ba7762e4fea2b6be807e2c019c7e31c10e254fdc4e524bc6ab",
+        "native_layer_lookup": "382bdbf6daa44463d8d0e8eb05113be0c298d84888f57e9b5bc27e1c4dc716b8",
+        "native_attach": "1f4294de547d4d14b513d9d7240e95e318f5f71a1ed4e3650c892f5e566dbb84",
+        "native_screen_init": "a1cb32cb1874f9b17b3fbed2d2842bdc0d816263c2b99b7d4dd80393008e80d2",
+        "native_layer_init": "13c9f6329d0996bd56f4181af9d01195d8162815f1bd293523d7afcc1a8be213",
+        "native_select": "ff314f988396ec75fab1d0a226e08fe0c8dbc126551cc77d7670053420dbc712",
+        "native_layer_wheel": "a3d9032310286406533948ec0011d752f6997977a8d8479bf150f479b5c8a0d6",
+        "native_screen_event": "0ce677fbda99aedfceca0549a6caa17872bf930532076867ac846a0f8ef8375e",
+        "native_screen_enter": "e6651959744066ce2cd71670f6fa9661e4949ea864eab59e11f99d1178f49e20",
+        "native_rebuild_title": "7e9f812ddb5aca9ad81f4373efef90670cfb3cf75447a25f870ee6a94a1df083",
+        "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
+        "native_config_layout": "0c2171367fbebe1ef300f298d3df2d8e8b6f7f25162fd11f48b45fc55f4fc975",
+        "native_image_load": "0c8566e3196c6095d0c217f9809f5bb9cef4229e3b611f3a140dd2d80ef29420",
+        "native_style": "3fd6d9cccef2b827f5574bca9b844e8e855b3bb3e168ca293c913ec5cc220a94",
+        "native_config_y": "ca0e2eba9eb3e6d59fbaf85ea194f9e5e261d73d769d900cd9c3eb6102b8592e",
+        "native_config_draw": "0e178a537373090255bc240fbfe5cdd6627dbade9e48ed9562f9d1d403954cca",
+        "native_image_width": "10501ff57aa0cba3d959ba5141a90a0d34435756301140df5a7165f1b4ff9df6",
+        "native_scroll_draw": "27bf2f7facb63fb00ff2578ab7965ca26708586e90e2f44e7f4ebad6c75886f1",
+        "native_image_height": "2a84fa417f2d80f6c24aa7e22cb32ebbb4232f50c91401e609d9eec171f96326",
+        "native_layer_event": "3b710c3be6c49bd5fba0edf17cde9094bfcfdd4e48f53512674b2f0dd213c3da",
+        "account_factory": "0d60ad28f8b703f5d650df769fc32a684599de2eb5ab9ed49300b6c517672591",
+        "layer_factory": "29dde7b31482bdb4086ef8db2aae80c9d0ab741059ef965873e324739ee27f41",
+        "screen_factory": "8d9facf1faf222fa5ace3f5c78e025a39c4d55883b038b65d9d0374a10051e55",
+        "screen_composition": "d5f6810fb248f1949c6c6d1c957a12f2baec644549248da1a1c79b47794416e0",
+        "layer_enter": "9e243d64214ec3de92e60c43f9eb4fd39fade4c5e76c8d420cec55a3db886c9a",
+        "layer_draw": "f6a5b22ace34917bab2551fd93641583dd8d28de9a64839e621fcdbb107949fe",
+        "image_helper": "acc2ef4b43efcdb51db85c8884fb66d3b8a213d37877dacbe61acd9c3990073e",
+        "layer_event": "3b710c3be6c49bd5fba0edf17cde9094bfcfdd4e48f53512674b2f0dd213c3da",
+        "layout_wrapper": "d7a54d65b955a2d36a1700b3977f0e657bd5118c2dd0333ed29173ac9477ec50",
+        "screen_title": "2e4605162e1076be88a31b3a532b8256663ddc57fb9ebea2214971673d7f5abb",
+        "generic_event": "dd273aa36c069288368d46ebfc8edf1e25bad7484b8f502e327958d3b1d0f154"
+      }
+    },
+    {
+      "label": "2019-gen2",
+      "reference_sha256": "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
+      "layout": {
+        "PRIMARY_SIZE": 320,
+        "COMMON_OFFSET": 164,
+        "LAYER_VTABLE_SIZE": 376,
+        "SCREEN_VTABLE_SIZE": 192,
+        "LAYER_COMMON_VPTR": 204,
+        "LAYER_SECOND_VPTR": 336,
+        "LAYER_THIRD_VPTR": 356,
+        "SCREEN_SECOND_VPTR": 152,
+        "SCREEN_THIRD_VPTR": 172,
+        "SCREEN_TITLE_SLOT": 132,
+        "LEGACY_CLICK": 1,
+        "TIMER_EVENT_FIRST": 1073741863,
+        "TIMER_EVENT_SECOND": 1073741864,
+        "RENAME_SYSCALL": 1
+      },
+      "functions": {
+        "native_layer_ctor": "375fee1f9ca35745638275d6db0f156711eb3fe9aeb9b6d8036ba45692396c7c",
+        "native_screen_ctor": "7709f3b425af6c552b1214d4cd302ac94ebf5b6d89825c85c22fd9c8338b3c0c",
+        "native_layer_lookup": "6661ea687256a3fda55450b54f23131edf90d51a8ca048745dda6283c4d4d4d2",
+        "native_attach": "c38c43dfea632e61bfe139062e1873ecc4e90ffc5f7f9b7b387d8e0614551b42",
+        "native_screen_init": "999ef18df42afa03bfdc21fe99bf25994f510f326e0ffcccf4223e2f36d308da",
+        "native_layer_init": "82e6b08fbf29f64cc70f7e8c939fb2fc8c19ad1de2063253a5bd4749cac54488",
+        "native_select": "3fae36e65165887294552721f2bcf41a2e800add2ba4720e3dc4e84013876bb1",
+        "native_layer_wheel": "71aafddf1bfebb83863e837066ab96b0b0714501f278a022c916380497e2c059",
+        "native_screen_event": "f54a53d109739e183cfe8f1b215d87ad80d4194366d58f7af29027851c6296a1",
+        "native_screen_enter": "beff8b452f79131e3bfba5cbd51c7559839d6a5988c415b5dd26745d1eaa1eab",
+        "native_rebuild_title": "e9a3ed538c805e0ae56bb25c6937046dd0c89ad75c943cd0c8a429fcaeb1d69b",
+        "native_config_invalidate": "931433f100f4690161f0c35a7b039353eba1ea6b6daaa6ef42b590fecad46248",
+        "native_config_layout": "63693c5c76c65936b8968c4c94380294d1be10d0b5d3aa6a8cbe7a135ea33db4",
+        "native_image_load": "5cea9d1b18fa0b6de1085c6be0a3ecca1050bdec40dda1e53d205a785c24cc9a",
+        "native_style": "2f700652b1b67e6251dc39e21277290436160772493edad4745903433352425f",
+        "native_config_y": "6dfd24c275a83d0d8f7036242f0fdcffb43b8aa2bd862c6df7f1c71debd2866e",
+        "native_config_draw": "50f38a06548352adf591cb9f462923b4a16fe8219d7c2aaafa0836f1f44df8d0",
+        "native_image_width": "8de8a896eba63c8b343fa5fe8898d831b298840a07646cd6281698f18c957120",
+        "native_scroll_draw": "199dc2e30b61c980dbfa8903237a83993dec9caa27615038df7bf07e1ae865d0",
+        "native_image_height": "71de2c273dd76c776ed9786783d36f4456a1db07dda88f7b46a623470e120b52",
+        "native_layer_event": "2a19ae00c6cb5300242610a1667a18a9724a1ae37b9e88c42eaf54ba06a3af1c",
+        "account_factory": "1e372aad8ec2981e7d480131ad36a8249be54762ec1327a37c8ce7866854ca75",
+        "layer_factory": "9f63fb0e5c92c7e30bc58850f412d2c18a1031af9f42ab6fc01c19150773a78a",
+        "screen_factory": "9779e71ca401e3b8f7ccbcd9222c7c87b7f4092a7b9fe31dea030c4129160dd8",
+        "screen_composition": "9ab72ae1d1a226f02ee705e5dbff702e045409825bc81095a718e25dabb9c54a",
+        "layer_enter": "1866f7ada52d83f4826571f2a8bbdec52504ef7f1af2abebbc4402fbd4df0a16",
+        "layer_draw": "b220c0f3c629d5cee216be4932be9f8fd14165795517d5ca7b1d71b09b14ef22",
+        "image_helper": "12642e8b271f80b94ed1d44a28b201fafd49fa9985027b726f637dd3ad24ddcc",
+        "layer_event": "2a19ae00c6cb5300242610a1667a18a9724a1ae37b9e88c42eaf54ba06a3af1c",
+        "layout_wrapper": "7ceccc6836c0f62f17ac6b4829c7d82a4ab575312bdb60f5bdf7f095ea247d68",
+        "screen_title": "e68a8adc37c3aa4ea690e3141daf80ae9f9d47a8df382714b05796455eb14ab8",
+        "generic_event": "96138424f60318101a936903a5114753994544b3291b573565f187206d52c38a"
+      }
+    }
+  ],
+  "activity_variants": [
+    {
+      "mark": "d20a9334999a57cab1d1b3be722d620a93ac0f7bcf045c0159ebb14d440e62ae",
+      "client": "c2464febf08633d9c3590aeaab5e575e44f5051b0a2ef0c72c1e8c48c77b6f78"
+    },
+    {
+      "mark": "3af30f083a4c08670babd148536788f0cb5fb9fbdacc9b90e744494243ec7d75",
+      "client": "445fdc6dcaa120bf4ea5021a2e4567b98d7521597ab7c78b29c4dd041786da00"
+    },
+    {
+      "mark": "8bbbe264f9f520cae2a822cde7db8a70b9fdf70f25e851057b6c3a92084061ce",
+      "client": "2cba494f6c688155c36cc6bdc5a79284c6ee2b9311f6ff8cbec82cf065d6f139"
+    }
+  ],
+  "menu_title_draw_variants": [
+    "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
+    "d895c47395538af626d8bc054f9e9b9b797425ab264fc69496158bbdfab4c9b0"
+  ],
+  "menu_scale_variants": [
+    "842767bd844df9288e5b5137ff4110626a5614e82c0f54505048543a894adf11",
+    "da64a6577093d8c7a3dd4f41bd321b57fa9cdfacc0ba32eda7e590108a923ce5",
+    "9b40f1eca73596cc9113cd01100cb80f5c263b3b05aea58636f2f9677e1e4139"
+  ],
+  "menu_hidden_variants": [
+    "69396b02d8e0e58fafaaab7e14182da1b38a7c318658097b82d884f2735321fc",
+    "49895f004f8369bb0e3646328a2ad50673cb904112b61cd710b2f12cd1627884",
+    "d1e518e98d61e456b39606d6349408158d02a8cb5761c90bb73c9d7128330d53"
+  ],
+  "menu_draw_variants": [
+    "9a5cbcb506b3859667ef70fe6dc0b880a71e34e66ce677ff36cc979479e14c3b",
+    "8d4bfced18e58ef7cca82b7e8998ddefcbe70a4e528c4495582f373c1f24cc62",
+    "5f7abd85c5a65819dc20dd63e39605126cffcb1dc53191e7f48708b7b1dd439f"
+  ],
+  "downlink_variants": [
+    {
+      "device": "f6a92e24bc86853d6f456bf33fd04ee578494e9116bf293d6aa5409b382ab947",
+      "shared": "d09b53e11a0cdf7a70a88fdeb94acded38161a81ca63450aacc5865da9700121",
+      "schedule": "be5101d39c0b8de892236056e97a89d7dd6c58ef1952b4f9b53a1421d6fc3ec0",
+      "globals_offset": 28,
+      "view_handler": "7c6ce0ed2d0b31546dd93590439e3571ebff494e6ed6a14a8d8d61cc10552d28",
+      "dispatch": "39a663948262e051679bebad7405af18a0444ac6c24c8e9be097ac02c7a04989"
+    },
+    {
+      "device": "a60853dc3be40e3fe75678074fbfb2ee2db7c553c459d9bf86d04d82ba2c65b8",
+      "shared": "ff6d5c823fe58da9ca666e34c5589bff9641a67db6c9e363c17e990225c42d7e",
+      "schedule": "7b606ad358b34ff29696cfddc1dc765b1f83f5b1cff01984fb8babbfbb015e3c",
+      "globals_offset": 4,
+      "view_handler": "4437fc6124b68777e58fbe8f4aba0e811c113f67618c6fe0049a7b0cb42b4c1b",
+      "dispatch": "4437fc6124b68777e58fbe8f4aba0e811c113f67618c6fe0049a7b0cb42b4c1b"
+    },
+    {
+      "device": "b27f215377a8b34a9af7a2f6cc7ff8c36684c35661a14975d1c0b8f4af60bd0e",
+      "shared": "bfbd3b26c8ab5b64ce24cb19aee3080d0b260a73271b707f1768d6faff53d23c",
+      "schedule": "7a6d9c963735e9d0980c892aece0fd6c1c8fccc3c590eef96b6d0b1c681817aa",
+      "globals_offset": 4,
+      "view_handler": "80061bc15f67a508adea317e5c14583733591e52f2a8f7686f1799b5b1acb07b",
+      "dispatch": "80061bc15f67a508adea317e5c14583733591e52f2a8f7686f1799b5b1acb07b"
+    }
+  ]
+}

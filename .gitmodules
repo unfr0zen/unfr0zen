@@ -1,0 +1,6 @@
+[submodule "uboot/upstream"]
+	path = platform/diamond3/uboot/upstream
+	url = https://github.com/nxp-imx/uboot-imx.git
+[submodule "doom/doomgeneric"]
+	path = platform/common/doom/doomgeneric
+	url = https://github.com/ozkl/doomgeneric.git

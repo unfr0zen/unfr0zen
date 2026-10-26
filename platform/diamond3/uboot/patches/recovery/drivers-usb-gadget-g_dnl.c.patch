@@ -1,0 +1,45 @@
+diff --git a/drivers/usb/gadget/g_dnl.c b/drivers/usb/gadget/g_dnl.c
+index 444707171d6..afa4dc01ad7 100644
+--- a/drivers/usb/gadget/g_dnl.c
++++ b/drivers/usb/gadget/g_dnl.c
+@@ -121,20 +121,34 @@ static inline struct g_dnl_bind_callback *g_dnl_bind_callback_end(void)
+ 				g_dnl_bind_callbacks);
+ }
+ 
+-static int g_dnl_do_config(struct usb_configuration *c)
++static int g_dnl_bind_named(struct usb_configuration *c, const char *name)
+ {
+-	const char *s = c->cdev->driver->name;
+ 	struct g_dnl_bind_callback *callback = g_dnl_bind_callback_first();
+ 
+-	debug("%s: configuration: 0x%p composite dev: 0x%p\n",
+-	      __func__, c, c->cdev);
+-
+ 	for (; callback != g_dnl_bind_callback_end(); callback++)
+-		if (!strcmp(s, callback->usb_function_name))
++		if (!strcmp(name, callback->usb_function_name))
+ 			return callback->fptr(c);
+ 	return -ENODEV;
+ }
+ 
++static int g_dnl_do_config(struct usb_configuration *c)
++{
++	const char *name = c->cdev->driver->name;
++	int ret;
++
++	debug("%s: configuration: 0x%p composite dev: 0x%p\n",
++	      __func__, c, c->cdev);
++
++	if (IS_ENABLED(CONFIG_NEST_USB_RECOVERY) &&
++	    !strcmp(name, "usb_recovery_acm_fastboot")) {
++		ret = g_dnl_bind_named(c, "usb_serial_acm");
++		if (ret)
++			return ret;
++		return g_dnl_bind_named(c, "usb_dnl_fastboot");
++	}
++	return g_dnl_bind_named(c, name);
++}
++
+ static int g_dnl_config_register(struct usb_composite_dev *cdev)
+ {
+ 	struct usb_configuration *config;

@@ -1,0 +1,15 @@
+diff --git a/drivers/mtd/nand/raw/mxs_nand.c b/drivers/mtd/nand/raw/mxs_nand.c
+index bfc65b80b13..3f5174888e7 100644
+--- a/drivers/mtd/nand/raw/mxs_nand.c
++++ b/drivers/mtd/nand/raw/mxs_nand.c
+@@ -1684,6 +1684,10 @@ int mxs_nand_init_ctrl(struct mxs_nand_info *nand_info)
+ 		mtd->_block_markbad = mxs_nand_hook_block_markbad;
+ 	}
+ 
++	/* Recovery uses the installed BCH18 layout and permits UBI writes. */
++	printf("Recovery NAND: RW, BCH%u/%u\n",
++	       nand->ecc.strength, nand->ecc.size);
++
+ 	err = nand_register(0, mtd);
+ 	if (err)
+ 		goto err_free_buffers;

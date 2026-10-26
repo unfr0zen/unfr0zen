@@ -1,0 +1,7 @@
+#
+#    nestlocal: restart the local cloud stand-in if it ever exits.
+#
+
+check process nestlocal with pidfile /var/run/nestlocal.pid
+  start program = "/etc/init.d/nestlocal start"
+  stop  program = "/etc/init.d/nestlocal stop"

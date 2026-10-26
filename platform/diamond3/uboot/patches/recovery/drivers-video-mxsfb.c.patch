@@ -1,0 +1,17 @@
+diff --git a/drivers/video/mxsfb.c b/drivers/video/mxsfb.c
+index a6496194792..b21572fd5e8 100644
+--- a/drivers/video/mxsfb.c
++++ b/drivers/video/mxsfb.c
+@@ -305,8 +305,10 @@ static int mxs_of_get_timings(struct udevice *dev,
+ 		return -EINVAL;
+ 	}
+ 
+-	priv->disp_dev = video_link_get_next_device(dev);
+-	if (priv->disp_dev) {
++	/* Without a video link graph, the display node's timings are used. */
++	if (IS_ENABLED(CONFIG_VIDEO_LINK))
++		priv->disp_dev = video_link_get_next_device(dev);
++	if (IS_ENABLED(CONFIG_VIDEO_LINK) && priv->disp_dev) {
+ 		ret = video_link_get_display_timings(timings);
+ 		if (ret) {
+ 			dev_err(dev, "failed to get any video link display timings\n");

@@ -1,0 +1,65 @@
+#!/bin/sh
+# Dedicated OpenThread host and SPI bridge; credentials live on the data volume.
+set -eu
+umask 077
+BIN=/nestlabs/sbin
+STATE=/media/data/nestlocal-thread
+OPTIONS=/etc/nestlocal/options
+[ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
+stop() {
+    for name in daemon rcp; do
+        file=/run/nestlocal-thread-$name.pid
+        if [ -f "$file" ]; then
+            kill "$(cat "$file")" 2>/dev/null || true
+            rm -f "$file"
+        fi
+    done
+    rm -f /run/nestlocal-thread-sleep /run/nestlocal-thread-wake.sock /run/nestlocal-thread-alarm.sock
+}
+alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+case "${1:-}" in
+start)
+    # Only nestlocal's options choose Thread; otherwise the radio is Zigbee's or Nest's.
+    grep -q -- '-matter-thread' "$OPTIONS" 2>/dev/null || { echo "Thread is not selected in $OPTIONS" >&2; exit 1; }
+    alive /run/nestlocal-thread-rcp.pid && alive /run/nestlocal-thread-daemon.pid && exit 0
+    stop
+    rm -f /run/nestlocal-thread-pty
+    mkdir -p /run "$STATE"
+    chmod 700 "$STATE"
+    # wpantund must be disabled by the installer before either process owns SPI.
+    [ -z "$(pidof wpantund)" ] && [ -z "$(pidof spi-server)" ] || exit 1
+    if ! "$BIN/thread-rcp" --probe >/dev/null 2>&1; then
+        /nestlabs/bin/zb-loader --app-easyload /usr/share/nestlocal/thread-rcp.bin >/tmp/nestlocal-thread-loader.log 2>&1 || true
+        "$BIN/thread-rcp" --probe >/dev/null 2>&1 || exit 1
+    fi
+    trap stop EXIT
+    "$BIN/thread-rcp" >/run/nestlocal-thread-pty 2>/tmp/nestlocal-thread-rcp.log &
+    echo $! >/run/nestlocal-thread-rcp.pid
+    count=0
+    while [ ! -s /run/nestlocal-thread-pty ]; do
+        alive /run/nestlocal-thread-rcp.pid || exit 1
+        count=$((count + 1)); [ "$count" -lt 10 ] || exit 1
+        sleep 1
+    done
+    serial=$(head -n 1 /run/nestlocal-thread-pty)
+    case "$serial" in /dev/pts/*) ;; *) exit 1;; esac
+    cd "$STATE"
+    # OpenThread requests SIGHUP on parent exit; keep the supervised daemon alive.
+    nohup "$BIN/ot-daemon" -I thread0 -d 4 -v "spinel+hdlc+uart://$serial?uart-baudrate=115200&no-reset" >/tmp/nestlocal-thread-daemon.log 2>&1 &
+    echo $! >/run/nestlocal-thread-daemon.pid
+    count=0
+    while ! "$BIN/ot-ctl" -I thread0 state >/dev/null 2>&1; do
+        alive /run/nestlocal-thread-daemon.pid || exit 1
+        count=$((count + 1)); [ "$count" -lt 10 ] || exit 1
+        sleep 1
+    done
+    "$BIN/ot-ctl" -I thread0 mode rdn >/dev/null
+    "$BIN/ot-ctl" -I thread0 ifconfig up >/dev/null
+    ip -6 route replace default dev thread0 metric 2048
+    # Matter supplies the dataset through Network Commissioning.
+    trap - EXIT
+    ;;
+stop) stop;;
+restart) stop; "$0" start;;
+*) echo "Usage: $0 {start|stop|restart}"; exit 1;;
+esac

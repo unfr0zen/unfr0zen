@@ -1,0 +1,10 @@
+# Build artifacts -- never committed.
+/target/
+/build/
+/.work/
+/dist/
+
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

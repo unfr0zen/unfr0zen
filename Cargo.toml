@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/unfr0zen-core", "crates/unfr0zen-host", "crates/unfr0zen-cli", "crates/unfr0zen-gui", "crates/nestlocal"]
+
+[workspace.package]
+edition = "2021"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+# nestlocal and the Thread bridge for the thermostat: size first, as a gen 2's
+# root slot has little room for them (opt-level s keeps most of 3's speed for
+# Matter's crypto, at three quarters of the size).
+[profile.thermostat]
+inherits = "release"
+opt-level = "s"
+
+[profile.dev.package.rsa]
+opt-level = 3

@@ -1,0 +1,389 @@
+diff --git a/board/freescale/mx6sx_17x17_val/display.c b/board/freescale/mx6sx_17x17_val/display.c
+new file mode 100644
+index 00000000000..0327e90888e
+--- /dev/null
++++ b/board/freescale/mx6sx_17x17_val/display.c
+@@ -0,0 +1,383 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * The diamond3 display: an HX8369 panel whose SPI sits on ECSPI1's pads,
++ * LCDIF1, and an LM3695 backlight on I2C2. The bring-up is the stock Linux
++ * 4.1 kernel's (hx8369_lcd_init, lm3695_configure_device), byte for byte.
++ */
++
++#include <common.h>
++#include <dm.h>
++#include <gzip.h>
++#include <i2c.h>
++#include <malloc.h>
++#include <mapmem.h>
++#include <video.h>
++#include <asm/gpio.h>
++#include <asm/io.h>
++#include <asm/arch/clock.h>
++#include <asm/arch/crm_regs.h>
++#include <asm/arch/imx-regs.h>
++#include <asm/arch/sys_proto.h>
++#include <asm/arch/mx6-pins.h>
++#include <asm/mach-imx/iomux-v3.h>
++#include <asm/mach-imx/regs-lcdif.h>
++#include <linux/delay.h>
++#include <linux/sizes.h>
++
++#define PANEL_SCLK	IMX_GPIO_NR(4, 21)
++#define PANEL_MOSI	IMX_GPIO_NR(4, 16)
++#define PANEL_MISO	IMX_GPIO_NR(4, 17)
++#define PANEL_CS	IMX_GPIO_NR(4, 22)
++#define PANEL_RESET	IMX_GPIO_NR(3, 27)
++#define BL_ENABLE	IMX_GPIO_NR(2, 14)
++
++#define SPI_PAD_CTRL	0x100b1		/* the kernel's ecspi1grp-1 */
++#define RESET_PAD_CTRL	0x1b0b0		/* the kernel's lcdifctrlgrp-0 */
++
++static iomux_v3_cfg_t const display_pads[] = {
++	MX6_PAD_QSPI1A_SCLK__GPIO4_IO_21 | MUX_PAD_CTRL(SPI_PAD_CTRL),
++	MX6_PAD_QSPI1A_DATA0__GPIO4_IO_16 | MUX_PAD_CTRL(SPI_PAD_CTRL),
++	MX6_PAD_QSPI1A_DATA1__GPIO4_IO_17 | MUX_PAD_CTRL(SPI_PAD_CTRL),
++	MX6_PAD_QSPI1A_SS0_B__GPIO4_IO_22 | MUX_PAD_CTRL(NO_PAD_CTRL),
++	MX6_PAD_LCD1_RESET__GPIO3_IO_27 | MUX_PAD_CTRL(RESET_PAD_CTRL),
++	MX6_PAD_KEY_COL4__GPIO2_IO_14 | MUX_PAD_CTRL(NO_PAD_CTRL),
++};
++
++struct hx8369_cmd {
++	u8 cmd;
++	u8 len;
++	u8 data[34];
++	u16 delay_ms;
++};
++
++static const struct hx8369_cmd hx8369_setextc = { 0xb9, 3, { 0xff, 0x83, 0x69 }, 10 };
++
++/* The three panel variants, picked by the ID the panel reports. */
++static const struct hx8369_cmd hx8369_init[3][15] = { {
++	{ 0xb2, 15, { 0x00, 0x3b, 0x04, 0x04, 0xf0, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x04, 0x04, 0x00, 0x01 } },
++	{ 0xb4, 5, { 0x0a, 0x1d, 0x80, 0x00, 0x00 } },
++	{ 0xb6, 2, { 0x3f, 0x3f } },
++	{ 0xcc, 1, { 0x02 } },
++	{ 0xd5, 26, { 0x00, 0x01, 0x03, 0x34, 0x01, 0x05, 0x00, 0x70, 0x11, 0x13, 0x00, 0x00, 0x60, 0x24, 0x71, 0x35, 0x00, 0x00, 0x73, 0x05, 0x62, 0x14, 0x07, 0x0f, 0x04, 0x04 } },
++	{ 0xb1, 19, { 0x01, 0x00, 0x34, 0x0a, 0x00, 0x11, 0x11, 0x2f, 0x37, 0x3f, 0x3f, 0x01, 0x22, 0x01, 0xe6, 0xe6, 0xe6, 0xe6, 0xe6 } },
++	{ 0x00, 1, { 0x00 } },
++	{ 0xe0, 34, { 0x10, 0x1a, 0x26, 0x2a, 0x2b, 0x2f, 0x33, 0x4b, 0x04, 0x0a, 0x0e, 0x13, 0x15, 0x14, 0x14, 0x13, 0x15, 0x10, 0x1b, 0x26, 0x2a, 0x2b, 0x2f, 0x33, 0x4a, 0x00, 0x0a, 0x0e, 0x14, 0x16, 0x14, 0x14, 0x12, 0x18 } },
++	{ 0x11, 0, { }, 120 },
++	{ 0x29, 0, { } },
++}, {
++	{ 0xb2, 15, { 0x00, 0x33, 0x03, 0x03, 0x70, 0x00, 0xff, 0x06, 0x00, 0x00, 0x00, 0x03, 0x03, 0x00, 0x01 } },
++	{ 0xb4, 5, { 0x00, 0x1c, 0x84, 0x06, 0x02 } },
++	{ 0xb6, 2, { 0x3c, 0x3c } },
++	{ 0xcc, 1, { 0x02 } },
++	{ 0xd5, 26, { 0x00, 0x08, 0x03, 0x00, 0x01, 0x0a, 0x00, 0x85, 0x11, 0x13, 0x00, 0x01, 0x00, 0x64, 0x00, 0x75, 0x01, 0x00, 0x44, 0x57, 0x44, 0x46, 0x07, 0x0f, 0x02, 0x03 } },
++	{ 0xb1, 19, { 0x01, 0x00, 0x34, 0x07, 0x00, 0x10, 0x10, 0x22, 0x32, 0x3f, 0x3f, 0x07, 0x23, 0x01, 0xe6, 0xe6, 0xe6, 0xe6, 0xe6 } },
++	{ 0x00, 1, { 0x00 } },
++	{ 0xe0, 34, { 0x00, 0x1a, 0x20, 0x37, 0x3b, 0x3f, 0x2f, 0x4d, 0x07, 0x0d, 0x0f, 0x12, 0x14, 0x12, 0x14, 0x10, 0x18, 0x00, 0x19, 0x21, 0x38, 0x3b, 0x3f, 0x2f, 0x4c, 0x06, 0x0d, 0x0e, 0x12, 0x14, 0x14, 0x14, 0x11, 0x17 } },
++	{ 0x11, 0, { }, 120 },
++	{ 0x29, 0, { } },
++}, {
++	{ 0xb2, 15, { 0x00, 0x33, 0x03, 0x03, 0x70, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x03, 0x03, 0x00, 0x01 } },
++	{ 0xb4, 5, { 0x0a, 0x1d, 0x69, 0x0e, 0x06 } },
++	{ 0xb6, 2, { 0x31, 0x31 } },
++	{ 0xcc, 1, { 0x02 } },
++	{ 0xd5, 26, { 0x00, 0x04, 0x00, 0x00, 0x01, 0x04, 0x28, 0x98, 0x33, 0x37, 0x02, 0x31, 0x46, 0x8a, 0x57, 0x9b, 0x00, 0x00, 0x73, 0x15, 0x61, 0x04, 0x07, 0x0f, 0x04, 0x00 } },
++	{ 0xb1, 19, { 0x01, 0x00, 0x54, 0x0b, 0x00, 0x0f, 0x0f, 0x34, 0x3c, 0x3f, 0x3f, 0x07, 0x22, 0x01, 0xe6, 0xe6, 0xe6, 0xe6, 0xe6 } },
++	{ 0xbf, 1, { 0x70 } },
++	{ 0xe0, 34, { 0x00, 0x0d, 0x0f, 0x2f, 0x32, 0x3e, 0x1d, 0x3c, 0x09, 0x0e, 0x0d, 0x10, 0x12, 0x11, 0x12, 0x11, 0x18, 0x00, 0x0d, 0x0f, 0x2f, 0x32, 0x3e, 0x1d, 0x3c, 0x09, 0x0e, 0x0d, 0x10, 0x12, 0x11, 0x12, 0x11, 0x18 } },
++	{ 0x11, 0, { }, 120 },
++	{ 0x29, 0, { } },
++} };
++
++/*
++ * One word of SPI mode 3, MSB first: the clock idles high and both ends
++ * sample on its rising edge.
++ */
++static uint panel_spi_word(uint out, int bits)
++{
++	uint in = 0;
++
++	while (bits--) {
++		gpio_set_value(PANEL_SCLK, 0);
++		gpio_set_value(PANEL_MOSI, (out >> bits) & 1);
++		udelay(1);
++		gpio_set_value(PANEL_SCLK, 1);
++		in = in << 1 | gpio_get_value(PANEL_MISO);
++		udelay(1);
++	}
++	return in;
++}
++
++/* 9-bit words: bit 8 clear for the command, set for its parameters. */
++static void panel_write(const struct hx8369_cmd *c)
++{
++	int i;
++
++	gpio_set_value(PANEL_CS, 0);
++	panel_spi_word(c->cmd, 9);
++	for (i = 0; i < c->len; i++)
++		panel_spi_word(0x100 | c->data[i], 9);
++	gpio_set_value(PANEL_CS, 1);
++	mdelay(c->delay_ms);
++}
++
++/* Select the register with 0xfe, then clock it out after 0xff. */
++static u8 panel_read(u8 reg)
++{
++	struct hx8369_cmd index = { 0xfe, 1, { reg } };
++	u8 val;
++
++	panel_write(&index);
++	gpio_set_value(PANEL_CS, 0);
++	panel_spi_word(0xff, 9);
++	val = panel_spi_word(0, 8);
++	gpio_set_value(PANEL_CS, 1);
++	return val;
++}
++
++/* Returns the extra vertical back porch lines the variant needs. */
++static int panel_init(void)
++{
++	int variant, i;
++	u32 id;
++
++	gpio_set_value(PANEL_RESET, 1);
++	mdelay(10);
++	gpio_set_value(PANEL_RESET, 0);
++	mdelay(10);
++	gpio_set_value(PANEL_RESET, 1);
++	mdelay(120);
++
++	panel_write(&hx8369_setextc);
++	panel_read(0xf4); /* the kernel reads, and only logs, this ID too */
++	id = (panel_read(0xdc) << 16 | panel_read(0xdb) << 8 |
++	      panel_read(0xda)) & ~0x8000;
++	writel(id, (void *)0x0093809C);
++	/*
++	 * The stock kernel reads Panel ID 0x000011 on this glass (its log:
++	 * "Himax ID: 69" then "Panel ID: 000011"), which selects variant 0.
++	 * Our bit-banged SPI read is unreliable and returns a floating value,
++	 * so honour a good read but default to variant 0 for this panel.
++	 */
++	variant = id == 0x000011 ? 0 : id == 0x232221 ? 1 : 0;
++	printf("Display: HX8369 id %06x, variant %d\n", id, variant);
++
++	for (i = 0; i < ARRAY_SIZE(hx8369_init[variant]); i++)
++		panel_write(&hx8369_init[variant][i]);
++	return variant == 2 ? 3 : 0;
++}
++
++extern u8 boot_logo_gz[], boot_logo_gz_end[];
++
++/* The stock device tree keeps PFUZE200 VGEN4/5/6 at 2.8/3.3/3.0 V. */
++static void display_power_on(void)
++{
++	static const u8 rails[][2] = {
++		{ 0x6f, 0x1a }, { 0x70, 0x1f }, { 0x71, 0x1c },
++	};
++	struct udevice *pmic;
++	int i, value, ret;
++
++	/* The diamond3 PMIC is on I2C4 (U-Boot bus sequence 3). */
++	ret = i2c_get_chip_for_busnum(3, 0x08, 1, &pmic);
++	if (ret) {
++		writel(1, (void *)0x009380CC);
++		writel(ret, (void *)0x009380D0);
++		return;
++	}
++	for (i = 0; i < ARRAY_SIZE(rails); i++) {
++		value = dm_i2c_reg_read(pmic, rails[i][0]);
++		writel(value, (void *)(0x009380B4 + i * 4));
++		if (value < 0) {
++			ret = value;
++			goto fail;
++		}
++		ret = dm_i2c_reg_write(pmic, rails[i][0],
++					(value & ~0x1f) | rails[i][1]);
++		if (ret)
++			goto fail;
++		value = dm_i2c_reg_read(pmic, rails[i][0]);
++		writel(value, (void *)(0x009380C0 + i * 4));
++		if (value < 0 || (value & 0x1f) != rails[i][1]) {
++			ret = value < 0 ? value : -EIO;
++			goto fail;
++		}
++	}
++	writel(0, (void *)0x009380CC);
++	mdelay(10);
++	return;
++
++fail:
++	writel(i + 2, (void *)0x009380CC);
++	writel(ret, (void *)0x009380D0);
++	printf("Display: PMIC rail %d failed (%d)\n", i, ret);
++}
++
++/* Draw the boot logo; it is stored turned to how the panel is mounted. */
++static void show_boot_logo(struct udevice *dev, int vbp_extra)
++{
++	struct mxs_lcdif_regs *lcdif = (void *)MX6SX_LCDIF1_BASE_ADDR;
++	unsigned long len = boot_logo_gz_end - boot_logo_gz;
++	void *bmp;
++	int ret;
++
++	/* As the kernel's upper_margin += 3: a longer frame, later start. */
++	writel(readl(&lcdif->hw_lcdif_vdctrl1) + vbp_extra,
++	       &lcdif->hw_lcdif_vdctrl1);
++	writel(readl(&lcdif->hw_lcdif_vdctrl3) + vbp_extra,
++	       &lcdif->hw_lcdif_vdctrl3);
++
++	bmp = malloc(SZ_1M);
++	if (!bmp)
++		return;
++	ret = gunzip(bmp, SZ_1M, boot_logo_gz, &len);
++	if (!ret)
++		ret = video_bmp_display(dev, map_to_sysmem(bmp), 0, 0, false);
++	if (ret)
++		printf("Display: boot logo failed (%d)\n", ret);
++	free(bmp);
++}
++
++/* The stock kernel's LM3695 setup, at the device tree's brightness=1800. */
++static void backlight_on(void)
++{
++	static const u8 regs[][2] = {
++		{ 0x10, 0x6d },	/* general purpose: enable, boost, single string */
++		{ 0x11, 0x03 },	/* clock divider */
++		{ 0x12, 0x03 },	/* ramp rate: 2 s over the full range */
++		{ 0x13, 1800 & 7 },
++		{ 0x14, 1800 >> 3 },
++	};
++	struct udevice *chip;
++	int i, ret, stage = 3;
++
++	/* Keep HWEN high while the panel starts, and allow the LM3695 to wake. */
++	ret = gpio_set_value(BL_ENABLE, 1);
++	if (ret)
++		goto fail;
++	mdelay(10);
++	stage = 1;
++	for (i = 0; i < 3; i++) {
++		ret = i2c_get_chip_for_busnum(1, 0x63, 1, &chip);
++		if (!ret)
++			break;
++		mdelay(10);
++	}
++	if (ret)
++		goto fail;
++	stage = 2;
++	/* A fresh enable edge clears any prior blank state. The LM3695 needs
++	 * at least 600 us after this edge before brightness registers wake. */
++	ret = dm_i2c_reg_write(chip, 0x10, 0x6c);
++	if (ret) {
++		writel(0x10, (void *)0x00938098);
++		goto fail;
++	}
++	mdelay(2);
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		ret = dm_i2c_reg_write(chip, regs[i][0], regs[i][1]);
++		if (ret) {
++			writel(regs[i][0], (void *)0x00938098);
++			goto fail;
++		}
++		if (i == 0)
++			mdelay(2);
++	}
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		ret = dm_i2c_reg_read(chip, regs[i][0]);
++		writel(ret, (void *)(0x009380A0 + i * 4));
++		if (ret < 0) {
++			stage = 4;
++			writel(regs[i][0], (void *)0x00938098);
++			goto fail;
++		}
++	}
++	writel(0x424c0000, (void *)0x00938090);
++	return;
++
++fail:
++	writel(0x424c0000 | stage, (void *)0x00938090);
++	writel(ret, (void *)0x00938094);
++	printf("Display: backlight failed (%d)\n", ret);
++}
++
++/*
++ * A watchdog reset restarts only the SoC: the LCDIF and the video PLL can
++ * still be set up from the last run. Stop the LCDIF at a frame boundary,
++ * soft-reset it, and return PLL5 to its power-on state (powered down,
++ * bypassed), so mxsfb starts from where a cold boot does.
++ */
++static void lcdif_quiesce(void)
++{
++	struct mxs_lcdif_regs *lcdif = (void *)MX6SX_LCDIF1_BASE_ADDR;
++	struct mxc_ccm_reg *ccm = (void *)CCM_BASE_ADDR;
++
++	enable_lcdif_clock(MX6SX_LCDIF1_BASE_ADDR, 1);
++	if (readl(&lcdif->hw_lcdif_ctrl) & LCDIF_CTRL_RUN) {
++		writel(LCDIF_CTRL_RUN, &lcdif->hw_lcdif_ctrl_clr);
++		mdelay(50);	/* about three frames: the DMA stops at the end of one */
++	}
++	mxs_reset_block(&lcdif->hw_lcdif_ctrl_reg);
++
++	writel(BM_ANADIG_PLL_VIDEO_ENABLE, &ccm->analog_pll_video_clr);
++	writel(BM_ANADIG_PLL_VIDEO_POWERDOWN | BM_ANADIG_PLL_VIDEO_BYPASS,
++	       &ccm->analog_pll_video_set);
++}
++
++void board_display_init(void)
++{
++	struct udevice *dev;
++	int ret;
++
++	writel(0x424cffff, (void *)0x00938090);
++	writel(0, (void *)0x00938094);
++	writel(0, (void *)0x00938098);
++	writel(0xffffffff, (void *)0x009380CC);
++	writel(0, (void *)0x009380D0);
++	imx_iomux_v3_setup_multiple_pads(display_pads, ARRAY_SIZE(display_pads));
++	gpio_request(PANEL_SCLK, "panel sclk");
++	gpio_request(PANEL_MOSI, "panel mosi");
++	gpio_request(PANEL_MISO, "panel miso");
++	gpio_request(PANEL_CS, "panel cs");
++	gpio_request(PANEL_RESET, "panel reset");
++	ret = gpio_request(BL_ENABLE, "backlight enable");
++	if (ret) {
++		writel(0x424c0003, (void *)0x00938090);
++		writel(ret, (void *)0x00938094);
++		return;
++	}
++	display_power_on();
++	gpio_direction_output(PANEL_SCLK, 1);
++	gpio_direction_output(PANEL_MOSI, 0);
++	gpio_direction_input(PANEL_MISO);
++	gpio_direction_output(PANEL_CS, 1);
++	/*
++	 * The panel and the LM3695 keep power across a watchdog reset, so
++	 * hold the panel in reset and shut the LM3695 down (HWEN low resets
++	 * its registers) until they are set up again. backlight_on() raises
++	 * HWEN before its first I2C transaction.
++	 */
++	gpio_direction_output(PANEL_RESET, 0);
++	ret = gpio_direction_output(BL_ENABLE, 0);
++	if (ret) {
++		writel(0x424c0003, (void *)0x00938090);
++		writel(ret, (void *)0x00938094);
++		return;
++	}
++	lcdif_quiesce();
++
++	/*
++	 * Bring the LCDIF up first so DOTCLK and the sync signals are live
++	 * before the panel is initialised and turned on. A DPI panel that
++	 * receives display-on (0x29) with no pixel clock never locks to the
++	 * timing: a uniform framebuffer then scans out as walking colour bands
++	 * that collapse to black. With the clock already running, the panel
++	 * locks when panel_init() sends sleep-out and display-on.
++	 */
++	ret = uclass_first_device_err(UCLASS_VIDEO, &dev);
++	if (ret) {
++		printf("Display: probe failed (%d)\n", ret);
++		return;
++	}
++	show_boot_logo(dev, panel_init());
++	backlight_on();
++}

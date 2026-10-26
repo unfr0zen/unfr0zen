@@ -1,0 +1,21 @@
+blueprint:
+  name: Nest clock (unfr0zen)
+  description: >-
+    Answers Nest thermostats running unfr0zen when they ask for the time, so
+    their clocks stay right on a network with no way out to an NTP server. One
+    automation answers every thermostat.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/time.yaml
+
+# nestlocal asks on nestlocal/<serial>/time/request and takes the answer, the
+# time in seconds since 1970, only within 5 seconds: a late one cannot set the
+# clock wrong.
+mode: queued
+triggers:
+  - trigger: mqtt
+    topic: nestlocal/+/time/request
+actions:
+  - action: mqtt.publish
+    data:
+      topic: "nestlocal/{{ trigger.topic.split('/')[1] }}/set/time"
+      payload: "{{ now().timestamp() }}"

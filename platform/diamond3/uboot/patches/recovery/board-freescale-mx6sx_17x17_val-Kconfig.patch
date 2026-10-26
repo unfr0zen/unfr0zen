@@ -1,0 +1,19 @@
+diff --git a/board/freescale/mx6sx_17x17_val/Kconfig b/board/freescale/mx6sx_17x17_val/Kconfig
+index df1ec1547f0..4572808dfb4 100644
+--- a/board/freescale/mx6sx_17x17_val/Kconfig
++++ b/board/freescale/mx6sx_17x17_val/Kconfig
+@@ -12,6 +12,14 @@ config SYS_CONFIG_NAME
+ config TEXT_BASE
+ 	default 0x87800000
+ 
++config NEST_USB_RECOVERY
++	bool "Use the RAM recovery ACM console instead of manufacturing boot"
++	depends on USB_FUNCTION_ACM && ENV_IS_NOWHERE
++	select CYCLIC
++	help
++	  Honor CONFIG_BOOTCOMMAND when entered via ROM USB download.
++	  Omit validation-board NAND and manufacturing boot environment entries.
++
+ config LPDDR2_BOARD
+ 	bool "Select for the board using LPDDR2 not default DDR3"
+ 

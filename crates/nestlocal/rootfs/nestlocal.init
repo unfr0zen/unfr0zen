@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# nestlocal: the unit's own stand-in for Nest's service, bridged to Home
+# Assistant over MQTT (ha/README.md in the imx6-stuff repository).
+# Started from rcS before nlclient, and kept running by monit.
+#
+# CLI/GUI settings in /etc/nestlocal/options take precedence. Units without
+# that file can use /media/system-config/nestlocal.options.
+
+DAEMON=/nestlabs/sbin/nestlocal
+PIDFILE=/var/run/nestlocal.pid
+OPTIONS=/etc/nestlocal/options
+[ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
+
+case "${1}" in
+start)
+    # A radio that will not flash or attach must not take MQTT and Wi-Fi Matter down with it.
+    if grep -q -- '-matter-thread' "$OPTIONS"; then
+        /etc/init.d/nestlocal-thread start || echo "nestlocal: Thread transport unavailable; serving without it" >&2
+    fi
+    # Firmware 6.4-8 moves a unit with no structure to Nest's newer service
+    # at start, before nlclient asks nestlocal anything: give it the one
+    # nestlocal serves (crates/nestlocal/src/structure.rs). An existing one stays.
+    ${DAEMON} -syslog -seed-structure /media/user-config/settings.config
+    start-stop-daemon -S -q -b -m -p ${PIDFILE} -x ${DAEMON} -- -syslog `cat ${OPTIONS}`
+    ;;
+stop)
+    start-stop-daemon -K -q -p ${PIDFILE} -x ${DAEMON}
+    rm -f ${PIDFILE}
+    [ ! -x /etc/init.d/nestlocal-thread ] || /etc/init.d/nestlocal-thread stop
+    ;;
+restart)
+    ${0} stop
+    sleep 1
+    ${0} start
+    ;;
+*)
+    echo "Usage: ${0} {start|stop|restart}"
+    exit 1
+    ;;
+esac
