@@ -1,6 +1,6 @@
 # unfr0zen
 [![GitHub Release](https://img.shields.io/github/v/release/unfr0zen/unfr0zen?include_prereleases)](https://github.com/unfr0zen/unfr0zen/releases)
-[![GitHub License](https://img.shields.io/github/license/unfr0zen/unfr0zen)](LICENSE)
+[![GitHub License](https://img.shields.io/github/license/unfr0zen/unfr0zen?v=1)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/4YC7Yj3Tx)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-donate-yellow.svg)](https://buymeacoffee.com/willtm)
 

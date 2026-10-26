@@ -21,6 +21,11 @@ sha2 = "0.10"
 tempfile = "3"
 
 
+[dev-dependencies]
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [build-dependencies]
 flate2 = "1"
 lzma-rs = "0.3"

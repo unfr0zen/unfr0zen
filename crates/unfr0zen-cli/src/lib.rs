@@ -327,6 +327,7 @@ fn local_nlclient(binary: &std::path::Path, out: &std::path::Path, undo: Option<
         std::fs::write(out.with_extension("json"), manifest)?;
     }
     Ok(format!("Wrote {} ({} bytes)", out.display(), output.len()))
+}
 
 fn update() -> unfr0zen_host::Result<String> {
     let version = env!("UNFR0ZEN_BUILD_VERSION");
