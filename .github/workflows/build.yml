@@ -26,22 +26,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # A pull request's run waits here for approval in the pull-request
-  # environment before any job reaches the self-hosted runners; pushes to main
-  # and release tags go straight through.
-  approve:
-    runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'pull_request' && 'pull-request' || '' }}
-    permissions: {}
-    steps:
-      - run: 'true'
-
   # The build image, from this repository's Dockerfile, into zot for the jobs
   # below to pull. This job runs on the host itself: Actions resolves and pulls
   # a job's container before any of its steps run, so the job that builds the
   # image cannot be one that uses it.
   image:
-    needs: approve
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
@@ -129,7 +118,6 @@ jobs:
   # zbwake job's matrix. Over the API, as the image job fetches the
   # Dockerfile: a host job cannot check out.
   zbwake-releases:
-    needs: approve
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
