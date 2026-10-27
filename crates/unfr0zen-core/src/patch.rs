@@ -401,6 +401,16 @@ const NLCLIENT_MONITRC_ORIGINAL: &str = "etc/unfr0zen/nlclient.monitrc.original"
 const CLIENT_MONITRC: &[u8] = include_bytes!("../../../client-ng/rootfs/nlclient.monitrc");
 const CLIENT_INIT: &[u8] = include_bytes!("../../../client-ng/rootfs/client-ng.init");
 const CLIENT_SHARE: &str = "nestlabs/share/client-ng/";
+/// Where the client reads the pages of unfr0zen's features from.
+const CLIENT_PLUGINS: &str = "etc/unfr0zen/plugins";
+/// unfr0zen's Settings pages for the client: its own tile, and one for each
+/// feature, installed while the feature is.
+const CLIENT_PAGES: [(&str, &[u8]); 4] = [
+    ("10-unfr0zen.lua", include_bytes!("../../../client-ng/rootfs/plugins/10-unfr0zen.lua")),
+    ("20-matter.lua", include_bytes!("../../../client-ng/rootfs/plugins/20-matter.lua")),
+    ("30-zigbee.lua", include_bytes!("../../../client-ng/rootfs/plugins/30-zigbee.lua")),
+    ("40-doom.lua", include_bytes!("../../../client-ng/rootfs/plugins/40-doom.lua")),
+];
 /// The client as installed under its earlier name, unfr0zen-client: its
 /// binary, init script and files, removed when it is installed again, and
 /// its monit check, taken for the client's own.
@@ -410,11 +420,13 @@ const RETIRED_SHARE: &str = "nestlabs/share/unfr0zen-client/";
 const RETIRED_CHECK: &str = "check process nlclient matching /nestlabs/sbin/unfr0zen-client";
 
 /// --client-ng: the client's files and its init script, and monit's nlclient
-/// check running it, stock's check kept aside. Without it, a unit that has
+/// check running it, stock's check kept aside, and a Settings page for each
+/// feature in `features` (matter, zigbee, doom). Without it, a unit that has
 /// the client gets stock's check back, so nlclient runs again. Returns the
-/// files of the client under its earlier name, to be removed.
+/// files of the client under its earlier name and the pages of features
+/// left out, to be removed.
 fn client_ng(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, client: Option<&Overlay>,
-             overlay: &mut Overlay) -> Result<Vec<String>> {
+             overlay: &mut Overlay, features: [bool; 3]) -> Result<Vec<String>> {
     if client.is_none() && volume.inspect(CLIENT_BINARY)?.is_none() && volume.inspect(RETIRED_BINARY)?.is_none() {
         return Ok(Vec::new());
     }
@@ -432,6 +444,7 @@ fn client_ng(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Original
             let original = original.ok_or_else(|| crate::Error::Device(format!("{NLCLIENT_MONITRC_ORIGINAL} is missing")))?;
             overlay.directories.push(("etc/unfr0zen".into(), 0o755));
             overlay.files.push((NLCLIENT_MONITRC_ORIGINAL.into(), mode, original));
+            overlay.directories.push((CLIENT_PLUGINS.into(), 0o755));
         }
         None if ours => {
             let original = original.ok_or_else(|| crate::Error::Device(format!("{NLCLIENT_MONITRC_ORIGINAL} is missing")))?;
@@ -440,6 +453,15 @@ fn client_ng(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Original
         None => {}
     }
     let mut retired = vec![RETIRED_BINARY.to_string(), RETIRED_INIT.to_string()];
+    // The tile with the client, each feature's page with the feature too.
+    for (i, (name, page)) in CLIENT_PAGES.into_iter().enumerate() {
+        let path = format!("{CLIENT_PLUGINS}/{name}");
+        if client.is_some() && (i == 0 || features[i - 1]) {
+            overlay.files.push((path, 0o644, page.to_vec()));
+        } else {
+            retired.push(path);
+        }
+    }
     retired.extend(client.iter().flat_map(|c| &c.files).filter_map(|(name, _, _)| name.strip_prefix(CLIENT_SHARE))
         .map(|rest| format!("{RETIRED_SHARE}{rest}")));
     let names: Vec<&str> = retired.iter().map(String::as_str).collect();
@@ -543,7 +565,8 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
             overlay.files.extend(doom.files.clone());
             overlay.directories.extend(doom.directories.clone());
         }
-        retired = client_ng(volume, &mut tree, &mut originals, options.client_ng.as_ref(), overlay.as_mut().unwrap())?;
+        let features = [options.matter.is_some(), options.zigbee, options.doom.is_some()];
+        retired = client_ng(volume, &mut tree, &mut originals, options.client_ng.as_ref(), overlay.as_mut().unwrap(), features)?;
     }
     let mut directories = Vec::new();
     if let Some(overlay) = &overlay {
@@ -1029,6 +1052,26 @@ mod tests {
         assert_eq!(volume.text(NLCLIENT_MONITRC_ORIGINAL), STOCK_CHECK);
         patch(&mut volume, &Options { client_ng: None, ..options }, false).unwrap();
         assert_eq!(volume.text(NLCLIENT_MONITRC), STOCK_CHECK);
+    }
+
+    #[test]
+    fn client_ng_installs_a_settings_page_for_each_feature_and_retires_the_others() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        volume.files.insert(NLCLIENT_MONITRC.into(), ("0:0".into(), 0o644, b"check process nlclient\n".to_vec()));
+        let client = Overlay { files: vec![(CLIENT_BINARY.into(), 0o755, b"CLIENT".to_vec())],
+                               directories: vec![("nestlabs/share/client-ng".into(), 0o755)] };
+        let page = |name: &str| format!("{CLIENT_PLUGINS}/{name}");
+        let options = Options { client_ng: Some(client), zigbee: true, ..options() };
+        patch(&mut volume, &options, false).unwrap();
+        assert!(volume.text(&page("10-unfr0zen.lua")).contains("UNFR0ZEN"));
+        assert!(volume.text(&page("30-zigbee.lua")).contains("Zigbee"));
+        assert!(!volume.files.contains_key(&page("20-matter.lua")));
+        assert!(!volume.files.contains_key(&page("40-doom.lua")));
+        patch(&mut volume, &Options { zigbee: false, ..options.clone() }, false).unwrap();
+        assert!(!volume.files.contains_key(&page("30-zigbee.lua")), "the page goes with the feature");
+        patch(&mut volume, &Options { client_ng: None, zigbee: false, ..options }, false).unwrap();
+        assert!(!volume.files.contains_key(&page("10-unfr0zen.lua")), "and the tile with the client");
     }
 
     #[test]
