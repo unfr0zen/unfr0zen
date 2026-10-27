@@ -38,7 +38,7 @@ RUN for arch in arm64 riscv64; do dpkg --add-architecture $arch; done \
     && pip install --no-cache-dir --break-system-packages --root-user-action=ignore \
         ziglang==0.16.0 cargo-zigbuild==0.23.4 unicorn==2.1.4 pyelftools==0.33 \
     && rustup target add aarch64-unknown-linux-gnu x86_64-pc-windows-gnu \
-        aarch64-apple-darwin x86_64-apple-darwin armv7-unknown-linux-musleabihf \
+        aarch64-apple-darwin x86_64-apple-darwin armv7-unknown-linux-musleabihf armv7-unknown-linux-gnueabihf \
         riscv64gc-unknown-linux-gnu aarch64-pc-windows-gnullvm \
     && printf '#!/bin/sh\nexec /usr/lib/llvm-19/bin/llvm-windres --target=aarch64-w64-mingw32 "$@"\n' \
         > /usr/local/bin/llvm-windres && chmod +x /usr/local/bin/llvm-windres \

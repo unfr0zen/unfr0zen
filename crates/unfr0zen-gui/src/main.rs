@@ -327,6 +327,7 @@ impl Form {
             matter_code: self.matter.on.then(|| self.matter.code.clone()),
             zigbee: self.zigbee,
             doom: false,  // the CLI's --doom has no window control
+            client_ng: false,  // nor its --client-ng
             ssh: self.ssh,
             usb_shell: self.usb_shell,
         }

@@ -132,6 +132,85 @@ fn doom(root: &Path, out: &Path) {
     let wad = deb_file(&deb, "./usr/share/games/doom/doom1.wad");
     assert_eq!(sha256(&wad), DOOM_WAD_SHA256, "{DOOM_WAD_DEB} does not hold the v1.9 shareware DOOM1.WAD");
     gzip(&wad, &out.join("doom1.wad.gz"));
+    fs::write(out.join("doom-logo.png"), doom_logo(&wad)).unwrap();
+}
+
+/// Doom's title graphic (the WAD's M_DOOM patch, in PLAYPAL's colours) as a
+/// PNG, for the client's Doom page: the art stays in the WAD, never
+/// committed.
+fn doom_logo(wad: &[u8]) -> Vec<u8> {
+    let u32_at = |d: &[u8], at: usize| u32::from_le_bytes(d[at..at + 4].try_into().unwrap()) as usize;
+    let lump = |name: &str| (0..u32_at(wad, 4)).map(|i| u32_at(wad, 8) + i * 16).find_map(|e| {
+        let n = &wad[e + 8..e + 16];
+        (n.split(|&b| b == 0).next() == Some(name.as_bytes())).then(|| &wad[u32_at(wad, e)..u32_at(wad, e) + u32_at(wad, e + 4)])
+    }).unwrap_or_else(|| panic!("the WAD has no {name}"));
+    let (palette, patch) = (lump("PLAYPAL"), lump("M_DOOM"));
+    let (w, h) = (u16::from_le_bytes([patch[0], patch[1]]) as usize, u16::from_le_bytes([patch[2], patch[3]]) as usize);
+    let mut rgba = vec![0u8; w * h * 4];
+    for x in 0..w {
+        let mut at = u32_at(patch, 8 + x * 4);
+        while patch[at] != 0xff {
+            let (top, n) = (patch[at] as usize, patch[at + 1] as usize);
+            for i in 0..n {
+                let c = patch[at + 3 + i] as usize * 3;
+                let o = ((top + i) * w + x) * 4;
+                rgba[o..o + 4].copy_from_slice(&[palette[c], palette[c + 1], palette[c + 2], 0xff]);
+            }
+            at += n + 4;
+        }
+    }
+    let raw: Vec<u8> = rgba.chunks(w * 4).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&raw).unwrap();
+    let chunk = |kind: &[u8], data: &[u8]| {
+        let mut c = (data.len() as u32).to_be_bytes().to_vec();
+        c.extend(kind);
+        c.extend(data);
+        let mut crc = flate2::Crc::new();
+        crc.update(&c[4..]);
+        c.extend(crc.sum().to_be_bytes());
+        c
+    };
+    let mut header = (w as u32).to_be_bytes().to_vec();
+    header.extend((h as u32).to_be_bytes());
+    header.extend([8, 6, 0, 0, 0]);
+    [&b"\x89PNG\r\n\x1a\n"[..], &chunk(b"IHDR", &header), &chunk(b"IDAT", &z.finish().unwrap()), &chunk(b"IEND", &[])].concat()
+}
+
+/// client-ng as client-ng/build.sh stages it (build/client-ng), for
+/// --client-ng: one gzipped stream of files, each its path's length (u32 LE),
+/// path, mode and length, then its bytes.
+fn client(root: &Path, out: &Path) {
+    let stage = root.join("build/client-ng");
+    println!("cargo:rerun-if-changed={}", stage.display());
+    fn walk(dir: &Path, base: &Path, files: &mut Vec<(String, u32, Vec<u8>)>) {
+        let mut entries: Vec<_> = fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for path in entries {
+            println!("cargo:rerun-if-changed={}", path.display());
+            if path.is_dir() {
+                walk(&path, base, files);
+            } else {
+                let name = path.strip_prefix(base).unwrap().to_string_lossy().into_owned();
+                let mode = if name == "client-ng" { 0o755 } else { 0o644 };
+                files.push((name, mode, fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let binary = fs::read(stage.join("client-ng"))
+        .unwrap_or_else(|_| panic!("build/client-ng is missing: build it first (scripts/build-firmware.sh)"));
+    assert_eq!((&binary[..4], binary[18]), (&b"\x7fELF"[..], 40), "build/client-ng/client-ng is not an ARM ELF binary");
+    let mut files = Vec::new();
+    walk(&stage, &stage, &mut files);
+    let mut data = Vec::new();
+    for (name, mode, bytes) in files {
+        data.extend((name.len() as u32).to_le_bytes());
+        data.extend(name.as_bytes());
+        data.extend(mode.to_le_bytes());
+        data.extend((bytes.len() as u32).to_le_bytes());
+        data.extend(bytes);
+    }
+    gzip(&data, &out.join("client.gz"));
 }
 
 fn j49(root: &Path, out: &Path) {
@@ -198,6 +277,7 @@ fn main() {
     busybox(&root, &out);
     nestlocal(&root, &out);
     doom(&root, &out);
+    client(&root, &out);
     custom_screen(&root, &out);
     // The gen3's radio image serves Thread and Zigbee alike, the gen2's
     // Thread image Thread alone; the Thread host tools beside them.

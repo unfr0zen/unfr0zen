@@ -334,6 +334,9 @@ pub struct Options {
     pub zigbee: bool,
     /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
+    /// client-ng's files (--client-ng): it runs in place of nlclient,
+    /// from start-up, through monit's nlclient check.
+    pub client_ng: Option<Overlay>,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
@@ -389,6 +392,61 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
     Ok(())
 }
 
+/// client-ng's binary, which is there while --client-ng is.
+pub const CLIENT_BINARY: &str = "nestlabs/sbin/client-ng";
+/// Monit's check for nlclient, which stock's start-up asks to start.
+const NLCLIENT_MONITRC: &str = "etc/monit.d/nlclient.monitrc";
+/// Stock's check, kept while the client's is in its place.
+const NLCLIENT_MONITRC_ORIGINAL: &str = "etc/unfr0zen/nlclient.monitrc.original";
+const CLIENT_MONITRC: &[u8] = include_bytes!("../../../client-ng/rootfs/nlclient.monitrc");
+const CLIENT_INIT: &[u8] = include_bytes!("../../../client-ng/rootfs/client-ng.init");
+const CLIENT_SHARE: &str = "nestlabs/share/client-ng/";
+/// The client as installed under its earlier name, unfr0zen-client: its
+/// binary, init script and files, removed when it is installed again, and
+/// its monit check, taken for the client's own.
+const RETIRED_BINARY: &str = "nestlabs/sbin/unfr0zen-client";
+const RETIRED_INIT: &str = "etc/init.d/unfr0zen-client";
+const RETIRED_SHARE: &str = "nestlabs/share/unfr0zen-client/";
+const RETIRED_CHECK: &str = "check process nlclient matching /nestlabs/sbin/unfr0zen-client";
+
+/// --client-ng: the client's files and its init script, and monit's nlclient
+/// check running it, stock's check kept aside. Without it, a unit that has
+/// the client gets stock's check back, so nlclient runs again. Returns the
+/// files of the client under its earlier name, to be removed.
+fn client_ng(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, client: Option<&Overlay>,
+             overlay: &mut Overlay) -> Result<Vec<String>> {
+    if client.is_none() && volume.inspect(CLIENT_BINARY)?.is_none() && volume.inspect(RETIRED_BINARY)?.is_none() {
+        return Ok(Vec::new());
+    }
+    fetch(volume, tree, originals, &[NLCLIENT_MONITRC], true, true)?;
+    fetch(volume, tree, originals, &[NLCLIENT_MONITRC_ORIGINAL], false, true)?;
+    let (current, mode) = tree.get(NLCLIENT_MONITRC).cloned().unwrap();
+    let ours = current == CLIENT_MONITRC || String::from_utf8_lossy(&current).contains(RETIRED_CHECK);
+    let original = tree.get(NLCLIENT_MONITRC_ORIGINAL).map(|(data, _)| data.clone()).or_else(|| (!ours).then(|| current.clone()));
+    match client {
+        Some(client) => {
+            overlay.files.extend(client.files.clone());
+            overlay.directories.extend(client.directories.clone());
+            overlay.files.push(("etc/init.d/client-ng".into(), 0o755, CLIENT_INIT.to_vec()));
+            overlay.files.push((NLCLIENT_MONITRC.into(), mode, CLIENT_MONITRC.to_vec()));
+            let original = original.ok_or_else(|| crate::Error::Device(format!("{NLCLIENT_MONITRC_ORIGINAL} is missing")))?;
+            overlay.directories.push(("etc/unfr0zen".into(), 0o755));
+            overlay.files.push((NLCLIENT_MONITRC_ORIGINAL.into(), mode, original));
+        }
+        None if ours => {
+            let original = original.ok_or_else(|| crate::Error::Device(format!("{NLCLIENT_MONITRC_ORIGINAL} is missing")))?;
+            overlay.files.push((NLCLIENT_MONITRC.into(), mode, original));
+        }
+        None => {}
+    }
+    let mut retired = vec![RETIRED_BINARY.to_string(), RETIRED_INIT.to_string()];
+    retired.extend(client.iter().flat_map(|c| &c.files).filter_map(|(name, _, _)| name.strip_prefix(CLIENT_SHARE))
+        .map(|rest| format!("{RETIRED_SHARE}{rest}")));
+    let names: Vec<&str> = retired.iter().map(String::as_str).collect();
+    fetch(volume, tree, originals, &names, false, false)?;
+    Ok(retired)
+}
+
 /// Patches host copies of the device's files in patch_root0.py's order, with
 /// every option it takes, then (unless dry_run) applies the differences on
 /// the unit and verifies them on flash. The host never parses UBIFS.
@@ -438,12 +496,14 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
         patch_ntp(&mut tree, if server.is_empty() { DEFAULT_NTP_SERVER } else { server })?;
     }
     let mut overlay = options.overlay.clone();
+    let mut retired = Vec::new();
     // An installed nestlocal is the unit's cloud, so it stays; a run with no
     // integration, overlay or cloud URL rewrites its files with them all off,
     // which also puts Nest's Thread radio set-up back after Zigbee.
     let turn_off = options.overlay.is_none() && options.cloud_url.is_none()
         && volume.inspect(nestlocal::OPTIONS)?.is_some();
-    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || turn_off {
+    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || options.client_ng.is_some()
+        || turn_off {
         fetch(volume, &mut tree, &mut originals, &nestlocal::STOCK_FILES, true, true)?;
         fetch(volume, &mut tree, &mut originals, &[nestlocal::UNLOCK_BUNDLE], false, true)?;
         if options.matter.is_some() {
@@ -483,6 +543,7 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
             overlay.files.extend(doom.files.clone());
             overlay.directories.extend(doom.directories.clone());
         }
+        retired = client_ng(volume, &mut tree, &mut originals, options.client_ng.as_ref(), overlay.as_mut().unwrap())?;
     }
     let mut directories = Vec::new();
     if let Some(overlay) = &overlay {
@@ -584,7 +645,7 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
             writes.push((name.clone(), data, old.map_or("0:0".to_string(), |(owner, _, _)| owner), *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied()
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain(retired.iter().map(String::as_str))
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -947,6 +1008,49 @@ mod tests {
         assert_eq!(volume.text("nestlabs/sbin/doom"), "DOOM");
         patch(&mut volume, &Options { doom: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-doom"));
+    }
+
+    #[test]
+    fn client_ng_runs_the_client_in_nlclients_place_and_gives_stocks_check_back_without_it() {
+        const STOCK_CHECK: &str = "check process nlclient matching /nestlabs/sbin/nlclient\n";
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        volume.files.insert(NLCLIENT_MONITRC.into(), ("0:0".into(), 0o644, STOCK_CHECK.as_bytes().to_vec()));
+        let client = Overlay { files: vec![(CLIENT_BINARY.into(), 0o755, b"CLIENT".to_vec())],
+                               directories: vec![("nestlabs/share/client-ng".into(), 0o755)] };
+        let options = Options { client_ng: Some(client), ..options() };
+        patch(&mut volume, &options, false).unwrap();
+        assert_eq!(volume.text(CLIENT_BINARY), "CLIENT");
+        assert!(volume.text(NLCLIENT_MONITRC).contains("matching /nestlabs/sbin/client-ng"));
+        assert!(volume.text("etc/init.d/client-ng").contains("--settings"));
+        assert_eq!(volume.text(NLCLIENT_MONITRC_ORIGINAL), STOCK_CHECK);
+        // Again: stock's check stays kept, not replaced by the client's.
+        patch(&mut volume, &options, false).unwrap();
+        assert_eq!(volume.text(NLCLIENT_MONITRC_ORIGINAL), STOCK_CHECK);
+        patch(&mut volume, &Options { client_ng: None, ..options }, false).unwrap();
+        assert_eq!(volume.text(NLCLIENT_MONITRC), STOCK_CHECK);
+    }
+
+    #[test]
+    fn client_ng_replaces_the_client_installed_as_unfr0zen_client() {
+        const STOCK_CHECK: &str = "check process nlclient matching /nestlabs/sbin/nlclient\n";
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let old_check = format!("{RETIRED_CHECK}\n  start program = \"/etc/init.d/unfr0zen-client start\"\n");
+        volume.files.insert(NLCLIENT_MONITRC.into(), ("0:0".into(), 0o644, old_check.into_bytes()));
+        volume.files.insert(NLCLIENT_MONITRC_ORIGINAL.into(), ("0:0".into(), 0o644, STOCK_CHECK.as_bytes().to_vec()));
+        for name in [RETIRED_BINARY, RETIRED_INIT, "nestlabs/share/unfr0zen-client/config/menus.lua"] {
+            volume.files.insert(name.into(), ("0:0".into(), 0o644, b"OLD".to_vec()));
+        }
+        let client = Overlay { files: vec![(CLIENT_BINARY.into(), 0o755, b"CLIENT".to_vec()),
+                                           ("nestlabs/share/client-ng/config/menus.lua".into(), 0o644, b"MENUS".to_vec())],
+                               directories: vec![("nestlabs/share/client-ng".into(), 0o755)] };
+        patch(&mut volume, &Options { client_ng: Some(client), ..options() }, false).unwrap();
+        assert!(volume.text(NLCLIENT_MONITRC).contains("matching /nestlabs/sbin/client-ng"));
+        assert_eq!(volume.text(NLCLIENT_MONITRC_ORIGINAL), STOCK_CHECK, "stock's check, not the old client's");
+        for name in [RETIRED_BINARY, RETIRED_INIT, "nestlabs/share/unfr0zen-client/config/menus.lua"] {
+            assert!(!volume.files.contains_key(name), "{name} removed");
+        }
     }
 
     #[test]

@@ -115,6 +115,7 @@ Common options:
   --matter-thread       Serve Matter over Thread too (excludes --zigbee)
   --zigbee              Join a Zigbee network as a router
   --doom                Install Doom, launched from UNFR0ZEN → Doom
+  --client-ng           Run client-ng, the new thermostat UI, in place of nlclient
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
 ```

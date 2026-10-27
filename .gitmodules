@@ -4,3 +4,6 @@
 [submodule "doom/doomgeneric"]
 	path = platform/common/doom/doomgeneric
 	url = https://github.com/ozkl/doomgeneric.git
+[submodule "client-ng"]
+	path = client-ng
+	url = https://github.com/unfr0zen/client-ng.git

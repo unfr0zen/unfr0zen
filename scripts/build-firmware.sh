@@ -1,10 +1,10 @@
 #!/bin/sh
 # Build what the app installs on the thermostat, into build/: the diamond3's
-# ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loaders, NAND
-# flasher, dropbear and kernel with a USB serial port, the radio's firmware and zbwake.ko for each
-# gen3 release, nestlocal for ARMv7 carrying them, Doom, and the UNFR0ZEN
-# screen's object for the app to link into the unit's nlclient. The build logs
-# go to .work/.
+# ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loaders,
+# NAND flasher, dropbear and kernel with a USB serial port, the radio's firmware
+# and zbwake.ko for each gen3 release, nestlocal for ARMv7 carrying them, Doom,
+# client-ng, and the UNFR0ZEN screen's object for the app to link into the
+# unit's nlclient. The build logs go to .work/.
 #
 #     scripts/build-firmware.sh
 #
@@ -92,10 +92,14 @@ step thread-source sh platform/common/radio/thread/fetch-openthread.sh
 step thread sh platform/common/radio/thread/build.sh
 cp build/thread/nestlocal build/nestlocal-armv7
 step doom sh platform/common/doom/build.sh build/doom-armv7
+# client-ng for --client-ng, staged with its skins, menus and plugins in
+# build/client-ng. On macOS it starts its own container, as above.
+echo "Building client; log: .work/build-client.log"
+sh client-ng/build.sh > .work/build-client.log 2>&1 || { tail -n 40 .work/build-client.log >&2; exit 1; }
 # One relocatable object for every firmware build: the app links it at the
 # addresses and layouts discovered in the unit's nlclient. No compiler or
 # linker is required when the finished app patches a unit.
 step custom-screen clang --target=arm-linux-gnueabihf -march=armv7-a -marm -mfpu=vfpv3-d16 -mfloat-abi=hard \
     -std=c11 -O2 -fPIE -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables \
     -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -c platform/common/nlclient/src/custom_screen.c -o build/custom-screen.o
-echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loaders and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom and the screen object under build/."
+echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loaders and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom, the client and the screen object under build/."

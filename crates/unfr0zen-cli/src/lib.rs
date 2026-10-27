@@ -91,6 +91,9 @@ struct Args {
     /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
+    /// run client-ng, the new thermostat UI, in place of nlclient from start-up; without it a unit that has it runs nlclient again
+    #[arg(long, alias = "new-ui", help_heading = "Root filesystem options")]
+    client_ng: bool,
     /// tar of root-owned files to add
     #[arg(long, value_name = "TAR", help_heading = "Root filesystem options")]
     overlay: Option<PathBuf>,
@@ -179,6 +182,7 @@ impl Args {
             matter_code: self.matter_code.clone(),
             zigbee: self.zigbee,
             doom: self.doom,
+            client_ng: self.client_ng,
             ssh: self.ssh,
             usb_shell: self.usb_shell,
         }

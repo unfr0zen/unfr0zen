@@ -16,6 +16,7 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 - `scripts/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app.
 - `assets/`: app icons, the Linux `.desktop` entry, and the README screenshot.
 - `integrations/`: files users install on their side: Home Assistant blueprints (`home-assistant/`) and the Zigbee2MQTT converter (`zigbee2mqtt/`).
+- `client-ng/`: `client-ng`, a replacement for stock nlclient (Rust engine, Lua skins, GLES2), developed on nest-qemu; a submodule (the private `unfr0zen/client-ng`), still a member of this Cargo workspace. Commit its changes in the submodule, then the new pointer here. `client-ng/README.md` describes it and `client-ng/TESTING.md` the build, emulator and stock-comparison workflow.
 
 Generated outputs belong in ignored `build/`, `target/`, `dist/`, or `.work/` directories.
 
@@ -34,6 +35,8 @@ cargo test --workspace --locked
 sh scripts/make_macos_app.sh
 ```
 
+The client builds separately for the unit (`client-ng/build.sh`) and runs on nest-qemu through `client-ng/tools/nest.py`; see `client-ng/TESTING.md`.
+
 The firmware build supplies assets embedded by the host crates; build it before workspace tests or application builds. macOS uses Docker for firmware compilation. See `BUILDING.md` for platform dependencies. The packaging command produces `dist/unfr0zen.app`.
 
 ## Coding Style & Naming Conventions
@@ -48,6 +51,7 @@ Rust tests use `#[test]` and integration tests under `crates/unfr0zen-core/tests
 clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/custom_flow_test.c -o /tmp/custom-flow-test
 /tmp/custom-flow-test
 python3 -m unittest discover -s platform/common/radio/tests -v
+cargo run --locked -q -p client-ng -- --check --skins client-ng/skins --menus client-ng/config/menus.lua
 cargo clippy --workspace --locked --all-targets -- -D warnings
 ```
 

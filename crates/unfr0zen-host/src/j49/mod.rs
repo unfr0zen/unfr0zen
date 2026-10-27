@@ -189,7 +189,8 @@ fn route(progress: &mut dyn Progress, config: &Config, device: Device, nand: &mu
         progress.status(&format!("Original root slot saved: {} (raw 2112-byte pages)", original.display()));
     }
     let mut volume = stage(progress, &format!("Scan {slot}'s JFFS2"), || jffs2::Slot::load(raw.clone()))?;
-    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
+    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
+        || options.client_ng.is_some() {
         crate::assets::nestlocal()
     } else {
         Vec::new()

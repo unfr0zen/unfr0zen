@@ -28,5 +28,7 @@ The game:
   seconds quits.
 - Sound: the unit has no audio output but its piezo, one tone at a time.
   Effects are Doom's PC speaker sounds; music is each song's highest note.
-- While Doom runs nlclient is stopped, so the thermostat does not control the
-  heating or cooling.
+- While Doom runs stock nlclient is stopped, so the thermostat does not
+  control the heating or cooling. client-ng, run in its place, keeps
+  running the heating and cooling but stops drawing and reading the ring
+  until Doom exits.
