@@ -13,6 +13,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::nand::{self, Job};
+use unfr0zen_host::update;
 use unfr0zen_host::{init_logging, log_path, run, Config, Device, PatchInputs, Slot};
 
 use ui::TerminalProgress;
@@ -136,6 +137,8 @@ enum Command {
     Verify { image: PathBuf },
     /// Write IMAGE, a backup verified against its .sha256, back to NAND (asks first)
     Restore { image: PathBuf },
+    /// Replace this executable with the latest release from GitHub, if newer
+    Update,
 }
 
 fn parse_device(value: &str) -> Result<Device, String> {
@@ -225,6 +228,10 @@ pub fn main() {
     if !args.skip_logo {
         ui::logo();
     }
+    // Before elevation: an update needs no USB access.
+    if let Some(Command::Update) = args.command {
+        finish(update());
+    }
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
     let work_dir = args.work_dir.clone().unwrap_or_else(|| data_dir.join("runs"));
     #[cfg(target_os = "linux")]
@@ -263,9 +270,17 @@ pub fn main() {
         Some(Command::Restore { image }) => {
             nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore)
         }
+        Some(Command::Update) => update(),
     };
+    finish(result);
+}
+
+fn finish(result: unfr0zen_host::Result<String>) -> ! {
     match result {
-        Ok(message) => ui::done(&message),
+        Ok(message) => {
+            ui::done(&message);
+            std::process::exit(0);
+        }
         Err(error) => {
             log::error!("{error}");
             let hint = if log_path().is_some() { " (details in the run log)" } else { "" };
@@ -312,4 +327,18 @@ fn local_nlclient(binary: &std::path::Path, out: &std::path::Path, undo: Option<
         std::fs::write(out.with_extension("json"), manifest)?;
     }
     Ok(format!("Wrote {} ({} bytes)", out.display(), output.len()))
+}
+
+fn update() -> unfr0zen_host::Result<String> {
+    let version = env!("UNFR0ZEN_BUILD_VERSION");
+    if update::release_version(version).is_none() {
+        return Ok(format!("unfr0zen {version} is a development build; release builds update themselves"));
+    }
+    ui::waiting("Checking GitHub for a newer release");
+    let Some(release) = update::check(update::App::Cli, version)? else {
+        return Ok(format!("unfr0zen {version} is the latest release"));
+    };
+    ui::waiting(&format!("Installing unfr0zen {}", release.tag));
+    update::install(update::App::Cli, &release)?;
+    Ok(format!("Updated unfr0zen {version} to {}: {}", release.tag, release.url))
 }

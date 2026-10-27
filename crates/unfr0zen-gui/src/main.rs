@@ -12,12 +12,15 @@ mod macos_about;
 mod run;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::flow::default_data_dir;
+use unfr0zen_host::update;
 use unfr0zen_host::WAIT_USB_BOOT_STAGE;
 use unfr0zen_host::{Config, Device, PatchInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
 
@@ -81,7 +84,10 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    let result = eframe::run_native("unfr0zen", options, Box::new(|cc| {
+    let restart = Arc::new(AtomicBool::new(false));
+    let result = eframe::run_native("unfr0zen", options, Box::new({
+        let restart = restart.clone();
+        move |cc| {
         // Dark whatever the system uses: egui's widgets, and the parts the
         // OS draws (title bar, window appearance, Wayland decorations).
         cc.egui_ctx.set_theme(egui::Theme::Dark);
@@ -91,10 +97,175 @@ fn main() -> eframe::Result<()> {
         cc.egui_ctx.all_styles_mut(|style| style.spacing.menu_margin = egui::Margin::same(12));
         #[cfg(target_os = "macos")]
         macos_about::install();
-        Ok(Box::new(App::default()))
-    }));
+        Ok(Box::new(App { updates: Updates::check(&cc.egui_ctx, restart), ..App::default() }))
+    }}));
     drop(instance);
+    // The new version starts once this one has let go of the instance lock.
+    if restart.load(Ordering::Relaxed) {
+        if let Err(e) = update::relaunch(update::App::Gui) {
+            log::error!("{e}");
+        }
+    }
     result
+}
+
+/// Where an update from GitHub's releases stands.
+#[derive(Clone, Default)]
+enum UpdateState {
+    #[default]
+    Checking,
+    None,
+    Available(update::Available),
+    Installing(String),
+    Installed(String),
+    Failed(String, update::Available),
+}
+
+/// The update check made at start, and the install it can lead to; both on
+/// background threads, so the window never waits on the network.
+#[derive(Default)]
+struct Updates {
+    state: Arc<Mutex<UpdateState>>,
+    restart: Arc<AtomicBool>,
+    /// The background check sets this to open the dialog automatically.
+    auto_open: Arc<AtomicBool>,
+    /// The update dialog is open.
+    dialog_open: bool,
+}
+
+impl Updates {
+    fn check(ctx: &egui::Context, restart: Arc<AtomicBool>) -> Updates {
+        let updates = Updates { restart, ..Updates::default() };
+        let (state, ctx) = (updates.state.clone(), ctx.clone());
+        let auto_open = updates.auto_open.clone();
+        std::thread::spawn(move || {
+            let next = match update::check(update::App::Gui, BUILD_VERSION) {
+                Ok(Some(release)) => UpdateState::Available(release),
+                Ok(None) => UpdateState::None,
+                Err(e) => { log::warn!("{e}"); UpdateState::None }
+            };
+            if matches!(next, UpdateState::Available(_)) {
+                auto_open.store(true, Ordering::Relaxed);
+            }
+            *state.lock().unwrap() = next;
+            ctx.request_repaint();
+        });
+        updates
+    }
+
+    fn install(&self, ctx: &egui::Context, release: update::Available) {
+        *self.state.lock().unwrap() = UpdateState::Installing(release.tag.clone());
+        let (state, ctx) = (self.state.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let next = match update::install(update::App::Gui, &release) {
+                Ok(()) => UpdateState::Installed(release.tag),
+                Err(e) => {
+                    log::error!("{e}");
+                    UpdateState::Failed(e.to_string(), release)
+                }
+            };
+            *state.lock().unwrap() = next;
+            ctx.request_repaint();
+        });
+    }
+
+    /// The version label in the header bar.
+    fn version_label(&self) -> String {
+        let state = self.state.lock().unwrap().clone();
+        match state {
+            UpdateState::Checking => BUILD_VERSION.to_string(),
+            UpdateState::None => BUILD_VERSION.to_string(),
+            UpdateState::Available(ref r) => format!("{BUILD_VERSION} · {} available", r.tag),
+            UpdateState::Installing(ref tag) => format!("{BUILD_VERSION} · installing {tag}…"),
+            UpdateState::Installed(ref tag) => format!("{tag} installed — restart to finish"),
+            UpdateState::Failed(..) => format!("{BUILD_VERSION} · update failed"),
+        }
+    }
+
+    /// Whether there's something to show a dialog about.
+    fn has_dialog(&self) -> bool {
+        let state = self.state.lock().unwrap().clone();
+        matches!(state, UpdateState::Available(_) | UpdateState::Installed(_) | UpdateState::Failed(..))
+    }
+
+    /// The update dialog, shown as a modal.
+    fn dialog(&mut self, ctx: &egui::Context) {
+        if self.auto_open.swap(false, Ordering::Relaxed) {
+            self.dialog_open = true;
+        }
+        if !self.dialog_open { return; }
+        let state = self.state.lock().unwrap().clone();
+        let response = egui::Modal::new(egui::Id::new("update")).show(ctx, |ui| {
+            match state {
+                UpdateState::Available(ref release) => {
+                    ui.set_width(400.0);
+                    ui.heading(egui::RichText::new(format!("unfr0zen {} is available", release.tag))
+                        .color(ui.visuals().strong_text_color()));
+                    ui.label(format!("You're currently on {BUILD_VERSION}."));
+                    ui.add_space(8.0);
+                    if let Some(body) = &release.body {
+                        let notes = body.trim();
+                        if !notes.is_empty() {
+                            ui.strong("Release Notes");
+                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                                ui.label(notes);
+                            });
+                            ui.add_space(8.0);
+                        }
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Install Update").clicked() {
+                            self.install(ui.ctx(), release.clone());
+                        }
+                        if ui.button("Not Now").clicked() {
+                            self.dialog_open = false;
+                        }
+                        ui.hyperlink_to("View on GitHub", &release.url);
+                    });
+                    false
+                }
+                UpdateState::Installing(ref tag) => {
+                    ui.heading(egui::RichText::new(format!("Installing {tag}…"))
+                        .color(ui.visuals().strong_text_color()));
+                    ui.spinner();
+                    false
+                }
+                UpdateState::Installed(ref tag) => {
+                    ui.heading(egui::RichText::new(format!("{tag} installed"))
+                        .color(ui.visuals().strong_text_color()));
+                    ui.label("Restart unfr0zen to use the new version.");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Restart Now").clicked() {
+                            self.restart.store(true, Ordering::Relaxed);
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        ui.button("Later").clicked()
+                    }).inner
+                }
+                UpdateState::Failed(ref error, ref release) => {
+                    ui.heading(egui::RichText::new("Update failed")
+                        .color(ui.visuals().warn_fg_color));
+                    ui.label(error.as_str());
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Try Again").clicked() {
+                            self.install(ui.ctx(), release.clone());
+                        }
+                        ui.button("Close").clicked()
+                    }).inner
+                }
+                _ => {
+                    self.dialog_open = false;
+                    false
+                }
+            }
+        });
+        if response.inner {
+            self.dialog_open = false;
+        }
+    }
 }
 
 /// The patch options the form offers, as strings the user types.
@@ -267,6 +438,7 @@ struct App {
     drawer_dismissed: bool,
     drawer_height: Option<f32>,
     drawer_content_height: f32,
+    updates: Updates,
 }
 
 #[derive(Default)]
@@ -467,7 +639,17 @@ impl eframe::App for App {
             ui.allocate_ui(egui::vec2(ui.available_width(), 22.0), |ui| {
                 let rect = ui.max_rect();
                 if cfg!(target_os = "macos") {
-                    ui.centered_and_justified(|ui| ui.weak(BUILD_VERSION));
+                    let label = self.updates.version_label();
+                    let has_update = self.updates.has_dialog();
+                    ui.centered_and_justified(|ui| {
+                        if has_update {
+                            if ui.link(&label).clicked() {
+                                self.updates.dialog_open = true;
+                            }
+                        } else {
+                            ui.weak(&label);
+                        }
+                    });
                 }
                 let button_rect = egui::Rect::from_center_size(
                     egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(24.0, 22.0));
@@ -544,6 +726,7 @@ impl eframe::App for App {
         }
 
         about::show(ui.ctx(), &mut self.about_open);
+        self.updates.dialog(ui.ctx());
         self.sdp_ui(ui.ctx());
         self.confirm_ui(ui.ctx());
     }
