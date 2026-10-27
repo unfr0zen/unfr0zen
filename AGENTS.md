@@ -53,24 +53,36 @@ cargo clippy --workspace --locked --all-targets -- -D warnings
 
 For binary patch changes, follow `platform/common/nlclient/tests/README.md`; strict golden tests require private firmware samples. Report hardware verification separately from host tests. No numeric coverage threshold is specified.
 
-## Commits
+## Commits and PR titles
 
-    area: subarea: imperative summary (72 columns max, no trailing period)
+    subsys: lowercase imperative summary
 
-    Body wrapped at 72 columns, at most three lines: why the change is
-    needed and any non-obvious implementation choice. Never empty.
+Everything after the colon is **lowercase**. The subject fits in 72 columns, no trailing period. The subsystem prefix matches the area the change touches — check `git log --format=%s -20 -- <path>` for precedent. Common prefixes:
 
-- `area:` is the prefix the path's recent history uses: `git log --format=%s -20 -- <path>`. Examples: `gui:`, `cli:`, `nestlocal: thread:`, `radio:`, `j49:`, `platform:`, `ci:`, `docs:`. Never `WIP`.
+| Prefix | Area |
+|-|-|
+| `app:` | the unfr0zen application (GUI, CLI, self-update, host library) |
+| `nestlocal:` | the on-device service; nest deeper with `nestlocal: thread:` |
+| `client-ng:` | the thermostat UI submodule |
+| `ci:` | GitHub Actions workflows and build infrastructure |
+| `radio:` | radio firmware and Thread/Zigbee protocol |
+| `j49:` | gen 2 device-specific code |
+| `platform:` | build scripts, bootstrap, x-loader, kernel modules |
+| `docs:` | documentation only |
+
+Never `WIP`, `fix`, or bare verbs without a subsystem prefix.
+
+Body is optional — omit it for self-explanatory changes. When present, wrap at 72 columns, at most three lines: why the change is needed and any non-obvious choice.
+
 - One logical change per commit, and every commit builds and passes its tests on its own. Fold review fixes into the commit that owns the lines instead of adding fixup commits; without an interactive terminal: `git commit --fixup=<sha>`, then `GIT_SEQUENCE_EDITOR=true GIT_EDITOR=true git rebase -i --autosquash origin/main`.
 - Update a branch with `git rebase origin/main`, never by merging `main` into it.
 - Stage explicit paths (`git add <file>`) rather than `git add -A` or `commit -a`, which pick up stray files. Before pushing, review `git show --stat origin/main..HEAD`.
-- Branches: `features/<short-name>` for features, `bugfix/<short-name>` for fixes.
+- Branches: `feature/<short-name>` for features, `bugfix/<short-name>` for fixes.
 
 ## Pull requests
 
-- A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it follows the commit format above.
-- The description is Markdown, not hard-wrapped commit text: the problem and resulting behavior in one or two sentences, then validation (what was built, run, and on which platform or unit) and material limitations. Include screenshots for visual changes and `Fixes #N` for issues.
-- Keep the title and description in sync with the commits after every force-push.
+- A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it must follow the `subsys: lowercase summary` format above.
+- PR body is short — one or two sentences describing the change. No padding.
 - CI (`.github/workflows/build.yml`) builds the firmware and every app target and runs the tests above; a PR merges only when it is green.
 - Never describe an undisclosed vulnerability in a public issue, PR or commit.
 
