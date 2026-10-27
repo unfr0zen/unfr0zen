@@ -129,7 +129,20 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
     };
     let mut asked = false;
     crate::settings_ui::status("zigbee", if up { "Paired" } else { "Not paired. Permit joining, then enable pairing." });
+    let radio = format!("EmberZNet {}.{}.{}.{}\nEUI64 {}", stack >> 12, (stack >> 8) & 0xF, (stack >> 4) & 0xF, stack & 0xF,
+                        network::eui64(&mut ezsp).unwrap_or_default());
+    let mut shown_info = String::new();
     loop {
+        let info = match up.then(|| network::load(store)).flatten() {
+            Some(n) => format!("{radio}\nPAN {:#06x}, channel {}", n.pan_id, n.channel),
+            None => format!("{radio}\nNo network"),
+        };
+        if info != shown_info {
+            if let Err(e) = crate::settings_ui::publish("zigbee.info", info.as_bytes()) {
+                logf!("settings UI: {e}");
+            }
+            shown_info = info;
+        }
         let request_age = crate::settings_ui::take_request_age("zigbee");
         if let Some(age) = request_age {
             let now = Instant::now();

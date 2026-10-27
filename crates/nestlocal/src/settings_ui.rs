@@ -41,7 +41,7 @@ pub fn init(matter: bool, zigbee: bool, doom: bool) -> std::io::Result<()> {
     let features = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2);
     publish("features", &[b'0' + features])?;
     publish_activity_icons()?;
-    for name in ["display.request", "display.taken", "matter.request", "zigbee.request", "doom.request", "matter.code", "matter.png"] {
+    for name in ["display.request", "display.taken", "matter.request", "zigbee.request", "doom.request", "matter.code", "matter.png", "zigbee.info"] {
         let _ = std::fs::remove_file(Path::new(DIR).join(name));
     }
     status("matter", if matter { "Starting Matter..." } else { "Matter not enabled" });

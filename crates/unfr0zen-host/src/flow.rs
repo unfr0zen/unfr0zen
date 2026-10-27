@@ -51,6 +51,8 @@ pub struct PatchInputs {
     pub zigbee: bool,
     /// Doom, launched from the UNFR0ZEN screen (through nestlocal).
     pub doom: bool,
+    /// client-ng in place of nlclient, from start-up.
+    pub client_ng: bool,
     /// An SSH server on the unit, root logging in with its password; off by default.
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
@@ -119,12 +121,12 @@ impl PatchInputs {
         if self.matter_thread && (!matter || self.zigbee) {
             return Err(failure("Matter over Thread requires Matter and cannot share the radio with Zigbee"));
         }
-        let nestlocal = self.mqtt.is_some() || matter || self.zigbee || self.doom;
+        let nestlocal = self.mqtt.is_some() || matter || self.zigbee || self.doom || self.client_ng;
         if nestlocal && self.overlay.is_some() {
-            return Err(failure("--mqtt, --matter, --zigbee and --doom build their own overlay; drop --overlay"));
+            return Err(failure("--mqtt, --matter, --zigbee, --doom and --client-ng build their own overlay; drop --overlay"));
         }
         if nestlocal && self.cloud_url.is_some() {
-            return Err(failure("--mqtt, --matter, --zigbee and --doom point the unit at nestlocal; drop --cloud-url"));
+            return Err(failure("--mqtt, --matter, --zigbee, --doom and --client-ng point the unit at nestlocal; drop --cloud-url"));
         }
         let read = |flag: &str, path: &Path| fs::read(path)
             .map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
@@ -162,6 +164,7 @@ impl PatchInputs {
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
             doom: self.doom.then(assets::doom),
+            client_ng: self.client_ng.then(assets::client_ng),
             ssh: self.ssh,
             ssh_public_key,
             ssh_server: None,

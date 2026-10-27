@@ -273,13 +273,14 @@ jobs:
         run: |
           echo "UBOOT=$(git rev-parse HEAD:platform/diamond3/uboot/upstream)" >> "$GITHUB_ENV"
           echo "DOOM=$(git rev-parse HEAD:platform/common/doom/doomgeneric)" >> "$GITHUB_ENV"
+          echo "CLIENT_NG=$(git rev-parse HEAD:client-ng)" >> "$GITHUB_ENV"
           echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
 
       # The firmware's tag in zot: a digest of its inputs, since a tag is at
       # most 128 characters and cannot hold the image digest's colon.
       - id: key
         run: |
-          inputs="firmware-build-$UBOOT-$DOOM-${{ needs.image.outputs.digest }}-${{ hashFiles('scripts/**', 'platform/common/doom/**', 'platform/common/radio/**', 'platform/common/nlclient/src/**', 'platform/diamond3/**', 'platform/j49/**', 'crates/nestlocal/**', 'Cargo.toml', 'Cargo.lock', 'Dockerfile') }}"
+          inputs="firmware-build-$UBOOT-$DOOM-$CLIENT_NG-${{ needs.image.outputs.digest }}-${{ hashFiles('scripts/**', 'platform/common/doom/**', 'platform/common/radio/**', 'platform/common/nlclient/src/**', 'platform/diamond3/**', 'platform/j49/**', 'crates/nestlocal/**', 'Cargo.toml', 'Cargo.lock', 'Dockerfile') }}"
           echo "key=$(printf %s "$inputs" | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       # The firmware itself, for exactly these inputs (the U-Boot commit,
@@ -338,6 +339,16 @@ jobs:
           oras pull --plain-http -o build/j49 "$ZOT/unfr0zen-firmware:j49-kernel-$(cat platform/j49/kernel.sh platform/j49/zbwake/zbwake.c platform/j49/xloader.sh | sha256sum | cut -d' ' -f1)"
           touch build/j49/uImage build/j49/zbwake.ko build/j49/x-load.bin
 
+      # client-ng is a private repository (unfr0zen/client-ng): its
+      # submodule comes with a token that can read it.
+      - name: Fetch client-ng
+        if: steps.built.outputs.hit != 'true'
+        env:
+          TOKEN: ${{ secrets.CLIENT_NG_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --depth 1 client-ng
+
       - name: Build firmware
         if: steps.built.outputs.hit != 'true'
         run: |
@@ -375,6 +386,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # client-ng is a private repository (unfr0zen/client-ng): its
+      # submodule comes with a token that can read it.
+      - name: Fetch client-ng
+        env:
+          TOKEN: ${{ secrets.CLIENT_NG_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --depth 1 client-ng
+
       # unfr0zen-host embeds the firmware, so its tests need it built.
       - name: Fetch the firmware
         env:
@@ -404,6 +424,10 @@ jobs:
       # The image checks read the radio images from the restored firmware.
       - name: radio
         run: python3 -m unittest discover -s platform/common/radio/tests -v
+
+      # The client's skin and menus, drawn on every screen without a display.
+      - name: client skin
+        run: cargo run --locked -q -p client-ng -- --check --skins client-ng/skins --menus client-ng/config/menus.lua
 
       # The built image's ARM code under Unicorn: source matching and the PHY's
       # early-ACK ISR, the radio's measurements and entropy, and the selection
@@ -491,6 +515,15 @@ jobs:
       CARGO_BUILD_JOBS: 3
     steps:
       - uses: actions/checkout@v7
+
+      # client-ng is a private repository (unfr0zen/client-ng): its
+      # submodule comes with a token that can read it.
+      - name: Fetch client-ng
+        env:
+          TOKEN: ${{ secrets.CLIENT_NG_TOKEN }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" submodule update --init --depth 1 client-ng
 
       - name: Version
         run: |

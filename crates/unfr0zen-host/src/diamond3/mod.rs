@@ -127,14 +127,15 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     }
 
     // Contents known before boot travel in the initramfs, over fastboot.
-    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
+    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
+        || options.client_ng.is_some() {
         crate::assets::nestlocal()
     } else {
         Vec::new()
     };
     let mut payload: BTreeMap<String, Vec<u8>> = options.overlay.iter()
         .flat_map(|overlay| overlay.files.iter().map(|(_, _, data)| (sha256_hex(data), data.clone()))).collect();
-    for bundle in options.thread.iter().chain(&options.doom) {
+    for bundle in options.thread.iter().chain(&options.doom).chain(&options.client_ng) {
         for (_, _, data) in &bundle.files { payload.insert(sha256_hex(data), data.clone()); }
     }
     if !nestlocal_binary.is_empty() {
