@@ -27,6 +27,8 @@ pub(crate) fn failure(error: impl std::fmt::Display) -> Error {
 /// [`PatchInputs::build`] before the unit is touched.
 #[derive(Clone, Debug, Default)]
 pub struct PatchInputs {
+    /// Keep the original Gen3 screen and install only the MQTT service.
+    pub stock_ui: bool,
     pub root_password: Option<String>,
     pub ntp_server: Option<String>,
     pub cloud_url: Option<String>,
@@ -62,6 +64,12 @@ impl PatchInputs {
     /// Checks the options against each other and the filesystem, and builds the
     /// patch, all before the unit is touched. The error text is shown as is.
     pub fn build(&self) -> Result<Options> {
+        if self.stock_ui && (self.mqtt.is_none() || self.root_password.is_some()
+            || self.ntp_server.is_some() || self.cloud_url.is_some() || self.backplate_sim
+            || self.block_cloud || self.overlay.is_some() || self.matter || self.matter_code.is_some()
+            || self.matter_thread || self.zigbee || self.doom || self.ssh || self.usb_shell) {
+            return Err(failure("stock UI mode requires MQTT alone, without other root filesystem options"));
+        }
         if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some())
             && self.mqtt.is_none() {
             return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls and --mqtt-ca need --mqtt"));
@@ -98,7 +106,10 @@ impl PatchInputs {
         }
         let overlay = self.overlay.as_deref().map(|p| patch::overlay_from_tar(&read("--overlay", p)?)).transpose()?;
         Ok(Options {
-            root_hash: patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?,
+            stock_ui: self.stock_ui,
+            root_hash: if self.stock_ui { String::new() } else {
+                patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?
+            },
             ntp_server: self.ntp_server.clone().or_else(|| self.block_cloud.then(String::new)),
             cloud_url: self.cloud_url.clone(),
             backplate_sim: self.backplate_sim,
@@ -233,8 +244,48 @@ pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<Path
 /// Returns the final status line.
 pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
     let unit = device::detect(progress, config.wait_usb, config.omap)?;
+    if config.options.stock_ui && unit.device != Device::Diamond3 {
+        return Err(failure("stock UI mode is only supported on the 3rd generation"));
+    }
     match unit.device {
         Device::Diamond3 => diamond3::run(config, progress, unit),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit),
+    }
+}
+
+#[cfg(test)]
+mod stock_ui_tests {
+    use super::*;
+
+    #[test]
+    fn stock_ui_is_opt_in_and_preserves_root_password_and_time() {
+        assert!(!PatchInputs::default().build().unwrap().stock_ui);
+        let options = PatchInputs { stock_ui: true, mqtt: Some("broker.lan".into()), ..PatchInputs::default() }
+            .build().unwrap();
+        assert!(options.stock_ui && options.mqtt.is_some());
+        assert!(options.root_hash.is_empty() && options.ntp_server.is_none());
+    }
+
+    #[test]
+    fn stock_ui_rejects_missing_mqtt_and_other_rootfs_changes() {
+        let base = PatchInputs { stock_ui: true, mqtt: Some("broker.lan".into()), ..PatchInputs::default() };
+        for input in [
+            PatchInputs { mqtt: None, ..base.clone() },
+            PatchInputs { root_password: Some("test-only".into()), ..base.clone() },
+            PatchInputs { ntp_server: Some("time.lan".into()), ..base.clone() },
+            PatchInputs { block_cloud: true, ..base.clone() },
+            PatchInputs { matter: true, ..base.clone() },
+            PatchInputs { matter_code: Some(String::new()), ..base.clone() },
+            PatchInputs { matter_thread: true, ..base.clone() },
+            PatchInputs { zigbee: true, ..base.clone() },
+            PatchInputs { doom: true, ..base.clone() },
+            PatchInputs { ssh: true, ..base.clone() },
+            PatchInputs { usb_shell: true, ..base.clone() },
+            PatchInputs { backplate_sim: true, ..base.clone() },
+            PatchInputs { overlay: Some(PathBuf::from("not-read.tar")), ..base.clone() },
+            PatchInputs { cloud_url: Some("https://example.invalid".into()), ..base },
+        ] {
+            assert!(input.build().unwrap_err().to_string().contains("stock UI mode requires MQTT alone"));
+        }
     }
 }

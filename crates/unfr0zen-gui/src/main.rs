@@ -271,6 +271,7 @@ impl Updates {
 /// The patch options the form offers, as strings the user types.
 #[derive(Default)]
 struct Form {
+    stock_ui: bool,
     backplate_sim: bool,
     block_cloud: bool,
     ntp: Toggle,
@@ -310,6 +311,7 @@ impl Form {
     fn inputs(&self) -> PatchInputs {
         let text = |s: &str| (!s.is_empty()).then(|| s.to_string());
         PatchInputs {
+            stock_ui: self.stock_ui,
             root_password: text(&self.root_password),
             ntp_server: self.ntp.on.then(|| self.ntp.value.clone()),
             cloud_url: None,  // the CLI's --cloud-url has no window control
@@ -1120,6 +1122,7 @@ impl Form {
 
         toggle_field(ui, &mut self.ntp, "Custom NTP server", "pool.ntp.org");
 
+        ui.checkbox(&mut self.stock_ui, "Keep stock screen (Gen 3, MQTT only)");
         ui.checkbox(&mut self.mqtt.on, "Relay to MQTT broker");
         if self.mqtt.on {
             // A two-column grid, indented as sub-items, so the labels line
@@ -1506,6 +1509,18 @@ mod tests {
 
         let bare = Form::default().inputs();
         assert!(bare.mqtt.is_none() && bare.root_password.is_none() && !bare.backplate_sim);
+    }
+
+    #[test]
+    fn stock_ui_form_is_opt_in_and_requires_mqtt_alone() {
+        let mut form = Form::default();
+        assert!(!form.inputs().stock_ui);
+        form.stock_ui = true;
+        assert!(form.config().is_err());
+        form.mqtt = Toggle { on: true, value: "broker.lan".into() };
+        assert!(form.config().unwrap().options.stock_ui);
+        form.ssh = true;
+        assert!(form.config().err().unwrap().contains("MQTT alone"));
     }
 
     #[test]

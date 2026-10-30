@@ -61,6 +61,11 @@ struct Args {
     /// a root shell on the unit's USB serial port, which the run then confirms (default: no USB serial port)
     #[arg(long, help_heading = "Root filesystem options")]
     usb_shell: bool,
+    /// retain the original Gen3 screen; install MQTT only, without native binary patches
+    #[arg(long, requires = "mqtt", conflicts_with_all = ["ntp_server", "root_password", "ssh", "usb_shell",
+        "matter", "matter_code", "matter_thread", "zigbee", "doom", "overlay", "cloud_url",
+        "backplate_sim", "block_cloud", "nand_image"], help_heading = "Root filesystem options")]
+    stock_ui: bool,
     /// relay to this MQTT broker (--mqtt, --matter, --zigbee and --doom each install nestlocal)
     #[arg(long, value_name = "URL", help_heading = "Root filesystem options")]
     mqtt: Option<String>,
@@ -163,6 +168,7 @@ fn confirm_restore(what: &str) -> bool {
 impl Args {
     fn patch_inputs(&self) -> PatchInputs {
         PatchInputs {
+            stock_ui: self.stock_ui,
             root_password: self.root_password.clone(),
             ntp_server: self.ntp_server.clone(),
             cloud_url: self.cloud_url.clone(),
@@ -341,4 +347,25 @@ fn update() -> unfr0zen_host::Result<String> {
     ui::waiting(&format!("Installing unfr0zen {}", release.tag));
     update::install(update::App::Cli, &release)?;
     Ok(format!("Updated unfr0zen {version} to {}: {}", release.tag, release.url))
+}
+
+#[cfg(test)]
+mod stock_ui_tests {
+    use super::*;
+
+    #[test]
+    fn stock_ui_flag_reaches_the_shared_patcher() {
+        let args = Args::try_parse_from(["unfr0zen", "--stock-ui", "--mqtt", "broker.lan"]).unwrap();
+        assert!(args.patch_inputs().build().unwrap().stock_ui);
+        assert!(!Args::try_parse_from(["unfr0zen"]).unwrap().stock_ui);
+    }
+
+    #[test]
+    fn stock_ui_requires_mqtt_and_refuses_incompatible_flags() {
+        assert!(Args::try_parse_from(["unfr0zen", "--stock-ui"]).is_err());
+        for flag in ["--ssh", "--usb-shell", "--matter", "--matter-thread", "--zigbee",
+                     "--doom", "--backplate-sim", "--block-cloud"] {
+            assert!(Args::try_parse_from(["unfr0zen", "--stock-ui", "--mqtt", "broker.lan", flag]).is_err());
+        }
+    }
 }

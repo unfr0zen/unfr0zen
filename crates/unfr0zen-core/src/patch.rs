@@ -315,6 +315,8 @@ fn rootfs(target: Device) -> &'static Rootfs {
 /// which it always applies.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
+    /// Explicitly retain the original screen and install only the local MQTT service.
+    pub stock_ui: bool,
     /// From root_hash.
     pub root_hash: String,
     /// An empty name means DEFAULT_NTP_SERVER.
@@ -399,8 +401,130 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
                        screen_object: &[u8], new_pki: &mut dyn FnMut() -> Result<Pki>,
                        payload: &BTreeSet<String>, dry_run: bool) -> Result<Vec<Change>> {
+    if options.stock_ui {
+        return patch_stock_ui(volume, target, options, nestlocal_binary, new_pki, payload, dry_run);
+    }
     patch_with_screen_builder(volume, target, options, nestlocal_binary, new_pki, payload, dry_run,
                               &|source| crate::nlclient::build(source, screen_object))
+}
+
+/// A separate, minimal MQTT-only route; never invokes native ABI discovery or
+/// rewrites nlclient, boot artwork, connmand, USB shell or other radios.
+fn patch_stock_ui(volume: &mut impl Volume, target: Device, options: &Options, binary: &[u8],
+                  new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
+                  dry_run: bool) -> Result<Vec<Change>> {
+    if target != Device::Diamond3 || options.mqtt.is_none() || options.matter.is_some() || options.thread.is_some()
+        || options.zigbee || options.doom.is_some() || options.overlay.is_some() || options.ssh || options.usb_shell
+        || options.backplate_sim || options.ntp_server.is_some() || options.cloud_url.is_some() {
+        return device("stock UI mode requires Gen3 MQTT alone, without other patch options");
+    }
+    if binary.len() < 20 || &binary[..4] != b"\x7fELF" || binary[18] != 40 {
+        return device("stock UI mode requires a genuine ARM nestlocal ELF payload");
+    }
+    if volume.shell_binary()? != "0 755" {
+        return device("the mounted volume has no root-owned mode-755 bin/busybox or bin/toybox");
+    }
+    let screen = volume.read(crate::nlclient::BINARY)?
+        .ok_or_else(|| crate::Error::Device("stock nlclient is missing".into()))?;
+    if !screen.0.starts_with("0:") || screen.1 & 0o111 == 0 || !screen.2.starts_with(b"\x7fELF") {
+        return device("stock nlclient must be a root-owned ELF executable");
+    }
+    let screen_sha = sha256_hex(&screen.2);
+    if volume.inspect(crate::nlclient::BINARY)?.as_ref().map(|(_, _, sha)| sha) != Some(&screen_sha) {
+        return device("stock nlclient changed during inspection");
+    }
+    for name in [crate::nlclient::JOURNAL, crate::nlclient::ORIGINAL] {
+        if volume.inspect(name)?.is_some() {
+            return device(format!("{name} exists: restore the original screen before stock UI mode"));
+        }
+    }
+    let (mut tree, mut originals) = (Tree::new(), Originals::new());
+    fetch(volume, &mut tree, &mut originals, &nestlocal::STOCK_FILES, true, true)?;
+    fetch(volume, &mut tree, &mut originals, &[nestlocal::UNLOCK_BUNDLE,
+        "etc/nestlocal/server.crt", "etc/nestlocal/server.key"], false, true)?;
+    let own = |name: &str| tree.get(name).map(|(data, _)| data.as_slice());
+    let pki = nestlocal::unit_pki(own("etc/nestlocal/server.crt"), own("etc/nestlocal/server.key"),
+                                   own("etc/ssl/certs/ca-bundle.pem")).map_or_else(new_pki, Ok)?;
+    let overlay = nestlocal::overlay(|name| tree.get(name).cloned(), options.mqtt.as_ref(), None,
+                                     false, binary, &pki)?;
+    let names: Vec<&str> = overlay.files.iter().map(|(name, _, _)| name.as_str()).collect();
+    fetch(volume, &mut tree, &mut originals, &names, false, false)?;
+    for (name, mode, data) in &overlay.files {
+        tree.insert(name.clone(), (data.clone(), *mode));
+    }
+    fetch(volume, &mut tree, &mut originals, &STALE_SECRETS, false, false)?;
+    for name in STALE_SECRETS {
+        if !overlay.files.iter().any(|(path, _, _)| path == name) { tree.remove(name); }
+    }
+    if options.block_cloud {
+        fetch(volume, &mut tree, &mut originals, &["etc/hosts"], true, true)?;
+        patch_block_cloud(&mut tree, true)?;
+    }
+    let writes: Vec<_> = tree.iter().filter(|(name, (data, mode))| {
+        originals.get(*name).and_then(Option::as_ref)
+            .is_none_or(|(_, old_mode, sha)| *old_mode != *mode || *sha != sha256_hex(data))
+    }).map(|(name, (data, mode))| (name.clone(), data.clone(), *mode,
+        originals.get(name).and_then(Option::as_ref).map_or("0:0".to_string(), |(owner, _, _)| owner.clone()))).collect();
+    let removals: Vec<_> = STALE_SECRETS.iter().filter(|name|
+        originals.get(**name).is_some_and(Option::is_some) && !tree.contains_key(**name)).copied().collect();
+    let directories: Vec<_> = overlay.directories.into_iter().filter_map(|(name, mode)| {
+        match volume.directory(&name) {
+            Ok(Some(ref found)) if *found == format!("0:0 {mode:o}") => None,
+            other => Some((name, mode, other)),
+        }
+    }).collect();
+    let mut folders = Vec::new();
+    for (name, mode, found) in directories {
+        found?;
+        folders.push((name, mode));
+    }
+    let mut changes: Vec<Change> = folders.iter().map(|(name, mode)| Change {
+        name: format!("{name}/"), action: "directory", old: None, new: Some(format!("{mode:o}")),
+    }).collect();
+    for (name, data, _, _) in &writes {
+        let old = originals.get(name).and_then(Option::as_ref).map(|(_, _, sha)| sha.clone());
+        changes.push(Change { name: name.clone(), action: if old.is_some() { "write" } else { "create" },
+            old, new: Some(sha256_hex(data)) });
+    }
+    for name in &removals {
+        changes.push(Change { name: (*name).into(), action: "remove",
+            old: originals.get(*name).and_then(Option::as_ref).map(|(_, _, sha)| sha.clone()), new: None });
+    }
+    if dry_run || changes.is_empty() { return Ok(changes); }
+    if volume.checks_space() {
+        let needed = writes.iter().map(|(_, data, _, _)| data.len() as u64).sum::<u64>() + (1 << 20);
+        if volume.free_bytes()? < needed { return device("insufficient free space for stock UI MQTT overlay"); }
+    }
+    volume.remount(true)?;
+    let applied = (|| -> Result<()> {
+        for (name, mode) in &folders { volume.make_directory(name, *mode)?; }
+        for (name, data, mode, owner) in &writes {
+            volume.write(name, data, owner, *mode, payload)?;
+            if volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data))) {
+                return device(format!("{name}: write did not read back correctly"));
+            }
+        }
+        for name in &removals { volume.remove(name)?; }
+        Ok(())
+    })();
+    let cleanup = volume.remount(false);
+    applied?;
+    cleanup?;
+    let names: Vec<String> = writes.iter().map(|(name, _, _, _)| name.clone()).collect();
+    let digests = volume.digests(&names)?;
+    if digests.len() != writes.len() { return device("incomplete stock UI readback"); }
+    for (name, data, mode, owner) in &writes {
+        if digests.get(name) != Some(&(Some(sha256_hex(data)), Some(format!("{owner} {mode:o}")))) {
+            return device(format!("{name}: final readback mismatch"));
+        }
+    }
+    for name in &removals {
+        if volume.inspect(name)?.is_some() { return device(format!("{name}: removal did not read back")); }
+    }
+    if volume.inspect(crate::nlclient::BINARY)?.as_ref().map(|(_, _, sha)| sha) != Some(&screen_sha) {
+        return device("stock nlclient changed during apply");
+    }
+    Ok(changes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1197,6 +1321,76 @@ mod tests {
             files.push(("etc/nestlocal/server.key", 0o600, String::from_utf8(pki.server_key.clone()).unwrap()));
         }
         FakeVolume::new(files)
+    }
+
+    fn stock_ui_unit() -> FakeVolume {
+        let mut volume = nestlocal_unit(None);
+        let mut elf = b"\x7fELF".to_vec();
+        elf.resize(20, 0);
+        elf[18] = 40; // synthetic ARM executable, not owner bytes
+        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, elf));
+        volume
+    }
+
+    fn stock_ui_options() -> Options {
+        Options { stock_ui: true, mqtt: Some(Mqtt { url: "broker.lan".into(), ..Mqtt::default() }), ..Options::default() }
+    }
+
+    fn stock_ui_apply(volume: &mut FakeVolume, dry: bool) -> Result<Vec<Change>> {
+        let binary = { let mut b = b"\x7fELF".to_vec(); b.resize(20, 0); b[18] = 40; b };
+        patch_on_device(volume, Device::Diamond3, &stock_ui_options(), &binary, b"", &mut nestlocal::generate_pki,
+            &BTreeSet::new(), dry)
+    }
+
+    #[test]
+    fn stock_ui_dry_run_and_apply_preserve_elf_and_exclude_unrelated_features() {
+        let mut volume = stock_ui_unit();
+        let before = volume.files[crate::nlclient::BINARY].2.clone();
+        let changes = stock_ui_apply(&mut volume, true).unwrap();
+        assert!(volume.commands.is_empty());
+        assert!(changes.iter().any(|c| c.name == "nestlabs/sbin/nestlocal"));
+        assert!(!changes.iter().any(|c| c.name.contains("nlclient") || c.name.contains("boot")
+            || c.name.contains("doom") || c.name.contains("radio") || c.name.contains("thread")));
+        stock_ui_apply(&mut volume, false).unwrap();
+        assert_eq!(volume.files[crate::nlclient::BINARY].2, before);
+        assert!(!volume.files.contains_key(crate::nlclient::JOURNAL));
+        assert!(volume.text(nestlocal::OPTIONS).contains("-mqtt tcp://broker.lan:1883"));
+        assert!(!volume.text(nestlocal::OPTIONS).contains("-matter"));
+        assert_eq!(volume.commands.last().unwrap(), "remount ro");
+        volume.commands.clear();
+        assert!(stock_ui_apply(&mut volume, false).unwrap().is_empty());
+        assert!(volume.commands.is_empty());
+    }
+
+    #[test]
+    fn stock_ui_rejects_missing_and_duplicate_anchors_without_writes() {
+        for name in ["etc/nestlabs/product.config", "etc/monitrc", "etc/nestlabs/client.config"] {
+            let mut volume = stock_ui_unit();
+            volume.files.remove(name);
+            assert!(stock_ui_apply(&mut volume, false).is_err());
+            assert!(volume.commands.is_empty());
+        }
+        for (name, extra) in [("etc/nestlabs/client.config", "<a key=\"cloudregisterurl\" value=\"x\"/>\n"),
+                               ("etc/nestlabs/product.config", "<a key=\"usephoenix\" value=\"1\"/>\n"),
+                               ("etc/init.d/rcS", "${INITDIR}/nestlabs start\n")] {
+            let mut volume = stock_ui_unit();
+            volume.files.get_mut(name).unwrap().2.extend_from_slice(extra.as_bytes());
+            assert!(stock_ui_apply(&mut volume, false).is_err(), "{name}");
+            assert!(volume.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn stock_ui_failure_remounts_ro_and_detects_readback() {
+        let mut volume = stock_ui_unit();
+        volume.failing = Some("nestlabs/sbin/nestlocal");
+        assert!(stock_ui_apply(&mut volume, false).is_err());
+        assert_eq!(volume.commands.last().unwrap(), "remount ro");
+        assert!(!volume.commands.iter().any(|c| c.contains("nlclient")));
+        let mut volume = stock_ui_unit();
+        volume.readback = Some("bad".into());
+        assert!(stock_ui_apply(&mut volume, false).unwrap_err().to_string().contains("readback mismatch"));
+        assert_eq!(volume.commands.iter().filter(|c| *c == "remount ro").count(), 1);
     }
 
     #[test]
