@@ -19,7 +19,7 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 
 Generated outputs belong in ignored `build/`, `target/`, `dist/`, or `.work/` directories.
 
-User documentation for integrations and options (app and CLI) is the website's `integrations/index.html` (repository `unfr0zen/unfr0zen.com`); update it when an option, its app label, or integration behavior changes.
+User documentation for integrations and options (app and CLI) is the website's `integrations/index.html` (repository `unfr0zen/unfr0zen.com`); update it when an option, its app label, or integration behavior changes. The website's `protocols/index.html` documents nestlocal's MQTT topics, commands and state, Zigbee endpoints and clusters, and Matter endpoints for third-party integrations; update it when any of them changes.
 
 ## Build, Test, and Development Commands
 
