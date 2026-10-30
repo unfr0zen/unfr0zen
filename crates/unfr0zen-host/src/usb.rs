@@ -18,9 +18,15 @@ pub(crate) fn usb_error(error: impl std::fmt::Display) -> Error {
 }
 
 /// A physical port: the bus and the hub ports down to the device.
+fn format_port(bus: &str, ports: &[u8]) -> String {
+    // usbfs uses zero-padded bus IDs; sysfs ancestry uses the numeric bus.
+    let bus = bus.parse::<u32>().map(|n| n.to_string()).unwrap_or_else(|_| bus.to_owned());
+    let chain: Vec<String> = ports.iter().map(u8::to_string).collect();
+    format!("{}-{}", bus, chain.join("."))
+}
+
 pub(crate) fn port_name(info: &nusb::DeviceInfo) -> String {
-    let chain: Vec<String> = info.port_chain().iter().map(u8::to_string).collect();
-    format!("{}-{}", info.bus_id(), chain.join("."))
+    format_port(info.bus_id(), info.port_chain())
 }
 
 /// Every device on the bus: physical port, identity.
@@ -220,4 +226,21 @@ pub fn verify_shell(port: &str, id: Id, timeout: Duration) -> Result<String> {
     }
     log::info!("No uid-0 answer; the shell said: {:?}", String::from_utf8_lossy(&reply[reply.len().saturating_sub(300)..]));
     Err(Error::Timeout("application USB ACM appeared without a confirmed uid-0 shell".into()))
+}
+
+#[cfg(test)]
+mod physical_port_tests {
+    use super::format_port;
+
+    #[test]
+    fn padded_linux_bus_matches_sysfs_and_preserves_hub_chain() {
+        assert_eq!(format_port("003", &[4]), "3-4");
+        assert_eq!(format_port("3", &[4]), "3-4");
+        assert_eq!(format_port("012", &[2, 3]), "12-2.3");
+    }
+
+    #[test]
+    fn non_numeric_bus_ids_stay_unchanged() {
+        assert_eq!(format_port("opaque-bus", &[2]), "opaque-bus-2");
+    }
 }
