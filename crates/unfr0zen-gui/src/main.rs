@@ -457,6 +457,7 @@ struct LogContext {
 
 struct Row {
     label: String,
+    started: Instant,
     done: Option<(Duration, bool)>,
 }
 
@@ -585,7 +586,7 @@ impl App {
                 if label == WAIT_USB_BOOT_STAGE {
                     self.sdp_wait = Some(Instant::now());
                 } else {
-                    self.logs.rows.push(Row { label, done: None });
+                    self.logs.rows.push(Row { label, started: Instant::now(), done: None });
                 }
             }
             Event::End { label, elapsed, ok } => {
@@ -593,7 +594,7 @@ impl App {
                     // The popup closes; only a failed wait joins the steps.
                     self.sdp_wait = None;
                     if !ok {
-                        self.logs.rows.push(Row { label, done: Some((elapsed, ok)) });
+                        self.logs.rows.push(Row { label, started: Instant::now(), done: Some((elapsed, ok)) });
                     }
                 } else if let Some(row) = self.logs.rows.iter_mut().rev().find(|r| r.label == label && r.done.is_none()) {
                     row.done = Some((elapsed, ok));
@@ -1067,16 +1068,18 @@ impl App {
                         ui.add(egui::Spinner::new().size(14.0));
                         ui.label(&row.label);
                     }
-                    Some((elapsed, ok)) => {
+                    Some((_, ok)) => {
                         outcome_mark(ui, ok);
                         ui.label(&row.label);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Keep clear of the scroll bar on the right edge.
-                            ui.add_space(SCROLLBAR_GUTTER);
-                            ui.label(egui::RichText::new(format!("{:.1}s", elapsed.as_secs_f64())).weak());
-                        });
                     }
                 }
+                // A running step counts up, repainted with the window.
+                let elapsed = row.done.map_or_else(|| row.started.elapsed(), |(elapsed, _)| elapsed);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Keep clear of the scroll bar on the right edge.
+                    ui.add_space(SCROLLBAR_GUTTER);
+                    ui.label(egui::RichText::new(format!("{:.1}s", elapsed.as_secs_f64())).weak());
+                });
             });
         }
         for note in &self.logs.notes {
