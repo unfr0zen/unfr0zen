@@ -1,0 +1,52 @@
+--- a/ezsp-spi-serial-controller-autoselect.h
++++ b/ezsp-spi-serial-controller-autoselect.h
+@@ -147,9 +147,9 @@
+ // P[0].1 - MISO
+ // P[0].2 - SCLK
+ // P[0].3 - nSSEL (IRQC)
+-// P[1].2 - nHOST_INT
++// P[1].2 and P[1].4 - nHOST_INT (Nest gen2; the SDK has P[1].2 alone)
+ // P[1].3 - nSSEL_INT (for EM260 compatibility - not used by EM35X)
+-// P[1].6 - nWAKE (IRQB)
++// P[1].6 - nWAKE (IRQB; Nest gen2 ties it to nSSEL, and it takes no interrupt)
+ // P[1].0 - nSIMRST (IRQA replaces nRESET for debugging only)
+ // serial controller abstraction
+   #define SCx_REG(reg) SC2->reg
+@@ -179,14 +179,18 @@
+   #define nSSEL_INT           IRQC_IRQn
+   #define nSSEL_GPIOFLAG      EVENT_GPIO_FLAG_IRQC
+   #define nSSEL_ISR           halIrqCIsr
+-// nHOST_INT: P[1].2, configured as a push-pull output
+-  #define nHOST_INT_BIT       2
++// nHOST_INT: P[1].2 and P[1].4 (Nest gen2, whose host reads P[1].4; Nest's
++// firmware drives both), configured as push-pull outputs
++  #define nHOST_INT_BITS      ((1 << 2) | (1 << 4))
+   #define CFG_nHOST_INT(cfg)  do { uint32_t temp;                                   \
+                                    temp = GPIO->P[1].CFGL & ~_GPIO_P_CFGL_Px2_MASK; \
+                                    temp |= cfg << _GPIO_P_CFGL_Px2_SHIFT;           \
+-                                   GPIO->P[1].CFGL = temp; } while (0)
+-  #define SET_nHOST_INT()     do { GPIO->P[1].SET = (1 << nHOST_INT_BIT); } while (0)
+-  #define CLR_nHOST_INT()     do { GPIO->P[1].CLR = (1 << nHOST_INT_BIT); } while (0)
++                                   GPIO->P[1].CFGL = temp;                          \
++                                   temp = GPIO->P[1].CFGH & ~_GPIO_P_CFGH_Px4_MASK; \
++                                   temp |= cfg << _GPIO_P_CFGH_Px4_SHIFT;           \
++                                   GPIO->P[1].CFGH = temp; } while (0)
++  #define SET_nHOST_INT()     do { GPIO->P[1].SET = nHOST_INT_BITS; } while (0)
++  #define CLR_nHOST_INT()     do { GPIO->P[1].CLR = nHOST_INT_BITS; } while (0)
+ 
+ // nSSEL_INT: P[1].3, configured as a floating input
+ // For EM260 compatibility, can be connected to nSSEL; it is unused on the 35x
+@@ -206,7 +210,12 @@
+   #define PULLUP_nWAKE()      (GPIO->P[1].SET = (1 << nWAKE_BIT))
+   #define nWAKE_IS_NEGATED()  (((GPIO->P[1].IN) & (1 << nWAKE_BIT)) != 0)
+   #define nWAKE_IS_ASSERTED() (((GPIO->P[1].IN) & (1 << nWAKE_BIT)) == 0)
+-  #define nWAKE_INTCFG        EVENT_GPIO->CFGB
++// Nest gen2 drives nWAKE with the host's chip select: each transaction's
++// falling edge would start a wake handshake, which holds the radio until
++// nSSEL rises, and the answer with it. The interrupt's configuration goes to
++// this instead of IRQB's, so IRQB stays disabled.
++  static uint32_t nWAKE_INTCFG_UNUSED;
++  #define nWAKE_INTCFG        nWAKE_INTCFG_UNUSED
+   #define nWAKE_INT           IRQB_IRQn
+   #define nWAKE_GPIOFLAG      EVENT_GPIO_FLAG_IRQB
+   #define nWAKE_ISR           halIrqBIsr

@@ -20,7 +20,7 @@
 
 # The image's version: nestlocal installs its own image on a radio that runs
 # another (it reads it back with EZSP's getXncpInfo). Bump with every change.
-VERSION = 3
+VERSION = 4
 
 SDK   ?= $(error set SDK to a Gecko SDK 2.6 tree)
 GSDK  ?= $(error set GSDK to a gecko_sdk 4.5 tree)
@@ -49,8 +49,7 @@ FAMILY = em35x
 MICRO  = -DCORTEXM3_EM357 -DEZSP_SPI_PORT=2 -DRADIO_TX_POWER_MODE=EMBER_TX_POWER_MODE_BOOST -DRADIO_TX_POWER_MAX=-10
 # The gen2's loader takes the image from 0x08002000, its address table first.
 PREFIX = 0
-# The SDK's SC2 pins are the gen2's.
-SPI_PATCH =
+SPI_PATCH = $(PART)/nest-spi.patch
 else
 FAMILY = em358x
 # Nest's set-up (wpantund.conf): the alternate port, into the amplifier.

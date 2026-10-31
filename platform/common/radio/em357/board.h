@@ -1,5 +1,5 @@
 // The gen2 Nest's radio board: an EM357 talking EZSP-SPI to the OMAP on SC2,
-// the SDK's own SC2 pins.
+// the SDK's SC2 pins but for nHOST_INT (em357/nest-spi.patch).
 //
 // The pin configuration is the one Nest's own radio firmware (its
 // ip-modem-app.bin, at 0x08022188) sets, register for register:
@@ -7,9 +7,9 @@
 //   PA0-PA3   SC2 SPI slave: MOSI, MISO, SCLK, nSSEL (pulled up)
 //   PA4, PA5  packet trace (PTI_EN, PTI_DATA)
 //   PA6, PA7  outputs, held as Nest's image holds them
-//   PB2       nHOST_INT to the host
+//   PB2, PB4  nHOST_INT to the host, driven together (the host reads PB4)
 //   PB3       nSSEL_INT (EM260 compatibility, unused)
-//   PB6       nWAKE (IRQB, pulled up; the host does not drive it)
+//   PB6       nWAKE (IRQB, pulled up), which the host's chip select drives
 //   PC2, PC4  SWO, SWDIO
 //   PC5, PC6  TX_ACTIVE and its complement, for the front end
 //
@@ -38,6 +38,7 @@ extern GpioMaskType gpioRadioPowerBoardMask;
                                 | (((GpioMaskType)1) << PORTA_PIN(3)) /* nSSEL */     \
                                 | (((GpioMaskType)1) << PORTB_PIN(2)) /* nHOST_INT */ \
                                 | (((GpioMaskType)1) << PORTB_PIN(3)) /* nSSEL_INT */ \
+                                | (((GpioMaskType)1) << PORTB_PIN(4)) /* nHOST_INT */ \
                                 | (((GpioMaskType)1) << PORTB_PIN(6))) /* nWAKE */
 
 #define DEFINE_GPIO_RADIO_POWER_BOARD_MASK_VARIABLE() \
