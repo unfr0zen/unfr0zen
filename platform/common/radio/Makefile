@@ -20,7 +20,7 @@
 
 # The image's version: nestlocal installs its own image on a radio that runs
 # another (it reads it back with EZSP's getXncpInfo). Bump with every change.
-VERSION = 4
+VERSION = 5
 
 SDK   ?= $(error set SDK to a Gecko SDK 2.6 tree)
 GSDK  ?= $(error set GSDK to a gecko_sdk 4.5 tree)

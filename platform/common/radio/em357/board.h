@@ -2,11 +2,14 @@
 // the SDK's SC2 pins but for nHOST_INT (em357/nest-spi.patch).
 //
 // The pin configuration is the one Nest's own radio firmware (its
-// ip-modem-app.bin, at 0x08022188) sets, register for register:
+// ip-modem-app.bin, at 0x08022188) sets, register for register, but PB0
+// powered up high:
 //
 //   PA0-PA3   SC2 SPI slave: MOSI, MISO, SCLK, nSSEL (pulled up)
 //   PA4, PA5  packet trace (PTI_EN, PTI_DATA)
 //   PA6, PA7  outputs, held as Nest's image holds them
+//   PB0       the RF front end's enable: low, the front end costs some 30 dB
+//             each way; Nest's table has it low and its firmware raises it
 //   PB2, PB4  nHOST_INT to the host, driven together (the host reads PB4)
 //   PB3       nSSEL_INT (EM260 compatibility, unused)
 //   PB6       nWAKE (IRQB, pulled up), which the host's chip select drives
@@ -49,7 +52,7 @@ extern GpioMaskType gpioRadioPowerBoardMask;
   uint16_t gpioCfgPowerUp[6] = { 0x8494, 0x1199, 0x4141, 0x8811, 0x4919, 0x4994 }
 
 #define DEFINE_POWERUP_GPIO_OUTPUT_DATA_VARIABLES() \
-  uint8_t gpioOutPowerUp[3] = { 0xEF, 0x5E, 0x05 }
+  uint8_t gpioOutPowerUp[3] = { 0xEF, 0x5F, 0x05 }
 
 #define DEFINE_POWERDOWN_GPIO_CFG_VARIABLES() \
   uint16_t gpioCfgPowerDown[6] = { 0x8888, 0x1188, 0x8881, 0x8818, 0x8118, 0x4118 }
