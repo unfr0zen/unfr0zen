@@ -4,8 +4,9 @@
 //!
 //! A transaction is one chip select: the command and its terminator, then
 //! 0xFF clocked until the radio answers (it pulls nHOST_INT low when it
-//! has), then the answer and its terminator. The kernel drives chip select,
-//! so it is held across the transaction's spidev messages with cs_change.
+//! has), then the answer and its terminator. Chip select is held across the
+//! transaction's spidev messages: by the kernel with cs_change, or, where the
+//! controller drops it after every message, as a GPIO driven here.
 //! nHOST_INT low with no transaction under way means the radio has
 //! something to tell (an EZSP callback, or that it has just reset).
 
@@ -57,6 +58,7 @@ pub struct Spi {
     host_int: File,
     reset: File,
     wake: Option<File>,
+    chip_select: Option<ChipSelect>,
     /// Tests answer transactions from this script instead of the radio.
     #[cfg(test)]
     script: std::collections::VecDeque<Result<Vec<u8>, String>>,
@@ -70,6 +72,39 @@ fn gpio(line: &str, write: bool) -> std::io::Result<File> {
 pub fn host_int_low() -> bool {
     let mut level = *b"1";
     gpio(crate::device::current().radio.host_int, false).and_then(|mut f| f.read(&mut level)).is_ok() && level[0] == b'0'
+}
+
+/// nSSEL as a GPIO, its pad taken from the SPI controller while this lives.
+struct ChipSelect {
+    value: File,
+    line: &'static crate::device::ChipSelect,
+}
+
+impl ChipSelect {
+    fn take(line: &'static crate::device::ChipSelect) -> Result<ChipSelect, String> {
+        let dir = format!("/sys/class/gpio/gpio{}", line.gpio);
+        if !std::path::Path::new(&dir).exists() {
+            std::fs::write("/sys/class/gpio/export", line.gpio.to_string()).map_err(io("nSSEL export"))?;
+        }
+        // An output, high (deselected), before the pad is the GPIO's.
+        std::fs::write(format!("{dir}/direction"), "high").map_err(io("nSSEL direction"))?;
+        std::fs::write(line.pad, "0x4").map_err(io(line.pad))?;
+        Ok(ChipSelect { value: gpio(&dir, true).map_err(io("nSSEL"))?, line })
+    }
+
+    fn select(&mut self, selected: bool) -> Result<(), String> {
+        self.value.write_all(if selected { b"0" } else { b"1" }).map_err(io("nSSEL"))
+    }
+}
+
+impl Drop for ChipSelect {
+    /// The pad back to the SPI controller (mode 0), and the GPIO released,
+    /// as zb-loader expects to find them.
+    fn drop(&mut self) {
+        let _ = self.select(false);
+        let _ = std::fs::write(self.line.pad, "0x0");
+        let _ = std::fs::write("/sys/class/gpio/unexport", self.line.gpio.to_string());
+    }
 }
 
 fn io(what: &str) -> impl FnOnce(std::io::Error) -> String + '_ {
@@ -105,6 +140,7 @@ impl Spi {
             host_int: gpio(radio.host_int, false).map_err(io("nHOST_INT"))?,
             reset: gpio(radio.reset, true).map_err(io("nRESET"))?,
             wake: radio.wake.map(|line| gpio(line, true)).transpose().map_err(io("nWAKE"))?,
+            chip_select: radio.chip_select.as_ref().map(ChipSelect::take).transpose()?,
         })
     }
 
@@ -143,6 +179,7 @@ impl Spi {
         line(&mut self.reset, false).map_err(io("nRESET"))?;
         // A host killed mid-transaction leaves chip select held, and the radio
         // would boot into a half transaction: release it while the radio is in reset.
+        self.select(false)?;
         self.xfer(&[0xFF], false)?;
         sleep(Duration::from_millis(1));
         line(&mut self.reset, true).map_err(io("nRESET"))?;
@@ -237,11 +274,12 @@ impl Spi {
         }
         let mut out = command.to_vec();
         out.push(TERMINATOR);
-        self.xfer(&out, true)?;
-        let answer = self.answer();
+        self.select(true)?;
+        let answer = self.xfer(&out, true).and_then(|_| self.answer());
         // Chip select back up, and the protocol's breathing space between
         // transactions.
         let end = self.xfer(&[0xFF], false);
+        self.select(false)?;
         sleep(Duration::from_millis(1));
         let answer = answer?;
         if end? != [TERMINATOR] {
@@ -251,8 +289,11 @@ impl Spi {
     }
 
     /// The answer, after the command: 0xFF until the radio has it ready.
+    /// Where chip select is a GPIO (the gen2), the radio loses a transaction
+    /// whose clock pauses for long, so it is clocked without a pause instead.
     fn answer(&mut self) -> Result<Vec<u8>, String> {
-        if !self.wait_host_int(ANSWER) {
+        let pause = self.chip_select.is_none();
+        if pause && !self.wait_host_int(ANSWER) {
             return Err("no answer from the radio".into());
         }
         let start = Instant::now();
@@ -264,7 +305,9 @@ impl Spi {
             if start.elapsed() > ANSWER {
                 return Err("no answer from the radio".into());
             }
-            sleep(Duration::from_millis(1));
+            if pause {
+                sleep(Duration::from_millis(1));
+            }
         };
         let mut answer = vec![first];
         match first {
@@ -280,6 +323,11 @@ impl Spi {
             _ => {}
         }
         Ok(answer)
+    }
+
+    /// Chip select, where it is a GPIO; the kernel drives it otherwise.
+    fn select(&mut self, selected: bool) -> Result<(), String> {
+        self.chip_select.as_mut().map_or(Ok(()), |line| line.select(selected))
     }
 
     /// One spidev message; `hold` keeps chip select down after it.
@@ -318,7 +366,7 @@ mod tests {
     /// An Spi over plain files, nHOST_INT's value in `level`.
     fn fake(level: &std::path::Path) -> Spi {
         let file = || OpenOptions::new().read(true).write(true).open(level).unwrap();
-        Spi { dev: file(), host_int: file(), reset: file(), wake: Some(file()), script: Default::default() }
+        Spi { dev: file(), host_int: file(), reset: file(), wake: Some(file()), chip_select: None, script: Default::default() }
     }
 
     /// A radio coming out of a boot: nHOST_INT high, then low once it is ready.

@@ -15,6 +15,9 @@ pub struct Radio {
     pub reset: &'static str,
     pub host_int: &'static str,
     pub wake: Option<&'static str>,
+    /// nSSEL as a GPIO the host drives, where the SPI controller drops chip
+    /// select at the end of every spidev message.
+    pub chip_select: Option<ChipSelect>,
     /// The Zigbee image nestlocal installs (platform/common/radio/, embedded at build time,
     /// empty in a build without it), and where in it its address table's
     /// customerApplicationVersion is.
@@ -25,6 +28,13 @@ pub struct Radio {
     pub selects_zigbee: bool,
     /// EmberZNet's transmit power mode for the board's front end.
     pub tx_power_mode: u16,
+}
+
+/// The GPIO that can drive the radio's nSSEL in place of the SPI controller:
+/// its number, and its pad's omap_mux file, in whose mode 4 the GPIO has the pin.
+pub struct ChipSelect {
+    pub gpio: u32,
+    pub pad: &'static str,
 }
 
 /// The DA14580 BLE peripheral, a transport for Matter commissioning (on

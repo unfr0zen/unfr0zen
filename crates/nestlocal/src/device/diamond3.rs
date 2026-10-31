@@ -14,6 +14,7 @@ pub static DEVICE: Device = Device {
         reset: "/sys/bus/platform/devices/0.em35x-gpios/reset",
         host_int: "/sys/bus/platform/devices/0.em35x-gpios/irq",
         wake: Some("/sys/bus/platform/devices/0.em35x-gpios/wake"),
+        chip_select: None,
         zigbee_image: include_bytes!(concat!(env!("OUT_DIR"), "/radio-em3581.bin")),
         version_at: 0x2058,
         selects_zigbee: true,
