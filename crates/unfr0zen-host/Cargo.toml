@@ -20,6 +20,8 @@ serialport = "4"
 sha2 = "0.10"
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Devices_Communication", "Win32_Foundation"] }
 
 [dev-dependencies]
 flate2 = "1"

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use nusb::transfer::{Buffer, Bulk, In, Out};
 use nusb::MaybeFuture;
+use serialport::SerialPort;
 use unfr0zen_core::console::Serial;
 use unfr0zen_core::{bulk, Error, Result};
 
@@ -126,15 +127,50 @@ pub fn open_acm(id: Id, timeout: Duration) -> Result<Port> {
     Err(failed.unwrap_or_else(|| Error::Timeout(format!("ACM interface for {:04x}:{:04x} did not appear", id.0, id.1))))
 }
 
+#[cfg(windows)]
+type NativePort = serialport::COMPort;
+#[cfg(not(windows))]
+type NativePort = serialport::TTYPort;
+
 /// An ACM port with DTR held: recovery services its watchdog while it is.
-pub struct Port(Box<dyn serialport::SerialPort>);
+pub struct Port(NativePort);
 
 impl Port {
     pub fn open(name: &str) -> Result<Self> {
-        let mut port = serialport::new(name, 115_200).timeout(Duration::from_millis(250)).open()
+        let mut port = serialport::new(name, 115_200).timeout(Duration::from_millis(250)).open_native()
             .map_err(|e| Error::Io(format!("{name}: {e}")))?;
         port.write_data_terminal_ready(true).map_err(|e| Error::Io(format!("{name}: {e}")))?;
+        #[cfg(windows)]
+        windows::grow_receive_queue(&port, name);
         Ok(Port(port))
+    }
+}
+
+/// Windows' USB serial driver reads the device into a receive queue whether
+/// or not the app keeps up, and drops what overflows it. The queue is grown
+/// to hold a whole reply, and overflows are logged.
+#[cfg(windows)]
+mod windows {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Devices::Communication::{ClearCommError, SetupComm, COMSTAT};
+
+    /// A read chunk's reply in base64 with room to spare.
+    const RECEIVE_QUEUE: u32 = 1 << 20;
+    const TRANSMIT_QUEUE: u32 = 64 * 1024;
+
+    pub(super) fn grow_receive_queue(port: &serialport::COMPort, name: &str) {
+        if unsafe { SetupComm(port.as_raw_handle() as isize, RECEIVE_QUEUE, TRANSMIT_QUEUE) } == 0 {
+            log::warn!("{name}: receive queue left at the driver's size: {}", std::io::Error::last_os_error());
+        }
+    }
+
+    /// Logs, and so resets, the driver's receive error flags since the last call.
+    pub(super) fn report_receive_errors(port: &serialport::COMPort) {
+        let mut errors = 0;
+        let mut status = COMSTAT { _bitfield: 0, cbInQue: 0, cbOutQue: 0 };
+        if unsafe { ClearCommError(port.as_raw_handle() as isize, &mut errors, &mut status) } != 0 && errors != 0 {
+            log::warn!("Serial driver dropped received data: error flags {errors:#x} (0x1 queue overflow, 0x2 overrun)");
+        }
     }
 }
 
@@ -160,6 +196,8 @@ impl Write for Port {
 
 impl Serial for Port {
     fn clear_input(&mut self) -> io::Result<()> {
+        #[cfg(windows)]
+        windows::report_receive_errors(&self.0);
         self.0.clear(serialport::ClearBuffer::Input).map_err(io::Error::other)
     }
 }

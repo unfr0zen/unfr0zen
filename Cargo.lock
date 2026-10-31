@@ -6089,6 +6089,7 @@ dependencies = [
  "tar",
  "tempfile",
  "unfr0zen-core",
+ "windows-sys 0.52.0",
  "zip 2.6.1",
 ]
 
