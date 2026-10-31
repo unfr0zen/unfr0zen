@@ -58,7 +58,49 @@ pub struct PatchInputs {
     pub usb_shell: bool,
 }
 
+/// A URL with any user name and password in it replaced by ***.
+pub fn mask_url(url: &str) -> String {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let end = url[start..].find('/').map_or(url.len(), |i| start + i);
+    match url[start..end].rfind('@') {
+        Some(at) => format!("{}***@{}", &url[..start], &url[start + at + 1..]),
+        None => url.to_string(),
+    }
+}
+
 impl PatchInputs {
+    /// The options as the CLI spells them, for the run log: secrets and the
+    /// MQTT user masked, paths cut to their file names.
+    pub fn describe(&self) -> String {
+        let secret = |value: &Option<String>| value.as_ref().map(|_| "***".to_string());
+        let on = |set: bool| set.then(String::new);
+        let file = |path: &Option<PathBuf>| path.as_ref()
+            .map(|path| path.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        let flags = [
+            ("ntp-server", self.ntp_server.clone()),
+            ("root-password", secret(&self.root_password)),
+            ("ssh", on(self.ssh)),
+            ("usb-shell", on(self.usb_shell)),
+            ("mqtt", self.mqtt.as_deref().map(mask_url)),
+            ("mqtt-user", secret(&self.mqtt_user)),
+            ("mqtt-password", secret(&self.mqtt_password)),
+            ("mqtt-tls", on(self.mqtt_tls)),
+            ("mqtt-ca", file(&self.mqtt_ca)),
+            ("matter", on(self.matter)),
+            ("matter-code", secret(&self.matter_code)),
+            ("matter-thread", on(self.matter_thread)),
+            ("zigbee", on(self.zigbee)),
+            ("doom", on(self.doom)),
+            ("overlay", file(&self.overlay)),
+            ("cloud-url", self.cloud_url.as_deref().map(mask_url)),
+            ("backplate-sim", on(self.backplate_sim)),
+            ("block-cloud", on(self.block_cloud)),
+        ];
+        let set: Vec<String> = flags.into_iter().filter_map(|(name, value)| value.map(|value|
+            if value.is_empty() { format!("--{name}") } else { format!("--{name} {value}") })).collect();
+        if set.is_empty() { "no options".into() } else { set.join(" ") }
+    }
+
     /// Checks the options against each other and the filesystem, and builds the
     /// patch, all before the unit is touched. The error text is shown as is.
     pub fn build(&self) -> Result<Options> {
@@ -236,5 +278,22 @@ pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
     match unit.device {
         Device::Diamond3 => diamond3::run(config, progress, unit),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit),
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+
+    #[test]
+    fn options_read_as_cli_flags_with_secrets_masked() {
+        let inputs = PatchInputs { zigbee: true, block_cloud: true, ntp_server: Some("time.lan".into()),
+            root_password: Some("hunter2".into()), mqtt: Some("tcp://bob:pw@broker.lan".into()),
+            mqtt_ca: Some(PathBuf::from("/home/bob/ca.pem")), ..PatchInputs::default() };
+        assert_eq!(inputs.describe(), "--ntp-server time.lan --root-password *** --mqtt tcp://***@broker.lan \
+                                       --mqtt-ca ca.pem --zigbee --block-cloud");
+        assert_eq!(PatchInputs::default().describe(), "no options");
+        assert_eq!(mask_url("broker.lan:1883"), "broker.lan:1883");
+        assert_eq!(mask_url("mqtt://u@host/path@x"), "mqtt://***@host/path@x");
     }
 }

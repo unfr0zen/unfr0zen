@@ -8,15 +8,16 @@ pub mod device;
 pub mod diamond3;
 pub mod flow;
 pub mod j49;
+mod machine;
 pub mod nand;
 pub mod progress;
 pub mod update;
 pub mod usb;
 
 pub use device::{Device, WAIT_USB_BOOT_STAGE};
-pub use flow::{run, Config, PatchInputs};
+pub use flow::{mask_url, run, Config, PatchInputs};
 pub use unfr0zen_core::nlclient;
-pub use progress::{init_logging, log_path, Progress, Stage};
+pub use progress::{init_logging, log_path, set_selection, Progress, Stage};
 /// The unfr0zen logo, block-character art with "by @will-tm".
 pub const LOGO: &str = include_str!("logo.txt");
 

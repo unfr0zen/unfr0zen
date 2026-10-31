@@ -87,9 +87,20 @@ impl log::Log for RunLog {
 static RUN_LOG: RunLog = RunLog(Mutex::new(None));
 static LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// Installs the run logger once, early. Later a run points it at its file.
-pub fn init_logging() {
+static APP_VERSION: OnceLock<&'static str> = OnceLock::new();
+static SELECTION: Mutex<Option<String>> = Mutex::new(None);
+
+/// What the person chose for the runs that follow, secrets already masked,
+/// for the top of each run log.
+pub fn set_selection(selection: String) {
+    *SELECTION.lock().unwrap() = Some(selection);
+}
+
+/// Installs the run logger once, early, with the app's version for the top of
+/// each run log. Later a run points it at its file.
+pub fn init_logging(app_version: &'static str) {
     STARTED.get_or_init(Instant::now);
+    APP_VERSION.get_or_init(|| app_version);
     let _ = log::set_logger(&RUN_LOG).map(|()| log::set_max_level(log::LevelFilter::Debug));
 }
 
@@ -97,6 +108,14 @@ pub fn init_logging() {
 pub(crate) fn set_log_file(path: &Path) -> Result<()> {
     *RUN_LOG.0.lock().unwrap() = Some(fs::File::create(path)?);
     *LOG_PATH.lock().unwrap() = Some(path.to_path_buf());
+    log::info!("unfr0zen {}, built for {} {}", APP_VERSION.get().unwrap_or(&"(version unknown)"),
+               std::env::consts::OS, std::env::consts::ARCH);
+    for line in crate::machine::describe() {
+        log::info!("{line}");
+    }
+    if let Some(selection) = SELECTION.lock().unwrap().clone() {
+        log::info!("{selection}");
+    }
     Ok(())
 }
 

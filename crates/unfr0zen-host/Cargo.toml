@@ -21,7 +21,7 @@ sha2 = "0.10"
 tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Devices_Communication", "Win32_Foundation"] }
+windows-sys = { version = "0.52", features = ["Win32_Devices_Communication", "Win32_Foundation", "Win32_System_Registry"] }
 
 [dev-dependencies]
 flate2 = "1"

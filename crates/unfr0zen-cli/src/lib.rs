@@ -14,7 +14,7 @@ use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
-use unfr0zen_host::{init_logging, log_path, run, Config, Device, PatchInputs, Slot};
+use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, Config, Device, PatchInputs, Slot};
 
 use ui::TerminalProgress;
 
@@ -205,9 +205,37 @@ fn elevate(args: &Args, work_dir: &std::path::Path, data_dir: &std::path::Path) 
     Err(std::io::Error::other(format!("could not run sudo: {}", command.exec())))
 }
 
+/// The command line for the run log: secrets and the MQTT user masked, URLs
+/// without credentials, paths cut to their file names.
+fn logged_arguments(args: impl Iterator<Item = String>) -> String {
+    /// How the value of a flag is shown; None for flags shown as given.
+    fn shown(flag: &str, value: &str) -> Option<String> {
+        match flag {
+            "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" => Some("***".into()),
+            "--mqtt" | "--cloud-url" => Some(mask_url(value)),
+            "--mqtt-ca" | "--overlay" | "--nand-image" | "--work-dir" | "--data-dir" =>
+                Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned()),
+            _ => None,
+        }
+    }
+    let (mut out, mut flag) = (Vec::new(), None::<String>);
+    for arg in args {
+        if let Some(name) = flag.take() {
+            out.push(shown(&name, &arg).unwrap_or(arg));
+        } else if let Some((name, value)) = arg.split_once('=').filter(|(name, _)| name.starts_with("--")) {
+            out.push(format!("{name}={}", shown(name, value).unwrap_or_else(|| value.into())));
+        } else {
+            if shown(&arg, "").is_some() { flag = Some(arg.clone()); }
+            out.push(arg);
+        }
+    }
+    format!("Arguments: {}", out.join(" "))
+}
+
 pub fn main() {
-    init_logging();
+    init_logging(env!("UNFR0ZEN_BUILD_VERSION"));
     ui::enable_colors();
+    set_selection(logged_arguments(std::env::args().skip(1)));
     let args = Args::parse();
     if let Some(Command::Nlclient { binary, out, undo }) = &args.command {
         match local_nlclient(binary, out, undo.as_deref()) {
@@ -341,4 +369,18 @@ fn update() -> unfr0zen_host::Result<String> {
     ui::waiting(&format!("Installing unfr0zen {}", release.tag));
     update::install(update::App::Cli, &release)?;
     Ok(format!("Updated unfr0zen {version} to {}: {}", release.tag, release.url))
+}
+
+#[cfg(test)]
+mod logged_arguments_tests {
+    use super::logged_arguments;
+
+    #[test]
+    fn secrets_credentials_and_home_paths_stay_out_of_the_log() {
+        let args = ["--zigbee", "--root-password", "hunter2", "--mqtt=mqtt://bob:pw@broker.lan:1883",
+                    "--mqtt-user", "bob", "--matter-code=20202021", "--overlay", "/Users/bob/extra.tar", "--slot", "root0"];
+        assert_eq!(logged_arguments(args.iter().map(|a| a.to_string())),
+                   "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
+                    --mqtt-user *** --matter-code=*** --overlay extra.tar --slot root0");
+    }
 }

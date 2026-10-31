@@ -41,7 +41,7 @@ fn main() -> eframe::Result<()> {
         println!("unfr0zen {BUILD_VERSION}");
         return Ok(());
     }
-    unfr0zen_host::init_logging();
+    unfr0zen_host::init_logging(BUILD_VERSION);
     // One window at a time: a recovery run drives a single USB device, and two
     // would fight over it. Held for the whole process. On macOS the name is
     // the lock file's path: in the temporary directory, not wherever the app
@@ -522,6 +522,10 @@ impl App {
     }
 
     fn start(&mut self) {
+        unfr0zen_host::set_selection(match self.mode {
+            Mode::Patch => format!("Selected: {}, {}", self.mode.menu(), self.form.inputs().describe()),
+            _ => format!("Selected: {}", self.mode.menu()),
+        });
         let run = match self.mode {
             Mode::Patch => self.form.config().map(Run::start),
             _ => self.nand_job().map(|job| Run::nand(job, WAIT_USB)),
