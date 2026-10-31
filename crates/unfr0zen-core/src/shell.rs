@@ -20,6 +20,10 @@ pub type Digests = BTreeMap<String, (Option<String>, Option<String>)>;
 /// How much of a file one read moves: about 350 KB of base64.
 const READ_CHUNK: usize = 256 * 1024;
 
+/// How long a reply may go quiet short of its end marker before the shell is
+/// asked for another line of output behind it.
+const NUDGE_AFTER: Duration = Duration::from_secs(1);
+
 /// The mounted slot, as the patch sees it.
 pub trait Volume {
     /// Owner, mode and contents of a regular file; None if it is absent.
@@ -106,29 +110,46 @@ impl<S: Serial> InitramfsShell<S> {
         let marker = marker();
         let command = script.lines().next().unwrap_or(""); // what the log shows: no file contents
         // The script's status first, before echo resets $?. No quotes in the
-        // marker line: one cut short cannot leave the shell inside a string.
-        let sent = format!("{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n");
+        // marker lines: one cut short cannot leave the shell inside a string.
+        // The start marker keeps output a nudge left from an earlier command
+        // out of this one's.
+        let sent = format!("echo {marker}:begin\n{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n");
         let failed = |step: &str, e: std::io::Error| Error::Io(format!("{step} {command:?} ({} bytes): {e}", sent.len()));
         self.port.clear_input().map_err(|e| failed("clearing input for", e))?;
         self.port.write_all(sent.as_bytes()).map_err(|e| failed("sending", e))?;
         self.port.flush().map_err(|e| failed("flushing", e))?;
+        let begin = Regex::new(&format!(r"{marker}:begin\r?\n")).expect("valid pattern");
         let end = Regex::new(&format!(r"\n{marker}:(\d+)\r?\n")).expect("valid pattern");
-        let mut data = Vec::new();
+        let (mut data, mut nudges) = (Vec::new(), 0);
+        let mut heard = (0, Instant::now());
         let until = Instant::now() + timeout;
         while Instant::now() < until {
             read_some(&mut self.port, &mut data)?;
             if let Some(found) = end.captures(&data) {
-                let output = String::from_utf8_lossy(&data[..found.get(0).unwrap().start()]).into_owned();
+                let stop = found.get(0).unwrap().start();
+                let start = begin.find(&data[..stop]).map_or(0, |found| found.end());
+                let output = String::from_utf8_lossy(&data[start..stop]).into_owned();
                 let shown = if quiet { format!("({} bytes of output)", output.len()) } else { tail(output.as_bytes(), 2000) };
-                log::debug!("initramfs$ {command}\n{shown}");
+                let nudged = if nudges > 0 { format!(" (answered after {nudges} nudges)") } else { String::new() };
+                log::debug!("initramfs$ {command}{nudged}\n{shown}");
                 if &found[1] != b"0" {
                     let reason = if quiet { "see the unit".into() } else { tail(output.trim().as_bytes(), 300) };
                     return device(format!("initramfs command {command:?} failed: {reason}"));
                 }
                 return Ok(output);
             }
+            // On Windows in a VM, the last USB packet of a reply can stay
+            // undelivered until more output follows it: a quiet reply gets
+            // a blank line behind it.
+            if data.len() != heard.0 {
+                heard = (data.len(), Instant::now());
+            } else if heard.1.elapsed() >= NUDGE_AFTER {
+                self.port.write_all(b"echo\n").and_then(|()| self.port.flush()).map_err(|e| failed("nudging", e))?;
+                nudges += 1;
+                heard.1 = Instant::now();
+            }
         }
-        Err(Error::Timeout(format!("initramfs shell did not answer {command:?}")))
+        Err(Error::Timeout(format!("initramfs shell did not answer {command:?} ({} bytes received, {nudges} nudges)", data.len())))
     }
 
     /// Chunk `index` of the file at the quoted `path`, tried up to three times.
@@ -313,12 +334,16 @@ mod tests {
         input: Vec<u8>,
         output: VecDeque<u8>,
         scripts: Vec<String>,
+        /// Hold the next reply's end marker until a nudge, as a stuck last
+        /// USB packet would.
+        stall: bool,
+        held: Option<String>,
     }
 
     impl FakeShell {
         fn new(answers: Vec<(&'static str, &'static str, u8)>) -> Self {
             let used = vec![false; answers.len()];
-            FakeShell { answers, used, input: Vec::new(), output: VecDeque::new(), scripts: Vec::new() }
+            FakeShell { answers, used, input: Vec::new(), output: VecDeque::new(), scripts: Vec::new(), stall: false, held: None }
         }
     }
 
@@ -326,9 +351,16 @@ mod tests {
         fn write(&mut self, data: &[u8]) -> io::Result<usize> {
             self.input.extend_from_slice(data);
             let text = String::from_utf8_lossy(&self.input).into_owned();
-            let marker = regex::Regex::new(r"(?s)^(.*)\nunfr0zen_rc=\$\?; echo; echo ([0-9a-f]{16}):\$unfr0zen_rc\n$").unwrap();
+            if text == "echo\n" {
+                let held = self.held.take().unwrap_or_default();
+                self.output.extend(format!("\n{held}").bytes());
+                self.input.clear();
+                return Ok(data.len());
+            }
+            let marker = regex::Regex::new(r"(?s)^echo ([0-9a-f]{16}):begin\n(.*)\nunfr0zen_rc=\$\?; echo; echo ([0-9a-f]{16}):\$unfr0zen_rc\n$").unwrap();
             if let Some(found) = marker.captures(&text) {
-                let script = found[1].to_string();
+                assert_eq!(found[1], found[3], "one marker per command");
+                let script = found[2].to_string();
                 let matching: Vec<usize> = (0..self.answers.len())
                     .filter(|&i| script.starts_with(self.answers[i].0)).collect();
                 let pick = matching.iter().copied().find(|&i| !self.used[i]).or(matching.last().copied());
@@ -336,7 +368,9 @@ mod tests {
                     self.used[i] = true;
                     self.answers[i]
                 });
-                self.output.extend(format!("{output}\n{}:{code}\n", &found[2]).bytes());
+                let end = format!("{}:{code}\n", &found[3]);
+                self.output.extend(format!("{}:begin\n{output}\n", &found[1]).bytes());
+                if std::mem::take(&mut self.stall) { self.held = Some(end) } else { self.output.extend(end.bytes()) }
                 self.scripts.push(script);
                 self.input.clear();
             }
@@ -433,6 +467,16 @@ mod tests {
         fn clear_input(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_reply_that_stalls_short_of_its_marker_is_nudged_through() {
+        let mut shell = shell(vec![("rm -f", "", 0)]);
+        shell.port.stall = true;
+        shell.remove("etc/x").unwrap();
+        // The nudge's blank line, left behind, stays out of the next reply.
+        shell.port.output.extend(b"\n");
+        assert_eq!(shell.run("true").unwrap(), "");
     }
 
     #[test]
