@@ -93,6 +93,8 @@ const MEASUREMENT_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002];
 
 pub const MANUFACTURER: &str = "Google Nest";
 pub const MODEL: &str = "Nest Learning Thermostat";
+/// The gen 2's: a model of its own, for the coordinator to tell the two apart.
+pub const MODEL_GEN2: &str = "Nest Learning Thermostat (gen2)";
 
 /// The setpoint range, as the MQTT climate entity has it.
 const MIN: i16 = 900;
@@ -449,9 +451,12 @@ impl Clusters for Nest {
             (BASIC, 0x0000) => Some(Value::U8(3)), // ZCL version
             (BASIC, 0x0001) => Some(Value::U8(1)), // application version
             (BASIC, 0x0002) => Some(Value::U8(6)), // stack version: EmberZNet 6
-            (BASIC, 0x0003) => Some(Value::U8(3)), // hardware: the 3rd generation
+            (BASIC, 0x0003) => Some(Value::U8(crate::device::current().generation)), // hardware
             (BASIC, 0x0004) => Some(Value::Str(MANUFACTURER.into())),
-            (BASIC, 0x0005) => Some(Value::Str(MODEL.into())),
+            (BASIC, 0x0005) => {
+                let model = if crate::device::current().generation == 2 { MODEL_GEN2 } else { MODEL };
+                Some(Value::Str(model.into()))
+            }
             (BASIC, 0x0007) => Some(Value::Enum8(0x81)), // mains (the HVAC system's 24 V), battery backup
             (BASIC, 0x4000) => Some(Value::Str(sprint(self.view().dev.get("current_version")))),
             // Volts, in 100 mV.
@@ -547,6 +552,13 @@ mod tests {
                      fields!{"can_heat" => true, "can_cool" => true});
         assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
+    }
+
+    #[test]
+    fn generation_models_fit_the_basic_cluster_model_identifier() {
+        assert!(MODEL.len() <= 32);
+        assert!(MODEL_GEN2.len() <= 32);
+        assert_ne!(MODEL, MODEL_GEN2);
     }
 
     #[test]

@@ -4,6 +4,7 @@ use super::{Ble, Device, Radio};
 
 pub static DEVICE: Device = Device {
     name: "diamond3",
+    generation: 3,
     // An EM3581 on /dev/spidev_em35x, its lines through the em35x-gpios
     // platform device. Its image serves Thread and Zigbee alike, and loads at
     // 0x08002000 with its address table at 0x08004000, past Nest's 16 KiB

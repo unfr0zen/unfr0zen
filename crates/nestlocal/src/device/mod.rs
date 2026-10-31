@@ -50,6 +50,8 @@ pub struct Ble {
 
 pub struct Device {
     pub name: &'static str,
+    /// The Nest Learning Thermostat generation: 2 or 3.
+    pub generation: u8,
     pub radio: Radio,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub ble: Option<Ble>,

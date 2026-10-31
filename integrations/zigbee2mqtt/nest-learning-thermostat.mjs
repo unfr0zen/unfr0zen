@@ -1,5 +1,5 @@
-// Zigbee2MQTT external converter for a Nest Learning Thermostat (3rd gen) set
-// up with unfr0zen (https://github.com/unfr0zen/unfr0zen), Zigbee checked.
+// Zigbee2MQTT external converter for a Nest Learning Thermostat (2nd or 3rd gen)
+// set up with unfr0zen (https://github.com/unfr0zen/unfr0zen), Zigbee checked.
 //
 // The thermostat is endpoint 1, in standard clusters: Thermostat (eco is the
 // economy bit of its programming operation mode, the eco temperatures are the
@@ -405,4 +405,12 @@ const definition = {
     },
 };
 
-export default definition;
+// The gen 2 reports a model of its own; it has the same clusters.
+const gen2 = {
+    ...definition,
+    zigbeeModel: ['Nest Learning Thermostat (gen2)'],
+    model: 'Nest Learning Thermostat (2nd gen, unfr0zen)',
+    description: 'Nest Learning Thermostat, 2nd generation, freed by unfr0zen (nestlocal)',
+};
+
+export default [definition, gen2];

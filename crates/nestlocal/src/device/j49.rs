@@ -4,6 +4,7 @@ use super::{ChipSelect, Device, Radio};
 
 pub static DEVICE: Device = Device {
     name: "j49",
+    generation: 2,
     // An EM357 on /dev/spidev2.0, nRESET (gpio 61) and nHOST_INT (gpio 182)
     // through the diamond-zigbee platform device; its nWAKE follows chip
     // select. It holds one image at a time, this one the Zigbee NCP alone,
