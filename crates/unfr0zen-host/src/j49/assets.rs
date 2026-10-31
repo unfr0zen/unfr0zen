@@ -8,7 +8,6 @@ use std::io::Read;
 use unfr0zen_core::nestlocal::Overlay;
 
 pub const XLOADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/x-load.bin"));
-pub const DIAMOND_XLOADER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/diamond-x-load.bin"));
 pub const FLASHER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nand-flasher.bin"));
 pub const KERNEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-uImage"));
 /// Gzipped, as with_thread_radio takes them.

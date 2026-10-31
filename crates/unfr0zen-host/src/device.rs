@@ -1,5 +1,7 @@
 //! The devices unfr0zen supports. Diamond and j49 share their ROM USB ID;
-//! their application gadgets have distinct identities.
+//! their application gadgets have distinct identities. A boot ROM is taken
+//! as a j49 until the flasher runs and the NAND's U-Boot environment names
+//! the generation (j49::route), unless `--device` names it first.
 
 use std::thread;
 use std::time::{Duration, Instant};

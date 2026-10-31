@@ -10,7 +10,7 @@
 
 use std::sync::LazyLock;
 
-use crate::{device, Result, Slot};
+use crate::{device, Device, Result, Slot};
 
 pub const PAGE: usize = 2048;
 pub const OOB: usize = 64;
@@ -305,6 +305,19 @@ impl Environment {
         }
         Ok([numbers[0], numbers[1]].map(|n| if n == 0 { Slot::Root0 } else { Slot::Root1 }))
     }
+
+    /// The generation, as Nest's U-Boot tells the boards apart: `nlmodel` is
+    /// the family, a dash, the product and an optional dotted revision,
+    /// `Diamond-1.N` on a gen 1 and `Display-2.N` on a gen 2. None when it is
+    /// unset (U-Boot then assumes Display-2.0) or names neither.
+    pub fn device(&self) -> Option<Device> {
+        let (family, rest) = self.get("nlmodel")?.rsplit_once('-')?;
+        match (family, rest.split('.').next()?) {
+            ("Diamond", "1") => Some(Device::Diamond),
+            ("Display", "2") => Some(Device::J49),
+            _ => None,
+        }
+    }
 }
 
 /// The copy U-Boot boots with: the valid one of the newer generation, and
@@ -386,6 +399,20 @@ mod tests {
         let mut broken = data.clone();
         broken[100] ^= 1;
         assert_eq!(Environment::parse(&broken), None);
+    }
+
+    #[test]
+    fn nlmodel_names_the_generation() {
+        let env = |model: Option<&str>| Environment {
+            generation: 0,
+            values: model.map(|m| ("nlmodel".to_string(), m.to_string())).into_iter().collect(),
+        };
+        assert_eq!(env(Some("Display-2.4")).device(), Some(Device::J49));
+        assert_eq!(env(Some("Display-2")).device(), Some(Device::J49));
+        assert_eq!(env(Some("Diamond-1.9")).device(), Some(Device::Diamond));
+        assert_eq!(env(Some("Display-3.4")).device(), None);
+        assert_eq!(env(Some("Diamond")).device(), None);
+        assert_eq!(env(None).device(), None);
     }
 
     #[test]

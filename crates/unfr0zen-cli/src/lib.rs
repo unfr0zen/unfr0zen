@@ -46,7 +46,7 @@ struct Args {
     /// j49/diamond: patch FILE, a raw NAND image (2112-byte pages), in place instead of a unit
     #[arg(long, value_name = "FILE")]
     nand_image: Option<PathBuf>,
-    /// the unit's generation (default: identified on USB; a boot ROM Diamond and j49 share is taken as j49)
+    /// the unit's generation (default: identified on USB, or from the NAND's U-Boot environment in USB download mode)
     #[arg(long, global = true, value_parser = parse_device, value_name = "diamond|j49|diamond3")]
     device: Option<Device>,
     /// sync time from HOST instead of time.nest.com (default pool.ntp.org)

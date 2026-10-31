@@ -36,7 +36,7 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: U
     if !matches!(device, Device::Diamond | Device::J49) {
         return Err(failure(format!("this needs an OMAP Nest; the unit on USB is a {}", device.name())));
     }
-    let app = if device == Device::Diamond { usb::DIAMOND_APP } else { usb::APP };
+    let app = app_id(device);
     if usb::mode_for(id, app) == Some(Mode::App) {
         progress.waiting(HOLD_BUTTON);
         return stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device_for(&[Mode::Rom], wait_usb, Some(&port), app));
@@ -44,18 +44,31 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: U
     Ok((port, id))
 }
 
+/// The generation's application gadget identity.
+fn app_id(device: Device) -> Id {
+    if device == Device::Diamond { usb::DIAMOND_APP } else { usb::APP }
+}
+
+/// The generation a run is for: the one asked for, else the one the NAND's
+/// U-Boot environment names (the boards share their boot ROM's USB identity;
+/// Nest's U-Boot tells them apart the same way), else the USB identity's.
+fn generation(wanted: Option<Device>, env: &Environment, usb: Device) -> Device {
+    wanted.or_else(|| env.device()).unwrap_or(usb)
+}
+
 /// From the boot ROM to the flasher running from SDRAM: the ASIC ID,
 /// x-loader into SRAM, then x-loader (re-enumerated) loads the flasher.
-/// Returns the ASIC ID too.
-pub(crate) fn load_flasher(device: Device) -> Result<(Vec<u8>, Flasher<Pipe>)> {
-    let xloader = if device == Device::Diamond { assets::DIAMOND_XLOADER } else { assets::XLOADER };
-    if xloader.is_empty() {
-        return Err(failure(format!("this build has no {} x-loader (it needs Docker to build)", device.name())));
+/// Returns the ASIC ID too. The one x-loader serves both generations: Nest's
+/// USB loaders for the two differ only in the muxing of pins the loader does
+/// not use.
+pub(crate) fn load_flasher() -> Result<(Vec<u8>, Flasher<Pipe>)> {
+    if assets::XLOADER.is_empty() {
+        return Err(failure("this build has no x-loader (it needs Docker to build)"));
     }
     let (port, mut rom) = usb::open_rom(seconds(10))?;
     let asic = omap::probe(&mut rom)?;
-    log::info!("{} boot ROM at {port}, ASIC ID {}", device.name(), asic.iter().map(|b| format!("{b:02x}")).collect::<String>());
-    omap::load_first_stage(&mut rom, xloader)?;
+    log::info!("OMAP boot ROM at {port}, ASIC ID {}", asic.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    omap::load_first_stage(&mut rom, assets::XLOADER)?;
     drop(rom);
     std::thread::sleep(Duration::from_millis(20));
     let (_, mut xloader) = usb::open_rom(seconds(60))?;
@@ -70,7 +83,7 @@ pub(crate) fn load_flasher(device: Device) -> Result<(Vec<u8>, Flasher<Pipe>)> {
 }
 
 /// The U-Boot environment the unit boots with.
-fn read_environment(nand: &mut dyn Nand) -> Result<Environment> {
+pub(crate) fn read_environment(nand: &mut dyn Nand) -> Result<Environment> {
     let mut copies = Vec::new();
     for offset in layout::ENV_COPIES {
         let raw = nand.read(offset / layout::PAGE, layout::ENV_SIZE / layout::PAGE)?;
@@ -162,13 +175,17 @@ fn write_slot(nand: &mut dyn Nand, progress: &mut dyn Progress, slot: Slot, plan
 
 /// What a run did, for its final line.
 struct Outcome {
+    device: Device,
     slot: Slot,
     changed: bool,
 }
 
 /// From the NAND, by flasher or image, to the patched slot: everything but
-/// finding the unit and restarting it.
-fn route(progress: &mut dyn Progress, config: &Config, device: Device, nand: &mut dyn Nand, run_dir: &Path) -> Result<Outcome> {
+/// finding the unit and restarting it. `usb` is the generation the USB
+/// identity gave, which the environment's nlmodel settles; `silicon` names
+/// the SoC for the progress.
+fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &str, nand: &mut dyn Nand, run_dir: &Path)
+         -> Result<Outcome> {
     let options = &patch::Options {
         thread: config.options.thread.as_ref()
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
@@ -177,6 +194,10 @@ fn route(progress: &mut dyn Progress, config: &Config, device: Device, nand: &mu
     };
     progress.status(&format!("NAND: {}", nand.chip()));
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
+    let device = generation(config.omap, &env, usb);
+    progress.device(&format!("{}: {silicon}", device.description()));
+    progress.status(&format!("Generation: {} (nlmodel {})", device.description(), env.get("nlmodel").unwrap_or("unset")));
+    unsupported(device, &config.options)?;
     let order = env.boot_order()?;
     progress.status(&format!("Installed boot order: {} then {}", order[0], order[1]));
     let slot = config.slot.unwrap_or(order[0]);
@@ -216,7 +237,7 @@ fn route(progress: &mut dyn Progress, config: &Config, device: Device, nand: &mu
             progress.status(&format!("Dry run: the kernel with a USB serial port would go in {slot}'s boot partition, \
                                       booted first"));
         }
-        return Ok(Outcome { slot, changed: false });
+        return Ok(Outcome { device, slot, changed: false });
     }
     let mut changed = false;
     if !changes.is_empty() {
@@ -240,16 +261,28 @@ fn route(progress: &mut dyn Progress, config: &Config, device: Device, nand: &mu
         progress.status(if first { "U-Boot environment updated" } else { "U-Boot already boots it first" });
         changed |= written || first;
     }
-    Ok(Outcome { slot, changed })
+    Ok(Outcome { device, slot, changed })
+}
+
+/// Refuses what a Diamond cannot run: its CC2530 radio uses UART, and it has
+/// no kernel with a USB serial port.
+fn unsupported(device: Device, options: &patch::Options) -> Result<()> {
+    if device != Device::Diamond {
+        return Ok(());
+    }
+    if options.thread.is_some() || options.zigbee {
+        return Err(failure("Diamond's CC2530 radio uses UART; --matter-thread and --zigbee need a separate radio implementation"));
+    }
+    if options.usb_shell {
+        return Err(failure("Diamond needs its own kernel for --usb-shell"));
+    }
+    Ok(())
 }
 
 /// Refuses a run this build cannot do, before the unit is touched.
 fn check(config: &Config) -> Result<()> {
-    if config.omap == Some(Device::Diamond) && (config.options.thread.is_some() || config.options.zigbee) {
-        return Err(failure("Diamond's CC2530 radio uses UART; --matter-thread and --zigbee need a separate radio implementation"));
-    }
-    if config.omap == Some(Device::Diamond) && config.options.usb_shell {
-        return Err(failure("Diamond needs its own kernel for --usb-shell"));
+    if let Some(device) = config.omap {
+        unsupported(device, &config.options)?;
     }
     if config.options.usb_shell && assets::KERNEL.is_empty() {
         return Err(failure("this build has no j49 kernel with a USB serial port (it needs Docker to build); drop --usb-shell"));
@@ -260,33 +293,30 @@ fn check(config: &Config) -> Result<()> {
 /// Runs the recovery from whatever mode the unit is in, as the diamond3's
 /// does: run records under `work_dir`, the run log, the final status line.
 pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit) -> Result<String> {
-    let device = unit.device;
+    let usb = unit.device;
     check(config)?;
-    if device == Device::Diamond && (config.options.thread.is_some() || config.options.zigbee || config.options.usb_shell) {
-        return Err(failure("Diamond's UART radio and USB shell kernel are not available"));
-    }
+    unsupported(usb, &config.options)?;
     let (port, _) = find_unit(progress, config.wait_usb, unit)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
     let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
-    let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", || load_flasher(device))?;
-    progress.device(&format!("{}: {}", device.description(), omap::silicon(&asic, flasher.idcode)));
-    let outcome = route(progress, config, device, &mut flasher, &run_dir);
+    let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
+    let silicon = omap::silicon(&asic, flasher.idcode);
+    let outcome = route(progress, config, usb, &silicon, &mut flasher, &run_dir);
     // On failure too: whatever was written left the slot bootable.
     let reset = stage(progress, "Restart the unit", || flasher.reset());
     let outcome = outcome?;
     reset?;
-    let app = if device == Device::Diamond { usb::DIAMOND_APP } else { usb::APP };
+    let app = app_id(outcome.device);
     stage(progress, "Wait for the unit to restart", || usb::wait_device_for(&[Mode::App], seconds(180), Some(&port), app))?;
-    finish(progress, config, &run_dir, &outcome, Some(&port), device)
+    finish(progress, config, &run_dir, &outcome, Some(&port))
 }
 
 /// The same run against a raw NAND image (2112-byte pages) instead of a unit,
 /// which it rewrites in place: for an emulator, or a backup.
 pub fn run_image(config: &Config, image: &Path, progress: &mut dyn Progress) -> Result<String> {
-    let device = config.omap.unwrap_or(Device::J49);
     check(config)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
@@ -294,22 +324,21 @@ pub fn run_image(config: &Config, image: &Path, progress: &mut dyn Progress) -> 
     let log_dir = start_log(progress, &stamp)?;
     let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
     let name = image.display().to_string();
-    progress.device(&format!("{}: image", device.description()));
     let mut nand = flasher::Image::new(fs::read(image).map_err(|e| failure(format!("{name}: {e}")))?, &name)?;
-    let outcome = route(progress, config, device, &mut nand, &run_dir)?;
+    let outcome = route(progress, config, Device::J49, "image", &mut nand, &run_dir)?;
     if outcome.changed {
         fs::write(image, &nand.raw).map_err(|e| failure(format!("{name}: {e}")))?;
     }
-    finish(progress, config, &run_dir, &outcome, None, device)
+    finish(progress, config, &run_dir, &outcome, None)
 }
 
-fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome: &Outcome, port: Option<&str>, device: Device) -> Result<String> {
+fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome: &Outcome, port: Option<&str>) -> Result<String> {
     let slot = outcome.slot;
     if config.dry_run {
         return Ok(format!("Dry run done: {slot} left as it was; changes listed in {}", run_dir.join("changes.txt").display()));
     }
     let shell = match port.filter(|_| config.options.usb_shell) {
-        Some(port) => Some(stage(progress, "Wait for USB root shell", || verify_shell(port, if device == Device::Diamond { usb::DIAMOND_APP } else { usb::APP }, config.wait_shell))?),
+        Some(port) => Some(stage(progress, "Wait for USB root shell", || verify_shell(port, app_id(outcome.device), config.wait_shell))?),
         None => None,
     };
     if let Some(matter) = &config.options.matter {

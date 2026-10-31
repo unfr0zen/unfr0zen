@@ -6,7 +6,7 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 
 - `crates/unfr0zen-core`: firmware parsing, patching, and recovery logic.
 - `crates/unfr0zen-host`: USB workflows, embedded assets, and host orchestration.
-- Device-specific code sits in one module per device (`diamond3`, `j49`) in core and host; `unfr0zen-host::device` identifies the unit on USB by its identity in any mode and the run dispatches to its device's flow.
+- Device-specific code sits in one module per device (`diamond3`, `j49`) in core and host; `unfr0zen-host::device` identifies the unit on USB by its identity in any mode and the run dispatches to its device's flow; the gen 1 and gen 2 share their boot ROM's identity, and in that mode the OMAP flow reads the generation from the NAND's U-Boot environment (`nlmodel`) once the flasher runs.
 - `crates/unfr0zen-gui` and `crates/unfr0zen-cli`: the `unfr0zen` executable (egui window) and the terminal interface, a library it runs when given arguments on Linux and macOS; Windows has the window only.
 - `crates/nestlocal`: device service implementing MQTT, Matter, and Zigbee; startup scripts live in `rootfs/`.
 - `platform/`: what is built for and installed on the thermostat, by device:

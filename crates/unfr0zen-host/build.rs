@@ -156,18 +156,13 @@ fn j49(root: &Path, out: &Path) {
         .unwrap_or_else(|_| panic!("build/j49/dropbearmulti is missing: build it first (scripts/build-firmware.sh)"));
     assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/j49/dropbearmulti is not an ARM ELF binary");
     gzip(&data, &out.join("dropbearmulti.gz"));
-    // x-loader builds in Docker too; without it the app reaches no j49.
+    // x-loader builds in Docker too; without it the app reaches no OMAP unit.
     let xloader = root.join("build/j49/x-load.bin");
     println!("cargo:rerun-if-changed={}", xloader.display());
     let xloader = fs::read(&xloader).unwrap_or_default();
     // Its reset vector: b reset.
     assert!(xloader.is_empty() || xloader[3] == 0xea, "build/j49/x-load.bin does not start with its vectors");
     fs::write(out.join("x-load.bin"), xloader).unwrap();
-    let diamond = root.join("build/diamond/x-load.bin");
-    println!("cargo:rerun-if-changed={}", diamond.display());
-    let diamond = fs::read(&diamond).unwrap_or_default();
-    assert!(diamond.is_empty() || diamond[3] == 0xea, "build/diamond/x-load.bin does not start with its vectors");
-    fs::write(out.join("diamond-x-load.bin"), diamond).unwrap();
 }
 
 fn nestlocal(root: &Path, out: &Path) {

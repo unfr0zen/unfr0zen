@@ -31,10 +31,10 @@ controller over Wi-Fi, joined from its own menu (Settings → Network); the
 network doesn't need internet access.
 
 The Gen 1 Diamond path has no stock NAND or physical-unit verification. Diamond
-and j49 share the ROM identity `0451:d00e`, which is taken as j49; their app
-identities differ. Start a Gen 1 while it runs its firmware, or pass
-`--device diamond` to the CLI before USB boot.
-Gen 1 uses the Diamond x-loader and the OMAP NAND/JFFS2 path. USB shell, Zigbee
+and j49 share the ROM identity `0451:d00e`; in USB download mode the generation
+is read from the NAND's U-Boot environment (`nlmodel`), as Nest's U-Boot tells
+the boards apart. `--device` overrides it.
+Gen 1 uses the j49's x-loader and the OMAP NAND/JFFS2 path. USB shell, Zigbee
 and Matter over Thread are unavailable: its CC2530 radio uses UART, not the
 Gen 2 SPI protocol. MQTT and Matter over Wi-Fi still need Gen 1 firmware testing.
 On the 2nd generation, Zigbee and

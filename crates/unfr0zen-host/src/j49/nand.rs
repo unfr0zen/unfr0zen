@@ -27,7 +27,7 @@ use unfr0zen_core::j49::omap;
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
 
-use super::{find_unit, load_flasher};
+use super::{find_unit, load_flasher, read_environment};
 use crate::device::Unit;
 use crate::flow::{failure, start_log, HandBack};
 use crate::nand::{checksum_path, file, read_at, Job};
@@ -245,11 +245,14 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
             return Err(failure(format!("{} does not match {}", image.display(), checksum.display())));
         }
     }
-    let device = unit.device;
+    let usb = unit.device;
     find_unit(progress, wait_usb, unit)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
-    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", || load_flasher(device))?;
+    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
+    // The generation only names the unit here; an environment a restore is
+    // to repair may not parse.
+    let device = read_environment(&mut flasher).ok().and_then(|env| env.device()).unwrap_or(usb);
     progress.device(&format!("{}: {}", device.description(), omap::silicon(&asic, flasher.idcode)));
     progress.status(&format!("NAND: {}", flasher.chip()));
     let result = (|| -> Result<String> {
