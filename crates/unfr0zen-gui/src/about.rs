@@ -7,7 +7,6 @@ const LICENSES: &[&str] = &[
     "U-Boot (GPLv2; see individual files)",
     "Linux (GPLv2)",
     "X-loader (GPLv2 or later)",
-    "lzokay (MIT), copyright 2021 Luke Street",
 ];
 
 pub fn show(ctx: &egui::Context, open: &mut bool) {

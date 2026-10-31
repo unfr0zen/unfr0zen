@@ -144,9 +144,14 @@ impl Read for Port {
     }
 }
 
+/// The most one write call hands the port. On Windows the port's timeout
+/// bounds a whole write call, so each must drain within it; write_all
+/// sends the rest.
+const WRITE_CHUNK: usize = 4096;
+
 impl Write for Port {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.0.write(data)
+        self.0.write(&data[..data.len().min(WRITE_CHUNK)])
     }
     fn flush(&mut self) -> io::Result<()> {
         self.0.flush()
