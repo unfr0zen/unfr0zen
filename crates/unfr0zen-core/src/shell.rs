@@ -105,11 +105,13 @@ impl<S: Serial> InitramfsShell<S> {
     pub fn run_with(&mut self, script: &str, timeout: Duration, quiet: bool) -> Result<String> {
         let marker = marker();
         let command = script.lines().next().unwrap_or(""); // what the log shows: no file contents
-        self.port.clear_input()?;
         // The script's status first, before echo resets $?. No quotes in the
         // marker line: one cut short cannot leave the shell inside a string.
-        self.port.write_all(format!("{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n").as_bytes())?;
-        self.port.flush()?;
+        let sent = format!("{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n");
+        let failed = |step: &str, e: std::io::Error| Error::Io(format!("{step} {command:?} ({} bytes): {e}", sent.len()));
+        self.port.clear_input().map_err(|e| failed("clearing input for", e))?;
+        self.port.write_all(sent.as_bytes()).map_err(|e| failed("sending", e))?;
+        self.port.flush().map_err(|e| failed("flushing", e))?;
         let end = Regex::new(&format!(r"\n{marker}:(\d+)\r?\n")).expect("valid pattern");
         let mut data = Vec::new();
         let until = Instant::now() + timeout;
@@ -408,6 +410,37 @@ mod tests {
     fn failing_commands_are_errors() {
         let mut shell = shell(vec![("rm -f", "rm: busy", 1)]);
         assert!(shell.remove("etc/x").unwrap_err().to_string().contains("rm: busy"));
+    }
+
+    struct RejectingPort;
+
+    impl Write for RejectingPort {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from_raw_os_error(87))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Read for RejectingPort {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::TimedOut.into())
+        }
+    }
+
+    impl Serial for RejectingPort {
+        fn clear_input(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_rejected_send_names_the_command_and_its_size() {
+        let mut shell = InitramfsShell { port: RejectingPort };
+        let error = shell.write("etc/x", &[0; 3000], "0:0", 0o644, &BTreeSet::new()).unwrap_err().to_string();
+        assert!(error.starts_with("sending \"mkdir -p '/mnt/etc' && base64 -d > '/mnt/etc/x.unfr0zen'"), "{error}");
+        assert!(error.contains(" bytes): "), "{error}");
     }
 
     #[test]
