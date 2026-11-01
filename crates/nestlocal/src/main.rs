@@ -125,9 +125,13 @@ async fn run(config: flags::Config) {
     let live = liveness::Liveness::new(config.stale);
     tokio::spawn(live.clone().run());
 
+    let wwn_boiler = heatlink::using(std::path::Path::new(&config.settings));
+    if wwn_boiler {
+        logf!("nestlocal: nlclient runs with {}: it heats while it reports can_heat false", heatlink::KEY);
+    }
     let bridge = (!config.mqtt.is_empty() || config.matter || config.zigbee).then(|| {
         bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
-                            Some(live.clone()))
+                            Some(live.clone()), wwn_boiler)
     });
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {

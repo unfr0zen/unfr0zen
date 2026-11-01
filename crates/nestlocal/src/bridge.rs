@@ -37,6 +37,9 @@ pub struct Bridge {
     pub store: Arc<Store>,
     pub outdoor: Arc<Outdoor>,
     live: Option<Arc<Liveness>>,
+    /// nlclient runs with using_wwn_boiler: it heats while it reports
+    /// can_heat false (heatlink.rs).
+    wwn_boiler: bool,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
@@ -46,7 +49,7 @@ pub struct Bridge {
 
 impl Bridge {
     pub fn new(prefix: &str, discovery: &str, serial: &str, store: Arc<Store>, outdoor: Arc<Outdoor>,
-               live: Option<Arc<Liveness>>) -> Arc<Bridge> {
+               live: Option<Arc<Liveness>>, wwn_boiler: bool) -> Arc<Bridge> {
         let (time_ok, time_ok_rx) = mpsc::channel(1);
         Arc::new(Bridge {
             serial: serial.into(),
@@ -55,6 +58,7 @@ impl Bridge {
             store,
             outdoor,
             live,
+            wwn_boiler,
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
             time_asked: Mutex::new(None),
@@ -190,11 +194,18 @@ impl Bridge {
         self.publish(&format!("{}/raw/{typ}", self.base), true, Value::Object(o.value.clone()).to_string().as_bytes());
     }
 
-    /// Buckets of this unit, by type: device, shared, ...
+    /// Buckets of this unit, by type: device, shared, ... With
+    /// using_wwn_boiler, shared has can_heat true, as the unit heats.
     pub fn buckets(&self) -> BTreeMap<String, Fields> {
         self.store.all().into_iter().filter_map(|o| {
             let (typ, id) = o.key.split_once('.').unwrap_or((o.key.as_str(), ""));
-            (id == self.serial).then(|| (typ.to_string(), o.value.clone()))
+            (id == self.serial).then(|| {
+                let mut value = o.value.clone();
+                if self.wwn_boiler && typ == "shared" {
+                    value.insert("can_heat".into(), true.into());
+                }
+                (typ.to_string(), value)
+            })
         }).collect()
     }
 
@@ -563,7 +574,7 @@ pub mod tests {
     use serde_json::json;
 
     pub fn test_bridge() -> Arc<Bridge> {
-        Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None)
+        Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false)
     }
 
     fn obj(v: Value) -> Fields {
@@ -638,6 +649,16 @@ pub mod tests {
         assert!(configs.contains_key("homeassistant/binary_sensor/nestlocal_s/heating/config"));
         assert!(!configs.contains_key("homeassistant/binary_sensor/nestlocal_s/cooling/config"));
         assert!(configs.contains_key("homeassistant/select/nestlocal_s/fan_timer_duration/config"));
+    }
+
+    #[test]
+    fn a_wwn_boiler_unit_heats_without_can_heat() {
+        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, true);
+        b.store.merge("shared.S", &obj(json!({"can_heat": false, "can_cool": false})), 0, 0, true);
+        let shared = &b.buckets()["shared"];
+        assert_eq!((shared["can_heat"].clone(), shared["can_cool"].clone()), (json!(true), json!(false)));
+        assert_eq!(b.store.get("shared.S").unwrap().value["can_heat"], json!(false), "the store keeps what the unit said");
+        assert_eq!(test_bridge().buckets().len(), 0);
     }
 
     /// Equipment with everything discovery can announce.

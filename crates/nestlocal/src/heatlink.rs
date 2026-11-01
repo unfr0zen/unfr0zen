@@ -4,8 +4,9 @@
 //! Heat Link only connects through the radio. nlclient skips that check for
 //! a Works with Nest boiler, which it reads at start from using_wwn_boiler in
 //! its settings file. With it the unit still heats through W1 and keeps its
-//! safety temperature. nestlocal sets it before nlclient starts, and takes
-//! back only what it set: a marker file next to its store records that.
+//! safety temperature, but reports can_heat false (bridge.rs reports it
+//! true). nestlocal sets it before nlclient starts, and takes back only what
+//! it set: a marker file next to its store records that.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -52,8 +53,12 @@ pub fn marker(state: &str) -> PathBuf {
     Path::new(state).with_file_name("nestlocal-wwn-boiler")
 }
 
-/// Whether using_wwn_boiler is on, as nlclient reads it: a number other
-/// than 0.
+/// Whether the settings file at path has using_wwn_boiler on, as nlclient
+/// reads it: a number other than 0.
+pub fn using(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|b| on(&b))
+}
+
 fn on(b: &[u8]) -> bool {
     nlsettings::value(b, KEY).and_then(|v| std::str::from_utf8(v).ok()?.trim().parse::<i64>().ok()).is_some_and(|v| v != 0)
 }
@@ -130,7 +135,7 @@ mod tests {
         let (settings, marker) = (dir.join("settings.config"), dir.join("marker"));
         std::fs::write(&settings, STOCK).unwrap();
         assert_eq!(prepare(&settings, &marker, true).unwrap(), Some(true));
-        assert!(on(&std::fs::read(&settings).unwrap()) && marker.exists());
+        assert!(using(&settings) && marker.exists());
         assert_eq!(prepare(&settings, &marker, true).unwrap(), None);
         assert_eq!(prepare(&settings, &marker, false).unwrap(), Some(false));
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), STOCK);
@@ -163,7 +168,7 @@ mod tests {
     #[test]
     fn zero_is_off() {
         assert!(!on(br#"<s key="using_wwn_boiler" value="0"/>"#) && on(br#"<s key="using_wwn_boiler" value="1"/>"#));
-        assert!(!on(b"<settings/>"));
+        assert!(!on(b"<settings/>") && !using(Path::new("/nonexistent/settings.config")));
     }
 
     #[test]
