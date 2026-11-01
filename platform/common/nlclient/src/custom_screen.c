@@ -128,6 +128,7 @@ struct custom_state {
     void *screen;
     /* The display's width, which the gen 3's layouts below scale to. */
     int display;
+    int drawn;
     void *menu_glyph;
     text_config config;
     nl_string text[3];
@@ -229,6 +230,23 @@ static int rename_setting(const char *from, const char *to) {
     }
     return native_rename(from, to);
 }
+/* A build discovery matched on its structure alone can fault in the factory,
+ * on entry, or on the first draw. A marker written before each and renamed
+ * away after it outlives the restart a fault causes: finding it, the factory
+ * declines, which the stock menu takes as the screen's absence, instead of
+ * faulting at every restart. A reboot clears /var/run and tries again. */
+#define ATTEMPT "/var/run/unfr0zen-screen.attempt"
+static int attempt_pending(void) {
+    void *file = native_fopen(ATTEMPT, "r");
+    if (!file) return 0;
+    native_fclose(file);
+    return 1;
+}
+static void attempt_begin(void) {
+    void *file = native_fopen(ATTEMPT, "w");
+    if (file) native_fclose(file);
+}
+static void attempt_end(void) { rename_setting(ATTEMPT, "/var/run/unfr0zen-screen.done"); }
 extern u32 native_time(void *);
 extern int native_device_commit(void *);
 extern int native_shared_commit(void *);
@@ -623,7 +641,9 @@ static int draw(void *raw, void *context) {
     }
     native_config_draw(base, context, &s->config, 0, y, 255,
                        WORD(base, 0x7c), style, 0x10000);
-    return (native_scroll_draw(raw, context, 0x10000), 0);
+    native_scroll_draw(raw, context, 0x10000);
+    if (!s->drawn) { s->drawn = 1; attempt_end(); }
+    return 0;
 }
 static int draw_common(void *base, void *context) {
     return draw((u8 *)base - COMMON_OFFSET, context);
@@ -685,6 +705,8 @@ static int screen_draw(void *screen, void *context) {
 static void title_thunk(void *part) { title((u8 *)part - 8); }
 static void enter_screen(void *screen) {
     struct custom_state *s = state(raw_layer(screen));
+    s->drawn = 0;
+    attempt_begin();
     s->active = 1;
     s->flow.page = CUSTOM_HOME;
     s->flow.parent_selection = 0;
@@ -719,6 +741,8 @@ static int screen_event(void *screen, void *event, void *target) {
 }
 /* Exported replacement for account's factory. */
 void *custom_factory(void *globals, void *handler, const char *name) {
+    if (attempt_pending()) return 0;
+    attempt_begin();
     void *screen = native_new(0xf0);
     if (!screen) return 0;
     native_screen_ctor(screen);
@@ -786,5 +810,6 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     PTR(PTR(screen, 0), 0x0c) = screen_draw;
     PTR(PTR(screen, 8), 0x10) = title_thunk;
     title(screen);
+    attempt_end();
     return screen;
 }
