@@ -42,6 +42,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     unfr0zen_host::init_logging(BUILD_VERSION);
+    update::remove_previous();
     // One window at a time: a recovery run drives a single USB device, and two
     // would fight over it. Held for the whole process. On macOS the name is
     // the lock file's path: in the temporary directory, not wherever the app

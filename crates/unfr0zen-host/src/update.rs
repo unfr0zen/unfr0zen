@@ -4,7 +4,7 @@
 //! file matching this platform.  Both the window and the terminal use the
 //! same release asset (`unfr0zen-<platform>-<version>`); the distinction
 //! only matters for install: macOS GUI swaps the whole .app bundle, everything
-//! else replaces the executable via `self-replace`.
+//! else swaps the executable.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -191,14 +191,44 @@ fn install_archive(
                 return Err(failed("unpack",
                     format!("{} has no {exe_name}", archive.display())));
             };
-            // In production this replaces the running binary; tests pass a
-            // fake exe path and verify the archive was extracted correctly.
-            if *exe == std::env::current_exe().unwrap_or_default() {
-                self_replace::self_replace(&new).map_err(|e| failed("replace", e))
-            } else {
-                fs::copy(&new, exe).map(drop).map_err(|e| failed("replace", e))
-            }
+            swap_exe(exe, &new)
         }
+    }
+}
+
+/// Replaces `exe` with `new` by moving the running one aside.  Windows lets
+/// a running executable be renamed but not deleted or overwritten, so there
+/// it stays next to the new one as `unfr0zen.exe.old` until `remove_previous`
+/// runs at the next start; elsewhere it goes at once.  Nothing is copied
+/// into a temporary directory or spawned from one: that pattern is what
+/// antivirus heuristics flag as a dropper.
+fn swap_exe(exe: &Path, new: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(exe).map_err(|e| failed("current executable", e))?.permissions();
+        fs::set_permissions(new, mode).map_err(|e| failed("replace", e))?;
+    }
+    let old = previous(exe);
+    fs::rename(exe, &old).map_err(|e| failed("move the current executable aside", e))?;
+    if let Err(e) = fs::rename(new, exe) {
+        let _ = fs::rename(&old, exe);
+        return Err(failed("move the new executable in place", e));
+    }
+    let _ = fs::remove_file(&old);
+    Ok(())
+}
+
+/// Where `swap_exe` leaves the executable it replaced.
+fn previous(exe: &Path) -> PathBuf {
+    let mut old = exe.as_os_str().to_owned();
+    old.push(".old");
+    PathBuf::from(old)
+}
+
+/// Removes the executable the last update replaced, now that it has exited.
+pub fn remove_previous() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = fs::remove_file(previous(&exe));
     }
 }
 
@@ -506,6 +536,18 @@ mod tests {
 
         install_archive(App::Cli, &archive, &work, None, &fake_exe).unwrap();
         assert_eq!(fs::read_to_string(&fake_exe).unwrap(), "new-version");
+        assert!(!previous(&fake_exe).exists());
+    }
+
+    #[test]
+    fn exe_swap_rolls_back_when_the_new_one_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join(App::Cli.executable());
+        fs::write(&exe, b"current").unwrap();
+
+        assert!(swap_exe(&exe, &dir.path().join("missing")).is_err());
+        assert_eq!(fs::read_to_string(&exe).unwrap(), "current");
+        assert!(!previous(&exe).exists());
     }
 
     /// macOS CLI path: the archive has unfr0zen.app, not a bare executable;

@@ -238,6 +238,7 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
 
 pub fn main() {
     init_logging(env!("UNFR0ZEN_BUILD_VERSION"));
+    update::remove_previous();
     ui::enable_colors();
     set_selection(logged_arguments(std::env::args().skip(1)));
     let args = Args::parse();

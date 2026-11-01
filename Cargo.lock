@@ -6081,7 +6081,6 @@ dependencies = [
  "lzma-rs",
  "nusb",
  "regex",
- "self-replace",
  "self_update",
  "serde_json",
  "serialport",
