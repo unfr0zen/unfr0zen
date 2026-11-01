@@ -303,12 +303,16 @@ fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
 
 /// Joins the strongest network that permits joining, as a router, the way a
 /// Zigbee 3.0 device does: the global link key, then the network key from
-/// the trust centre, encrypted. False when none permits joining.
+/// the trust centre, encrypted. Requests an individual trust-centre link key
+/// so the router can authenticate other devices' joining notifications.
+/// False when none permits joining.
 fn join(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Result<bool, String> {
     const HAVE_PRECONFIGURED_KEY: u16 = 0x0100;
     const REQUIRE_ENCRYPTED_KEY: u16 = 0x0800;
+    const GET_LINK_KEY_WHEN_JOINING: u16 = 0x0400;
     const TRUST_CENTER_GLOBAL_LINK_KEY: u16 = 0x0004;
-    let mut security = (HAVE_PRECONFIGURED_KEY | REQUIRE_ENCRYPTED_KEY | TRUST_CENTER_GLOBAL_LINK_KEY)
+    let mut security = (HAVE_PRECONFIGURED_KEY | REQUIRE_ENCRYPTED_KEY | GET_LINK_KEY_WHEN_JOINING
+        | TRUST_CENTER_GLOBAL_LINK_KEY)
         .to_le_bytes().to_vec();
     security.extend(GLOBAL_LINK_KEY);
     security.extend([0; 16]); // no network key yet

@@ -149,27 +149,36 @@ pub fn forget(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-/// Puts the network back on a radio that has none, as a router with the
-/// keys, counters and address it had; the caller waits for it to come up.
-pub fn restore(ezsp: &mut Ezsp, saved: &Saved, tx_power: i8) -> Result<(), String> {
+/// Preserve whether the trust-centre key is the shared joining key or an
+/// individual key supplied by the coordinator.
+fn initial_security_state(saved: &Saved) -> Result<Vec<u8>, String> {
     const TRUST_CENTER_GLOBAL_LINK_KEY: u16 = 0x0004;
     const HAVE_TRUST_CENTER_EUI64: u16 = 0x0040;
     const HAVE_PRECONFIGURED_KEY: u16 = 0x0100;
     const HAVE_NETWORK_KEY: u16 = 0x0200;
     const REQUIRE_ENCRYPTED_KEY: u16 = 0x0800;
     const NO_FRAME_COUNTER_RESET: u16 = 0x1000;
-    let mut bitmask = TRUST_CENTER_GLOBAL_LINK_KEY | HAVE_PRECONFIGURED_KEY | HAVE_NETWORK_KEY | REQUIRE_ENCRYPTED_KEY
-        | NO_FRAME_COUNTER_RESET;
+    let link_key = unhex::<16>(&saved.trust_center_link_key)?;
+    let mut bitmask = HAVE_PRECONFIGURED_KEY | HAVE_NETWORK_KEY | REQUIRE_ENCRYPTED_KEY | NO_FRAME_COUNTER_RESET;
+    if link_key == *super::GLOBAL_LINK_KEY {
+        bitmask |= TRUST_CENTER_GLOBAL_LINK_KEY;
+    }
     let trust_center = eui_unhex(&saved.trust_center_eui64)?;
     if trust_center != [0; 8] {
         bitmask |= HAVE_TRUST_CENTER_EUI64;
     }
     let mut security = bitmask.to_le_bytes().to_vec();
-    security.extend(unhex::<16>(&saved.trust_center_link_key)?);
+    security.extend(link_key);
     security.extend(unhex::<16>(&saved.network_key)?);
     security.push(saved.network_key_sequence);
     security.extend(trust_center);
-    ezsp.expect(id::SET_INITIAL_SECURITY_STATE, &security)?;
+    Ok(security)
+}
+
+/// Puts the network back on a radio that has none, as a router with the
+/// keys, counters and address it had; the caller waits for it to come up.
+pub fn restore(ezsp: &mut Ezsp, saved: &Saved, tx_power: i8) -> Result<(), String> {
+    ezsp.expect(id::SET_INITIAL_SECURITY_STATE, &initial_security_state(saved)?)?;
 
     const NWK_FRAME_COUNTER: u8 = 0x23;
     const APS_FRAME_COUNTER: u8 = 0x24;
@@ -271,6 +280,22 @@ mod tests {
             assert_eq!(load(&path), None, "{text:?}");
         }
         forget(&path);
+    }
+
+    #[test]
+    fn restored_security_marks_only_the_joining_key_as_global() {
+        let mut network = saved();
+        let unique = unhex::<16>(&network.trust_center_link_key).unwrap();
+        assert_ne!(unique, *super::super::GLOBAL_LINK_KEY);
+        let state = initial_security_state(&network).unwrap();
+        assert_eq!(u16::from_le_bytes(state[..2].try_into().unwrap()) & 0x0004, 0);
+        assert_eq!(&state[2..18], &unique);
+        network.trust_center_link_key = hex(super::super::GLOBAL_LINK_KEY);
+        let state = initial_security_state(&network).unwrap();
+        assert_ne!(u16::from_le_bytes(state[..2].try_into().unwrap()) & 0x0004, 0);
+        assert_eq!(&state[2..18], super::super::GLOBAL_LINK_KEY);
+        network.trust_center_link_key = "invalid".into();
+        assert!(initial_security_state(&network).is_err());
     }
 
     #[test]
