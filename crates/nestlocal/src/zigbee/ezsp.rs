@@ -16,6 +16,7 @@ pub mod id {
     pub const ADD_ENDPOINT: u8 = 0x02;
     pub const CALLBACK: u8 = 0x06;
     pub const GET_XNCP_INFO: u8 = 0x13;
+    pub const SET_MANUFACTURER_CODE: u8 = 0x15;
     pub const NO_CALLBACKS: u8 = 0x07;
     pub const NETWORK_INIT: u8 = 0x17;
     pub const STACK_STATUS_HANDLER: u8 = 0x19;

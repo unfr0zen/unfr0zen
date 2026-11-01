@@ -273,6 +273,10 @@ fn ours() -> Result<(Ezsp, u16), String> {
 /// The stack's sizes and the radio's power, then the endpoint and the
 /// policies: configuration comes before anything else.
 fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
+    // Registered Nest Labs code for the ZDO node descriptor. 0xABCD denotes
+    // Control4 and causes coordinators to apply its proprietary-device quirks.
+    const NEST_LABS_CODE: u16 = 0x10D6;
+    ezsp.command(id::SET_MANUFACTURER_CODE, &NEST_LABS_CODE.to_le_bytes())?;
     const STACK_PROFILE: u8 = 0x0C;
     const SECURITY_LEVEL: u8 = 0x0D;
     const TX_POWER_MODE: u8 = 0x17;
