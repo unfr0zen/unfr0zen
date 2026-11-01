@@ -1,5 +1,7 @@
 //! On Windows, embed the app icon into the .exe so Explorer and the taskbar
-//! show it. Other platforms set the window icon at runtime (with_icon).
+//! show it, and fill in the version resource: antivirus heuristics weigh an
+//! unsigned executable with no company, product or copyright as suspicious.
+//! Other platforms set the window icon at runtime (with_icon).
 
 fn main() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -27,6 +29,12 @@ fn main() {
         res.set_icon(icon);
         res.set("ProductVersion", &version);
         res.set("FileVersion", &version);
+        res.set("ProductName", "unfr0zen");
+        res.set("InternalName", "unfr0zen");
+        res.set("OriginalFilename", "unfr0zen.exe");
+        res.set("FileDescription", "unfr0zen");
+        res.set("CompanyName", "unfr0zen");
+        res.set("LegalCopyright", "Copyright © 2026 the unfr0zen team");
         if let Err(error) = res.compile() {
             println!("cargo:warning=could not embed the Windows icon: {error}");
         }
