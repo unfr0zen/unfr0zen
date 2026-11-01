@@ -53,6 +53,8 @@ pub struct PatchInputs {
     pub doom: bool,
     /// An SSH server on the unit, root logging in with its password; off by default.
     pub ssh: bool,
+    /// One OpenSSH public key to authorize for root; requires SSH.
+    pub ssh_public_key: Option<PathBuf>,
     /// The USB root shell (an ACM port); off by default. Without it the run
     /// cannot log in at the end to confirm the result.
     pub usb_shell: bool,
@@ -80,6 +82,7 @@ impl PatchInputs {
             ("ntp-server", self.ntp_server.clone()),
             ("root-password", secret(&self.root_password)),
             ("ssh", on(self.ssh)),
+            ("ssh-public-key", file(&self.ssh_public_key)),
             ("usb-shell", on(self.usb_shell)),
             ("mqtt", self.mqtt.as_deref().map(mask_url)),
             ("mqtt-user", secret(&self.mqtt_user)),
@@ -104,6 +107,9 @@ impl PatchInputs {
     /// Checks the options against each other and the filesystem, and builds the
     /// patch, all before the unit is touched. The error text is shown as is.
     pub fn build(&self) -> Result<Options> {
+        if self.ssh_public_key.is_some() && !self.ssh {
+            return Err(failure("--ssh-public-key needs --ssh"));
+        }
         if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some())
             && self.mqtt.is_none() {
             return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls and --mqtt-ca need --mqtt"));
@@ -138,6 +144,11 @@ impl PatchInputs {
         if let Some(mqtt) = &mqtt {
             nestlocal::mqtt_options(mqtt)?;
         }
+        let ssh_public_key = self.ssh_public_key.as_deref().map(|path| {
+            let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
+                path.file_name().unwrap_or_default().to_string_lossy())))?;
+            patch::ssh_public_key(&data)
+        }).transpose()?;
         let overlay = self.overlay.as_deref().map(|p| patch::overlay_from_tar(&read("--overlay", p)?)).transpose()?;
         Ok(Options {
             root_hash: patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?,
@@ -152,6 +163,7 @@ impl PatchInputs {
             zigbee: self.zigbee,
             doom: self.doom.then(assets::doom),
             ssh: self.ssh,
+            ssh_public_key,
             ssh_server: None,
             usb_shell: self.usb_shell,
         })
@@ -284,6 +296,25 @@ pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
 #[cfg(test)]
 mod describe_tests {
     use super::*;
+
+    #[test]
+    fn public_key_input_requires_ssh_and_is_validated_before_the_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("id_ed25519.pub");
+        let mut inputs = PatchInputs { ssh_public_key: Some(path.clone()), ..PatchInputs::default() };
+        assert!(inputs.build().unwrap_err().to_string().contains("needs --ssh"));
+        inputs.ssh = true;
+        let error = inputs.build().unwrap_err().to_string();
+        assert!(error.contains("id_ed25519.pub"));
+        assert!(!error.contains(directory.path().to_str().unwrap()));
+        fs::write(&path, b"-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-material").unwrap();
+        let error = inputs.build().unwrap_err().to_string();
+        assert!(!error.contains("private-material"));
+        fs::write(&path, b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB user@host\n").unwrap();
+        let options = inputs.build().unwrap();
+        assert!(options.ssh_public_key.unwrap().starts_with("ssh-ed25519 "));
+        assert_eq!(inputs.describe(), "--ssh --ssh-public-key id_ed25519.pub");
+    }
 
     #[test]
     fn options_read_as_cli_flags_with_secrets_masked() {

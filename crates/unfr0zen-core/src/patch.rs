@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::sync::LazyLock;
 
+use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
 use regex::Regex;
 
 use crate::nestlocal::{self, Matter, Mqtt, Overlay, Pki};
@@ -93,6 +94,60 @@ pub fn root_hash(password: &str) -> Result<String> {
     let hash = sha_crypt::sha512_crypt_b64(password.as_bytes(), salt.as_bytes(), &params)
         .or_else(|e| device(format!("root password hash: {e:?}")))?;
     Ok(format!("$6${salt}${hash}"))
+}
+
+const AUTHORIZED_KEYS: &str = "root/.ssh/authorized_keys";
+
+/// Checks one OpenSSH public key and normalizes its type and base64 encoding.
+pub fn ssh_public_key(data: &[u8]) -> Result<String> {
+    let invalid = || crate::Error::Device("--ssh-public-key: expected one valid OpenSSH public key (Ed25519, ECDSA or RSA)".into());
+    let line = std::str::from_utf8(data).map_err(|_| invalid())?.trim();
+    if line.contains(['\n', '\r', '\0']) { return Err(invalid()); }
+    let mut fields = line.split_whitespace();
+    let kind = fields.next().ok_or_else(invalid)?;
+    let encoded = fields.next().ok_or_else(invalid)?;
+    let blob = STANDARD.decode(encoded).or_else(|_| STANDARD_NO_PAD.decode(encoded)).map_err(|_| invalid())?;
+    let mut remaining = blob.as_slice();
+    fn field<'a>(data: &mut &'a [u8]) -> Option<&'a [u8]> {
+        let length = u32::from_be_bytes(data.get(..4)?.try_into().ok()?) as usize;
+        let value = data.get(4..)?.get(..length)?;
+        *data = data.get(4..)?.get(length..)?;
+        Some(value)
+    }
+    if field(&mut remaining) != Some(kind.as_bytes()) { return Err(invalid()); }
+    let valid = match kind {
+        "ssh-ed25519" => field(&mut remaining).is_some_and(|key| key.len() == 32),
+        "ssh-rsa" => {
+            let positive = |value: &[u8]| !value.is_empty() && value[0] & 0x80 == 0
+                && value.iter().any(|b| *b != 0) && (value[0] != 0 || value.get(1).is_some_and(|b| b & 0x80 != 0));
+            field(&mut remaining).is_some_and(positive) && field(&mut remaining).is_some_and(positive)
+        }
+        "ecdsa-sha2-nistp256" | "ecdsa-sha2-nistp384" | "ecdsa-sha2-nistp521" => {
+            let curve = kind.strip_prefix("ecdsa-sha2-").unwrap();
+            let size = match curve { "nistp256" => 65, "nistp384" => 97, _ => 133 };
+            field(&mut remaining) == Some(curve.as_bytes())
+                && field(&mut remaining).is_some_and(|point| point.len() == size && point[0] == 4)
+        }
+        _ => false,
+    };
+    if !valid || !remaining.is_empty() { return Err(invalid()); }
+    Ok(format!("{kind} {}", STANDARD.encode(blob)))
+}
+
+fn patch_authorized_key(tree: &mut Tree, key: &str) -> Result<()> {
+    let mut contents = if tree.contains_key(AUTHORIZED_KEYS) { text(tree, AUTHORIZED_KEYS)? } else { String::new() };
+    let present = contents.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let pair = fields.next().zip(fields.next());
+        pair.is_some_and(|(kind, encoded)| ssh_public_key(format!("{kind} {encoded}").as_bytes()).is_ok_and(|existing| existing == key))
+    });
+    if !present {
+        if !contents.is_empty() && !contents.ends_with('\n') { contents.push('\n'); }
+        contents.push_str(key);
+        contents.push('\n');
+    }
+    tree.insert(AUTHORIZED_KEYS.into(), (contents.into_bytes(), 0o600));
+    Ok(())
 }
 
 pub fn check_ntp_server(host: &str) -> Result<()> {
@@ -337,6 +392,8 @@ pub struct Options {
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
+    /// A validated OpenSSH public key to merge into root's authorized_keys; needs SSH.
+    pub ssh_public_key: Option<String>,
     /// The SSH server's files for a device without one of its own (the j49).
     pub ssh_server: Option<Overlay>,
     /// The USB root shell: an ACM port with a root shell on it. Without it
@@ -410,6 +467,10 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
     }
+    if options.ssh_public_key.is_some() && !options.ssh {
+        return device("--ssh-public-key needs --ssh");
+    }
+    let public_key = options.ssh_public_key.as_deref().map(|key| ssh_public_key(key.as_bytes())).transpose()?;
     // What patch_root0.check_source asks of an extracted tree: here, that the
     // mount is a real application root before anything is written into it.
     if volume.shell_binary()? != "0 755" {
@@ -432,6 +493,9 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
     let optional = (rootfs.optional_files)(options);
     fetch(volume, &mut tree, &mut originals, &optional.iter().map(String::as_str).collect::<Vec<_>>(), false, false)?;
     patch_root_password(&mut tree, &options.root_hash, rootfs.shadow_modes)?;
+    if public_key.is_some() {
+        fetch(volume, &mut tree, &mut originals, &[AUTHORIZED_KEYS], false, true)?;
+    }
     if let Some(server) = &options.ntp_server {
         let names: Vec<&str> = NTP_LINES.iter().map(|(name, _)| *name).collect();
         fetch(volume, &mut tree, &mut originals, &names, false, true)?;
@@ -509,6 +573,11 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
     patch_root_rw(&mut tree, true)?;
     (rootfs.patch)(&mut tree, options)?;
+    if let Some(key) = &public_key {
+        patch_authorized_key(&mut tree, key)?;
+        directories.retain(|(name, _)| name != "root/.ssh");
+        directories.push(("root/.ssh".into(), 0o700));
+    }
 
     let screen = volume.inspect(crate::nlclient::BINARY)?;
     let mut screen_patch = None;
@@ -580,8 +649,11 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
     let mut writes: Vec<(String, &[u8], String, u32)> = Vec::new();
     for (name, (data, mode)) in &tree {
         let old = originals.get(name).cloned().flatten();
-        if old.as_ref().is_none_or(|(_, old_mode, sha)| (*old_mode, sha.as_str()) != (*mode, sha256_hex(data).as_str())) {
-            writes.push((name.clone(), data, old.map_or("0:0".to_string(), |(owner, _, _)| owner), *mode));
+        let key_file = name == AUTHORIZED_KEYS && public_key.is_some();
+        if old.as_ref().is_none_or(|(owner, old_mode, sha)| (*old_mode, sha.as_str()) != (*mode, sha256_hex(data).as_str())
+            || (key_file && owner != "0:0")) {
+            let owner = if key_file { "0:0".to_string() } else { old.map_or("0:0".to_string(), |(owner, _, _)| owner) };
+            writes.push((name.clone(), data, owner, *mode));
         }
     }
     let removals: Vec<&str> = STALE_SECRETS.iter().copied()
@@ -895,6 +967,93 @@ mod tests {
                 (name.clone(), (Some(self.readback.clone().unwrap_or_else(|| sha256_hex(data))), Some(format!("{owner} {mode:o}"))))
             }).collect())
         }
+    }
+
+    fn public_key(kind: &str, fields: &[&[u8]]) -> String {
+        let mut blob = Vec::new();
+        for value in std::iter::once(kind.as_bytes()).chain(fields.iter().copied()) {
+            blob.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            blob.extend_from_slice(value);
+        }
+        format!("{kind} {}", STANDARD.encode(blob))
+    }
+
+    #[test]
+    fn ssh_public_keys_validate_the_type_and_complete_wire_format() {
+        let ed25519 = public_key("ssh-ed25519", &[&[1; 32]]);
+        let rsa = public_key("ssh-rsa", &[&[1, 0, 1], &[0, 0x80, 1]]);
+        for (curve, size) in [("nistp256", 65), ("nistp384", 97), ("nistp521", 133)] {
+            let mut point = vec![1; size];
+            point[0] = 4;
+            let key = public_key(&format!("ecdsa-sha2-{curve}"), &[curve.as_bytes(), &point]);
+            assert_eq!(ssh_public_key(key.as_bytes()).unwrap(), key);
+        }
+        assert_eq!(ssh_public_key(format!("  {ed25519} user@host\n").as_bytes()).unwrap(), ed25519);
+        assert_eq!(ssh_public_key(rsa.as_bytes()).unwrap(), rsa);
+        for key in [String::new(), "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret".into(),
+                    "ssh-ed25519 !!!!".into(), "ssh-ed25519 AAAA".into(),
+                    ed25519.replacen("ssh-ed25519", "ssh-rsa", 1),
+                    public_key("ssh-ed25519", &[&[1; 31]]),
+                    public_key("ssh-ed25519", &[&[1; 32], b"trailing"]),
+                    public_key("ssh-rsa", &[&[0x80], &[1]]),
+                    public_key("ssh-rsa", &[&[1]]),
+                    public_key("ecdsa-sha2-nistp256", &[b"nistp384", &[4; 65]]),
+                    public_key("ecdsa-sha2-nistp256", &[b"nistp256", &[4; 64]]),
+                    format!("{ed25519}\n{rsa}")] {
+            assert!(ssh_public_key(key.as_bytes()).is_err(), "accepted {key:?}");
+        }
+    }
+
+    #[test]
+    fn ssh_public_keys_merge_once_with_safe_permissions_on_both_devices() {
+        for target in [Device::Diamond3, Device::J49] {
+            for existing in [false, true] {
+                let mut volume = FakeVolume::new(stock());
+                if target == Device::J49 {
+                    volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
+                }
+                let key = public_key("ssh-ed25519", &[&[1; 32]]);
+                let other = format!("# keep this key\n{} other@host", public_key("ssh-ed25519", &[&[2; 32]]));
+                if existing {
+                    volume.files.insert(AUTHORIZED_KEYS.into(), ("0:12".into(), 0o644, other.as_bytes().to_vec()));
+                    volume.directories.insert("root/.ssh".into(), "0:12 755".into());
+                }
+                let options = Options { ssh: true, ssh_public_key: Some(format!("{key} user@host")),
+                    ssh_server: Some(Overlay { directories: vec![], files: vec![
+                        ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
+                let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
+                    volume, target, options, b"", b"", &mut no_pki, &BTreeSet::new(), dry_run);
+                let before = volume.files.clone();
+                let before_directories = volume.directories.clone();
+                let planned = run(&mut volume, &options, true).unwrap();
+                assert!(names(&planned).contains(AUTHORIZED_KEYS));
+                assert!(volume.commands.is_empty());
+                assert_eq!(volume.files, before);
+                assert_eq!(volume.directories, before_directories);
+                assert_eq!(run(&mut volume, &options, false).unwrap(), planned);
+                let expected = if existing { format!("{other}\n{key}\n") } else { format!("{key}\n") };
+                assert_eq!(volume.files[AUTHORIZED_KEYS], ("0:0".into(), 0o600, expected.as_bytes().to_vec()));
+                assert_eq!(volume.directories["root/.ssh"], "0:0 700");
+                volume.commands.clear();
+                let options = Options { ssh_public_key: Some(format!("{key} different-comment")), ..options };
+                assert!(run(&mut volume, &options, false).unwrap().is_empty());
+                assert!(volume.commands.is_empty());
+                assert!(run(&mut volume, &Options { ssh_public_key: None, ..options }, false).unwrap().is_empty());
+                assert_eq!(volume.text(AUTHORIZED_KEYS), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_public_key_installation_requires_ssh_and_rejects_non_root_files() {
+        let key = public_key("ssh-ed25519", &[&[1; 32]]);
+        let mut volume = FakeVolume::new(stock());
+        let options = Options { ssh_public_key: Some(key), ..options() };
+        assert!(patch(&mut volume, &options, false).unwrap_err().to_string().contains("needs --ssh"));
+        volume.files.insert(AUTHORIZED_KEYS.into(), ("1000:1000".into(), 0o600, b"keep".to_vec()));
+        let options = Options { ssh: true, ..options };
+        assert!(patch(&mut volume, &options, false).unwrap_err().to_string().contains("not owned by root"));
+        assert!(volume.commands.is_empty());
     }
 
     fn options() -> Options {

@@ -58,6 +58,9 @@ struct Args {
     /// run an SSH server on the unit, root logging in with its password (default: no SSH server)
     #[arg(long, help_heading = "Root filesystem options")]
     ssh: bool,
+    /// authorize one OpenSSH public key for root (gen3's stock SSH may need ECDSA)
+    #[arg(long, value_name = "FILE", requires = "ssh", help_heading = "Root filesystem options")]
+    ssh_public_key: Option<PathBuf>,
     /// a root shell on the unit's USB serial port, which the run then confirms (default: no USB serial port)
     #[arg(long, help_heading = "Root filesystem options")]
     usb_shell: bool,
@@ -180,6 +183,7 @@ impl Args {
             zigbee: self.zigbee,
             doom: self.doom,
             ssh: self.ssh,
+            ssh_public_key: self.ssh_public_key.clone(),
             usb_shell: self.usb_shell,
         }
     }
@@ -213,7 +217,7 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
         match flag {
             "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" => Some("***".into()),
             "--mqtt" | "--cloud-url" => Some(mask_url(value)),
-            "--mqtt-ca" | "--overlay" | "--nand-image" | "--work-dir" | "--data-dir" =>
+            "--mqtt-ca" | "--overlay" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" =>
                 Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned()),
             _ => None,
         }
@@ -373,7 +377,21 @@ fn update() -> unfr0zen_host::Result<String> {
 
 #[cfg(test)]
 mod logged_arguments_tests {
-    use super::logged_arguments;
+    use super::{logged_arguments, Args};
+    use clap::Parser;
+
+    #[test]
+    fn public_key_flag_requires_ssh_and_logs_only_its_filename() {
+        assert!(Args::try_parse_from(["unfr0zen", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).is_err());
+        let args = Args::try_parse_from(["unfr0zen", "--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).unwrap();
+        assert_eq!(args.patch_inputs().ssh_public_key.unwrap(), std::path::Path::new("/home/bob/id_ed25519.pub"));
+        for args in [vec!["--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"],
+                     vec!["--ssh", "--ssh-public-key=/home/bob/id_ed25519.pub"]] {
+            let logged = logged_arguments(args.into_iter().map(str::to_string));
+            assert!(logged.contains("id_ed25519.pub"));
+            assert!(!logged.contains("/home/bob"));
+        }
+    }
 
     #[test]
     fn secrets_credentials_and_home_paths_stay_out_of_the_log() {

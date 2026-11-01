@@ -328,6 +328,7 @@ impl Form {
             zigbee: self.zigbee,
             doom: false,  // the CLI's --doom has no window control
             ssh: self.ssh,
+            ssh_public_key: None,
             usb_shell: self.usb_shell,
         }
     }
