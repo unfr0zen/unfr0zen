@@ -73,7 +73,7 @@
     "native_api": {
       "memcpy": 175168,
       "memset": 180220,
-      "native_activity_client": 317780,
+      "native_activity_client": 316756,
       "native_activity_ctor": 182692,
       "native_activity_init": 172840,
       "native_attach": 2978524,
@@ -128,7 +128,7 @@
   "native_api": {
     "memcpy": 175168,
     "memset": 180220,
-    "native_activity_client": 317780,
+    "native_activity_client": 316756,
     "native_activity_ctor": 182692,
     "native_activity_init": 172840,
     "native_attach": 2978524,
@@ -178,8 +178,8 @@
     "native_timeout_id": 175048
   },
   "output": {
-    "journal_sha256": "72de8908b95da09b8eadd851c476f9ad222704523bd3b17fbabdcb7e87b3f048",
-    "sha256": "b2abb93bd1adaa769e02d4c95463d73ab2cb5ce88e14fe8222bfb3703568233b",
+    "journal_sha256": "7a056c3afec3657e967ddd9ee3cc08c09c548dc0d921cf6078f2dbb7ebf24a9e",
+    "sha256": "809a04d2bd1eb42655f40b47a2b881f6a8af070cfa8f11a35e3ff9c9a7f87f48",
     "size": 5190561
   },
   "patch": {
@@ -236,7 +236,7 @@
   },
   "payload": {
     "entry": 5308920,
-    "sha256": "5918bd586d26d99247a12f59acfa2d8bfacaddad5bd1de7b41124eb90bfb2503",
+    "sha256": "1440ec86add49dfa4b6f54eac55135ddad932aa7255766df4d798ca4f0e5c19a",
     "size": 13217,
     "symbols": {
       "$a": 5320336,
@@ -281,7 +281,7 @@
       "load_image": 5318396,
       "memcpy": 175168,
       "memset": 180220,
-      "native_activity_client": 317780,
+      "native_activity_client": 316756,
       "native_activity_ctor": 182692,
       "native_activity_init": 172840,
       "native_attach": 2978524,

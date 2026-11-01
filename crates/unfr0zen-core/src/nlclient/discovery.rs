@@ -780,7 +780,17 @@ fn activity(
             }
         }
     }
-    let getter = elf.read(unique(vtables, "globals primary vtable")? + 0x18)?;
+    let vtable = unique(vtables, "globals primary vtable")?;
+    let mark_shape = arm.fingerprint(mark)?;
+    let mut getters = Vec::new();
+    for slot in [0x10, 0x18] {
+        let getter = elf.read(vtable + slot)?;
+        let shapes = serde_json::json!({"mark": mark_shape, "client": arm.fingerprint(getter)?});
+        if known["activity_variants"].as_array().is_some_and(|v| v.contains(&shapes)) {
+            getters.push(getter);
+        }
+    }
+    let getter = unique(getters, "validated client globals accessor")?;
     let code = arm.code(getter, Some(20))?;
     require(
         code.len() >= 2
