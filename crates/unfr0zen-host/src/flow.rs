@@ -272,6 +272,23 @@ pub(crate) fn stored_pki(directory: &Path) -> Result<Pki> {
     Ok(pki)
 }
 
+/// Links the settings screen against the unit's stock nlclient. When that
+/// fails, the stock executable goes in the run directory: a firmware build
+/// discovery does not know needs it as a sample, and the run has read it.
+pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8]) -> Result<Vec<u8>> + '_ {
+    move |source| {
+        unfr0zen_core::nlclient::build(source, assets::CUSTOM_SCREEN).map_err(|error| {
+            let path = run_dir.join("nlclient.stock");
+            match fs::write(&path, source) {
+                Ok(()) => failure(format!("{error}. The unit's stock nlclient is saved as {}: attach it to a bug report",
+                                          path.display())),
+                Err(write) => failure(format!("{error} (saving the unit's stock nlclient as {} failed: {write})",
+                                              path.display())),
+            }
+        })
+    }
+}
+
 /// Starts the run log in its own directory under the log root; returns the directory.
 pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<PathBuf> {
     let log_dir = prepare_log_root(progress)?.join(stamp);
@@ -314,6 +331,17 @@ mod describe_tests {
         let options = inputs.build().unwrap();
         assert!(options.ssh_public_key.unwrap().starts_with("ssh-ed25519 "));
         assert_eq!(inputs.describe(), "--ssh --ssh-public-key id_ed25519.pub");
+    }
+
+    #[test]
+    fn unknown_firmware_keeps_the_stock_nlclient_for_a_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let stock = b"not an ARM executable";
+        let error = screen_builder(directory.path())(stock).unwrap_err().to_string();
+        let saved = directory.path().join("nlclient.stock");
+        assert!(error.contains(saved.to_str().unwrap()), "{error}");
+        assert!(error.contains("bug report"), "{error}");
+        assert_eq!(fs::read(&saved).unwrap(), stock);
     }
 
     #[test]

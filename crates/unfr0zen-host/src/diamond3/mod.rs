@@ -21,7 +21,7 @@ use unfr0zen_core::shell::{sha256_hex, InitramfsShell};
 use unfr0zen_core::Result;
 
 use crate::device::{Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
-use crate::flow::{failure, private_dir, seconds, start_log, stored_pki, Config, HandBack};
+use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
 use crate::progress::{stage, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
 use usb::Mode;
@@ -163,7 +163,8 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     let payload: BTreeSet<String> = payload.into_keys().collect();
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let changes = stage(progress, &label, || {
-        patch::patch_on_device(&mut shell, Device::Diamond3, options, &nestlocal_binary, crate::assets::CUSTOM_SCREEN, &mut || stored_pki(&pki_dir), &payload, config.dry_run)
+        patch::patch_on_device(&mut shell, Device::Diamond3, options, &nestlocal_binary, &mut || stored_pki(&pki_dir), &payload,
+                               config.dry_run, &screen_builder(run_dir))
     })?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
     shell.restart()?;

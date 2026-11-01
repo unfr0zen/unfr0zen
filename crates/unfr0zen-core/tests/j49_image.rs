@@ -163,6 +163,7 @@ fn the_patch_applies_to_both_slots() {
     let Some(image) = image() else { return };
     let object = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o");
     let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (scripts/build-firmware.sh)", object.display()) };
+    let build_screen = |source: &[u8]| unfr0zen_core::nlclient::build(source, &object);
     let pki = generate_pki().unwrap();
     let options = Options {
         root_hash: root_hash("unfr0zen").unwrap(),
@@ -178,8 +179,8 @@ fn the_patch_applies_to_both_slots() {
     };
     for which in [Slot::Root1, Slot::Root0] {
         let mut volume = slot(&image, which);
-        let changes = patch_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &object, &mut || Ok(pki.clone()),
-                                      &Default::default(), false).unwrap_or_else(|e| panic!("{which}: {e}"));
+        let changes = patch_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
+                                      &Default::default(), false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
         let (free, used) = volume.usage();
         let plan = volume.programmed().unwrap();
         eprintln!("{which}: {} changes, {} pages in {used} of {free} erased blocks", changes.len(), plan.before.len() + plan.after.len());
@@ -198,8 +199,8 @@ fn the_patch_applies_to_both_slots() {
         assert_ne!(unfr0zen_core::shell::sha256_hex(&nlclient), "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7");
         // A second run finds everything in place.
         let mut again = jffs2::Slot::load(volume.programmed().unwrap().raw).unwrap();
-        let second = patch_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &object, &mut || Ok(pki.clone()),
-                                     &Default::default(), false).unwrap();
+        let second = patch_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
+                                     &Default::default(), false, &build_screen).unwrap();
         let rewritten: Vec<&str> = second.iter().map(|c| c.name.as_str()).collect();
         assert!(rewritten.iter().all(|name| *name == "etc/shadow" || *name == "etc/nestlocal/server.crt" || *name == "etc/nestlocal/server.key"), "{which}: {rewritten:?}");
     }

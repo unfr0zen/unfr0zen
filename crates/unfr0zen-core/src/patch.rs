@@ -452,18 +452,12 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 ///
 /// nestlocal: the ARMv7 binary --mqtt and --matter install. new_pki: a key set for a
 /// unit without its own. payload: SHA-256 of contents the initramfs carries.
+/// build_screen: the settings screen's undo journal for the unit's stock
+/// nlclient, as nlclient::build makes it.
 #[allow(clippy::too_many_arguments)]
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
-                       screen_object: &[u8], new_pki: &mut dyn FnMut() -> Result<Pki>,
-                       payload: &BTreeSet<String>, dry_run: bool) -> Result<Vec<Change>> {
-    patch_with_screen_builder(volume, target, options, nestlocal_binary, new_pki, payload, dry_run,
-                              &|source| crate::nlclient::build(source, screen_object))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
-                            new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
-                            dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
+                       new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
+                       dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
     }
@@ -1022,7 +1016,8 @@ mod tests {
                     ssh_server: Some(Overlay { directories: vec![], files: vec![
                         ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
                 let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
-                    volume, target, options, b"", b"", &mut no_pki, &BTreeSet::new(), dry_run);
+                    volume, target, options, b"", &mut no_pki, &BTreeSet::new(), dry_run,
+                    &|source| crate::nlclient::build(source, b""));
                 let before = volume.files.clone();
                 let before_directories = volume.directories.clone();
                 let planned = run(&mut volume, &options, true).unwrap();
@@ -1065,7 +1060,7 @@ mod tests {
     }
 
     fn patch(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-        patch_with_screen_builder(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run, &|source| {
+        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run, &|source| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o")))?;
             crate::nlclient::build(source, &object)
@@ -1303,8 +1298,8 @@ mod tests {
         let overlay = overlay_from_tar(&tar(&[("etc/nestlocal/options", 0o644, b"-mqtt tcp://b:1883\n", 0),
                                               ("./nestlabs/sbin/nestlocal", 0o755, &binary, 0)], &["etc/nestlocal"])).unwrap();
         let payload = BTreeSet::from([sha256_hex(&binary)]);
-        let changes = patch_on_device(&mut volume, Device::Diamond3, &Options { overlay: Some(overlay), ..options() }, b"", b"",
-                                      &mut no_pki, &payload, false).unwrap();
+        let changes = patch_on_device(&mut volume, Device::Diamond3, &Options { overlay: Some(overlay), ..options() }, b"",
+                                      &mut no_pki, &payload, false, &|source| crate::nlclient::build(source, b"")).unwrap();
         let action = |name: &str| changes.iter().find(|c| c.name == name).unwrap().action;
         assert_eq!((action("nestlabs/sbin/nestlocal"), action("etc/nestlocal/mqtt.password"), action("etc/nestlocal/")),
                    ("create", "remove", "directory"));
@@ -1372,8 +1367,9 @@ mod tests {
         // A unit without nestlocal gets the key set it is given.
         let mut fresh = nestlocal_unit(None);
         let mut made = 0;
-        patch_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7", b"",
-                        &mut || { made += 1; Ok(pki.clone()) }, &BTreeSet::new(), false).unwrap();
+        patch_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
+                        &mut || { made += 1; Ok(pki.clone()) }, &BTreeSet::new(), false,
+                        &|source| crate::nlclient::build(source, b"")).unwrap();
         assert_eq!(made, 1);
         // As Python's with_ca: the empty bundle's newline, then the CA.
         assert_eq!(fresh.files["etc/ssl/certs/ca-bundle.pem"].2, [b"\n", pki.ca.as_slice()].concat());
@@ -1651,7 +1647,7 @@ mod tests {
             journal
         }
         fn patch(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-            patch_with_screen_builder(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
                 &|source| {
                     if source != self.stock() { return device("fake screen builder received different firmware"); }
                     Ok(self.0.borrow().clone())
