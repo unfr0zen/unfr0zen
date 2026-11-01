@@ -449,7 +449,7 @@ fn patch_with_screen_builder(volume: &mut impl Volume, target: Device, options: 
         if options.matter.is_some() {
             fetch(volume, &mut tree, &mut originals, &[nestlocal::BLE_FIRMWARE], false, true)?;
         }
-        fetch(volume, &mut tree, &mut originals, &["etc/nestlocal/server.crt", "etc/nestlocal/server.key"], false, true)?;
+        fetch(volume, &mut tree, &mut originals, &["etc/nestlocal/server.crt", "etc/nestlocal/server.key", nestlocal::RANDOM_SEED], false, true)?;
         let own = |name: &str| tree.get(name).map(|(data, _)| data.as_slice());
         let pki = match nestlocal::unit_pki(own("etc/nestlocal/server.crt"), own("etc/nestlocal/server.key"),
                                             own("etc/ssl/certs/ca-bundle.pem")) {

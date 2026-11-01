@@ -10,6 +10,7 @@ mod cloud;
 mod commands;
 mod device;
 mod doom;
+mod entropy;
 mod flags;
 mod json;
 mod liveness;
@@ -86,6 +87,7 @@ fn main() {
         return;
     }
 
+    entropy::seed();
     install_crypto();
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
         .unwrap_or_else(|e| fatal!("{e}"));

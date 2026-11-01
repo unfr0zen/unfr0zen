@@ -42,6 +42,7 @@ const WITH_WPAN: &str = "NETWORKING_TECHNOLOGIES=\"common wifi wpan\"\n";
 const WITHOUT_WPAN: &str = "NETWORKING_TECHNOLOGIES=\"common wifi\"\n";
 pub const PASSWORD_FILE: &str = "etc/nestlocal/mqtt.password";
 pub const CA_FILE: &str = "etc/nestlocal/mqtt-ca.pem";
+pub const RANDOM_SEED: &str = "etc/nestlocal/random-seed";
 const INIT: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.init");
 const MONITRC: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.monitrc");
 
@@ -429,6 +430,15 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
         String::from_utf8(data).or_else(|_| device(format!("{name} is not text")))
     };
     let mode = |name: &str, default: u32| stock(name).map_or(default, |(_, mode)| mode);
+    let seed = match stock(RANDOM_SEED) {
+        Some((seed, _)) if seed.len() == 64 => seed,
+        Some(_) => return device("nestlocal random-seed must contain 64 bytes"),
+        None => {
+            let mut seed = vec![0; 64];
+            getrandom::fill(&mut seed).map_err(|e| crate::Error::Io(e.to_string()))?;
+            seed
+        }
+    };
     let (options, secrets) = options(mqtt, matter, zigbee)?;
     let product = configure_matter_ble(edit_product_config(&text("etc/nestlabs/product.config")?)?,
         matter.is_some(), stock(BLE_FIRMWARE).map(|(data, _)| data).as_deref());
@@ -437,6 +447,7 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
         ("etc/nestlocal/server.crt".to_string(), 0o644, pki.server_crt.clone()),
         ("etc/nestlocal/server.key".to_string(), 0o600, pki.server_key.clone()),
         (OPTIONS.to_string(), 0o644, options),
+        (RANDOM_SEED.to_string(), 0o600, seed),
         ("etc/init.d/nestlocal".to_string(), 0o755, INIT.to_vec()),
         ("etc/monit.d/nestlocal.monitrc".to_string(), 0o600, MONITRC.to_vec()),
         ("etc/init.d/rcS".to_string(), mode("etc/init.d/rcS", 0o750), edit_rcs(&text("etc/init.d/rcS")?)?.into_bytes()),
@@ -663,6 +674,8 @@ mod tests {
         assert!(String::from_utf8_lossy(&by_name["etc/nestlabs/client.config"].1).contains(LOCAL_URL));
         assert!(String::from_utf8_lossy(&by_name["etc/nestlabs/product.config"].1).contains("value=\"0\""));
         assert_eq!(by_name["etc/nestlocal/server.key"].0, 0o600);
+        assert_eq!(by_name[RANDOM_SEED].0, 0o600);
+        assert_eq!(by_name[RANDOM_SEED].1.len(), 64);
         assert_eq!(by_name["etc/init.d/rcS"].0, 0o640);
         for (name, (_, data)) in &by_name {
             files.insert(name.clone(), data.clone());
@@ -671,6 +684,21 @@ mod tests {
         assert_eq!(by_name["etc/init.d/networking-defines"].1, WITHOUT_WPAN.as_bytes());
         let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, b"ARMV7", one).unwrap();
         assert_eq!(again.files, first.files);
+    }
+
+    #[test]
+    fn installation_seeds_are_independent_and_invalid_existing_seeds_are_rejected() {
+        let (pki, _) = pkis();
+        let mut files = stock();
+        let make = |files: &BTreeMap<String, Vec<u8>>| {
+            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, b"ARMV7", pki)
+        };
+        let seed = |overlay: Overlay| overlay.files.into_iter().find(|(name, _, _)| name == RANDOM_SEED).unwrap().2;
+        assert_ne!(seed(make(&files).unwrap()), seed(make(&files).unwrap()));
+        for size in [0, 63, 65] {
+            files.insert(RANDOM_SEED.into(), vec![0; size]);
+            assert!(make(&files).is_err());
+        }
     }
 
     #[test]
