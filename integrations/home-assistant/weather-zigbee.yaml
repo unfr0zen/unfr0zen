@@ -14,12 +14,13 @@ blueprint:
       selector:
         device:
           filter:
+            # Zigbee2MQTT's model, in the device's model_id (its model holds the description).
             - integration: mqtt
               manufacturer: Google Nest
-              model: Nest Learning Thermostat (3rd gen, unfr0zen)
+              model_id: Nest Learning Thermostat (3rd gen, unfr0zen)
             - integration: mqtt
               manufacturer: Google Nest
-              model: Nest Learning Thermostat (2nd gen, unfr0zen)
+              model_id: Nest Learning Thermostat (2nd gen, unfr0zen)
     base_topic:
       name: Zigbee2MQTT base topic
       description: As in Zigbee2MQTT's configuration (mqtt.base_topic).
