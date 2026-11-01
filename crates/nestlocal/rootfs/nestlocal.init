@@ -18,10 +18,11 @@ start)
     if grep -q -- '-matter-thread' "$OPTIONS"; then
         /etc/init.d/nestlocal-thread start || echo "nestlocal: Thread transport unavailable; serving without it" >&2
     fi
-    # Firmware 6.4-8 moves a unit with no structure to Nest's newer service
-    # at start, before nlclient asks nestlocal anything: give it the one
-    # nestlocal serves (crates/nestlocal/src/structure.rs). An existing one stays.
-    ${DAEMON} -syslog -seed-structure /media/user-config/settings.config
+    # nlclient reads its settings at start, before it asks nestlocal anything:
+    # firmware 6.4-8 moves a unit with no structure to Nest's newer service
+    # (crates/nestlocal/src/structure.rs), and a Heat Link unit whose radio
+    # nestlocal holds needs using_wwn_boiler (crates/nestlocal/src/heatlink.rs).
+    ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}`
     start-stop-daemon -S -q -b -m -p ${PIDFILE} -x ${DAEMON} -- -syslog `cat ${OPTIONS}`
     ;;
 stop)

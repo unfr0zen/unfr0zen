@@ -12,12 +12,14 @@ mod device;
 mod doom;
 mod entropy;
 mod flags;
+mod heatlink;
 mod json;
 mod liveness;
 mod logger;
 mod matter;
 mod mqtt;
 mod mqtttls;
+mod nlsettings;
 mod store;
 mod settings_ui;
 mod structure;
@@ -78,12 +80,8 @@ fn main() {
     if config.serial.is_empty() {
         config.serial = hostname().unwrap_or_else(|e| fatal!("{e}"));
     }
-    if !config.seed_structure.is_empty() {
-        match structure::seed_structure_id(&config.seed_structure, &config.serial) {
-            Ok(true) => logf!("nestlocal: seeded structure_id in {}", config.seed_structure),
-            Ok(false) => {}
-            Err(e) => fatal!("{e}"),
-        }
+    if config.prepare_settings {
+        prepare_settings(&config);
         return;
     }
 
@@ -92,6 +90,27 @@ fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
         .unwrap_or_else(|e| fatal!("{e}"));
     runtime.block_on(run(config));
+}
+
+/// nlclient's settings file, as it should be when nlclient starts.
+fn prepare_settings(config: &flags::Config) {
+    let path = &config.settings;
+    match structure::seed_structure_id(path, &config.serial) {
+        Ok(true) => logf!("nestlocal: seeded structure_id in {path}"),
+        Ok(false) => {}
+        Err(e) => fatal!("{e}"),
+    }
+    let store = store::Store::new(&config.state);
+    let model = heatlink::model();
+    let wanted = heatlink::wanted(config.zigbee || config.matter_thread, device::current().generation, model.as_deref(),
+                                  heatlink::w1_wired(&store, &config.serial));
+    match heatlink::prepare(std::path::Path::new(path), &heatlink::marker(&config.state), wanted) {
+        Ok(Some(true)) => logf!("nestlocal: set {} in {path}: the {} has no Heat Link without its radio",
+                                heatlink::KEY, model.unwrap_or_default()),
+        Ok(Some(false)) => logf!("nestlocal: removed {} from {path}", heatlink::KEY),
+        Ok(None) => {}
+        Err(e) => fatal!("{e}"),
+    }
 }
 
 async fn run(config: flags::Config) {

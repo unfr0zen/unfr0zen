@@ -13,6 +13,7 @@ use md5::{Digest, Md5};
 use serde_json::Value;
 
 use crate::fields;
+use crate::nlsettings;
 use crate::store::Store;
 
 /// A UUID made from the serial: the same every time.
@@ -34,66 +35,17 @@ pub fn ensure_structure(store: &Store, serial: &str) {
     }
 }
 
-const SETTING: &[u8] = br#"<s key="structure_id" value=""#;
-const SETTING_END: &[u8] = br#""/>"#;
-
-/// Every `<s key="structure_id" value="..."/>` in b: its span and value.
-fn settings(b: &[u8]) -> Vec<(usize, usize, &[u8])> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while let Some(i) = find(&b[at..], SETTING) {
-        let start = at + i;
-        let value_start = start + SETTING.len();
-        let value_len = b[value_start..].iter().position(|&c| c == b'"').unwrap_or(b.len() - value_start);
-        let end = value_start + value_len;
-        if b[end..].starts_with(SETTING_END) {
-            found.push((start, end + SETTING_END.len(), &b[value_start..end]));
-            at = end + SETTING_END.len();
-        } else {
-            at = start + 1;
-        }
-    }
-    found
-}
-
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
-}
-
 /// Sets structure_id in nlclient's settings file when it is empty or
 /// missing. One the unit already has (from Nest's service, or from
 /// nestlocal's link bucket) stays.
 pub fn seed_structure_id(path: &str, serial: &str) -> std::io::Result<bool> {
     let b = std::fs::read(path)?;
-    let line = format!(r#"<s key="structure_id" value="{}"/>"#, structure_id(serial)).into_bytes();
-    let found = settings(&b);
-    let out = match found.first() {
-        Some((_, _, value)) if !value.is_empty() => return Ok(false),
-        Some(_) => {
-            let mut out = Vec::with_capacity(b.len());
-            let mut at = 0;
-            for (start, end, _) in &found {
-                out.extend_from_slice(&b[at..*start]);
-                out.extend_from_slice(&line);
-                at = *end;
-            }
-            out.extend_from_slice(&b[at..]);
-            out
-        }
-        None => {
-            let end = b.windows(11).rposition(|w| w == b"</settings>")
-                .ok_or_else(|| std::io::Error::other(format!("{path}: no </settings>")))?;
-            let mut out = b[..end].to_vec();
-            out.extend_from_slice(b"  ");
-            out.extend_from_slice(&line);
-            out.push(b'\n');
-            out.extend_from_slice(&b[end..]);
-            out
-        }
-    };
-    let tmp = format!("{path}.nestlocal");
-    std::fs::write(&tmp, out)?;
-    std::fs::rename(&tmp, path)?;
+    if nlsettings::value(&b, "structure_id").is_some_and(|value| !value.is_empty()) {
+        return Ok(false);
+    }
+    let out = nlsettings::set(&b, "structure_id", &structure_id(serial))
+        .map_err(|e| std::io::Error::other(format!("{path}: {e}")))?;
+    nlsettings::write(std::path::Path::new(path), &out)?;
     Ok(true)
 }
 
