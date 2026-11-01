@@ -1,7 +1,7 @@
 //! Resolve native addresses from this ELF's imports, registrations and code.
-//! Reviewed instruction shapes constrain the ABI, never select addresses.
+//! Reviewed instruction shapes name the build, never select addresses.
 use super::{
-    arm::{Arm, Value},
+    arm::{Arm, Ins, Op, Value},
     elf::{bytes, half, string, word, Elf},
 };
 use crate::shell::sha256_hex;
@@ -27,6 +27,15 @@ pub struct Discovery {
     pub layout: BTreeMap<String, u32>,
     pub anchors: BTreeMap<String, u32>,
     pub fingerprints: BTreeMap<String, String>,
+    /// The imported symbols each native calls, its evidence across builds.
+    pub evidence: BTreeMap<String, Vec<String>>,
+    /// Per reviewed variant, how many natives' evidence it matches.
+    pub matches: BTreeMap<String, usize>,
+    /// The reviewed variant whose instruction shapes this build has, if any.
+    /// Every build must pass the structural discovery: addresses, layouts,
+    /// call shapes, each native's own shape and the library calls it makes.
+    /// A build no variant's shapes match is patched on that alone.
+    pub variant: Option<String>,
     pub stock_sha256: String,
     pub validation: String,
 }
@@ -206,6 +215,16 @@ fn group_end(elf: &Elf, vptr: u32) -> Result<u32> {
     Ok(end)
 }
 pub fn discover(data: &[u8]) -> Result<Discovery> {
+    match survey(data)? {
+        (found, None) => Ok(found),
+        (_, Some(objection)) => device(format!("Native discovery: {objection}")),
+    }
+}
+/// What discovery finds, and why the build is refused when it is: every
+/// native must call what a reviewed build's does, and fingerprints mask the
+/// targets of calls, so this holds a reviewed build too. A review of a new
+/// build starts from the findings whatever the objection.
+pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let elf = Elf::parse(data)?;
     let flags = word(data, 36)?;
     require(
@@ -447,71 +466,27 @@ pub fn discover(data: &[u8]) -> Result<Discovery> {
         ("screen_title".into(), elf.read(sv + title)?),
         ("generic_event".into(), generic),
     ]);
-    let mut implementations = api.clone();
-    implementations.extend(anchors.clone());
-    let mut fingerprints = BTreeMap::new();
-    for (name, address) in implementations {
-        if !IMPORTS.iter().any(|(key, _)| *key == name)
-            && name != "native_rename"
-            && name != "native_screen_vtable"
-        {
-            fingerprints.insert(name, arm.fingerprint(address)?);
-        }
-    }
     let known: serde_json::Value = serde_json::from_str(include_str!("abi_shapes.json"))
         .map_err(|e| crate::Error::Device(e.to_string()))?;
-    let layout_value = serde_json::to_value(&layout).unwrap();
-    let fingerprint_value = serde_json::to_value(&fingerprints).unwrap();
-    let variants = known["variants"]
-        .as_array()
-        .ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
-    require(
-        variants
-            .iter()
-            .any(|v| v["layout"] == layout_value && v["functions"] == fingerprint_value),
-        "unrecognised instruction shapes or C++ layout",
-    )?;
     // Screen port additions: real activity notification and periodic refresh.
     activity(&elf, &arm, &imports, &known, &mut api, &mut layout)?;
     for(name,symbol)in [("native_send_timeout","_ZN12nlEventUtils11SendTimeoutERP21nlEventTimeoutRequestjjP12nlEventQueueP15nlIEventHandlerP7nlTimer"),("native_cancel_timeout","_ZN21nlEventTimeoutRequest6CancelEv"),("native_release","_ZNK10nlRefCount7ReleaseEv"),("native_timeout_id","_ZNK15nlEventTimedOut5GetIDEv")]{api.insert(name.into(),*imports.get(symbol).ok_or_else(||crate::Error::Device(format!("missing status-refresh import {symbol}")))?);}
     let screen_draw = elf.read(sv + 0xc)?;
-    let shape = arm.fingerprint(screen_draw)?;
-    require(
-        known["menu_draw_variants"]
-            .as_array()
-            .is_some_and(|v| v.contains(&serde_json::Value::String(shape))),
-        "unknown settings tile drawing ABI",
-    )?;
     api.insert("native_screen_draw".into(), screen_draw);
     let menu_hidden = unique(arm.calls(screen_draw)?, "menu visibility accessor")?;
     let mut menu_scales = Vec::new();
+    let mut title_draws = Vec::new();
     for target in arm.tails(screen_draw)? {
         let calls = arm.calls(target)?;
         if calls.len() == 4 && calls[3] == api["native_style"] {
             menu_scales.push(calls[2]);
-            let shape = arm.fingerprint(target)?;
-            require(
-                known["menu_title_draw_variants"]
-                    .as_array()
-                    .is_some_and(|v| v.contains(&serde_json::Value::String(shape))),
-                "unknown menu title drawing ABI",
-            )?;
+            title_draws.push(target);
         }
     }
     let menu_scale = unique(menu_scales, "menu animation scale accessor")?;
-    for (name, target, shapes) in [
-        ("native_menu_hidden", menu_hidden, "menu_hidden_variants"),
-        ("native_menu_scale", menu_scale, "menu_scale_variants"),
-    ] {
-        let shape = arm.fingerprint(target)?;
-        require(
-            known[shapes]
-                .as_array()
-                .is_some_and(|v| v.contains(&serde_json::Value::String(shape))),
-            "unknown menu animation accessor ABI",
-        )?;
-        api.insert(name.into(), target);
-    }
+    anchors.insert("menu_title_draw".into(), unique(title_draws, "menu title drawing")?);
+    api.insert("native_menu_hidden".into(), menu_hidden);
+    api.insert("native_menu_scale".into(), menu_scale);
     let select = arm.calls(api["native_select"])?;
     require(select.len() == 3, "unknown native scroll selection calls")?;
     let target = arm.code(select[1], None)?;
@@ -527,26 +502,128 @@ pub fn discover(data: &[u8]) -> Result<Discovery> {
     )?;
     api.insert("native_scroll_target".into(), select[1]);
     layout.insert("GLOBALS_TIMER_OFFSET".into(), timer(&elf, &arm, &imports)?);
-    downlink(&elf, &arm, &imports, &known, &mut api, &mut layout, &mut anchors)?;
+    downlink(&elf, &arm, &imports, &mut api, &mut layout, &mut anchors)?;
     require(
         layout["LAYER_VTABLE_SIZE"].max(layout["SCREEN_VTABLE_SIZE"]) <= 0x400,
         "vtable larger than the payload holds",
     )?;
-    Ok(Discovery {
+    roles(&arm, &api, &anchors)?;
+    // Every native of the build's own code: its shape names the build, and
+    // the library calls it makes are the evidence an unreviewed build is
+    // patched on. The view's event handler differs by build, so its calls
+    // are no evidence; the dispatch it owns is checked by its shape.
+    let by_address: BTreeMap<u32, String> = imports.iter().map(|(k, v)| (*v, k.clone())).collect();
+    let mut fingerprints = BTreeMap::new();
+    let mut evidence = BTreeMap::new();
+    for (name, &address) in api.iter().chain(&anchors) {
+        if by_address.contains_key(&address) || name == "native_screen_vtable" || name.ends_with("_slot") {
+            continue;
+        }
+        fingerprints.insert(name.clone(), arm.fingerprint(address)?);
+        if !matches!(name.as_str(), "view_handler" | "view_dispatch") {
+            evidence.insert(name.clone(), arm.imports_called(address, &by_address)?.into_iter().collect::<Vec<_>>());
+        }
+    }
+    let layout_value = serde_json::to_value(&layout).unwrap();
+    let fingerprint_value = serde_json::to_value(&fingerprints).unwrap();
+    let variants = known["variants"]
+        .as_array()
+        .ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
+    let variant = variants
+        .iter()
+        .find(|v| v["layout"] == layout_value && v["functions"] == fingerprint_value)
+        .and_then(|v| v["label"].as_str())
+        .map(str::to_owned);
+    let mut matches = BTreeMap::new();
+    for v in variants {
+        let label = v["label"].as_str().unwrap_or_default().to_owned();
+        let count = evidence.iter().filter(|(name, calls)| v["imports"][name] == serde_json::json!(calls)).count();
+        matches.insert(label, count);
+    }
+    let unmatched: Vec<_> = evidence
+        .iter()
+        .filter(|(name, calls)| !variants.iter().any(|v| v["imports"][name.as_str()] == serde_json::json!(calls)))
+        .map(|(name, calls)| format!("{name} calls {}", if calls.is_empty() { "nothing".to_owned() } else { calls.join(", ") }))
+        .collect();
+    let objection = (!unmatched.is_empty())
+        .then(|| format!("no reviewed build's native makes these library calls: {}", unmatched.join("; ")));
+    let validation = match &variant {
+        Some(label) => format!("instruction shapes of the reviewed {label} build; guest acceptance required"),
+        None => {
+            let (label, count) = matches.iter().max_by_key(|(_, n)| **n).map(|(l, n)| (l.as_str(), *n)).unwrap_or(("none", 0));
+            format!("unreviewed build: structurally consistent, {count} of {} natives' library calls as the reviewed {label} build; \
+                     no reviewed instruction shapes", evidence.len())
+        }
+    };
+    let found = Discovery {
         factory: account,
         native_api: api,
         layout,
         anchors,
         fingerprints,
+        evidence,
+        matches,
+        variant,
         stock_sha256: sha256_hex(data),
-        validation: "audited instruction shapes; guest acceptance required".into(),
-    })
+        validation,
+    };
+    Ok((found, objection))
+}
+/// What the screen asks of natives found by position, checked on the
+/// natives' own instructions: the loads, stores and calls the screen's use
+/// of each one assumes, which a recompile keeps and a wrong slot does not.
+fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>) -> Result<()> {
+    let body = |name: &str| arm.body(api.get(name).or_else(|| anchors.get(name)).copied().unwrap());
+    let loads = |code: &[Ins], disp: i32| code.iter().filter(|i| i.name == "ldr" && i.ops.get(1).and_then(Op::mem)
+        .is_some_and(|(b, d, _)| b != "sp" && b != "pc" && d == disp)).count();
+    let stores = |code: &[Ins], disp: i32| code.iter().any(|i| i.name == "str" && i.ops.last().and_then(Op::mem)
+        .is_some_and(|(b, d, _)| b != "sp" && d == disp));
+    let calls = |code: &[Ins]| code.iter().filter(|i| i.name == "bl").count();
+    let indirect = |code: &[Ins]| code.iter().any(|i| matches!(i.name.as_str(), "bx" | "blx") && i.ops[0].reg().is_some_and(|r| r != "lr"));
+    // A getter: one load through a register, no call, nothing else of note.
+    let getter = |code: &[Ins]| -> Option<i32> {
+        let fields: Vec<_> = code.iter().filter(|i| i.name == "ldr").filter_map(|i| i.ops.get(1).and_then(Op::mem))
+            .filter(|(b, _, _)| *b != "sp" && *b != "pc").map(|(_, d, _)| d).collect();
+        (fields.len() == 1 && calls(code) == 0 && !indirect(code)).then(|| fields[0])
+    };
+    for (name, check) in [
+        ("native_image_width", getter(&body("native_image_width")?) == Some(4)),
+        ("native_image_height", getter(&body("native_image_height")?) == Some(8)),
+        ("native_style", getter(&body("native_style")?).is_some()),
+        ("native_activity_client", getter(&body("native_activity_client")?).is_some()),
+        ("native_menu_scale", {
+            let code = body("native_menu_scale")?;
+            loads(&code, i32::MAX) == 0 && calls(&code) == 0 && code.last().is_some_and(|i| i.name == "b")
+                && code.iter().filter(|i| i.name == "ldr").count() == 1
+        }),
+        ("native_menu_hidden", { let code = body("native_menu_hidden")?; loads(&code, 0x28) == 1 && indirect(&code) }),
+        ("native_screen_event", { let code = body("native_screen_event")?; loads(&code, 0x20) == 1 && loads(&code, 0) >= 2 && indirect(&code) }),
+        ("native_screen_enter", { let code = body("native_screen_enter")?; loads(&code, 0x20) == 1 && loads(&code, 0xc) == 1 && indirect(&code) }),
+        ("native_layer_init", { let code = body("native_layer_init")?; stores(&code, 0x8c) && calls(&code) == 1 && indirect(&code) }),
+        ("native_config_invalidate", {
+            let code = body("native_config_invalidate")?;
+            stores(&code, 0x18) && calls(&code) == 2 && code.iter().any(|i| i.name == "cmn" && i.ops[1].imm() == Some(1))
+        }),
+        ("layout_wrapper", { let code = body("layout_wrapper")?; loads(&code, 0xc) == 1 && code.last().is_some_and(|i| i.name == "b") }),
+        ("native_layer_wheel", {
+            let code = body("native_layer_wheel")?;
+            calls(&code) == 2 && code.iter().any(|i| i.name == "vcvt.f32.s32") && code.iter().any(|i| i.name == "vdiv.f32")
+        }),
+        ("native_screen_init", { let code = body("native_screen_init")?; stores(&code, 0xe4) && loads(&code, 0xe8) == 1 && calls(&code) == 5 }),
+        ("native_config_draw", {
+            let code = body("native_config_draw")?;
+            calls(&code) == 1 && [0x28, 0x2c, 0x34, 0x38, 0x3c].iter().all(|&d| loads(&code, d) == 1)
+        }),
+        ("view_dispatch", { let code = body("view_dispatch")?; loads(&code, 0) >= 2 && indirect(&code) }),
+    ] {
+        require(check, format!("{name} does not have the native's shape"))?;
+    }
+    Ok(())
 }
 fn downlink(
     elf: &Elf,
     arm: &Arm,
     imports: &BTreeMap<String, u32>,
-    known: &serde_json::Value,
     api: &mut BTreeMap<String, u32>,
     layout: &mut BTreeMap<String, u32>,
     anchors: &mut BTreeMap<String, u32>,
@@ -566,7 +643,6 @@ fn downlink(
         }
         Ok(result)
     };
-    let mut shapes = serde_json::Map::new();
     for (bucket, name) in [
         ("device", "16nlCZDeviceBucket"),
         ("shared", "16nlCZSharedBucket"),
@@ -601,7 +677,6 @@ fn downlink(
         let slot = unique(vtables, "bucket primary vtable")?
             + if bucket == "view_handler" { 0x10 } else { 0x48 };
         let function = elf.read(slot)?;
-        shapes.insert(bucket.into(), arm.fingerprint(function)?.into());
         if bucket == "view_handler" {
             let code = arm.code(function, None)?;
             let dispatch = if code.first().is_some_and(|i| i.name == "push") {
@@ -613,7 +688,8 @@ fn downlink(
             } else {
                 function
             };
-            shapes.insert("dispatch".into(), arm.fingerprint(dispatch)?.into());
+            anchors.insert("view_handler".into(), function);
+            anchors.insert("view_dispatch".into(), dispatch);
             continue;
         }
         if half(elf.data, 16)? == 3 {
@@ -641,18 +717,11 @@ fn downlink(
                 .filter(|i| i.name == "ldr" && i.text.starts_with("r0, [r0, #"))
                 .filter_map(|i| i.ops.get(1).and_then(|o| o.mem()).map(|(_, d, _)| d as u32));
             let offset = unique(offsets, "bucket client globals offset")?;
-            shapes.insert("globals_offset".into(), offset.into());
             layout.insert("BUCKET_GLOBALS_OFFSET".into(), offset);
         }
         api.insert(format!("native_{bucket}_commit"), function);
         anchors.insert(format!("{bucket}_commit_slot"), slot);
     }
-    require(
-        known["downlink_variants"]
-            .as_array()
-            .is_some_and(|v| v.contains(&shapes.into())),
-        "unrecognised downlink completion ABI",
-    )?;
     api.insert(
         "native_delete".into(),
         *imports
@@ -790,6 +859,14 @@ fn activity(
             getters.push(getter);
         }
     }
+    // The client accessor's slot differs by generation (0x18 on the gen 3,
+    // 0x10 on the gen 2) and both slots hold plain getters, so a build no
+    // reviewed shapes name gets the gen 3's: the screen checks the client's
+    // back-pointer before using it, so a wrong slot costs the display wake,
+    // not a crash.
+    if getters.is_empty() {
+        getters.push(elf.read(vtable + 0x18)?);
+    }
     let getter = unique(getters, "validated client globals accessor")?;
     let code = arm.code(getter, Some(20))?;
     require(
@@ -803,14 +880,7 @@ fn activity(
         "unknown client accessor ABI",
     )?;
     api.insert("native_activity_client".into(), getter);
-    let shapes =
-        serde_json::json!({"mark":arm.fingerprint(mark)?,"client":arm.fingerprint(getter)?});
-    require(
-        known["activity_variants"]
-            .as_array()
-            .is_some_and(|v| v.contains(&shapes)),
-        "unrecognised user-activity ABI",
-    )
+    Ok(())
 }
 fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
     let ctor = *imports
@@ -886,3 +956,4 @@ fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
     }
     Ok(unique(offsets, "nlGlobals timer field")?.0)
 }
+

@@ -10,11 +10,123 @@
       "layer_event": 870820,
       "layer_factory": 871676,
       "layout_wrapper": 1603284,
+      "menu_title_draw": 1128900,
       "schedule_commit_slot": 3908768,
       "screen_composition": 873024,
       "screen_factory": 873244,
       "screen_title": 873408,
-      "shared_commit_slot": 3906048
+      "shared_commit_slot": 3906048,
+      "view_dispatch": 3018388,
+      "view_handler": 3018388
+    },
+    "evidence": {
+      "account_factory": [
+        "_Znwj"
+      ],
+      "generic_event": [
+        "_ZNK7nlEvent7GetTypeEv"
+      ],
+      "image_helper": [
+        "_ZNK8nlConfig8GetValueEPKc"
+      ],
+      "layer_draw": [],
+      "layer_enter": [
+        "_ZN8nlStringaSERKS_",
+        "random"
+      ],
+      "layer_event": [
+        "_ZNK7nlEvent7GetTypeEv",
+        "_ZNK7nlEvent8GetValueEv"
+      ],
+      "layer_factory": [
+        "_Znwj"
+      ],
+      "layout_wrapper": [],
+      "menu_title_draw": [],
+      "native_activity_client": [],
+      "native_attach": [
+        "_Znwj"
+      ],
+      "native_config_draw": [],
+      "native_config_invalidate": [],
+      "native_config_layout": [],
+      "native_config_y": [],
+      "native_device_commit": [
+        "_ZN10nlSettings5WriteEv",
+        "_ZN12nlEventQueue7EnqueueEPK7nlEventP15nlIEventHandler",
+        "_ZN8nlString4CopyERKS_",
+        "_ZN8nlString5ClearEv",
+        "_ZN8nlStringC1EPKc",
+        "_ZN8nlStringC1ERKS_",
+        "_ZN8nlStringC1Ev",
+        "_ZN8nlStringD1Ev",
+        "_ZNK8nlString13GetAsUTFArrayEv",
+        "_Znwj",
+        "nlGetNowInSeconds"
+      ],
+      "native_image_height": [],
+      "native_image_load": [
+        "_ZN8nlStringC1EPKc",
+        "_ZN8nlStringD1Ev"
+      ],
+      "native_image_width": [],
+      "native_layer_ctor": [],
+      "native_layer_event": [
+        "_ZNK7nlEvent7GetTypeEv",
+        "_ZNK7nlEvent8GetValueEv"
+      ],
+      "native_layer_init": [],
+      "native_layer_lookup": [
+        "PL_HashTableLookupConst"
+      ],
+      "native_layer_wheel": [],
+      "native_mark_activity": [
+        "sysinfo"
+      ],
+      "native_menu_hidden": [],
+      "native_menu_scale": [],
+      "native_rebuild_title": [
+        "_ZN13nlStringArray5ClearEv",
+        "_ZN8nlString5ClearEv",
+        "_ZN8nlString6AppendEPKc",
+        "_ZNK7nlArray14GetNumElementsEv",
+        "_ZNK8nlString13GetAsUTFArrayEv",
+        "_ZNK8nlString7IsEmptyEv"
+      ],
+      "native_schedule_commit": [
+        "_ZNK8nlString13GetAsUTFArrayEv",
+        "_ZNK8nlString6EqualsEPKc6nlBOOL",
+        "_ZNK8nlString7IsEmptyEv"
+      ],
+      "native_screen_ctor": [
+        "_ZN7nlArrayC2Ev",
+        "_ZN8nlStringC1Ev"
+      ],
+      "native_screen_draw": [],
+      "native_screen_enter": [],
+      "native_screen_event": [],
+      "native_screen_init": [],
+      "native_scroll_draw": [],
+      "native_scroll_target": [],
+      "native_select": [],
+      "native_shared_commit": [
+        "_ZN8nlString5ClearEv",
+        "_ZN8nlStringC1ERKS_",
+        "_ZN8nlStringD1Ev",
+        "_ZNK8nlString13GetAsUTFArrayEv"
+      ],
+      "native_style": [],
+      "screen_composition": [
+        "__dynamic_cast"
+      ],
+      "screen_factory": [
+        "_Znwj"
+      ],
+      "screen_title": [
+        "_ZN8nlString18GetLocalizedStringEPKcS1_",
+        "_ZN8nlStringD1Ev",
+        "_ZN8nlStringaSERKS_"
+      ]
     },
     "factory": 1496176,
     "fingerprints": {
@@ -26,11 +138,14 @@
       "layer_event": "2a19ae00c6cb5300242610a1667a18a9724a1ae37b9e88c42eaf54ba06a3af1c",
       "layer_factory": "9f63fb0e5c92c7e30bc58850f412d2c18a1031af9f42ab6fc01c19150773a78a",
       "layout_wrapper": "7ceccc6836c0f62f17ac6b4829c7d82a4ab575312bdb60f5bdf7f095ea247d68",
+      "menu_title_draw": "d895c47395538af626d8bc054f9e9b9b797425ab264fc69496158bbdfab4c9b0",
+      "native_activity_client": "f64f1b70a8d10042c1a41caf0eb444fadb9439923a73e5fe5ac03da9519b5d50",
       "native_attach": "c38c43dfea632e61bfe139062e1873ecc4e90ffc5f7f9b7b387d8e0614551b42",
       "native_config_draw": "50f38a06548352adf591cb9f462923b4a16fe8219d7c2aaafa0836f1f44df8d0",
       "native_config_invalidate": "931433f100f4690161f0c35a7b039353eba1ea6b6daaa6ef42b590fecad46248",
       "native_config_layout": "63693c5c76c65936b8968c4c94380294d1be10d0b5d3aa6a8cbe7a135ea33db4",
       "native_config_y": "6dfd24c275a83d0d8f7036242f0fdcffb43b8aa2bd862c6df7f1c71debd2866e",
+      "native_device_commit": "b27f215377a8b34a9af7a2f6cc7ff8c36684c35661a14975d1c0b8f4af60bd0e",
       "native_image_height": "71de2c273dd76c776ed9786783d36f4456a1db07dda88f7b46a623470e120b52",
       "native_image_load": "5cea9d1b18fa0b6de1085c6be0a3ecca1050bdec40dda1e53d205a785c24cc9a",
       "native_image_width": "8de8a896eba63c8b343fa5fe8898d831b298840a07646cd6281698f18c957120",
@@ -39,17 +154,26 @@
       "native_layer_init": "82e6b08fbf29f64cc70f7e8c939fb2fc8c19ad1de2063253a5bd4749cac54488",
       "native_layer_lookup": "6661ea687256a3fda55450b54f23131edf90d51a8ca048745dda6283c4d4d4d2",
       "native_layer_wheel": "71aafddf1bfebb83863e837066ab96b0b0714501f278a022c916380497e2c059",
+      "native_mark_activity": "8bbbe264f9f520cae2a822cde7db8a70b9fdf70f25e851057b6c3a92084061ce",
+      "native_menu_hidden": "d1e518e98d61e456b39606d6349408158d02a8cb5761c90bb73c9d7128330d53",
+      "native_menu_scale": "9b40f1eca73596cc9113cd01100cb80f5c263b3b05aea58636f2f9677e1e4139",
       "native_rebuild_title": "e9a3ed538c805e0ae56bb25c6937046dd0c89ad75c943cd0c8a429fcaeb1d69b",
+      "native_schedule_commit": "7a6d9c963735e9d0980c892aece0fd6c1c8fccc3c590eef96b6d0b1c681817aa",
       "native_screen_ctor": "7709f3b425af6c552b1214d4cd302ac94ebf5b6d89825c85c22fd9c8338b3c0c",
+      "native_screen_draw": "5f7abd85c5a65819dc20dd63e39605126cffcb1dc53191e7f48708b7b1dd439f",
       "native_screen_enter": "beff8b452f79131e3bfba5cbd51c7559839d6a5988c415b5dd26745d1eaa1eab",
       "native_screen_event": "f54a53d109739e183cfe8f1b215d87ad80d4194366d58f7af29027851c6296a1",
       "native_screen_init": "999ef18df42afa03bfdc21fe99bf25994f510f326e0ffcccf4223e2f36d308da",
       "native_scroll_draw": "199dc2e30b61c980dbfa8903237a83993dec9caa27615038df7bf07e1ae865d0",
+      "native_scroll_target": "27ac9a131266d43cfcc0f9bc686e02c9304266d2358ade2c54916cec1e8f4fff",
       "native_select": "3fae36e65165887294552721f2bcf41a2e800add2ba4720e3dc4e84013876bb1",
+      "native_shared_commit": "bfbd3b26c8ab5b64ce24cb19aee3080d0b260a73271b707f1768d6faff53d23c",
       "native_style": "2f700652b1b67e6251dc39e21277290436160772493edad4745903433352425f",
       "screen_composition": "9ab72ae1d1a226f02ee705e5dbff702e045409825bc81095a718e25dabb9c54a",
       "screen_factory": "9779e71ca401e3b8f7ccbcd9222c7c87b7f4092a7b9fe31dea030c4129160dd8",
-      "screen_title": "e68a8adc37c3aa4ea690e3141daf80ae9f9d47a8df382714b05796455eb14ab8"
+      "screen_title": "e68a8adc37c3aa4ea690e3141daf80ae9f9d47a8df382714b05796455eb14ab8",
+      "view_dispatch": "80061bc15f67a508adea317e5c14583733591e52f2a8f7686f1799b5b1acb07b",
+      "view_handler": "80061bc15f67a508adea317e5c14583733591e52f2a8f7686f1799b5b1acb07b"
     },
     "layout": {
       "ACTIVITY_QUEUE_OFFSET": 420,
@@ -69,6 +193,11 @@
       "SCREEN_VTABLE_SIZE": 192,
       "TIMER_EVENT_FIRST": 1073741863,
       "TIMER_EVENT_SECOND": 1073741864
+    },
+    "matches": {
+      "2019-gen2": 42,
+      "2019-gen3": 41,
+      "2025": 40
     },
     "native_api": {
       "memcpy": 175168,
@@ -123,7 +252,8 @@
       "native_timeout_id": 175048
     },
     "stock_sha256": "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
-    "validation": "audited instruction shapes; guest acceptance required"
+    "validation": "instruction shapes of the reviewed 2019-gen2 build; guest acceptance required",
+    "variant": "2019-gen2"
   },
   "native_api": {
     "memcpy": 175168,

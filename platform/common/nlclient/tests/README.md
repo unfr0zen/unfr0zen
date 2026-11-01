@@ -11,9 +11,12 @@ The corresponding private samples live in `.work/firmware/`:
 | `nlclient-gen3-2019` (5.9.4-5) | `bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d` | `imx6-stuff/.work/gen3-extract/ubifs-root0/nestlabs/sbin/nlclient` |
 | `nlclient-gen2-2019` (5.9.4-5) | `67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7` | `imx6-stuff/.work/gen2-extract/jffs2-root0/nestlabs/sbin/nlclient` |
 
-Each golden records discovery (including ABI fingerprints), resolved native
-APIs, original size/program headers/factory bytes, settings ordering, linked
-symbols and payload hash, output hash, and decompressed undo-journal hash.
+Each golden records discovery (including ABI fingerprints and the library
+calls each native makes), resolved native APIs, original size/program
+headers/factory bytes, settings ordering, linked symbols and payload hash,
+output hash, and decompressed undo-journal hash. `cargo run -p unfr0zen-core
+--bin nlclient -- --golden STOCK build/custom-screen.o TOOLCHAIN` records a
+sample's golden from the build image's object.
 The 2025 reference was re-linked with `-O0`: only its payload/output stages
 changed from the previous golden. Disabling lld string merging keeps input
 string order, which the in-memory linker reproduces. The other two references
@@ -48,3 +51,19 @@ from the ELF rather than selecting an address map from its hash.
 Keep these reference results fixed when porting. An intentional screen revision
 requires review and a fresh independent reference before updating payload
 hashes; never update discovery fingerprints simply to accept unknown firmware.
+
+## Unreviewed builds
+
+A build whose instruction shapes match no reviewed variant is patched on its
+structure alone: the address, layout and call-shape checks every build
+passes, each native's own shape (the loads, stores and calls the screen's
+use of it assumes), and the imported symbols each native calls, which must
+be a reviewed variant's for every native. Each variant in `abi_shapes.json`
+records those imports beside its fingerprints; the fingerprints name the
+build in the manifest and never block. Tests hold every reviewed build's
+imports to every other's on all but one native, so that evidence stays what
+survives a recompile. A run on such a build keeps its stock nlclient beside
+the run log. `cargo run -p unfr0zen-core --bin nlclient -- --report STOCK`
+(or `unfr0zen nlclient --discover STOCK`) prints what discovery finds in a
+sample: the first step of reviewing a new variant, whose fingerprints and
+imports it records.

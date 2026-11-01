@@ -279,8 +279,8 @@ fn discovery_moves_with_the_elf_and_rejects_corrupted_abis() {
         let at = va(&changed, address);
         changed[at] ^= 1;
         assert!(
-            nlclient::discovery::discover(&changed).is_err(),
-            "changed native instruction accepted"
+            !nlclient::discovery::discover(&changed).is_ok_and(|found| found.variant.is_some()),
+            "changed native instruction named a reviewed build"
         );
     }
     for bucket in ["device", "shared", "schedule"] {
@@ -408,4 +408,113 @@ fn layout_numbers_do_not_acquire_the_pie_load_bias() {
             "missing layout {name}"
         );
     }
+}
+
+/// Every private sample, by file name, with its golden.
+fn samples() -> Vec<(PathBuf, Vec<u8>, Value)> {
+    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root().join(".work/firmware"));
+    let Ok(paths) = std::fs::read_dir(&firmware) else { return Vec::new() };
+    let mut found = Vec::new();
+    for path in paths.flatten().map(|p| p.path()).filter(|p| p.is_file()) {
+        let stock = std::fs::read(&path).unwrap();
+        let golden = root().join(format!("platform/common/nlclient/tests/golden/{}.json", sha256_hex(&stock)));
+        if let Ok(golden) = std::fs::read(golden) {
+            found.push((path, stock, serde_json::from_slice(&golden).unwrap()));
+        }
+    }
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
+/// The imported symbols each native calls are the evidence an untested
+/// build is admitted on, so they must be what survives a recompile: had any
+/// reviewed build been unknown, the others' evidence would have admitted
+/// all but at most one of its natives (the 2025 build's activity mark, the
+/// gen 2's device commit).
+#[test]
+fn reviewed_builds_share_their_natives_library_calls() {
+    let samples = samples();
+    if samples.is_empty() {
+        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks require the private samples");
+        return;
+    }
+    let shapes: Value =
+        serde_json::from_slice(&std::fs::read(root().join("crates/unfr0zen-core/src/nlclient/abi_shapes.json")).unwrap()).unwrap();
+    for (path, stock, _) in &samples {
+        let found = nlclient::discovery::discover(stock).unwrap();
+        let own = found.variant.clone().unwrap();
+        assert_eq!(found.matches[&own], found.evidence.len(), "{}", path.display());
+        let others: Vec<_> = shapes["variants"].as_array().unwrap().iter().filter(|v| v["label"] != own).collect();
+        let unmatched: Vec<_> = found
+            .evidence
+            .iter()
+            .filter(|(name, calls)| !others.iter().any(|v| v["imports"][name.as_str()] == json!(calls)))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(unmatched.len() <= 1, "{}: no other reviewed build's natives call what these do: {unmatched:?}", path.display());
+    }
+}
+
+/// A build with one instruction changed has no reviewed build's shapes:
+/// discovery patches it on its structure and library calls all the same,
+/// names the reviewed build it is like, and the manifest says so.
+#[test]
+fn a_recompiled_build_is_patched_and_named_as_no_reviewed_one() {
+    let Some(stock) = stock_sample() else { return };
+    let before = nlclient::discovery::discover(&stock).unwrap();
+    assert_eq!(before.variant.as_deref(), Some("2025"));
+    let mut changed = stock.clone();
+    let at = va(&changed, before.native_api["native_layer_ctor"]);
+    changed[at] ^= 1;
+    let found = nlclient::discovery::discover(&changed).unwrap();
+    assert_eq!(found.variant, None);
+    assert_eq!(found.native_api, before.native_api);
+    assert_eq!(found.layout, before.layout);
+    assert_eq!(found.matches["2025"], found.evidence.len());
+    assert!(found.validation.starts_with("unreviewed build: structurally consistent"), "{}", found.validation);
+    let object = object().unwrap();
+    assert_eq!(nlclient::builder::build(&changed, &object).unwrap().manifest["reviewed"], false);
+    assert_eq!(nlclient::builder::build(&stock, &object).unwrap().manifest["reviewed"], true);
+}
+
+/// Discovery holds every native to its shape whatever its fingerprints: a
+/// getter that reads another field is refused, and so is a native calling
+/// other library functions than every reviewed build's, which the
+/// fingerprints alone, masking call targets, would not tell apart.
+#[test]
+fn natives_of_another_shape_are_refused() {
+    let Some(stock) = stock_sample() else { return };
+    let before = nlclient::discovery::discover(&stock).unwrap();
+    let mut changed = stock.clone();
+    let at = va(&changed, before.native_api["native_image_width"]);
+    assert_eq!(w(&changed, at), 0xe5900004, "ldr r0, [r0, #4]");
+    put(&mut changed, at, 0xe590000c);
+    let error = nlclient::discovery::discover(&changed).unwrap_err().to_string();
+    assert!(error.contains("native_image_width does not have the native's shape"), "{error}");
+    // Every call in the screen constructor made to its first callee: one
+    // library function where the reviewed builds call four.
+    let mut changed = stock.clone();
+    let start = va(&changed, before.native_api["native_screen_ctor"]);
+    let mut first = None;
+    for at in (start..start + 0x200).step_by(4) {
+        let word = w(&changed, at);
+        if word == 0xe12fff1e || word & 0xffff8000 == 0xe8bd8000 {
+            break; // bx lr, or a pop into pc: the constructor's return
+        }
+        if word >> 24 != 0xeb {
+            continue;
+        }
+        let target = at as i64 + 8 + (((word << 8) as i32) >> 6) as i64;
+        match first {
+            None => first = Some(target),
+            Some(target_first) => {
+                let delta = target_first - at as i64 - 8;
+                put(&mut changed, at, 0xeb000000 | ((delta >> 2) as u32 & 0xffffff));
+            }
+        }
+    }
+    let error = nlclient::discovery::discover(&changed).unwrap_err().to_string();
+    assert!(error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"), "{error}");
 }

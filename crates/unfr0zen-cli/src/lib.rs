@@ -118,11 +118,14 @@ enum Command {
     /// Patch a local stock nlclient or restore it using its undo journal; no USB or host tools
     Nlclient {
         binary: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
+        #[arg(long, required_unless_present = "discover")]
+        out: Option<PathBuf>,
         /// Restore stock from this journal instead of building the custom screen
-        #[arg(long)]
+        #[arg(long, conflicts_with = "discover")]
         undo: Option<PathBuf>,
+        /// Print what discovery finds in BINARY as JSON, and any objection to the build, and write nothing
+        #[arg(long)]
+        discover: bool,
     },
     /// diamond3: load recovery U-Boot over USB and leave it at its prompt; prints its serial port
     Uboot,
@@ -242,7 +245,20 @@ pub fn main() {
     ui::enable_colors();
     set_selection(logged_arguments(std::env::args().skip(1)));
     let args = Args::parse();
-    if let Some(Command::Nlclient { binary, out, undo }) = &args.command {
+    if let Some(Command::Nlclient { binary, out, undo, discover }) = &args.command {
+        if *discover {
+            let found = std::fs::read(binary).map_err(|e| e.to_string())
+                .and_then(|source| unfr0zen_host::nlclient::discovery::survey(&source).map_err(|e| e.to_string()));
+            match found {
+                Ok((found, objection)) => {
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({"discovery": found, "objection": objection})).unwrap());
+                    if objection.is_some() { std::process::exit(1); }
+                }
+                Err(error) => { eprintln!("unfr0zen: {}: {error}", binary.display()); std::process::exit(1); }
+            }
+            return;
+        }
+        let out = out.as_deref().expect("--out is required without --discover");
         match local_nlclient(binary, out, undo.as_deref()) {
             Ok(message) => println!("{message}"),
             Err(error) => { eprintln!("unfr0zen: {error}"); std::process::exit(1); }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use unfr0zen_core::nestlocal::{self, Matter, Mqtt, Pki};
+use unfr0zen_core::nlclient;
 use unfr0zen_core::patch::{self, Options};
 use unfr0zen_core::{Error, Result, Slot};
 
@@ -272,20 +273,33 @@ pub(crate) fn stored_pki(directory: &Path) -> Result<Pki> {
     Ok(pki)
 }
 
-/// Links the settings screen against the unit's stock nlclient. When that
-/// fails, the stock executable goes in the run directory: a firmware build
-/// discovery does not know needs it as a sample, and the run has read it.
+/// Links the settings screen against the unit's stock nlclient, keeping
+/// what was discovered in the run directory as nlclient.json. A build no
+/// reviewed variant names, or one the link fails on, is a sample a review
+/// needs, and the run has read it: its stock executable goes there too.
 pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8]) -> Result<Vec<u8>> + '_ {
     move |source| {
-        unfr0zen_core::nlclient::build(source, assets::CUSTOM_SCREEN).map_err(|error| {
-            let path = run_dir.join("nlclient.stock");
-            match fs::write(&path, source) {
+        log::info!("Discovering nlclient ABI and linking UNFR0ZEN settings in memory");
+        let path = run_dir.join("nlclient.stock");
+        match nlclient::builder::build(source, assets::CUSTOM_SCREEN) {
+            Ok(built) => {
+                fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", built.manifest))?;
+                let status = built.manifest["status"].as_str().unwrap_or_default();
+                if built.manifest["reviewed"] == false {
+                    fs::write(&path, source)?;
+                    log::info!("nlclient: {status}; its stock executable is saved as {}", path.display());
+                } else {
+                    log::info!("nlclient: {status}");
+                }
+                Ok(built.journal)
+            }
+            Err(error) => Err(match fs::write(&path, source) {
                 Ok(()) => failure(format!("{error}. The unit's stock nlclient is saved as {}: attach it to a bug report",
                                           path.display())),
                 Err(write) => failure(format!("{error} (saving the unit's stock nlclient as {} failed: {write})",
                                               path.display())),
-            }
-        })
+            }),
+        }
     }
 }
 

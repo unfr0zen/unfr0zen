@@ -64,6 +64,18 @@ pub(super) enum Value {
     Number(u32),
     Object(i32),
 }
+/// Whether the instruction leaves the function for good: an unconditional
+/// return, branch out, or jump through a register or a load into pc.
+fn leaves(i: &Ins) -> bool {
+    let unconditional = i.word >> 28 == 0xe;
+    unconditional
+        && match i.name.as_str() {
+            "bx" | "b" => true,
+            "pop" | "ldm" | "ldmib" | "ldmda" | "ldmdb" => i.writes.iter().any(|r| r == "pc"),
+            "ldr" | "mov" => i.ops.first().and_then(Op::reg) == Some("pc"),
+            _ => false,
+        }
+}
 impl<'a, 'b> Arm<'a, 'b> {
     pub fn new(elf: &'a Elf<'b>) -> Result<Self> {
         let cs = Capstone::new()
@@ -264,6 +276,60 @@ impl<'a, 'b> Arm<'a, 'b> {
             output.extend(w.to_le_bytes());
         }
         Ok(sha256_hex(&output))
+    }
+    /// The function's own instructions. `code` ends a function at the next
+    /// unwind-table entry, which leaf functions without one do not have, so
+    /// it runs on into their neighbours. This ends at the first instruction
+    /// that leaves the function for good: a return, an unconditional branch
+    /// out, or a load into pc, once no earlier forward branch skips past it.
+    pub fn body(&self, address: u32) -> Result<Vec<Ins>> {
+        let code = self.code(address, None)?;
+        let mut reach = address;
+        let mut end = code.len();
+        for (n, i) in code.iter().enumerate() {
+            // A B of any condition (not BL) forward within the code read.
+            if i.word & 0x0f000000 == 0x0a000000 {
+                if let Some(target) = i.ops.first().and_then(Op::imm) {
+                    if target > reach && target < code.last().unwrap().address + 4 {
+                        reach = target;
+                    }
+                }
+            }
+            if i.address >= reach && leaves(i) {
+                end = n + 1;
+                break;
+            }
+        }
+        Ok(code[..end].to_vec())
+    }
+    /// The imported symbols the function calls or tail-calls, as the ABI
+    /// evidence that survives a recompile: sized delete is plain delete, and
+    /// the stack protector, unwinding and logging are build options. A
+    /// function that is one branch to another stands for that one.
+    pub fn imports_called(&self, address: u32, imports: &BTreeMap<u32, String>) -> Result<BTreeSet<String>> {
+        let mut body = self.body(address)?;
+        if body.len() == 1 && body[0].name == "b" {
+            if let Some(target) = body[0].ops[0].imm().filter(|t| !imports.contains_key(t)) {
+                body = self.body(target)?;
+            }
+        }
+        let mut found = BTreeSet::new();
+        for i in body {
+            if !matches!(i.name.as_str(), "bl" | "b") {
+                continue;
+            }
+            let Some(name) = i.ops.first().and_then(Op::imm).and_then(|t| imports.get(&t)) else { continue };
+            match name.as_str() {
+                "__stack_chk_fail" | "__cxa_end_cleanup" | "nlLogWithComponent" => {}
+                "_ZdlPvj" => {
+                    found.insert("_ZdlPv".into());
+                }
+                _ => {
+                    found.insert(name.clone());
+                }
+            }
+        }
+        Ok(found)
     }
     pub fn stores(&self, address: u32, allocator: Option<u32>) -> Result<ConstructorStores> {
         let mut regs: BTreeMap<String, Value> = BTreeMap::new();

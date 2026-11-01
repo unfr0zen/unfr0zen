@@ -120,7 +120,7 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
     let boot_branding = super::branding::recolor(source, &mut output)?;
     let manifest = serde_json::json!({
         "boot_branding":boot_branding,
-        "status":"experimental; guest validation pending","stock_sha256":discovery.stock_sha256,
+        "status":discovery.validation,"reviewed":discovery.variant.is_some(),"stock_sha256":discovery.stock_sha256,
         "source_size":source.len(),"program_header_offset":phoff,"original_program_headers":hex(original_headers),
         "output_sha256":sha256_hex(&output),"replaced_screen":"account","factory":factory,
         "factory_file_offset":factory_offset,"original_factory_bytes":hex(old),
