@@ -4,7 +4,8 @@
 // The thermostat is endpoint 1, in standard clusters: Thermostat (eco is the
 // economy bit of its programming operation mode, the eco temperatures are the
 // unoccupied setpoints), Fan Control (with a fan), Thermostat User Interface
-// Configuration, Relative Humidity and the battery's voltage. The rest have
+// Configuration, Relative Humidity and the battery's voltage; and one
+// manufacturer-specific cluster, Weather (see WEATHER below). The rest have
 // endpoints of their own, present as the unit's equipment calls for:
 //
 //   2   backplate temperature   Temperature Measurement
@@ -33,6 +34,19 @@
 // Home Assistant gets the entities unfr0zen's MQTT relay announces, under
 // the same names: the climate has one target in heat or cool and the range
 // in heat_cool (ZCL's auto), eco its one preset.
+//
+// The unit asks the coordinator for the time (Time cluster), which
+// Zigbee2MQTT answers by itself. The weather it used to get from Google is
+// set as the MQTT relay takes it, with no entity to show for it:
+//
+//   zigbee2mqtt/<thermostat>/set  {"outdoor_temperature": 12.3, "outdoor_humidity": 60,
+//                                  "weather": {"condition": ..., "next_rising": ..., "next_setting": ...,
+//                                              "hourly": [...], "daily": [...]}}
+//
+// weather is what Home Assistant's weather blueprint for Zigbee
+// (integrations/home-assistant/weather-zigbee.yaml) sends: a weather entity's
+// condition, sun.sun's next_rising and next_setting, and the lists
+// weather.get_forecasts returns (daily may be twice_daily, NWS has no daily).
 //
 // Needs Zigbee2MQTT 2.12.1 or later. Install: copy to Zigbee2MQTT's
 // data/external_converters/ and restart it.
@@ -92,6 +106,32 @@ const STATE_LABELS = {
     dehumidifier: ['Dehumidifier', {deviceClass: 'running', name: 'Dehumidifier'}, 'The dehumidifier runs'],
 };
 
+// The Weather cluster, manufacturer-specific under Nest Labs' code: the
+// readings, the conditions, and the forecast in slots, hour hh (0-23) at
+// 0x1hhf and day dd (0-5) at 0x2ddf, f the slot's field. A slot with no time
+// is empty. The thermostat shows the first 24 hours and 6 days.
+const WEATHER = 0xfc00;
+const NEST_LABS = 0x10d6;
+const OUTDOOR_TEMPERATURE = 0x0000; // int16, 0.01 °C
+const OUTDOOR_HUMIDITY = 0x0001; // uint8, %
+const CONDITION = 0x0002; // string, Home Assistant's condition name
+const NEXT_RISING = 0x0003; // UTCTime
+const NEXT_SETTING = 0x0004; // UTCTime
+const HOURLY = 0x1000;
+const DAILY = 0x2000;
+const HOURS = 24;
+const DAYS = 6;
+const SLOT_TIME = 0; // UTCTime
+const SLOT_TEMPERATURE = 1; // int16; a day's high
+const SLOT_HUMIDITY = 2; // uint8
+const SLOT_LOW = 3; // int16, days only
+const INT16 = 0x29;
+const UINT8 = 0x20;
+const STRING = 0x42;
+const UTC = 0xe2;
+// UTCTime counts from 2000-01-01 UTC.
+const ZIGBEE_EPOCH = 946684800;
+
 // ThermostatProgrammingOperationMode: following its schedule, economy.
 const SCHEDULE = 0x01;
 const ECONOMY = 0x04;
@@ -99,6 +139,56 @@ const ECONOMY = 0x04;
 const RUNNING = {heating: 0x0001, cooling: 0x0002, fan_running: 0x0004};
 
 const byEndpoint = (map, id) => Object.keys(map).find((name) => map[name] === id);
+
+/** A number, or undefined for anything else (unavailable, null, ...). */
+function number(value) {
+    const n = typeof value === 'string' ? Number.parseFloat(value) : value;
+    return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+}
+
+// Weather attribute values: ZCL's none when there is no number or time.
+const int16 = (celsius) => ({type: INT16, value: number(celsius) === undefined ? -32768 : Math.round(number(celsius) * 100)});
+const uint8 = (percent) => ({type: UINT8, value: number(percent) === undefined ? 0xff : Math.round(number(percent))});
+const utc = (iso) => {
+    const ms = Date.parse(iso);
+    return {type: UTC, value: Number.isNaN(ms) ? 0xffffffff : Math.floor(ms / 1000) - ZIGBEE_EPOCH};
+};
+
+/** Days from a daily list, or a twice_daily one: each daytime half with the
+ *  following night's temperature as its low. */
+function days(list) {
+    return list.flatMap((f, i) => {
+        if (f.is_daytime === undefined) {
+            return [f];
+        }
+        const night = list[i + 1];
+        return f.is_daytime ? [{...f, templow: night?.is_daytime === false ? night.temperature : f.templow}] : [];
+    });
+}
+
+/** The forecast slots from `base`, every one of `slots`: those past the list are emptied. */
+function forecast(base, slots, list, low) {
+    const attributes = {};
+    for (let i = 0; i < slots; i++) {
+        const f = list[i] ?? {};
+        const slot = base | (i << 4);
+        attributes[slot | SLOT_TIME] = utc(f.datetime);
+        attributes[slot | SLOT_TEMPERATURE] = int16(f.temperature);
+        attributes[slot | SLOT_HUMIDITY] = uint8(f.humidity);
+        if (low) {
+            attributes[slot | SLOT_LOW] = int16(f.templow);
+        }
+    }
+    return attributes;
+}
+
+/** Writes Weather attributes, 12 a frame: 4 hours or 3 days, under a frame's 82 bytes. */
+async function writeWeather(endpoint, attributes) {
+    const entries = Object.entries(attributes);
+    for (let i = 0; i < entries.length; i += 12) {
+        await endpoint.write(WEATHER, Object.fromEntries(entries.slice(i, i + 12)), {manufacturerCode: NEST_LABS});
+    }
+}
 
 const nest = {
     // Eco, as the climate's preset.
@@ -205,6 +295,38 @@ const set = {
             await entity.command('hvacThermostat', 'clearWeeklySchedule', {});
         },
     },
+    weather: {
+        key: ['outdoor_temperature', 'outdoor_humidity', 'weather'],
+        // Zigbee2MQTT calls a converter once a message, for the first of its
+        // keys in it: all three are taken from the message here.
+        convertSet: async (entity, key, value, meta) => {
+            const endpoint = meta.device.getEndpoint(THERMOSTAT);
+            const message = meta.message;
+            const readings = {};
+            if (message.outdoor_temperature !== undefined) {
+                readings[OUTDOOR_TEMPERATURE] = int16(message.outdoor_temperature);
+            }
+            if (message.outdoor_humidity !== undefined) {
+                readings[OUTDOOR_HUMIDITY] = uint8(message.outdoor_humidity);
+            }
+            await writeWeather(endpoint, readings);
+            const weather = message.weather;
+            if (weather === undefined) {
+                return;
+            }
+            if (typeof weather !== 'object' || weather === null) {
+                throw new Error(`weather: expected Home Assistant's weather as an object, got '${weather}'`);
+            }
+            const condition = typeof weather.condition === 'string' ? weather.condition.slice(0, 32) : '';
+            await writeWeather(endpoint, {
+                [CONDITION]: {type: STRING, value: condition},
+                [NEXT_RISING]: utc(weather.next_rising),
+                [NEXT_SETTING]: utc(weather.next_setting),
+            });
+            await writeWeather(endpoint, forecast(HOURLY, HOURS, Array.isArray(weather.hourly) ? weather.hourly : [], false));
+            await writeWeather(endpoint, forecast(DAILY, DAYS, days(Array.isArray(weather.daily) ? weather.daily : []), true));
+        },
+    },
     switches: {
         key: Object.keys(SWITCHES),
         convertSet: async (entity, key, value, meta) => {
@@ -248,7 +370,7 @@ const definition = {
     toZigbee: [tz.thermostat_occupied_heating_setpoint, tz.thermostat_occupied_cooling_setpoint,
         tz.thermostat_unoccupied_heating_setpoint, tz.thermostat_unoccupied_cooling_setpoint, tz.thermostat_system_mode,
         tz.thermostat_local_temperature, tz.thermostat_running_state, tz.fan_mode, tz.thermostat_temperature_display_mode,
-        set.preset, set.outputs, set.clear_schedule, set.switches],
+        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather],
     exposes: (device) => {
         // What the unit's wiring can do: cooling only (0), heating only (2), both.
         const sequence = isDummyDevice(device) ? 4 :

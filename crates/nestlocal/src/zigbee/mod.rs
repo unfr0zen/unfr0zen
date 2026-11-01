@@ -10,8 +10,9 @@
 //! with none, nestlocal joins the strongest network that permits joining, so
 //! pairing is permitting joins on the coordinator. Enable pairing in the
 //! settings menu leaves the previous network and forgets its credentials.
-//! Changes go to the coordinator as
-//! attribute reports, whatever reporting it configured.
+//! Changes go to the coordinator as attribute reports, whatever reporting it
+//! configured; the unit's clock is set from the coordinator's Time cluster,
+//! which Zigbee2MQTT and ZHA serve (clock.rs has the other sources).
 
 mod beeper;
 mod clusters;
@@ -27,12 +28,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::bridge::Bridge;
-use crate::logf;
+use crate::{clock, logf};
 
-use clusters::{Nest, THERMOSTAT_ENDPOINT};
+use clusters::{Nest, THERMOSTAT_ENDPOINT, TIME};
 use ezsp::{id, status, Aps, Callback, Ezsp, Incoming, Network, Reader};
 use zcl::Value;
 
@@ -62,6 +63,9 @@ const JOIN_RETRY: Duration = Duration::from_secs(30);
 const REJOIN_AFTER_LEAVE: Duration = Duration::from_secs(10);
 /// How long an answer waits for the radio to free a packet buffer.
 const ANSWER_RETRY: Duration = Duration::from_secs(2);
+/// UTCTime's zero, 2000-01-01 UTC, in seconds since 1970.
+const ZIGBEE_EPOCH: u64 = 946_684_800;
+const NO_TIME: u32 = 0xFFFF_FFFF;
 
 #[derive(Default)]
 struct PairingAttempt { deadline: Option<Instant>, stopped: bool }
@@ -126,6 +130,7 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
     }
     let mut server = Server {
         sequence: 0, reported: BTreeMap::new(), next_full: Instant::now() + FIRST_REPORT, pending: false,
+        time_asked: None, next_time: Instant::now() + FIRST_REPORT,
     };
     let mut asked = false;
     crate::settings_ui::status("zigbee", if up { "Paired" } else { "Not paired. Permit joining, then enable pairing." });
@@ -182,6 +187,7 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
             attempt.deadline = None;
             crate::settings_ui::status("zigbee", "Paired successfully");
             server.next_full = Instant::now() + FIRST_REPORT;
+            server.next_time = server.next_full;
             keep(&mut ezsp, store);
         }
         if ezsp.wait(Duration::from_secs(1)) {
@@ -204,6 +210,9 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
         if up && Instant::now() >= server.next_full {
             server.report(&mut ezsp, nest, true)?;
             keep(&mut ezsp, store);
+        }
+        if up && Instant::now() >= server.next_time {
+            server.ask_time(&mut ezsp)?;
         }
     }
 }
@@ -273,10 +282,7 @@ fn ours() -> Result<(Ezsp, u16), String> {
 /// The stack's sizes and the radio's power, then the endpoint and the
 /// policies: configuration comes before anything else.
 fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
-    // Registered Nest Labs code for the ZDO node descriptor. 0xABCD denotes
-    // Control4 and causes coordinators to apply its proprietary-device quirks.
-    const NEST_LABS_CODE: u16 = 0x10D6;
-    ezsp.command(id::SET_MANUFACTURER_CODE, &NEST_LABS_CODE.to_le_bytes())?;
+    ezsp.command(id::SET_MANUFACTURER_CODE, &zcl::MANUFACTURER_CODE.to_le_bytes())?;
     const STACK_PROFILE: u8 = 0x0C;
     const SECURITY_LEVEL: u8 = 0x0D;
     const TX_POWER_MODE: u8 = 0x17;
@@ -293,11 +299,13 @@ fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
         ezsp.expect(id::SET_CONFIGURATION_VALUE, &params).map_err(|e| format!("configuration {config:#04x}: {e}"))?;
     }
     for e in &nest.endpoints {
+        // The thermostat's endpoint is the Time client that asks for the time.
+        let clients: &[u16] = if e.id == THERMOSTAT_ENDPOINT { &[TIME] } else { &[] };
         let mut endpoint = vec![e.id];
         endpoint.extend(PROFILE_HA.to_le_bytes());
         endpoint.extend(e.device.to_le_bytes());
-        endpoint.extend([1, e.clusters.len() as u8, 0]); // device version, server and client cluster counts
-        e.clusters.iter().for_each(|c| endpoint.extend(c.to_le_bytes()));
+        endpoint.extend([1, e.clusters.len() as u8, clients.len() as u8]); // device version, server and client cluster counts
+        e.clusters.iter().chain(clients).for_each(|c| endpoint.extend(c.to_le_bytes()));
         ezsp.expect(id::ADD_ENDPOINT, &endpoint)?;
     }
     const BINDING_MODIFICATION: u8 = 0x01;
@@ -433,7 +441,8 @@ fn wait_for_network_until(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Resu
     Ok(false)
 }
 
-/// The thermostat's ZCL server side: answers, and reports.
+/// The thermostat's ZCL server side: answers, and reports. And its one
+/// client side, the time.
 struct Server {
     sequence: u8,
     /// What was last reported, by endpoint, cluster and attribute.
@@ -441,6 +450,11 @@ struct Server {
     next_full: Instant,
     /// Reports the radio had no room for yet.
     pending: bool,
+    /// The time read on its way: when it was sent (wall clock) and its sequence.
+    time_asked: Option<(SystemTime, u8)>,
+    /// When to ask for the time: a minute after a read that got no time,
+    /// else clock::RECHECK.
+    next_time: Instant,
 }
 
 impl Server {
@@ -449,6 +463,9 @@ impl Server {
             return Ok(());
         }
         let message = Incoming::read(&callback.params)?;
+        if message.aps.cluster == TIME && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
+            self.time_answer(&message.payload);
+        }
         if let Some((endpoint, answer)) = answer(nest, &message) {
             let to = (message.sender, message.aps.source_endpoint);
             // A read unanswered now is a failed read: wait briefly for room.
@@ -488,6 +505,36 @@ impl Server {
             }
         }
         Ok(())
+    }
+
+    /// Reads the coordinator's Time attribute.
+    fn ask_time(&mut self, ezsp: &mut Ezsp) -> Result<(), String> {
+        self.sequence = self.sequence.wrapping_add(1);
+        let request = zcl::read_request(self.sequence, &[0x0000]);
+        if send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), THERMOSTAT_ENDPOINT, TIME, &request)? {
+            self.time_asked = Some((SystemTime::now(), self.sequence));
+        }
+        self.next_time = Instant::now() + clock::RETRY;
+        Ok(())
+    }
+
+    /// Takes the coordinator's answer to ask_time, if `payload` is one and
+    /// came promptly: true when it set the clock.
+    fn time_answer(&mut self, payload: &[u8]) -> bool {
+        let Some((sequence, values)) = zcl::read_response(payload) else {
+            return false;
+        };
+        let Some((asked, _)) = self.time_asked.take_if(|(_, s)| *s == sequence) else {
+            return false;
+        };
+        let Some(Value::Utc(t)) = values.iter().find(|(id, _)| *id == 0x0000).map(|(_, v)| v) else {
+            return false;
+        };
+        if *t == NO_TIME || !clock::answer(asked, UNIX_EPOCH + Duration::from_secs(ZIGBEE_EPOCH + u64::from(*t)), "the Zigbee coordinator") {
+            return false;
+        }
+        self.next_time = Instant::now() + clock::RECHECK;
+        true
     }
 }
 
@@ -583,6 +630,36 @@ mod pairing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_coordinators_time_sets_the_clock_when_it_is_the_answer_to_the_last_ask() {
+        let mut server = Server {
+            sequence: 0, reported: BTreeMap::new(), next_full: Instant::now(), pending: false,
+            time_asked: Some((SystemTime::now(), 9)), next_time: Instant::now(),
+        };
+        // Now, as the coordinator would have it: the clock is not off, and
+        // the answer counts.
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let answer = |sequence: u8, t: u32| {
+            let mut frame = vec![0x18, sequence, 0x01, 0x00, 0x00, 0x00, 0xE2];
+            frame.extend(t.to_le_bytes());
+            frame
+        };
+        assert!(!server.time_answer(&answer(8, (now - ZIGBEE_EPOCH) as u32)), "another sequence");
+        assert!(server.time_asked.is_some());
+        assert!(server.time_answer(&answer(9, (now - ZIGBEE_EPOCH) as u32)));
+        assert!(server.time_asked.is_none());
+        assert!(server.next_time > Instant::now() + clock::RECHECK - Duration::from_secs(5));
+        // No time in the answer, or asked nothing.
+        server.time_asked = Some((SystemTime::now(), 10));
+        assert!(!server.time_answer(&answer(10, NO_TIME)));
+        server.time_asked = Some((SystemTime::now(), 11));
+        assert!(!server.time_answer(&[0x18, 11, 0x01, 0x00, 0x00, 0x86]));
+        assert!(!server.time_answer(&answer(12, 0)));
+        // One that waited too long is not trusted.
+        server.time_asked = Some((SystemTime::now() - clock::ANSWER - Duration::from_secs(1), 13));
+        assert!(!server.time_answer(&answer(13, (now - ZIGBEE_EPOCH) as u32)));
+    }
 
     #[test]
     fn broadcasts_and_multicasts_get_answers_but_no_default_responses() {

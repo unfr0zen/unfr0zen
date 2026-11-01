@@ -1,0 +1,98 @@
+blueprint:
+  name: Nest weather over Zigbee (unfr0zen)
+  description: >-
+    Sends the outdoor temperature and humidity, conditions and forecast to a
+    Nest thermostat running unfr0zen on Zigbee2MQTT, every 15 minutes.
+    Temperatures must be in °C. The thermostat sets its clock from
+    Zigbee2MQTT by itself.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/weather-zigbee.yaml
+  input:
+    thermostat:
+      name: Thermostat
+      description: The Nest thermostat, as Zigbee2MQTT shows it to Home Assistant.
+      selector:
+        device:
+          filter:
+            - integration: mqtt
+              manufacturer: Google Nest
+              model: Nest Learning Thermostat (3rd gen, unfr0zen)
+            - integration: mqtt
+              manufacturer: Google Nest
+              model: Nest Learning Thermostat (2nd gen, unfr0zen)
+    base_topic:
+      name: Zigbee2MQTT base topic
+      description: As in Zigbee2MQTT's configuration (mqtt.base_topic).
+      default: zigbee2mqtt
+      selector:
+        text:
+    temperature:
+      name: Outdoor temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+    humidity:
+      name: Outdoor humidity
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: humidity
+    weather:
+      name: Weather
+      description: For the conditions and the forecast, such as Met.no's.
+      selector:
+        entity:
+          filter:
+            - domain: weather
+
+mode: single
+triggers:
+  - trigger: time_pattern
+    minutes: /15
+  - trigger: homeassistant
+    event: start
+variables:
+  thermostat: !input thermostat
+  base_topic: !input base_topic
+  temperature: !input temperature
+  humidity: !input humidity
+  weather: !input weather
+actions:
+  - variables:
+      # Zigbee2MQTT identifies the device to Home Assistant by its IEEE
+      # address, which its topics take in place of the friendly name.
+      address: >-
+        {{ device_attr(thermostat, 'identifiers') | map(attribute=1)
+           | select('match', 'zigbee2mqtt_') | map('replace', 'zigbee2mqtt_', '') | first }}
+      # daily when the entity has it, else twice_daily (NWS)
+      daily_type: >-
+        {{ 'daily' if (state_attr(weather, 'supported_features') | int(0)) % 2
+           else 'twice_daily' }}
+  - action: weather.get_forecasts
+    target:
+      entity_id: "{{ weather }}"
+    data:
+      type: hourly
+    response_variable: hourly
+  - action: weather.get_forecasts
+    target:
+      entity_id: "{{ weather }}"
+    data:
+      type: "{{ daily_type }}"
+    response_variable: daily
+  # A reading that is not a number (unavailable, ...) leaves the last one
+  # on the thermostat.
+  - action: mqtt.publish
+    data:
+      topic: "{{ base_topic }}/{{ address }}/set"
+      payload: >-
+        {{ {"outdoor_temperature": states(temperature) | float(none),
+            "outdoor_humidity": states(humidity) | float(none),
+            "weather": {"condition": states(weather),
+                        "next_rising": state_attr('sun.sun', 'next_rising'),
+                        "next_setting": state_attr('sun.sun', 'next_setting'),
+                        "hourly": hourly[weather].forecast[:24],
+                        "daily": daily[weather].forecast[:14]}} | to_json }}

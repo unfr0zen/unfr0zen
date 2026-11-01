@@ -1,6 +1,14 @@
 //! The Zigbee Cluster Library as a server: frames, the data types nestlocal
 //! uses, and the global commands (read, write, configure reporting,
-//! discover) over whatever `Clusters` holds the attributes.
+//! discover) over whatever `Clusters` holds the attributes. Also the client
+//! side of a read, for the time.
+
+/// Registered Nest Labs code: the ZDO node descriptor's, and the one the
+/// manufacturer-specific clusters (0xFC00 and up) take in their frames.
+/// 0xABCD denotes Control4 and causes coordinators to apply its
+/// proprietary-device quirks.
+pub const MANUFACTURER_CODE: u16 = 0x10D6;
+const MANUFACTURER_CLUSTERS: u16 = 0xFC00;
 
 /// ZCL status codes.
 pub mod status {
@@ -52,6 +60,8 @@ pub enum Value {
     Enum16(u16),
     F32(f32),
     Str(String),
+    /// UTCTime: seconds since 2000-01-01 UTC; 0xFFFFFFFF is none.
+    Utc(u32),
 }
 
 impl Value {
@@ -68,6 +78,7 @@ impl Value {
             Value::Enum16(_) => 0x31,
             Value::F32(_) => 0x39,
             Value::Str(_) => 0x42,
+            Value::Utc(_) => 0xE2,
         }
     }
 
@@ -77,6 +88,7 @@ impl Value {
             Value::Bitmap8(v) | Value::U8(v) | Value::Enum8(v) => out.push(*v),
             Value::Bitmap16(v) | Value::U16(v) | Value::Enum16(v) => out.extend(v.to_le_bytes()),
             Value::F32(v) => out.extend(v.to_le_bytes()),
+            Value::Utc(v) => out.extend(v.to_le_bytes()),
             Value::I8(v) => out.push(*v as u8),
             Value::I16(v) => out.extend(v.to_le_bytes()),
             Value::Str(s) => {
@@ -109,6 +121,7 @@ impl Value {
                 let len = take(data, 1)?[0] as usize;
                 Value::Str(String::from_utf8_lossy(&take(data, len)?).into_owned())
             }
+            0xE2 => Value::Utc(u32::from_le_bytes(take(data, 4)?.try_into().ok()?)),
             _ => return None,
         })
     }
@@ -128,21 +141,26 @@ pub trait Clusters {
 }
 
 /// The answer to a ZCL frame for an endpoint's `cluster`, if one is due.
+/// A manufacturer-specific frame is served, with its code, for the
+/// manufacturer's own clusters; the rest are refused.
 pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8]) -> Option<Vec<u8>> {
     let (&control, rest) = frame.split_first()?;
     if control & TO_CLIENT != 0 {
         return None; // a response or report to us: nothing to answer
     }
-    let rest = if control & MANUFACTURER_SPECIFIC != 0 { rest.get(2..)? } else { rest };
+    let (manufacturer, rest) = if control & MANUFACTURER_SPECIFIC != 0 {
+        let (code, rest) = rest.split_at_checked(2)?;
+        (Some(u16::from_le_bytes([code[0], code[1]])), rest)
+    } else {
+        (None, rest)
+    };
     let (&sequence, rest) = rest.split_first()?;
     let (&cmd, payload) = rest.split_first()?;
     let quiet = control & NO_DEFAULT_RESPONSE != 0;
-    let default = |status: u8| {
-        (!quiet || status != status::SUCCESS)
-            .then(|| frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, sequence, command::DEFAULT_RESPONSE, &[cmd, status]))
-    };
+    let answer = |cmd, payload: &[u8]| Some(frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, cmd, payload));
+    let default = |status: u8| (!quiet || status != status::SUCCESS).then(|| answer(command::DEFAULT_RESPONSE, &[cmd, status])).flatten();
     let specific = control & CLUSTER_SPECIFIC != 0;
-    if control & MANUFACTURER_SPECIFIC != 0 {
+    if manufacturer.is_some_and(|code| code != MANUFACTURER_CODE || cluster < MANUFACTURER_CLUSTERS) {
         return default(if specific { status::UNSUP_MANUF_CLUSTER_COMMAND } else { status::UNSUP_MANUF_GENERAL_COMMAND });
     }
     let Some(ids) = clusters.attributes(endpoint, cluster) else {
@@ -151,7 +169,6 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
     if specific {
         return default(clusters.command(endpoint, cluster, cmd, payload));
     }
-    let answer = |cmd, payload: &[u8]| Some(frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, sequence, cmd, payload));
     match cmd {
         command::READ => {
             let mut out = Vec::new();
@@ -216,7 +233,43 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
 
 /// Whether `frame`, an answer from `serve`, is a default response.
 pub fn is_default_response(frame: &[u8]) -> bool {
-    frame.get(2) == Some(&command::DEFAULT_RESPONSE)
+    let cmd = if frame.first().is_some_and(|c| c & MANUFACTURER_SPECIFIC != 0) { 4 } else { 2 };
+    frame.get(cmd) == Some(&command::DEFAULT_RESPONSE)
+}
+
+/// A Read Attributes request, client to server.
+pub fn read_request(sequence: u8, attributes: &[u16]) -> Vec<u8> {
+    let payload: Vec<u8> = attributes.iter().flat_map(|a| a.to_le_bytes()).collect();
+    frame_out(NO_DEFAULT_RESPONSE, None, sequence, command::READ, &payload)
+}
+
+/// A Read Attributes Response to a request of ours: its sequence, and the
+/// attributes it has values for (up to one of a type nestlocal has not).
+pub fn read_response(frame: &[u8]) -> Option<(u8, Vec<(u16, Value)>)> {
+    let [control, sequence, cmd, data @ ..] = frame else {
+        return None;
+    };
+    if control & (TO_CLIENT | MANUFACTURER_SPECIFIC) != TO_CLIENT || *cmd != command::READ_RESPONSE {
+        return None;
+    }
+    let mut values = Vec::new();
+    let mut data = data;
+    while let [lo, hi, status, rest @ ..] = data {
+        let id = u16::from_le_bytes([*lo, *hi]);
+        data = rest;
+        if *status != status::SUCCESS {
+            continue;
+        }
+        let Some((&type_id, rest)) = data.split_first() else {
+            break;
+        };
+        data = rest;
+        match Value::read(type_id, &mut data) {
+            Some(value) => values.push((id, value)),
+            None => break,
+        }
+    }
+    Some((*sequence, values))
 }
 
 /// An attribute report, server to client.
@@ -227,11 +280,19 @@ pub fn report(sequence: u8, attributes: &[(u16, Value)]) -> Vec<u8> {
         payload.push(value.type_id());
         value.write(&mut payload);
     }
-    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, sequence, command::REPORT, &payload)
+    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, None, sequence, command::REPORT, &payload)
 }
 
-fn frame_out(control: u8, sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
-    let mut frame = vec![control, sequence, cmd];
+fn frame_out(control: u8, manufacturer: Option<u16>, sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(payload.len() + 5);
+    match manufacturer {
+        Some(code) => {
+            frame.push(control | MANUFACTURER_SPECIFIC);
+            frame.extend(code.to_le_bytes());
+        }
+        None => frame.push(control),
+    }
+    frame.extend([sequence, cmd]);
     frame.extend_from_slice(payload);
     frame
 }
@@ -241,12 +302,13 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    /// One cluster, 0x0201, with a writable int16 and a read-only enum.
+    /// Two clusters, 0x0201 and the manufacturer-specific 0xFC00, each with
+    /// a writable int16 and a read-only enum.
     struct Fake(RefCell<i16>);
 
     impl Clusters for Fake {
         fn attributes(&self, _endpoint: u8, cluster: u16) -> Option<&'static [u16]> {
-            (cluster == 0x0201).then_some(&[0x0000, 0x0012])
+            matches!(cluster, 0x0201 | 0xFC00).then_some(&[0x0000, 0x0012])
         }
         fn read(&self, _endpoint: u8, _cluster: u16, attribute: u16) -> Option<Value> {
             match attribute {
@@ -304,9 +366,43 @@ mod tests {
         // Configure reporting, discover.
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 6, 0x06, 0x00, 0x12, 0x00, 0x29]).unwrap(), [0x18, 6, 0x07, 0x00]);
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 7, 0x0C, 0x00, 0x00, 0x01]).unwrap(), [0x18, 7, 0x0D, 0x00, 0x00, 0x00, 0x30]);
-        // Manufacturer-specific, responses to us.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x04, 0x34, 0x12, 8, 0x00]).unwrap(), [0x18, 8, 0x0B, 0x00, 0x84]);
+        // Another manufacturer's, responses to us.
+        assert_eq!(serve(&f, 1, 0x0201, &[0x04, 0x34, 0x12, 8, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 8, 0x0B, 0x00, 0x84]);
         assert!(serve(&f, 1, 0x0201, &[0x18, 9, 0x0B, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn manufacturer_specific_frames_are_served_for_the_manufacturers_clusters_only() {
+        let f = Fake(RefCell::new(2150));
+        // A read and a write of 0xFC00 with Nest Labs' code, answered with it.
+        let out = serve(&f, 1, 0xFC00, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap();
+        assert_eq!(out, [0x1C, 0xD6, 0x10, 7, 0x01, 0x12, 0x00, 0x00, 0x29, 0x66, 0x08]);
+        let out = serve(&f, 1, 0xFC00, &[0x04, 0xD6, 0x10, 8, 0x02, 0x12, 0x00, 0x29, 0x34, 0x08]).unwrap();
+        assert_eq!(out, [0x1C, 0xD6, 0x10, 8, 0x04, 0x00]);
+        assert_eq!(*f.0.borrow(), 2100);
+        assert!(is_default_response(&serve(&f, 1, 0xFC00, &[0x05, 0xD6, 0x10, 9, 0x07]).unwrap()));
+        // The same read of a standard cluster, and with another code.
+        assert_eq!(serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap(), [0x1C, 0xD6, 0x10, 7, 0x0B, 0x00, 0x84]);
+        assert_eq!(serve(&f, 1, 0xFC00, &[0x04, 0x34, 0x12, 7, 0x00, 0x12, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 7, 0x0B, 0x00, 0x84]);
+        // A code cut short.
+        assert!(serve(&f, 1, 0xFC00, &[0x04, 0xD6]).is_none());
+    }
+
+    #[test]
+    fn reads_from_the_client_side() {
+        assert_eq!(read_request(5, &[0x0000, 0x0002]), [0x10, 5, 0x00, 0x00, 0x00, 0x02, 0x00]);
+        // Time, and TimeZone unsupported.
+        let response = [0x18, 5, 0x01, 0x00, 0x00, 0x00, 0xE2, 0x80, 0x33, 0x74, 0x31, 0x02, 0x00, 0x86];
+        assert_eq!(read_response(&response), Some((5, vec![(0x0000, Value::Utc(0x31743380))])));
+        // Not a read response: a report, a request, a manufacturer-specific one.
+        for frame in [&[0x18, 5, 0x0A, 0x00, 0x00, 0xE2, 0, 0, 0, 0][..], &[0x00, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1],
+                      &[0x1C, 0xD6, 0x10, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1], &[0x18, 5]] {
+            assert_eq!(read_response(frame), None, "{frame:02x?}");
+        }
+        // A value of an unknown type ends the list; what came before stays.
+        let response = [0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x23, 1, 2, 3, 4, 0x02, 0x00, 0x00, 0x20, 9];
+        assert_eq!(read_response(&response), Some((6, vec![(0x0001, Value::U8(7))])));
+        assert_eq!(read_response(&[0x18, 7, 0x01]), Some((7, vec![])));
     }
 
     #[test]
@@ -314,7 +410,7 @@ mod tests {
         let values = [
             Value::Bool(true), Value::Bitmap8(0xA5), Value::Bitmap16(0xBEEF), Value::U8(0xFE), Value::U16(0xFFFE),
             Value::I8(-128), Value::I16(-32768), Value::Enum8(4), Value::Enum16(98), Value::F32(-0.5),
-            Value::Str(String::new()), Value::Str("Nest".into()),
+            Value::Str(String::new()), Value::Str("Nest".into()), Value::Utc(0xFFFF_FFFE),
         ];
         for value in values {
             let mut out = Vec::new();
@@ -332,7 +428,7 @@ mod tests {
     fn values_cut_short_or_of_unknown_types_are_not_read() {
         for (type_id, data) in [(0x10, &[][..]), (0x21, &[0x01]), (0x29, &[0x01]), (0x31, &[0x01]),
                                 (0x39, &[0x00, 0x00, 0x80]), (0x42, &[]), (0x42, &[5, b'N', b'e', b's', b't']),
-                                (0x23, &[0x00, 0x00, 0x00, 0x00])] {
+                                (0xE2, &[0x00, 0x00, 0x00]), (0x23, &[0x00, 0x00, 0x00, 0x00])] {
             assert_eq!(Value::read(type_id, &mut &data[..]), None, "type {type_id:#04x}, {data:02x?}");
         }
     }
@@ -400,8 +496,8 @@ mod tests {
     fn unknown_global_commands_are_refused_even_when_no_response_is_asked() {
         let f = Fake(RefCell::new(0));
         assert_eq!(serve(&f, 1, 0x0201, &[0x10, 4, 0x40]).unwrap(), [0x18, 4, 0x0B, 0x40, 0x82]);
-        // A manufacturer-specific cluster command.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x05, 0x34, 0x12, 5, 0x00]).unwrap(), [0x18, 5, 0x0B, 0x00, 0x83]);
+        // A manufacturer-specific cluster command on a standard cluster.
+        assert_eq!(serve(&f, 1, 0x0201, &[0x05, 0x34, 0x12, 5, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 5, 0x0B, 0x00, 0x83]);
         // Reports and default responses sent to the server get none.
         assert!(serve(&f, 1, 0x0201, &[0x00, 6, 0x0A, 0x00, 0x00, 0x30, 0x04]).is_none());
         assert!(serve(&f, 1, 0x0201, &[0x00, 7, 0x0B, 0x00, 0x00]).is_none());

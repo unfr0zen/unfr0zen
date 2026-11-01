@@ -95,6 +95,20 @@ fn offset(t: SystemTime) -> f64 {
     }
 }
 
+/// Takes the answer to a request for the time made at `asked` (wall clock):
+/// `t` as of the answer's sending, from `from`. False when it took too long
+/// to trust.
+pub fn answer(asked: SystemTime, t: SystemTime, from: &str) -> bool {
+    let Ok(rtt) = SystemTime::now().duration_since(asked) else {
+        return false;
+    };
+    if rtt > ANSWER {
+        return false;
+    }
+    set_clock(t + rtt / 2, from);
+    true
+}
+
 /// Sets the clock to t if it is off.
 pub fn set_clock(t: SystemTime, from: &str) {
     let off = offset(t);

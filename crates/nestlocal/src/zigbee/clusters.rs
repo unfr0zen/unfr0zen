@@ -1,5 +1,5 @@
-//! The unit as a Zigbee node, in standard clusters only, read from its
-//! buckets and written through the same commands as MQTT's set/ topics
+//! The unit as a Zigbee node, in standard clusters, read from its buckets
+//! and written through the same commands as MQTT's set/ topics
 //! (Bridge::apply), as the Matter side does. Its equipment decides which
 //! endpoints it has; each has a fixed number, so a converter can name it:
 //!
@@ -7,7 +7,10 @@
 //!       Thermostat (eco is the economy bit of its programming operation
 //!       mode; the eco temperatures are the unoccupied setpoints), Fan
 //!       Control (with a fan), Thermostat User Interface Configuration
-//!       (°C or °F) and Relative Humidity
+//!       (°C or °F), Relative Humidity, and the one manufacturer-specific
+//!       cluster, Weather (see WEATHER): what the unit used to get from
+//!       Google, written by the coordinator. Its Time client asks the
+//!       coordinator for the time (mod.rs).
 //!   2   the backplate's temperature: Temperature Measurement
 //!   3   the fan timer's duration, minutes (with a fan): Analog Output
 //!   4   the target humidity, % (with a humidifier or dehumidifier): Analog
@@ -21,12 +24,15 @@
 //!
 //! ZCL temperatures are hundredths of a degree Celsius; 0x8000 is none.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
+use chrono::{DateTime, FixedOffset};
 use serde_json::Value as Json;
 
 use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
+use crate::weather::{HAForecast, HAWeather};
 
 use super::zcl::{status, Clusters, Value};
 
@@ -42,6 +48,46 @@ pub const FAN: u16 = 0x0202;
 pub const DISPLAY: u16 = 0x0204;
 pub const TEMPERATURE: u16 = 0x0402;
 pub const HUMIDITY: u16 = 0x0405;
+pub const TIME: u16 = 0x000A;
+/// Weather, manufacturer-specific (zcl::MANUFACTURER_CODE in its frames):
+/// MQTT's set/outdoor_temperature, set/outdoor_humidity and set/weather as
+/// attributes, written by the coordinator and kept until written again.
+///
+///   0x0000  outdoor temperature  int16, 0.01 °C (0x8000: none)
+///   0x0001  outdoor humidity     uint8, % (0xFF: none)
+///   0x0002  condition            string, Home Assistant's condition name
+///   0x0003  next sunrise         UTCTime, as sun.sun's next_rising
+///   0x0004  next sunset          UTCTime, as sun.sun's next_setting
+///   0x1hhf  hourly forecast, hour hh (0-23): f = 0 its time (UTCTime; none
+///           leaves the hour out), 1 temperature (int16), 2 humidity (uint8)
+///   0x2ddf  daily forecast, day dd (0-5): as hourly, and f = 3 the low
+///           (int16); 1 is the high
+pub const WEATHER: u16 = 0xFC00;
+const OUTDOOR_TEMPERATURE: u16 = 0x0000;
+const OUTDOOR_HUMIDITY: u16 = 0x0001;
+const CONDITION: u16 = 0x0002;
+const NEXT_RISING: u16 = 0x0003;
+const NEXT_SETTING: u16 = 0x0004;
+const HOURLY: u16 = 0x1000;
+const DAILY: u16 = 0x2000;
+const HOURLY_SLOTS: u16 = 24;
+const DAILY_SLOTS: u16 = 6;
+/// A forecast slot's attributes, in its low nibble.
+const SLOT_TIME: u16 = 0;
+const SLOT_TEMPERATURE: u16 = 1;
+const SLOT_HUMIDITY: u16 = 2;
+const SLOT_LOW: u16 = 3;
+/// The weather cluster's attributes, ascending.
+static WEATHER_ATTRIBUTES: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    let mut ids = vec![OUTDOOR_TEMPERATURE, OUTDOOR_HUMIDITY, CONDITION, NEXT_RISING, NEXT_SETTING];
+    ids.extend((0..HOURLY_SLOTS).flat_map(|h| (SLOT_TIME..=SLOT_HUMIDITY).map(move |f| HOURLY | h << 4 | f)));
+    ids.extend((0..DAILY_SLOTS).flat_map(|d| (SLOT_TIME..=SLOT_LOW).map(move |f| DAILY | d << 4 | f)));
+    ids
+});
+/// UTCTime's zero, 2000-01-01 UTC, in seconds since 1970.
+const ZIGBEE_EPOCH: i64 = 946_684_800;
+const NO_TIME: u32 = 0xFFFF_FFFF;
+const NO_HUMIDITY: u8 = 0xFF;
 
 pub const THERMOSTAT_ENDPOINT: u8 = 1;
 const BACKPLATE_ENDPOINT: u8 = 2;
@@ -121,6 +167,8 @@ pub struct Endpoint {
 pub struct Nest {
     pub bridge: Arc<Bridge>,
     pub endpoints: Vec<Endpoint>,
+    /// The Weather cluster's attributes written so far.
+    weather: Mutex<BTreeMap<u16, Value>>,
 }
 
 /// The buckets and the computed state, as of now.
@@ -166,7 +214,7 @@ impl Nest {
         let has = |key: &str| truthy(v.dev.get(key)) || truthy(v.sh.get(key));
         let has_fan = has("has_fan");
         let humidity_control = has("has_humidifier") || has("has_dehumidifier");
-        let mut thermostat = vec![BASIC, POWER, IDENTIFY, THERMOSTAT, DISPLAY, HUMIDITY];
+        let mut thermostat = vec![BASIC, POWER, IDENTIFY, THERMOSTAT, DISPLAY, HUMIDITY, WEATHER];
         if has_fan {
             thermostat.push(FAN);
         }
@@ -202,7 +250,7 @@ impl Nest {
                 endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
             }
         }
-        Nest { bridge, endpoints }
+        Nest { bridge, endpoints, weather: Mutex::new(BTreeMap::new()) }
     }
 
     /// What changes reports go out for: endpoint, cluster, attributes.
@@ -425,6 +473,90 @@ impl Nest {
         };
         self.apply(key, if on { "ON" } else { "OFF" })
     }
+
+    /// A Weather attribute: as written, or none.
+    fn weather(&self, attribute: u16) -> Option<Value> {
+        if let Some(value) = self.weather.lock().unwrap().get(&attribute) {
+            return Some(value.clone());
+        }
+        Some(match (attribute, attribute & 0xF) {
+            (OUTDOOR_TEMPERATURE, _) => Value::I16(NONE),
+            (OUTDOOR_HUMIDITY, _) => Value::U8(NO_HUMIDITY),
+            (CONDITION, _) => Value::Str(String::new()),
+            (NEXT_RISING | NEXT_SETTING, _) => Value::Utc(NO_TIME),
+            (_, SLOT_TIME) => Value::Utc(NO_TIME),
+            (_, SLOT_TEMPERATURE | SLOT_LOW) => Value::I16(NONE),
+            (_, SLOT_HUMIDITY) => Value::U8(NO_HUMIDITY),
+            _ => return None,
+        })
+    }
+
+    /// Writes a Weather attribute (of its type, the caller has checked):
+    /// the readings go to the outdoor state as MQTT's do; the rest make up
+    /// the conditions and forecast, as set/weather's payload does.
+    fn write_weather(&self, attribute: u16, value: Value) -> u8 {
+        match value {
+            Value::I16(t) if t != NONE && !(-6000..=6000).contains(&t) => return status::INVALID_VALUE,
+            Value::U8(h) if h != NO_HUMIDITY && h > 100 => return status::INVALID_VALUE,
+            _ => {}
+        }
+        let mut weather = self.weather.lock().unwrap();
+        weather.insert(attribute, value);
+        match attribute {
+            OUTDOOR_TEMPERATURE | OUTDOOR_HUMIDITY => {
+                self.bridge.outdoor.set(temperature(&weather, OUTDOOR_TEMPERATURE), humidity(&weather, OUTDOOR_HUMIDITY));
+            }
+            _ => {
+                let forecast = |base: u16, slots: u16| -> Vec<HAForecast> {
+                    (0..slots).map(|i| base | i << 4).filter_map(|slot| {
+                        Some(HAForecast {
+                            datetime: Some(time(&weather, slot | SLOT_TIME)?),
+                            temperature: temperature(&weather, slot | SLOT_TEMPERATURE),
+                            templow: temperature(&weather, slot | SLOT_LOW),
+                            humidity: humidity(&weather, slot | SLOT_HUMIDITY),
+                            is_daytime: None,
+                        })
+                    }).collect()
+                };
+                let condition = match weather.get(&CONDITION) {
+                    Some(Value::Str(c)) => c.clone(),
+                    _ => String::new(),
+                };
+                self.bridge.outdoor.set_weather(&HAWeather {
+                    condition,
+                    next_rising: time(&weather, NEXT_RISING),
+                    next_setting: time(&weather, NEXT_SETTING),
+                    hourly: Some(forecast(HOURLY, HOURLY_SLOTS)),
+                    daily: Some(forecast(DAILY, DAILY_SLOTS)),
+                });
+            }
+        }
+        status::SUCCESS
+    }
+}
+
+/// A written Weather temperature, °C.
+fn temperature(weather: &BTreeMap<u16, Value>, attribute: u16) -> Option<f64> {
+    match weather.get(&attribute) {
+        Some(Value::I16(t)) if *t != NONE => Some(f64::from(*t) / 100.0),
+        _ => None,
+    }
+}
+
+/// A written Weather humidity, %.
+fn humidity(weather: &BTreeMap<u16, Value>, attribute: u16) -> Option<f64> {
+    match weather.get(&attribute) {
+        Some(Value::U8(h)) if *h != NO_HUMIDITY => Some(f64::from(*h)),
+        _ => None,
+    }
+}
+
+/// A written Weather time.
+fn time(weather: &BTreeMap<u16, Value>, attribute: u16) -> Option<DateTime<FixedOffset>> {
+    match weather.get(&attribute) {
+        Some(Value::Utc(t)) if *t != NO_TIME => DateTime::from_timestamp(ZIGBEE_EPOCH + i64::from(*t), 0).map(|d| d.fixed_offset()),
+        _ => None,
+    }
 }
 
 impl Clusters for Nest {
@@ -442,6 +574,7 @@ impl Clusters for Nest {
             ANALOG_OUTPUT => ANALOG_OUTPUT_ATTRIBUTES,
             ANALOG_INPUT => ANALOG_INPUT_ATTRIBUTES,
             BINARY_INPUT => BINARY_INPUT_ATTRIBUTES,
+            WEATHER => WEATHER_ATTRIBUTES.as_slice(),
             _ => return None,
         })
     }
@@ -495,6 +628,7 @@ impl Clusters for Nest {
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|key| Value::Bool(truthy(self.view().dev.get(key)))),
             (BINARY_INPUT, 0x006F) => Some(Value::Bitmap8(0)),
             (ON_OFF, 0x0000) => self.switch(endpoint).map(|key| Value::Bool(truthy(self.view().dev.get(key)))),
+            (WEATHER, a) => self.weather(a),
             _ => None,
         }
     }
@@ -514,6 +648,7 @@ impl Clusters for Nest {
             },
             (ANALOG_OUTPUT, a, v) => self.write_analog_output(endpoint, a, v),
             (IDENTIFY, 0x0000, _) => status::SUCCESS, // nothing to blink
+            (WEATHER, a, v) => self.write_weather(a, v),
             _ => status::READ_ONLY,
         }
     }
@@ -796,5 +931,56 @@ mod tests {
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
         assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x03, 20]), status::INVALID_FIELD);
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
+    }
+
+    #[test]
+    fn weather_written_over_zigbee_is_what_mqtt_gives() {
+        use serde_json::json;
+        let n = nest(fields!{}, fields!{});
+        let answer = || n.bridge.outdoor.answer().map(Json::Object);
+        // The readings: as the thermostat's outdoor temperature too.
+        assert_eq!(n.write(1, WEATHER, OUTDOOR_TEMPERATURE, Value::I16(-340)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0001), Some(Value::I16(-340)));
+        assert_eq!(answer(), None, "an answer without humidity");
+        assert_eq!(n.write(1, WEATHER, OUTDOOR_HUMIDITY, Value::U8(82)), status::SUCCESS);
+        assert_eq!(answer(), Some(crate::json::canonical(json!({"current": {"temp_c": -3.4, "humidity": 82.0}}))));
+        // Written over the air, with the manufacturer code: the conditions,
+        // the first hour and the first day (1790679723 is 2026-09-29 11:02:03 UTC).
+        let utc = |unix: u32| (unix - 946_684_800).to_le_bytes();
+        let mut frame = vec![0x04, 0xD6, 0x10, 7, 0x02];
+        for (id, type_id, value) in [(CONDITION, 0x42, b"\x0cpartlycloudy"[..].to_vec()),
+                                     (NEXT_RISING, 0xE2, utc(1790679723 + 86400).to_vec()), (NEXT_SETTING, 0xE2, utc(1790722504).to_vec()),
+                                     (HOURLY | SLOT_TIME, 0xE2, utc(1790697600).to_vec()),
+                                     (HOURLY | SLOT_TEMPERATURE, 0x29, 2280i16.to_le_bytes().to_vec()),
+                                     (HOURLY | SLOT_HUMIDITY, 0x20, vec![66]),
+                                     (DAILY | SLOT_TIME, 0xE2, utc(1790694000).to_vec()),
+                                     (DAILY | SLOT_TEMPERATURE, 0x29, 2330i16.to_le_bytes().to_vec()),
+                                     (DAILY | SLOT_LOW, 0x29, 1500i16.to_le_bytes().to_vec())] {
+            frame.extend(id.to_le_bytes());
+            frame.push(type_id);
+            frame.extend(value);
+        }
+        assert_eq!(serve(&n, 1, WEATHER, &frame), Some(vec![0x1C, 0xD6, 0x10, 7, 0x04, 0x00]));
+        assert_eq!(answer(), Some(crate::json::canonical(json!({
+            "current": {"temp_c": -3.4, "humidity": 82.0, "icon": "partlycloudy", "sunrise": 1790679723_i64, "sunset": 1790722504_i64},
+            "forecast": {
+                "hourly": [{"hour": 1, "time": 1790697600_i64, "temp_c": 22.8, "humidity": 66.0}],
+                "daily": [{"date": 1790694000_i64, "temp_high_c": 23.3, "temp_low_c": 15.0}],
+            },
+        }))));
+        assert_eq!(n.read(1, WEATHER, CONDITION), Some(Value::Str("partlycloudy".into())));
+        assert_eq!(n.read(1, WEATHER, HOURLY | 1 << 4 | SLOT_TIME), Some(Value::Utc(NO_TIME)), "an hour not written");
+        // An hour with its time taken away leaves the forecast; a condition
+        // the unit has no image for leaves the icon out.
+        assert_eq!(n.write(1, WEATHER, HOURLY | SLOT_TIME, Value::Utc(NO_TIME)), status::SUCCESS);
+        assert_eq!(n.write(1, WEATHER, CONDITION, Value::Str("windy".into())), status::SUCCESS);
+        let a = answer().unwrap();
+        assert!(a["forecast"].get("hourly").is_none() && a["current"].get("icon").is_none(), "{a}");
+        // Out of range, and the wrong type over the air.
+        assert_eq!(n.write(1, WEATHER, OUTDOOR_TEMPERATURE, Value::I16(6100)), status::INVALID_VALUE);
+        assert_eq!(n.write(1, WEATHER, DAILY | SLOT_HUMIDITY, Value::U8(101)), status::INVALID_VALUE);
+        assert_eq!(serve(&n, 1, WEATHER, &[0x04, 0xD6, 0x10, 8, 0x02, 0x01, 0x00, 0x29, 0x00, 0x00]),
+                   Some(vec![0x1C, 0xD6, 0x10, 8, 0x04, 0x8D, 0x01, 0x00]));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0001), Some(Value::I16(-340)), "the readings stay");
     }
 }

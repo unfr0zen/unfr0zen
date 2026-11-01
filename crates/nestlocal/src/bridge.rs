@@ -106,14 +106,9 @@ impl Bridge {
         let Some(asked) = self.time_asked.lock().unwrap().take() else {
             return Ok(()); // not asked
         };
-        let Ok(rtt) = SystemTime::now().duration_since(asked) else {
-            return Ok(());
-        };
-        if rtt > clock::ANSWER {
-            return Ok(()); // too late to trust
+        if clock::answer(asked, UNIX_EPOCH + Duration::from_secs_f64(seconds), "Home Assistant") {
+            let _ = self.time_ok.try_send(());
         }
-        clock::set_clock(UNIX_EPOCH + Duration::from_secs_f64(seconds) + rtt / 2, "Home Assistant");
-        let _ = self.time_ok.try_send(());
         Ok(())
     }
 
