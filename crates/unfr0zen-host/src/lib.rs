@@ -10,6 +10,7 @@ pub mod flow;
 pub mod j49;
 mod machine;
 pub mod nand;
+mod onyx;
 pub mod progress;
 pub mod update;
 pub mod usb;

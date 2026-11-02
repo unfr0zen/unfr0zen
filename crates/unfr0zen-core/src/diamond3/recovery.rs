@@ -112,6 +112,7 @@ pub fn parse_crc(response: &str) -> Option<u32> {
 pub fn silicon(digprog: u32) -> String {
     let name = match (digprog >> 16) & 0xff {
         0x62 => "i.MX6SoloX".to_string(),
+        0x64 => "i.MX6UL".to_string(),
         other => format!("i.MX6 type {other:#04x}"),
     };
     format!("{name} rev {}.{}", ((digprog >> 8) & 0xff) + 1, digprog & 0xff)

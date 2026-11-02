@@ -321,6 +321,7 @@ pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
     match unit.device {
         Device::Diamond3 => diamond3::run(config, progress, unit),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit),
+        Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }
 

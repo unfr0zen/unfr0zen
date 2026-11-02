@@ -359,10 +359,11 @@ pub(crate) struct Rootfs {
     pub patch: fn(&mut Tree, &Options) -> Result<()>,
 }
 
-fn rootfs(target: Device) -> &'static Rootfs {
+fn rootfs(target: Device) -> Result<&'static Rootfs> {
     match target {
-        Device::Diamond3 => &crate::diamond3::rootfs::ROOTFS,
-        Device::Diamond | Device::J49 => &crate::j49::rootfs::ROOTFS,
+        Device::Diamond3 => Ok(&crate::diamond3::rootfs::ROOTFS),
+        Device::Diamond | Device::J49 => Ok(&crate::j49::rootfs::ROOTFS),
+        Device::Onyx => device("Nest Thermostat E (onyx) is not supported"),
     }
 }
 
@@ -458,6 +459,7 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
                        new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
+    let rootfs = rootfs(target)?;
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
     }
@@ -482,7 +484,6 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         crate::nlclient::Patch::journal(source, &output)
     };
     let (mut tree, mut originals) = (Tree::new(), Originals::new());
-    let rootfs = rootfs(target);
     fetch(volume, &mut tree, &mut originals, rootfs.files, true, true)?;
     let optional = (rootfs.optional_files)(options);
     fetch(volume, &mut tree, &mut originals, &optional.iter().map(String::as_str).collect::<Vec<_>>(), false, false)?;
@@ -961,6 +962,16 @@ mod tests {
                 (name.clone(), (Some(self.readback.clone().unwrap_or_else(|| sha256_hex(data))), Some(format!("{owner} {mode:o}"))))
             }).collect())
         }
+    }
+
+    #[test]
+    fn onyx_is_rejected_before_patching() {
+        let mut volume = FakeVolume::new(Vec::new());
+        let error = patch_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
+            &mut || panic!("unsupported device must not create keys"), &BTreeSet::new(), false,
+            &|_| panic!("unsupported device must not build a screen")).unwrap_err();
+        assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
+        assert!(volume.commands.is_empty());
     }
 
     fn public_key(kind: &str, fields: &[&[u8]]) -> String {

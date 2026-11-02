@@ -108,6 +108,13 @@ impl Hid for HidDevice {
     }
 }
 
+/// Opens an SDP device without uploading or starting a loader.
+pub(crate) fn open_sdp((vid, pid): Id) -> Result<impl Hid> {
+    let api = hidapi::HidApi::new().map_err(|e| Error::Io(e.to_string()))?;
+    let handle = api.open(vid, pid).map_err(|e| Error::Io(e.to_string()))?;
+    Ok(HidDevice(handle))
+}
+
 /// Starts hidapi on the calling thread. On macOS hidapi starts once per
 /// process and ties its HID manager to the run loop of the thread that starts
 /// it, so that thread must outlive every later use: the window calls this from

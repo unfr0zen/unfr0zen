@@ -1063,9 +1063,10 @@ fn outcome_mark(ui: &mut egui::Ui, ok: bool) {
 impl App {
     fn progress_ui(&self, ui: &mut egui::Ui) {
         if let Some(device) = &self.logs.device {
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
+                ui.set_max_width(ui.available_width() - SCROLLBAR_GUTTER);
                 ui.label(egui::RichText::new("Device").weak());
-                ui.label(egui::RichText::new(device).strong());
+                ui.add(egui::Label::new(egui::RichText::new(device).strong()).wrap());
             });
         }
         for row in &self.logs.rows {
@@ -1455,6 +1456,25 @@ mod tests {
         assert!(render(&mut app) > many_logs, "manual height overrides content growth");
         app.collapse_logs();
         assert_eq!(render(&mut app), closed);
+    }
+
+    #[test]
+    fn device_description_wraps_within_window() {
+        let context = egui::Context::default();
+        let message = "Nest Thermostat E (onyx): i.MX6UL rev 1.2";
+        let app = App { logs: LogContext { device: Some(message.into()), ..LogContext::default() }, ..App::default() };
+        let output = context.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(280.0, 600.0))),
+            ..Default::default()
+        }, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| app.progress_ui(ui));
+        });
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == message => Some(text),
+            _ => None,
+        }).expect("device text is rendered");
+        assert!(text.galley.rows.len() > 1);
+        assert!(text.pos.x + text.galley.rect.right() < 280.0);
     }
 
     #[test]

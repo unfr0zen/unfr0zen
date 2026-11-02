@@ -70,12 +70,13 @@ pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut d
         }
     };
     let unit = device::detect(progress, wait_usb, omap)?;
-    if let Some(device) = expected.filter(|&device| device != unit.device && !(device == Device::J49 && unit.device == Device::Diamond)) {
+    if let Some(device) = expected.filter(|&device| unit.device != Device::Onyx && device != unit.device && !(device == Device::J49 && unit.device == Device::Diamond)) {
         return Err(failure(format!("the image is a {}'s NAND; the unit is a {}", device.name(), unit.device.name())));
     }
     match unit.device {
         Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, progress, confirm),
         Device::Diamond | Device::J49 => j49::nand::run(job, unit, wait_usb, progress, confirm),
+        Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }
 

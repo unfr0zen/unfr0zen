@@ -8,6 +8,8 @@ pub enum Device {
     Diamond3,
     /// Nest gen 2, TI AM3703, JFFS2 root slots.
     J49,
+    /// Nest Thermostat E, i.MX6UL; detection only.
+    Onyx,
 }
 
 impl Device {
@@ -16,6 +18,7 @@ impl Device {
             Device::Diamond => "diamond",
             Device::Diamond3 => "diamond3",
             Device::J49 => "j49",
+            Device::Onyx => "onyx",
         }
     }
 
@@ -25,6 +28,7 @@ impl Device {
             Device::Diamond => "Nest gen 1 (diamond)",
             Device::Diamond3 => "Nest gen 3 (diamond3)",
             Device::J49 => "Nest gen 2 (j49)",
+            Device::Onyx => "Nest Thermostat E (onyx)",
         }
     }
 }

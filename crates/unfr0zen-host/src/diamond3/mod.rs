@@ -56,6 +56,9 @@ fn load_recovery(progress: &mut dyn Progress, port: &str) -> Result<(String, Id)
 pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at_app: bool, unit: Unit)
                         -> Result<(String, Id)> {
     let Unit { device, mut port, mut id } = unit;
+    if device == Device::Onyx {
+        return Err(crate::onyx::unsupported(progress));
+    }
     if device != Device::Diamond3 {
         return Err(failure(format!("this needs a diamond3; the unit on USB is a {}", device.name())));
     }
