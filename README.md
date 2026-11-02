@@ -73,8 +73,10 @@ Download the latest build from the [releases page](https://github.com/unfr0zen/u
 <details>
 <summary>Linux: USB access and runtime dependencies (click to expand)</summary>
 
-Without a udev rule only root can open the unit. Keep the `70-` prefix: the rule
-has to run before systemd's `73-seat-late.rules` for `uaccess` to take effect.
+Run both the app and CLI as your normal user, without `sudo`. Both need the
+same one-time udev setup below; neither requests elevated privileges. Keep the
+`70-` prefix: the rule has to run before systemd's `73-seat-late.rules` for
+`uaccess` to grant the active local user USB access.
 
 ```sh
 sudo tee /etc/udev/rules.d/70-unfr0zen.rules > /dev/null <<'EOF'
@@ -94,7 +96,12 @@ EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-Reconnect the unit afterwards if it is already plugged in.
+Reconnect the unit afterwards if it is already plugged in. The same rules cover
+both the USB device and its HID/serial interfaces as it switches recovery modes.
+
+Both frontends save logs to `~/.local/share/unfr0zen/logs/<timestamp>/unfr0zen.log`
+(or `$XDG_DATA_HOME/unfr0zen/logs/<timestamp>/unfr0zen.log` when set). Errors creating
+run or log directories include the affected path.
 
 | Dependency | Why |
 |-|-|

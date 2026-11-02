@@ -203,29 +203,15 @@ pub fn default_data_dir() -> PathBuf {
 }
 
 pub(crate) fn private_dir(path: &Path) -> Result<()> {
-    fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    fs::create_dir(path)?;
+    let context = |error| Error::Io(format!("create private directory {}: {error}", path.display()));
+    fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(context)?;
+    fs::create_dir(path).map_err(context)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(context)?;
     }
     Ok(())
-}
-
-/// /tmp/unfr0zen is the log root; an older logo file there is kept aside.
-fn prepare_log_root(progress: &mut dyn Progress) -> Result<PathBuf> {
-    let root = if cfg!(unix) { PathBuf::from("/tmp/unfr0zen") } else { std::env::temp_dir().join("unfr0zen") };
-    if root.is_file() || root.is_symlink() {
-        let mut saved = root.with_file_name("unfr0zen-logo");
-        if saved.exists() {
-            saved = root.with_file_name(format!("unfr0zen-logo-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-        }
-        fs::rename(&root, &saved)?;
-        progress.status(&format!("Preserved previous logo at {}", saved.display()));
-    }
-    fs::create_dir_all(&root)?;
-    Ok(root)
 }
 
 /// Under sudo, what a run leaves is given back to the user who started it.
@@ -303,9 +289,9 @@ pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8]) -> Result<Vec<u8>
     }
 }
 
-/// Starts the run log in its own directory under the log root; returns the directory.
+/// Starts the run log under the user's data directory; returns the directory.
 pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<PathBuf> {
-    let log_dir = prepare_log_root(progress)?.join(stamp);
+    let log_dir = default_data_dir().join("logs").join(stamp);
     private_dir(&log_dir)?;
     let log_path = log_dir.join("unfr0zen.log");
     progress::set_log_file(&log_path)?;
@@ -328,6 +314,16 @@ pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
 #[cfg(test)]
 mod describe_tests {
     use super::*;
+
+    #[test]
+    fn directory_errors_identify_the_requested_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("not-a-directory");
+        fs::write(&parent, b"").unwrap();
+        let path = parent.join("run");
+        let error = private_dir(&path).unwrap_err().to_string();
+        assert!(error.contains(path.to_str().unwrap()), "{error}");
+    }
 
     #[test]
     fn public_key_input_requires_ssh_and_is_validated_before_the_run() {
