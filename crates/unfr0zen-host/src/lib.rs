@@ -18,7 +18,7 @@ pub use device::{Device, WAIT_USB_BOOT_STAGE};
 pub use flow::{mask_url, run, Config, PatchInputs};
 pub use unfr0zen_core::nlclient;
 pub use progress::{init_logging, log_path, set_selection, Progress, Stage};
-/// The unfr0zen logo, block-character art with "by @will-tm".
+/// The unfr0zen logo, block-character art.
 pub const LOGO: &str = include_str!("logo.txt");
 
 /// The colours down the diamond3 boot logo's UNFROZEN text, top to bottom,

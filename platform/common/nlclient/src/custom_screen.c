@@ -419,16 +419,14 @@ static void show(void *raw, int opening) {
     int choice_count = s->flow.page == CUSTOM_HOME ? custom_home_count(s->features) : activity ? 1 : 2;
     native_config_invalidate(&s->config);
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
-    s->config.text_count = s->flow.page == CUSTOM_HOME || activity ? 3 : 2;
+    s->config.text_count = activity ? 3 : 2;
     /* An image slot is part of the scrolling document, with no page heading.
      * Image positions below come from the actual native text-row anchors. */
     native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" :
                        custom_matter(s->flow.page) ? "\n\n\n\n\n" : "");
     native_string_copy(&s->text[2], "");
     if (s->flow.page == CUSTOM_HOME) {
-        native_string_copy(&s->text[1], "This device is running free from Google thanks to unfr0zen by");
-        native_string_copy(&s->text[2], "@will-tm");
-        s->flags[2] = 0x80000000u; /* Native blue text, without the selection capsule (bit 0). */
+        native_string_copy(&s->text[1], "This device is running free from Google thanks to unfr0zen.");
         for (int i = 0; i < 4; i++) {
             int action = custom_home_action(i, s->features);
             native_string_copy(&s->choices[i], action == 0 ? "Matter" : action == 1 ? "Zigbee" :
@@ -650,7 +648,7 @@ static int draw_common(void *base, void *context) {
 }
 static void title(void *screen) {
     native_string_copy((nl_string *)((u8 *)screen + 0x54), "\nUNFR0ZEN");
-    native_string_copy((nl_string *)((u8 *)screen + 0x70), "by @will-tm");
+    native_string_copy((nl_string *)((u8 *)screen + 0x70), "");
     native_rebuild_title(screen);
 }
 /* Preserve the native context and transform; offset only its title text calls. */

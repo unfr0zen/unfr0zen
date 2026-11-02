@@ -34,7 +34,7 @@ fn main() {
         res.set("OriginalFilename", "unfr0zen.exe");
         res.set("FileDescription", "unfr0zen");
         res.set("CompanyName", "unfr0zen");
-        res.set("LegalCopyright", "Copyright © 2026 the unfr0zen team");
+        res.set("LegalCopyright", "Copyright © 2026 unfr0zen team");
         if let Err(error) = res.compile() {
             println!("cargo:warning=could not embed the Windows icon: {error}");
         }

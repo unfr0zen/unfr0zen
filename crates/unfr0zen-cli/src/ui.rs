@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use unfr0zen_host::Progress;
 
 use unfr0zen_host::LOGO;
-const CYAN: &str = "\x1b[38;2;168;212;236m"; // the logo's @will-tm blue (#a8d4ec)
+const CYAN: &str = "\x1b[38;2;168;212;236m"; // light blue (#a8d4ec)
 const RED: &str = "\x1b[38;2;255;65;65m";
 const RESET: &str = "\x1b[0m";
 const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -59,11 +59,8 @@ pub fn logo() {
     let last = lines.len().saturating_sub(1).max(1) as f32;
     for (index, text) in lines.iter().enumerate() {
         if terminal() {
-            // The byline is lighter than the dark bottom of the gradient; the
-            // art beside it keeps its row's colour.
-            let (art, byline) = text.find("by @will-tm").map_or((*text, ""), |at| text.split_at(at));
             let [r, g, b] = unfr0zen_host::logo_color(index as f32 / last);
-            println!("\x1b[38;2;{r};{g};{b}m{art}{CYAN}{byline}{RESET}");
+            println!("\x1b[38;2;{r};{g};{b}m{text}{RESET}");
         } else {
             println!("{text}");
         }

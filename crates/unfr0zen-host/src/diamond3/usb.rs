@@ -108,6 +108,14 @@ impl Hid for HidDevice {
     }
 }
 
+/// Starts hidapi on the calling thread. On macOS hidapi starts once per
+/// process and ties its HID manager to the run loop of the thread that starts
+/// it, so that thread must outlive every later use: the window calls this from
+/// its main thread before any run's thread opens the ROM.
+pub fn init_hid() -> Result<()> {
+    hidapi::HidApi::new().map(drop).map_err(|e| Error::Io(e.to_string()))
+}
+
 fn wait_hid(api: &mut hidapi::HidApi, (vid, pid): Id, timeout: Duration) -> Result<HidDevice> {
     log::info!("Waiting up to {timeout:?} for USB HID {vid:04x}:{pid:04x}");
     let until = Instant::now() + timeout;

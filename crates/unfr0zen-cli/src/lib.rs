@@ -19,9 +19,9 @@ use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, Config
 use ui::TerminalProgress;
 
 #[derive(Parser, Debug)]
-#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), about = "Recover a Nest over USB (diamond3, j49 or experimental Diamond), patch its selected root volume from \
-    the unit, and with --usb-shell verify its USB root shell. The original volume is saved only with --backup; all NAND writes target only \
-    the selected root0/root1 volume. The commands only boot the unit, or back up, verify and restore the whole NAND.", args_conflicts_with_subcommands = true)]
+#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
+    Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
+    is written; --backup saves the volume first, --dry-run writes nothing.", args_conflicts_with_subcommands = true)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,

@@ -56,7 +56,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 the unfr0zen team</string>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 unfr0zen team</string>
 </dict>
 </plist>
 PLIST

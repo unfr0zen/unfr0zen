@@ -312,9 +312,9 @@
     "native_timeout_id": 480092
   },
   "output": {
-    "journal_sha256": "0230ba1db529a15341014048ed8e5cda8230658fbeef28d485069e179169de46",
-    "sha256": "a85b4f0ed442b05500327d522eab58a13fa3944f9032f4c44086fdaa25bdfe5c",
-    "size": 7288057
+    "journal_sha256": "1414db0dc231cbfb3be6053f008711ed7f6aef9e0813b292e13475f31029a9c2",
+    "sha256": "9d37992219431eea28a9c0c275eb1233a3d895ceb7ce3e0027130ea6e953c1af",
+    "size": 7287961
   },
   "patch": {
     "factory": 2180988,
@@ -371,15 +371,15 @@
   },
   "payload": {
     "entry": 8585720,
-    "sha256": "00ea0f338e3c4212568821cdc8b5e550cddc0d470094f67827a523dd5eec9888",
-    "size": 13561,
+    "sha256": "990c6c8f63d9de547d72cc8c7262225f9893611fe838b44b0320d62a8ac39247",
+    "size": 13465,
     "symbols": {
-      "$a": 8597412,
-      "$d": 8597332,
+      "$a": 8597344,
+      "$d": 8597264,
       "attempt_end": 8592112,
       "click": 8589352,
       "common_event": 8589332,
-      "custom_choose": 8596100,
+      "custom_choose": 8596032,
       "custom_device_commit": 8585216,
       "custom_factory": 8585720,
       "custom_schedule_commit": 8585688,
@@ -394,7 +394,7 @@
       "enter_layer": 8590712,
       "enter_screen": 8591004,
       "exit_screen": 8591216,
-      "keep_awake": 8595324,
+      "keep_awake": 8595256,
       "layer_event": 8587108,
       "layout_ACTIVITY_QUEUE_OFFSET": 324,
       "layout_BUCKET_GLOBALS_OFFSET": 28,
@@ -414,7 +414,7 @@
       "layout_TIMER_EVENT_FIRST": 1073741864,
       "layout_TIMER_EVENT_SECOND": 1073741865,
       "light_display": 8592200,
-      "load_image": 8595472,
+      "load_image": 8595404,
       "memcpy": 480212,
       "memset": 486216,
       "native_activity_client": 686124,
@@ -467,12 +467,12 @@
       "native_time": 486828,
       "native_timeout_id": 480092,
       "no_reload": 8590720,
-      "option_word": 8595728,
-      "request_action": 8596456,
+      "option_word": 8595660,
+      "request_action": 8596388,
       "screen_draw": 8591592,
       "screen_event": 8590816,
       "show": 8592824,
-      "subtitle_text": 8597412,
+      "subtitle_text": 8597344,
       "title": 8591532,
       "title_thunk": 8592052
     }

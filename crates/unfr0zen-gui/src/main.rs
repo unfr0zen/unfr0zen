@@ -26,7 +26,6 @@ use unfr0zen_host::{Config, Device, PatchInputs, DEFAULT_MATTER_CODE, DEFAULT_NT
 
 use run::{Event, Run};
 
-const WILL_TM: &str = "https://github.com/will-tm";
 const BUILD_VERSION: &str = env!("UNFR0ZEN_BUILD_VERSION");
 
 fn main() -> eframe::Result<()> {
@@ -56,6 +55,9 @@ fn main() -> eframe::Result<()> {
     if instance.as_ref().is_some_and(|i| !i.is_single()) {
         eprintln!("unfr0zen is already running.");
         return Ok(());
+    }
+    if let Err(error) = unfr0zen_host::diamond3::usb::init_hid() {
+        log::warn!("Could not start hidapi: {error}");
     }
     let mut viewport = egui::ViewportBuilder::default()
         // The logo (72 monospace chars) is the widest element; this is the
@@ -680,8 +682,7 @@ impl eframe::App for App {
                 ui.add_space(LEFT_MARGIN);
                 self.start_button(ui);
                 if self.running() {
-                    ui.add(egui::Spinner::new());
-                    ui.label("running; keep the unit connected");
+                    running_notice(ui);
                 } else if let Some(path) = unfr0zen_host::log_path() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.link("open log folder").clicked() {
@@ -1254,8 +1255,26 @@ fn shimmer(color: egui::Color32, col: usize, row: usize, cols: usize, rows: usiz
     color.lerp_to_gamma(egui::Color32::WHITE, glint * glint * 0.85)
 }
 
+/// The bottom bar's notice while a run is under way, with the logo's shimmer
+/// sweeping across it every RUNNING_LOOP seconds as its sign of activity.
+fn running_notice(ui: &mut egui::Ui) {
+    const TEXT: &str = "running; keep the unit connected";
+    const RUNNING_LOOP: f64 = 2.0;
+    let progress = ((ui.input(|i| i.time) % RUNNING_LOOP) / SHIMMER_SWEEP).min(1.0) as f32;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().text_color();
+    let cols = TEXT.chars().count();
+    let mut job = egui::text::LayoutJob::default();
+    for (col, c) in TEXT.chars().enumerate() {
+        let format = egui::TextFormat::simple(font.clone(), shimmer(color, col, 0, cols, 1, progress));
+        job.append(c.encode_utf8(&mut [0; 4]), 0.0, format);
+    }
+    ui.label(job);
+    ui.ctx().request_repaint();
+}
+
 /// The unfr0zen logo: the logo.txt block art in monospace, coloured with the
-/// boot logo's gradient top to bottom, centred, with the clickable handle.
+/// boot logo's gradient top to bottom, centred.
 fn logo(ui: &mut egui::Ui) {
     let mut lines: Vec<&str> = unfr0zen_host::LOGO.lines().collect();
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
@@ -1304,37 +1323,9 @@ fn logo(ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for (i, line) in lines.iter().enumerate() {
-                // The byline is lighter than the dark bottom of the gradient;
-                // the art beside it keeps its row's colour.
                 let art = logo_gradient(i as f32 / last);
-                let byline = egui::Color32::from_rgb(0xa8, 0xd4, 0xec);
-                let part = |text: &str, color| egui::RichText::new(text).font(font.clone()).color(color);
-                let plain = |ui: &mut egui::Ui, text: &str, color| ui.add(egui::Label::new(part(text, color))
-                    .selectable(false).wrap_mode(egui::TextWrapMode::Extend));
-                // The byline's handle opens the author's GitHub.
-                match line.split_once("by @will-tm") {
-                    Some((before, after)) => {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            ui.add(egui::Label::new(art_text(before, i, art)).selectable(false)
-                                .wrap_mode(egui::TextWrapMode::Extend));
-                            plain(ui, "by ", byline);
-                            let handle = ui.add(egui::Label::new(part("@will-tm", byline).underline())
-                                .selectable(false).sense(egui::Sense::click()))
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if handle.clicked() {
-                                let _ = open_url(WILL_TM);
-                            }
-                            if !after.is_empty() {
-                                plain(ui, after, byline);
-                            }
-                        });
-                    }
-                    None => {
-                        ui.add(egui::Label::new(art_text(line, i, art)).selectable(false)
-                            .wrap_mode(egui::TextWrapMode::Extend));
-                    }
-                }
+                ui.add(egui::Label::new(art_text(line, i, art)).selectable(false)
+                    .wrap_mode(egui::TextWrapMode::Extend));
             }
         });
     });
@@ -1345,12 +1336,7 @@ fn open_path(path: &std::path::Path) -> std::io::Result<()> {
     opener().arg(path).spawn().map(drop)
 }
 
-/// Opens a URL in the default browser.
-fn open_url(url: &str) -> std::io::Result<()> {
-    opener().arg(url).spawn().map(drop)
-}
-
-/// The platform command that opens a path or URL.
+/// The platform command that opens a path.
 fn opener() -> std::process::Command {
     #[cfg(target_os = "macos")]
     let program = "open";

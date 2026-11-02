@@ -14,9 +14,9 @@ this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
 
-The home screen has a **192×192 unfr0zen icon**, the attribution “This device
-is running free from Google thanks to unfr0zen by @will-tm”, and Matter,
-Zigbee, Doom and Done ring choices. The handle uses plain native blue text. Pages have
+The home screen has a **192×192 unfr0zen icon**, the text “This device
+is running free from Google thanks to unfr0zen.”, and Matter,
+Zigbee, Doom and Done ring choices. Pages have
 no inner headings or blank heading margins. Pages open at the top and status
 updates preserve the viewport. The larger QR has 10px of extra spacing above
 its manual code. Matter, Zigbee and Doom choices appear only for enabled integrations. nestlocal
@@ -51,7 +51,7 @@ While the Zigbee activity page is visible, stock user-activity notifications
 keep the display and device awake for at most 30 seconds. Back or completion
 stops those notifications and restores normal inactivity behavior.
 UNFR0ZEN is at settings-menu index 1, after the thermostat/Back entry at 0.
-Its carousel tile displays the glyph above UNFR0ZEN and “by @will-tm” below.
+Its carousel tile displays the glyph above UNFR0ZEN.
 The other items retain their order.
 
 ## Runtime and build requirements
