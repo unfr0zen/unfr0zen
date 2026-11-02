@@ -147,9 +147,11 @@ mod tests {
             response[44..48].copy_from_slice(&(1u32 << 31).to_be_bytes()); // half a second
             server.send_to(&response, from).await.unwrap();
         });
+        let started = std::time::Instant::now();
         let got = sntp(&addr.to_string()).await.unwrap();
+        let elapsed = started.elapsed();
         let d = got.duration_since(want).expect("plus half the round trip, not less");
-        assert!(d < Duration::from_millis(100), "got {d:?} after the server's time");
+        assert!(d * 2 <= elapsed, "got {d:?} after the server's time, more than half the {elapsed:?} exchange");
     }
 
     /// Asks a loopback server that answers with response.
