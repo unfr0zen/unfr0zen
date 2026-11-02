@@ -192,26 +192,6 @@ impl Args {
     }
 }
 
-/// Linux gives USB to root: re-run under sudo, with the user's directories.
-#[cfg(target_os = "linux")]
-fn elevate(args: &Args, work_dir: &std::path::Path, data_dir: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
-    if unsafe { libc::geteuid() } == 0 {
-        return Ok(());
-    }
-    ui::waiting("Requesting USB access");
-    let mut command = std::process::Command::new("sudo");
-    command.arg("-p").arg("\x1b[38;2;0;255;255m⠿ Enter sudo password for USB access: \x1b[0m").arg("--")
-        .arg(std::env::current_exe()?).args(std::env::args_os().skip(1)).arg("--skip-logo");
-    if args.work_dir.is_none() && args.command.is_none() {
-        command.arg("--work-dir").arg(work_dir);
-    }
-    if args.data_dir.is_none() {
-        command.arg("--data-dir").arg(data_dir);
-    }
-    Err(std::io::Error::other(format!("could not run sudo: {}", command.exec())))
-}
-
 /// The command line for the run log: secrets and the MQTT user masked, URLs
 /// without credentials, paths cut to their file names.
 fn logged_arguments(args: impl Iterator<Item = String>) -> String {
@@ -277,17 +257,11 @@ pub fn main() {
     if !args.skip_logo {
         ui::logo();
     }
-    // Before elevation: an update needs no USB access.
     if let Some(Command::Update) = args.command {
         finish(update());
     }
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
     let work_dir = args.work_dir.clone().unwrap_or_else(|| data_dir.join("runs"));
-    #[cfg(target_os = "linux")]
-    if let Err(e) = if args.nand_image.is_none() { elevate(&args, &work_dir, &data_dir) } else { Ok(()) } {
-        ui::error(&format!("unfr0zen: {e}"));
-        std::process::exit(1);
-    }
 
     let config = Config {
         options,
