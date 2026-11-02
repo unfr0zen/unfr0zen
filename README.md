@@ -8,44 +8,60 @@
 Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
 
-[The unfr0zen app on macOS](assets/app.png)
+> [!CAUTION]
+> **This rewrites the flash of the device that runs your heating.** A failed run
+> or a bad patch can leave the thermostat unbootable, or running without
+> controlling your heating or cooling. Back up the NAND before the first run
+> ([Undo it](#undo-it)) and have another way to heat or cool the house while you
+> test.
+>
+> Claude Code has been used to speed up the app's GUI, the documentation and the
+> tests. unfr0zen comes **without any warranty**: you use it at your own risk
+> ([Disclaimers](#disclaimers)).
 
-## Device Support
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/overview-dark.svg">
+  <img alt="Inside the thermostat, Nest's nlclient app still runs the screen and drives the backplate's heating and cooling wires. nestlocal stands in for Nest's cloud on 127.0.0.1: it reaches an MQTT broker and Matter controllers over Wi-Fi, a Zigbee coordinator through the 802.15.4 radio over SPI, and a Thread border router through OpenThread's ot-daemon and the same radio, which carries Matter over Thread. Nest's and Google's servers are resolved to 0.0.0.0 in /etc/hosts." src="assets/overview-light.svg">
+</picture>
 
-| Device | Codename | SoC |
+## What you get
+
+| | Stock | With unfr0zen |
 |-|-|-|
-| Nest Learning Thermostat (3rd generation) | `diamond3` | i.MX6SoloX |
-| Nest Learning Thermostat (2nd generation) | `j49` | TI AM3703 |
-| Nest Learning Thermostat (1st generation, experimental) | `diamond` | TI AM3703 |
+| Control from | the Nest/Google Home app, through Google's cloud | Home Assistant or any MQTT client, Matter controller or Zigbee coordinator, on your network |
+| Internet access | required | not needed: the unit only has to join your Wi-Fi |
+| Nest and Google servers | always contacted | blocked with Block cloud (`--block-cloud`) |
+| Integrations | none | MQTT, Matter over Wi-Fi or Thread, Zigbee router |
+| Extras | none | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore |
 
-Release builds keep themselves current from that page: the window checks for a
-newer release when it starts and offers to install it next to its version, and
-`unfr0zen update` does the same for the command-line tool. On macOS the window
-replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
-commits past a tag, or local changes) never update.
+## Supported thermostats
 
-The thermostat's display connects to the computer through the micro-USB port on
-its back, with a cable that carries data (a charge-only cable won't work).
+| Device | Codename | SoC | MQTT | Matter (Wi-Fi) | Matter (Thread) | Zigbee |
+|-|-|-|-|-|-|-|
+| Nest Learning Thermostat (3rd generation) | `diamond3` | i.MX6SoloX | ✅ | ✅ | ✅ | ✅ |
+| Nest Learning Thermostat (2nd generation) | `j49` | TI AM3703 | ✅ | ✅ | ✅ | ✅ |
+| Nest Learning Thermostat (1st generation) | `diamond` | TI AM3703 | 🧪 | 🧪 | — | — |
+
+✅ tested on a unit · 🧪 built, not yet tested on a unit · — not available
+
+- **1st generation:** experimental. Patching has not been verified on a physical
+  unit or a stock NAND. Its CC2530 radio uses UART, not the 2nd generation's SPI
+  protocol, so there is no Zigbee, Matter over Thread or USB shell.
+- **2nd generation:** Matter keeps the unit awake.
+- **Thread and Zigbee** share the 2nd and 3rd generation's 802.15.4 radio (an
+  EM357 or EM3581 on SPI), so only one of them can be on. Zigbee drives it
+  directly; Matter over Thread goes through OpenThread's `ot-daemon`.
+
 MQTT, Matter and Zigbee are nestlocal's: choosing any of them installs it on the
-thermostat. With MQTT or Matter, the thermostat then reaches the broker or the
+thermostat. With MQTT or Matter, the thermostat reaches the broker or the
 controller over Wi-Fi, joined from its own menu (Settings → Network); the
 network doesn't need internet access.
 
-The Gen 1 Diamond path has no stock NAND or physical-unit verification. Diamond
-and j49 share the ROM identity `0451:d00e`; in USB download mode the generation
-is read from the NAND's U-Boot environment (`nlmodel`), as Nest's U-Boot tells
-the boards apart. `--device` overrides it.
-Gen 1 uses the j49's x-loader and the OMAP NAND/JFFS2 path. USB shell, Zigbee
-and Matter over Thread are unavailable: its CC2530 radio uses UART, not the
-Gen 2 SPI protocol. MQTT and Matter over Wi-Fi still need Gen 1 firmware testing.
-On the 2nd generation, Zigbee and
-Matter over Thread are untested on a unit, and Matter keeps the unit awake.
-
-## Computer Requirements
+## Requirements
 1. **A USB data cable.** Gen 1 uses mini-USB; Gen 2 and 3 use micro-USB. Charge-only cables won't work.
 2. **Windows (x86_64, arm64), macOS 13+ (universal, arm64, x86_64) or Linux (x86_64, arm64, riscv64; glibc 2.28+).**
 
-## Installing
+## Install
 Download the latest build from the [releases page](https://github.com/unfr0zen/unfr0zen/releases).
 
 - **Windows:** unzip and run `unfr0zen.exe`. 1st and 2nd generation: bind the WinUSB
@@ -89,8 +105,12 @@ Reconnect the unit afterwards if it is already plugged in.
 </details>
 
 ## Usage
-**App:** open it, tick the integrations, plug in the thermostat and follow the
-prompts. Its mode menu also backs up and restores the whole NAND.
+**App:** open it, tick the integrations, fill in their settings (the MQTT
+broker, Matter's pairing code), plug in the thermostat, press **Start** and
+follow the prompts. The arrow beside Start switches to Back up NAND or Restore
+NAND.
+
+<p align="center"><img src="assets/app.png" width="420" alt="The unfr0zen app on macOS: checkboxes for the backplate simulator, blocking Nest and Google servers, a custom NTP server, the MQTT broker with its address, user, password and TLS, Matter with its pairing code and Thread support, Zigbee, the SSH server and the USB root shell, above the Start button and its mode menu arrow."></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few options the app doesn't have
@@ -124,28 +144,54 @@ Run `unfr0zen --help` for every option.
 Setting up MQTT, Matter, Thread, Zigbee and Doom, with the app's and the CLI's
 options side by side: [unfr0zen.com/integrations](https://unfr0zen.com/integrations/).
 
-## Building
-See [BUILDING.md](BUILDING.md).
+## Updating
+Release builds keep themselves current: the window checks for a newer release
+when it starts and offers to install it next to its version, and
+`unfr0zen update` does the same for the command-line tool. On macOS the window
+replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
+commits past a tag, or local changes) never update.
+
+## Undo it
+- **Before the first run:** the app's Back up NAND (or `unfr0zen backup`) saves
+  the whole NAND to a file, checked with a second read. `unfr0zen verify`
+  compares a backup with the unit.
+- **To go back to stock:** Restore NAND (or `unfr0zen restore`) writes that
+  backup back to the unit.
+- `--backup` also saves the original root volume before each patch.
+
+## When something is wrong
+**The app doesn't see the thermostat.** Use a USB cable that carries data:
+charge-only cables are the usual cause. On Windows, the 1st and 2nd generation
+need the WinUSB driver bound to `0451:d00e` with [Zadig](https://zadig.akeo.ie).
+On Linux, add the [udev rule](#install) and reconnect the unit.
+
+**macOS won't open the app.** It is signed ad hoc, not notarized: run
+`xattr -dr com.apple.quarantine unfr0zen.app`, or allow it under System
+Settings → Privacy & Security.
+
+**Home Assistant shows the thermostat offline.** The availability topic is
+online only while the thermostat's app calls in to nestlocal and nestlocal is
+connected to the broker. Check that the unit is on Wi-Fi (Settings → Network)
+and that it reaches the broker URL you gave it.
+
+Still stuck? [Open an issue](https://github.com/unfr0zen/unfr0zen/issues/new) with:
+- How you ran it (app or CLI, with the options used) and the OS of your computer
+- The full log of the run
+- What the thermostat screen showed
 
 ## Disclaimers
 unfr0zen is provided **as is, without any warranty**. We are **NOT** responsible
 for any data loss, a bricked thermostat, damage to your heating or cooling
 system, or anything else that happens to your device. By using unfr0zen you
 accept full responsibility for the result.
-- Back up first: the app's Back up NAND (or `unfr0zen backup`) saves the whole NAND, Restore NAND (`unfr0zen restore`) puts it back.
 - Modifying the thermostat voids its warranty and may break Google's services for it.
 - Doom takes over the UI: while it runs the thermostat does not control the heating or cooling.
 - Matter uses the test vendor ID (0xFFF1) and test attestation; controllers treat the unit as uncertified.
 - unfr0zen is not affiliated with, endorsed or sponsored by Google LLC or Nest Labs.
   Nest and Nest Learning Thermostat are trademarks of Google LLC.
 
-## Troubleshooting
-When opening an issue, include:
-- How you ran it (app or CLI, with the options used) and the OS of your computer
-- The full log of the run
-- What the thermostat screen showed
-
-Create an issue here: https://github.com/unfr0zen/unfr0zen/issues/new
+## Building
+See [BUILDING.md](BUILDING.md).
 
 ## License
 unfr0zen is licensed under the [GNU General Public License v3.0](LICENSE).

@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 580" width="800" height="580" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif">
+<rect x="16" y="16" width="768" height="96" rx="14" fill="#3c1618" stroke="#f85149"/>
+<text x="36" y="36" font-size="11" font-weight="600" fill="#f85149" text-anchor="start" dominant-baseline="central" letter-spacing="1.4">INTERNET</text>
+<rect x="240" y="44" width="280" height="48" rx="8" fill="#0d1117" stroke="#f85149" stroke-dasharray="4 3"/>
+<text x="380" y="61" font-size="13.5" font-weight="600" fill="#f85149" text-anchor="middle" dominant-baseline="central">Nest and Google servers</text>
+<text x="380" y="79" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle" dominant-baseline="central">resolved to 0.0.0.0</text>
+<rect x="20" y="553" width="14" height="14" rx="3" fill="#0d1117" stroke="#3d444d"/>
+<text x="42" y="560" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Nest&#x27;s</text>
+<rect x="104" y="553" width="14" height="14" rx="3" fill="#0b2a33" stroke="#22d3ee"/>
+<rect x="104" y="553" width="4" height="14" rx="1" fill="#22d3ee"/>
+<text x="126" y="560" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">unfr0zen</text>
+<rect x="16" y="128" width="476" height="408" rx="14" fill="#151b23"/>
+<text x="36" y="148" font-size="11" font-weight="600" fill="#9198a1" text-anchor="start" dominant-baseline="central" letter-spacing="1.4">THERMOSTAT</text>
+<rect x="40" y="172" width="180" height="60" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="56" y="193.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">nlclient</text>
+<text x="56" y="212.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Nest&#x27;s thermostat app</text>
+<rect x="40" y="280" width="180" height="60" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="56" y="301.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Backplate</text>
+<text x="56" y="320.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">heating and cooling wires</text>
+<clipPath id="k0"><rect x="284" y="172" width="184" height="168" rx="8"/></clipPath>
+<rect x="284" y="172" width="184" height="168" rx="8" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.2"/>
+<rect x="284" y="172" width="5" height="168" fill="#22d3ee" clip-path="url(#k0)"/>
+<text x="303" y="194" font-size="16" font-weight="700" fill="#67e8f9" text-anchor="start" dominant-baseline="central">nestlocal</text>
+<text x="303" y="214" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">in place of Nest&#x27;s cloud</text>
+<rect x="303" y="237" width="6" height="6" rx="1" fill="#22d3ee"/>
+<text x="317" y="240" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Nest&#x27;s service, 127.0.0.1</text>
+<rect x="303" y="257" width="6" height="6" rx="1" fill="#22d3ee"/>
+<text x="317" y="260" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="start" dominant-baseline="central">MQTT bridge</text>
+<rect x="303" y="277" width="6" height="6" rx="1" fill="#22d3ee"/>
+<text x="317" y="280" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Matter server</text>
+<rect x="303" y="297" width="6" height="6" rx="1" fill="#22d3ee"/>
+<text x="317" y="300" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Zigbee router</text>
+<rect x="303" y="317" width="6" height="6" rx="1" fill="#22d3ee"/>
+<text x="317" y="320" font-size="12.5" font-weight="400" fill="#e6edf3" text-anchor="start" dominant-baseline="central">weather, clock, settings</text>
+<clipPath id="k1"><rect x="40" y="448" width="180" height="64" rx="8"/></clipPath>
+<rect x="40" y="448" width="180" height="64" rx="8" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.2"/>
+<rect x="40" y="448" width="5" height="64" fill="#22d3ee" clip-path="url(#k1)"/>
+<text x="59" y="471.0" font-size="14" font-weight="600" fill="#67e8f9" text-anchor="start" dominant-baseline="central">ot-daemon</text>
+<text x="59" y="490.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">OpenThread, thread0</text>
+<clipPath id="k2"><rect x="284" y="448" width="184" height="64" rx="8"/></clipPath>
+<rect x="284" y="448" width="184" height="64" rx="8" fill="#0b2a33" stroke="#22d3ee" stroke-width="1.2"/>
+<rect x="284" y="448" width="5" height="64" fill="#22d3ee" clip-path="url(#k2)"/>
+<text x="303" y="471.0" font-size="14" font-weight="600" fill="#67e8f9" text-anchor="start" dominant-baseline="central">802.15.4 radio</text>
+<text x="303" y="490.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">EM3581 or EM357, over SPI</text>
+<path d="M220 202 L284 202" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="220" cy="202" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="284" cy="202" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="228.75" y="193" width="46.5" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="252" y="202" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">HTTPS</text>
+<path d="M130 232 L130 280" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="130" cy="232" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="130" cy="280" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="76.25" y="247" width="107.5" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="130" y="256" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">heat, cool, fan</text>
+<path d="M310 340 L310 400 L130 400 L130 448" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="310" cy="340" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="130" cy="448" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="193.7" y="391" width="52.599999999999994" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="220" y="400" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">Thread</text>
+<path d="M220 480 L284 480" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="220" cy="480" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="284" cy="480" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="225.7" y="471" width="52.599999999999994" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="252" y="480" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">Spinel</text>
+<path d="M430 340 L430 448" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="430" cy="340" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="430" cy="448" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="409.8" y="385" width="40.4" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="430" y="394" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">EZSP</text>
+<rect x="508" y="128" width="276" height="408" rx="14" fill="#151b23"/>
+<text x="528" y="148" font-size="11" font-weight="600" fill="#9198a1" text-anchor="start" dominant-baseline="central" letter-spacing="1.4">YOUR NETWORK</text>
+<rect x="528" y="172" width="236" height="56" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="544" y="191.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">MQTT broker</text>
+<text x="544" y="210.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Home Assistant, any client</text>
+<rect x="528" y="256" width="236" height="56" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="544" y="275.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Matter controller</text>
+<text x="544" y="294.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Home Assistant, Apple Home</text>
+<rect x="528" y="360" width="236" height="56" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="544" y="379.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Thread border router</text>
+<text x="544" y="398.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Apple TV, HomePod, OTBR</text>
+<rect x="528" y="456" width="236" height="56" rx="8" fill="#0d1117" stroke="#3d444d"/>
+<text x="544" y="475.0" font-size="14" font-weight="600" fill="#e6edf3" text-anchor="start" dominant-baseline="central">Zigbee coordinator</text>
+<text x="544" y="494.0" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start" dominant-baseline="central">Zigbee2MQTT, ZHA</text>
+<path d="M468 200 L528 200" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="468" cy="200" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<circle cx="528" cy="200" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<rect x="474.75" y="191" width="46.5" height="18" rx="9" fill="#0d1117" stroke="#22d3ee"/>
+<text x="498" y="200" font-size="10.5" font-weight="500" fill="#22d3ee" text-anchor="middle" dominant-baseline="central">Wi-Fi</text>
+<path d="M468 284 L528 284" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="468" cy="284" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<circle cx="528" cy="284" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<rect x="474.75" y="275" width="46.5" height="18" rx="9" fill="#0d1117" stroke="#22d3ee"/>
+<text x="498" y="284" font-size="10.5" font-weight="500" fill="#22d3ee" text-anchor="middle" dominant-baseline="central">Wi-Fi</text>
+<path d="M468 462 L498 462 L498 388 L528 388" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="468" cy="462" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<circle cx="528" cy="388" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<rect x="471.7" y="415" width="52.599999999999994" height="18" rx="9" fill="#0d1117" stroke="#22d3ee"/>
+<text x="498" y="424" font-size="10.5" font-weight="500" fill="#22d3ee" text-anchor="middle" dominant-baseline="central">Thread</text>
+<path d="M468 498 L528 498" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="468" cy="498" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<circle cx="528" cy="498" r="3.2" fill="#0d1117" stroke="#22d3ee" stroke-width="1.5"/>
+<rect x="471.7" y="489" width="52.599999999999994" height="18" rx="9" fill="#0d1117" stroke="#22d3ee"/>
+<text x="498" y="498" font-size="10.5" font-weight="500" fill="#22d3ee" text-anchor="middle" dominant-baseline="central">Zigbee</text>
+<path d="M646 312 L646 360" fill="none" stroke="#656c76" stroke-width="1.5" stroke-linejoin="round"/>
+<circle cx="646" cy="312" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<circle cx="646" cy="360" r="3.2" fill="#0d1117" stroke="#656c76" stroke-width="1.5"/>
+<rect x="583.1" y="327" width="125.8" height="18" rx="9" fill="#0d1117" stroke="#3d444d"/>
+<text x="646" y="336" font-size="10.5" font-weight="500" fill="#9198a1" text-anchor="middle" dominant-baseline="central">Matter over Thread</text>
+<line x1="380" y1="92" x2="380" y2="146" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="368" y="108" width="24" height="24" rx="12" fill="#3c1618" stroke="#f85149" stroke-width="1.5"/>
+<path d="M375 115 L385 125 M385 115 L375 125" stroke="#f85149" stroke-width="2" stroke-linecap="round"/>
+<text x="400" y="120" font-size="11" font-weight="500" fill="#f85149" text-anchor="start" dominant-baseline="central">blocked in /etc/hosts</text>
+</svg>
