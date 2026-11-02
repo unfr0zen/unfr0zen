@@ -181,6 +181,185 @@
    }
   },
   {
+   "label": "2025-6.3-5",
+   "reference_sha256": "7bc7e152ecee09ed993264f6d50c134b14a5464a3b4d294671c32f9ff1ec95e3",
+   "layout": {
+    "ACTIVITY_QUEUE_OFFSET": 324,
+    "BUCKET_GLOBALS_OFFSET": 28,
+    "COMMON_OFFSET": 164,
+    "GLOBALS_TIMER_OFFSET": 216,
+    "LAYER_COMMON_VPTR": 204,
+    "LAYER_SECOND_VPTR": 336,
+    "LAYER_THIRD_VPTR": 356,
+    "LAYER_VTABLE_SIZE": 376,
+    "LEGACY_CLICK": 0,
+    "PRIMARY_SIZE": 320,
+    "RENAME_SYSCALL": 0,
+    "SCREEN_SECOND_VPTR": 156,
+    "SCREEN_THIRD_VPTR": 176,
+    "SCREEN_TITLE_SLOT": 136,
+    "SCREEN_VTABLE_SIZE": 196,
+    "TIMER_EVENT_FIRST": 1073741864,
+    "TIMER_EVENT_SECOND": 1073741865
+   },
+   "functions": {
+    "account_factory": "ad46ef9e10ce0f300d71594562549d697e319fe1478ab7e94ec04a84768d351c",
+    "generic_event": "f1713b65345457c07a12e8af45a701008d51ee21cedc3beba8b81ff003f94bd5",
+    "image_helper": "0ee8c283a14650dd432512d3249a6428f034d5e22a60bbd03b30263a5bce4a61",
+    "layer_draw": "4e9030b63d3142189c5ba94f4378fa5615c7f042468a123c52e5a9c40db6a70c",
+    "layer_enter": "5bb74b3088da82fcb9f455f86802414248c5b5e9e53c2cba0e2674db93bd8f96",
+    "layer_event": "55aa4a24971aef53d8fd257468c4761c924790459e0a721d6a2cb66567c42c7d",
+    "layer_factory": "47a41995d96e18f77b872c80cea2f96a81dfd4e533d0f2c0bd56c8aa16327a06",
+    "layout_wrapper": "48ae9c26702fe8c7de1e2b66f910949ca6108cc10f6ac028b8415dde3345e7a5",
+    "menu_title_draw": "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
+    "native_activity_client": "aeb56ecb1cdec756869af9c63ab58fad5cbff38e80be0b1009156500cedffc4e",
+    "native_attach": "ae9c42a711a1b04a317d84b166fd93313e22c3c46669dd971a52af3a8275e7da",
+    "native_config_draw": "8af16f1c0d61489ac8316474e2ae585ffd0c2d58797355ce2853730292641a0a",
+    "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
+    "native_config_layout": "fe3092d9c20819607c6c5b82657f56aea9da28af3fa74d2cdc050e7f3472e48c",
+    "native_config_y": "f1545be4403ddf205f6943b5301d0e514712bf7d0a79890d9058788a6d48a678",
+    "native_device_commit": "2310add0eba31b736e9a80cb3165a7e540f44c0f6701e2186e5580aaae84e7e6",
+    "native_image_height": "0b23710ac6e066a7b2b8f0bb241607fcd99a680f614d56e58f9b0349d47a6fe4",
+    "native_image_load": "17c86a2969f1912b2dbf0d06af67405b2b6216e96f296c3ddf44b16e487a39a6",
+    "native_image_width": "5155260da9eaf6266914ded44328c89cd7e9f3c243e6c756177e9c71d0e68f01",
+    "native_layer_ctor": "e3b8104dacf36b35a08d05005f1e2c079c05a64e002190353f2ee84b0335e912",
+    "native_layer_event": "b29ba6decd1d29ffef0e139e9c6c4871a931127b586e18337cc43d669c17ea6b",
+    "native_layer_init": "d5d22e258843d2d204fe858f48156f97ce1af030304e8383606a0552f6a65e2e",
+    "native_layer_lookup": "bead2307decba03e7699ca900f495b123f6e274ff48154ea88059a05b3ceb379",
+    "native_layer_wheel": "968a3e5d135b8286c5a13290783c22d59d6c506a8de5760072df85964a91bf57",
+    "native_mark_activity": "82c4b30786e427e133901b1fce5286495447d29f4a84ee1f00303eb3a6c31d16",
+    "native_menu_hidden": "1d8a6dc910c3baa6f9b364154855194089cfeddfd0a7e988f507cdab27419fee",
+    "native_menu_scale": "ba4da0ecfab4863022819c5f0f418f64dafb2e14a284d059ee0f06df305b9184",
+    "native_rebuild_title": "bc088d2f89f7fbf2687ab42528a3cbfc61978e8f196cbb17057783c92d469ce7",
+    "native_schedule_commit": "9d05f732164ed7c364b6c6f94ad8aafa233c32fe5e0731837b07e4bae890db6e",
+    "native_screen_ctor": "68be25502b5e767394ff73f0047d9aa449c938c6e3fa3218deb076adf6d5e649",
+    "native_screen_draw": "9a5cbcb506b3859667ef70fe6dc0b880a71e34e66ce677ff36cc979479e14c3b",
+    "native_screen_enter": "950e294d4b5b5d2ff3170fb905562d8ebb2cd87fe4cf8689504651acffc033c3",
+    "native_screen_event": "b887835731000202bbebb4ec7a2a5a85167b41291541b5612ad3aee0c02705cd",
+    "native_screen_init": "a1cb32cb1874f9b17b3fbed2d2842bdc0d816263c2b99b7d4dd80393008e80d2",
+    "native_scroll_draw": "2db00602dcd015c5381ac2aa8699b08e7a9d687c48c2ab2f588aa167b4f1f463",
+    "native_scroll_target": "e6964dcf1b017dcbeaab7efcdee87a821948c9f0d1eb7c17db1f1cdc1febf5c7",
+    "native_select": "41c0d756bc0da802cf27ce3a8b794883489b2b8a557add6e5c398de0de22d444",
+    "native_shared_commit": "52bcd4b286ebd854ed35be196bfb4995e3556bd2921cd2a2d47200c13f2930ff",
+    "native_style": "344360535892eaf34c5c919817f675c649b6e8d0919a2a01a1b40ff934c003fd",
+    "screen_composition": "63c3f84ec48ea1bdbbda964c27fd9f986c15c10269068ce714f1502080c3bfe9",
+    "screen_factory": "044ae94eebc781694c2b2e9e65c6d216581321e0980c318f5e3e79e41021f4a7",
+    "screen_title": "28ebe377901781fc1d4944edd7aae16932bce2670178bb2b92dabe1ce13e2294",
+    "view_dispatch": "39a663948262e051679bebad7405af18a0444ac6c24c8e9be097ac02c7a04989",
+    "view_handler": "7f5218e965ba5bdaa91d09d7174065f0db9884cb424da93b7b1639f1839b6852"
+   },
+   "imports": {
+    "account_factory": [
+     "_Znwj"
+    ],
+    "generic_event": [
+     "_ZNK7nlEvent7GetTypeEv"
+    ],
+    "image_helper": [
+     "_ZNK8nlConfig8GetValueEPKc"
+    ],
+    "layer_draw": [],
+    "layer_enter": [
+     "_ZN8nlStringaSERKS_",
+     "random"
+    ],
+    "layer_event": [
+     "_ZNK7nlEvent7GetTypeEv",
+     "_ZNK7nlEvent8GetValueEv"
+    ],
+    "layer_factory": [
+     "_Znwj"
+    ],
+    "layout_wrapper": [],
+    "menu_title_draw": [],
+    "native_activity_client": [],
+    "native_attach": [
+     "_Znwj"
+    ],
+    "native_config_draw": [],
+    "native_config_invalidate": [],
+    "native_config_layout": [],
+    "native_config_y": [],
+    "native_device_commit": [
+     "_ZN10nlSettings5WriteEv",
+     "_ZN12nlEventQueue7EnqueueEPK7nlEventP15nlIEventHandler",
+     "_ZN8nlString4CopyERKS_",
+     "_ZN8nlString5ClearEv",
+     "_ZN8nlStringC1EPKc",
+     "_ZN8nlStringC1ERKS_",
+     "_ZN8nlStringC1Ev",
+     "_ZN8nlStringD1Ev",
+     "_ZNK8nlString13GetAsUTFArrayEv",
+     "_ZdlPv",
+     "_Znwj",
+     "nlGetNowInSeconds"
+    ],
+    "native_image_height": [],
+    "native_image_load": [
+     "_ZN8nlStringC1EPKc",
+     "_ZN8nlStringD1Ev"
+    ],
+    "native_image_width": [],
+    "native_layer_ctor": [],
+    "native_layer_event": [
+     "_ZNK7nlEvent7GetTypeEv",
+     "_ZNK7nlEvent8GetValueEv"
+    ],
+    "native_layer_init": [],
+    "native_layer_lookup": [
+     "PL_HashTableLookupConst"
+    ],
+    "native_layer_wheel": [],
+    "native_mark_activity": [
+     "nlGetUptimeInSeconds"
+    ],
+    "native_menu_hidden": [],
+    "native_menu_scale": [],
+    "native_rebuild_title": [
+     "_ZN13nlStringArray5ClearEv",
+     "_ZN8nlString5ClearEv",
+     "_ZN8nlString6AppendEPKc",
+     "_ZNK7nlArray14GetNumElementsEv",
+     "_ZNK8nlString13GetAsUTFArrayEv",
+     "_ZNK8nlString7IsEmptyEv"
+    ],
+    "native_schedule_commit": [
+     "_ZNK8nlString13GetAsUTFArrayEv",
+     "_ZNK8nlString6EqualsEPKc6nlBOOL",
+     "_ZNK8nlString7IsEmptyEv"
+    ],
+    "native_screen_ctor": [
+     "_ZN7nlArrayC2Ev",
+     "_ZN8nlStringC1Ev"
+    ],
+    "native_screen_draw": [],
+    "native_screen_enter": [],
+    "native_screen_event": [],
+    "native_screen_init": [],
+    "native_scroll_draw": [],
+    "native_scroll_target": [],
+    "native_select": [],
+    "native_shared_commit": [
+     "_ZN8nlString5ClearEv",
+     "_ZN8nlStringC1ERKS_",
+     "_ZN8nlStringD1Ev",
+     "_ZNK8nlString13GetAsUTFArrayEv"
+    ],
+    "native_style": [],
+    "screen_composition": [
+     "__dynamic_cast"
+    ],
+    "screen_factory": [
+     "_Znwj"
+    ],
+    "screen_title": [
+     "_ZN8nlString18GetLocalizedStringEPKcS1_",
+     "_ZN8nlStringD1Ev",
+     "_ZN8nlStringaSERKS_"
+    ]
+   }
+  },
+  {
    "label": "2019-gen3",
    "reference_sha256": "bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d",
    "layout": {

@@ -1,13 +1,14 @@
 # Unpatched firmware baselines
 
-The three goldens were recorded from untouched stock executables extracted
-from the previous NAND dumps, with Debian clang 19.1.7 and `ld.lld -O0`.
-No stock executable, NAND image, or proprietary payload is committed.
-The corresponding private samples live in `.work/firmware/`:
+The goldens were recorded from untouched stock executables extracted from
+NAND dumps, or read from a unit by a run, with Debian clang 19.1.7 and
+`ld.lld -O0`. No stock executable, NAND image, or proprietary payload is
+committed. The corresponding private samples live in `.work/firmware/`:
 
 | Sample | SHA256 | Original dump extraction |
 |---|---|---|
 | `nlclient-gen3-2025` (6.4-8) | `d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52` | `imx6-stuff/.work/fw-6.4-8/root-6.4-8/nestlabs/sbin/nlclient` |
+| `nlclient-gen3-6.3-5` (6.3-5) | `7bc7e152ecee09ed993264f6d50c134b14a5464a3b4d294671c32f9ff1ec95e3` | a user's unit, read by the run that reported issue 5; validated in QEMU on the 6.4-8 root |
 | `nlclient-gen3-2019` (5.9.4-5) | `bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d` | `imx6-stuff/.work/gen3-extract/ubifs-root0/nestlabs/sbin/nlclient` |
 | `nlclient-gen2-2019` (5.9.4-5) | `67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7` | `imx6-stuff/.work/gen2-extract/jffs2-root0/nestlabs/sbin/nlclient` |
 
