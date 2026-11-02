@@ -17,25 +17,13 @@ pub fn version() -> Option<u16> {
     radio.zigbee_image.get(radio.version_at..radio.version_at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
-/// The processes running `name`.
-fn pids(name: &str) -> Vec<i32> {
-    let Ok(dir) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    dir.flatten().filter_map(|entry| {
-        let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
-        let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
-        (comm.trim_end() == name).then_some(pid)
-    }).collect()
-}
-
 /// Stops wpantund and its SPI bridge, and monit from starting it again.
 pub fn stop_wpantund() {
-    if pids("wpantund").is_empty() && pids("spi-server").is_empty() {
+    if crate::pids("wpantund").is_empty() && crate::pids("spi-server").is_empty() {
         return;
     }
     let _ = Command::new("monit").args(["stop", "wpantund"]).output();
-    for pid in pids("wpantund").into_iter().chain(pids("spi-server")) {
+    for pid in crate::pids("wpantund").into_iter().chain(crate::pids("spi-server")) {
         // SAFETY: kill takes any pid and signal number.
         unsafe { libc::kill(pid, libc::SIGTERM) };
     }

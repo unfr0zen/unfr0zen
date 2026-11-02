@@ -6,12 +6,17 @@
 //! its settings file. With it the unit still heats through W1 and keeps its
 //! safety temperature, but reports can_heat false (bridge.rs reports it
 //! true). nestlocal sets it before nlclient starts, and takes back only what
-//! it set: a marker file next to its store records that.
+//! it set: a marker file next to its store records that. When the wiring
+//! nlclient reports later changes what is wanted, nestlocal restarts
+//! nlclient around the change (keep).
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
+use crate::logf;
 use crate::nlsettings;
 use crate::store::Store;
 
@@ -41,11 +46,16 @@ pub fn w1_wired(store: &Store, serial: &str) -> Option<bool> {
     Some(pins.split(',').any(|pin| pin.trim() == "W1"))
 }
 
-/// Whether nlclient should run with using_wwn_boiler: nestlocal holds the
-/// radio of a gen3 Heat Link unit with no W1 wired, or none reported yet.
-/// With W1 the firmware sees a wired Heat Link and shows no H71.
+/// Whether nestlocal holds the radio of a gen3 Heat Link unit.
+pub fn heat_link_unit(holds_radio: bool, generation: u8, model: Option<&str>) -> bool {
+    holds_radio && generation == 3 && model.is_some_and(heat_link_model)
+}
+
+/// Whether nlclient should run with using_wwn_boiler: on such a unit with no
+/// W1 wired, or none reported yet. With W1 the firmware sees a wired Heat
+/// Link and shows no H71.
 pub fn wanted(holds_radio: bool, generation: u8, model: Option<&str>, w1: Option<bool>) -> bool {
-    holds_radio && generation == 3 && model.is_some_and(heat_link_model) && w1 != Some(true)
+    heat_link_unit(holds_radio, generation, model) && w1 != Some(true)
 }
 
 /// Where nestlocal records that it set using_wwn_boiler: beside its store.
@@ -84,6 +94,84 @@ pub fn prepare(settings: &Path, marker: &Path, wanted: bool) -> io::Result<Optio
         return Ok(set.then_some(false));
     }
     Ok(None)
+}
+
+/// Whether nlclient must restart for using_wwn_boiler to become wanted:
+/// set when wanted, removed when not wanted and nestlocal set it.
+fn restart_needed(wanted: bool, set: bool, ours: bool) -> bool {
+    (wanted && !set) || (!wanted && set && ours)
+}
+
+/// The settings file and marker of a gen3 Heat Link unit whose radio
+/// nestlocal holds, and its serial.
+pub struct Unit {
+    pub serial: String,
+    pub settings: PathBuf,
+    pub marker: PathBuf,
+}
+
+/// Keeps using_wwn_boiler as the wiring nlclient reports wants it, on a
+/// thread of its own. nlclient reads the setting only at start and writes
+/// its settings back whole, so it is stopped around the change and started
+/// again. `changed` hears what nlclient now runs with.
+pub fn keep(store: Arc<Store>, unit: Unit, changed: impl Fn(bool) + Send + 'static) {
+    let (wiring, reports) = mpsc::channel();
+    let key = format!("device.{}", unit.serial);
+    store.watch(move |o| {
+        if o.key == key {
+            let _ = wiring.send(());
+        }
+    });
+    let spawned = std::thread::Builder::new().name("heatlink".into()).spawn(move || {
+        let mut last = w1_wired(&store, &unit.serial);
+        while reports.recv().is_ok() {
+            let w1 = w1_wired(&store, &unit.serial);
+            if w1 == last {
+                continue;
+            }
+            last = w1;
+            let wanted = w1 != Some(true);
+            if !restart_needed(wanted, using(&unit.settings), unit.marker.exists()) {
+                continue;
+            }
+            logf!("nestlocal: W1 {}: restarting nlclient to {} {KEY}",
+                  if wanted { "gone" } else { "wired" }, if wanted { "set" } else { "remove" });
+            if !stop_nlclient() {
+                logf!("nestlocal: nlclient did not stop; {KEY} left as it is");
+            } else if let Err(e) = prepare(&unit.settings, &unit.marker, wanted) {
+                logf!("nestlocal: {e}");
+            }
+            changed(using(&unit.settings));
+            start_nlclient();
+        }
+    });
+    if let Err(e) = spawned {
+        logf!("nestlocal: {e}");
+    }
+}
+
+/// Stops nlclient as the Doom launcher does: monit lets it go, then TERM,
+/// then KILL. True once it has gone.
+fn stop_nlclient() -> bool {
+    let _ = Command::new("monit").args(["unmonitor", "nlclient"]).output();
+    for attempt in 0..10 {
+        let pids = crate::pids("nlclient");
+        if pids.is_empty() {
+            return true;
+        }
+        let signal = if attempt < 5 { libc::SIGTERM } else { libc::SIGKILL };
+        for pid in pids {
+            // SAFETY: kill takes any pid and signal number.
+            unsafe { libc::kill(pid, signal) };
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    crate::pids("nlclient").is_empty()
+}
+
+fn start_nlclient() {
+    let _ = Command::new("monit").args(["monitor", "nlclient"]).output();
+    let _ = Command::new("monit").args(["start", "nlclient"]).output();
 }
 
 #[cfg(test)]
@@ -169,6 +257,14 @@ mod tests {
     fn zero_is_off() {
         assert!(!on(br#"<s key="using_wwn_boiler" value="0"/>"#) && on(br#"<s key="using_wwn_boiler" value="1"/>"#));
         assert!(!on(b"<settings/>") && !using(Path::new("/nonexistent/settings.config")));
+    }
+
+    #[test]
+    fn restarts_only_for_a_change_it_may_make() {
+        assert!(restart_needed(true, false, false), "set it");
+        assert!(restart_needed(false, true, true), "take back its own");
+        assert!(!restart_needed(false, true, false), "a setting it did not make stays");
+        assert!(!restart_needed(true, true, false) && !restart_needed(false, false, true));
     }
 
     #[test]

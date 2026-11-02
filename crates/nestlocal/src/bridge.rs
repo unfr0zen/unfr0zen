@@ -14,6 +14,7 @@
 //!                                      (anything the entities don't cover)
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -39,7 +40,7 @@ pub struct Bridge {
     live: Option<Arc<Liveness>>,
     /// nlclient runs with using_wwn_boiler: it heats while it reports
     /// can_heat false (heatlink.rs).
-    wwn_boiler: bool,
+    wwn_boiler: AtomicBool,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
@@ -58,7 +59,7 @@ impl Bridge {
             store,
             outdoor,
             live,
-            wwn_boiler,
+            wwn_boiler: AtomicBool::new(wwn_boiler),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
             time_asked: Mutex::new(None),
@@ -201,12 +202,19 @@ impl Bridge {
             let (typ, id) = o.key.split_once('.').unwrap_or((o.key.as_str(), ""));
             (id == self.serial).then(|| {
                 let mut value = o.value.clone();
-                if self.wwn_boiler && typ == "shared" {
+                if self.wwn_boiler.load(Ordering::Relaxed) && typ == "shared" {
                     value.insert("can_heat".into(), true.into());
                 }
                 (typ.to_string(), value)
             })
         }).collect()
+    }
+
+    /// What nlclient runs with since heatlink.rs restarted it.
+    pub fn set_wwn_boiler(&self, on: bool) {
+        if self.wwn_boiler.swap(on, Ordering::Relaxed) != on {
+            self.publish_state();
+        }
     }
 
     fn publish_state(&self) {
@@ -658,6 +666,8 @@ pub mod tests {
         let shared = &b.buckets()["shared"];
         assert_eq!((shared["can_heat"].clone(), shared["can_cool"].clone()), (json!(true), json!(false)));
         assert_eq!(b.store.get("shared.S").unwrap().value["can_heat"], json!(false), "the store keeps what the unit said");
+        b.set_wwn_boiler(false);
+        assert_eq!(b.buckets()["shared"]["can_heat"], json!(false));
         assert_eq!(test_bridge().buckets().len(), 0);
     }
 

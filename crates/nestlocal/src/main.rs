@@ -49,6 +49,18 @@ fn hostname() -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&buf[..len]).into_owned())
 }
 
+/// The processes running `name`.
+pub fn pids(name: &str) -> Vec<i32> {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    dir.flatten().filter_map(|entry| {
+        let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
+        let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+        (comm.trim_end() == name).then_some(pid)
+    }).collect()
+}
+
 fn server_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>, String> {
     let certs = CertificateDer::pem_file_iter(cert).map_err(|e| format!("{cert}: {e}"))?
         .collect::<Result<Vec<_>, _>>().map_err(|e| format!("{cert}: {e}"))?;
@@ -133,6 +145,18 @@ async fn run(config: flags::Config) {
         bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
                             Some(live.clone()), wwn_boiler)
     });
+    if let Some(bridge) = &bridge {
+        let holds_radio = config.zigbee || config.matter_thread;
+        if heatlink::heat_link_unit(holds_radio, device::current().generation, heatlink::model().as_deref()) {
+            let unit = heatlink::Unit {
+                serial: config.serial.clone(),
+                settings: config.settings.clone().into(),
+                marker: heatlink::marker(&config.state),
+            };
+            let bridge = bridge.clone();
+            heatlink::keep(store.clone(), unit, move |on| bridge.set_wwn_boiler(on));
+        }
+    }
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {
         let password = match config.mqtt_password_file.as_str() {
