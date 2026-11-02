@@ -79,7 +79,7 @@ struct Args {
     /// PEM CA certificate to verify the broker against (implies --mqtt-tls)
     #[arg(long, value_name = "FILE", help_heading = "Root filesystem options")]
     mqtt_ca: Option<PathBuf>,
-    /// serve the unit over Matter, with or without --mqtt (prints the pairing code to add it with)
+    /// serve the unit over Matter, with or without --mqtt
     #[arg(long, help_heading = "Root filesystem options")]
     matter: bool,
     /// Matter pairing code to enter on the phone, 11 digits (implies --matter; default: 0347-100-5534)

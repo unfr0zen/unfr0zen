@@ -344,8 +344,6 @@ fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome:
     if let Some(matter) = &config.options.matter {
         let code = matter.pairing_code();
         fs::write(run_dir.join("matter-pairing-code.txt"), format!("{code}\n"))?;
-        progress.status(&format!("Matter pairing code: {code} (Home Assistant: Add device, Matter, enter the code; \
-                                  the unit must be on Wi-Fi)"));
     }
     Ok(match (shell, outcome.changed, port) {
         (Some(name), _, _) => format!("Root shell confirmed on {name} (UID 0)"),

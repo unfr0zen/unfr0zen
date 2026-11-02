@@ -191,8 +191,6 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     if let Some(matter) = &options.matter {
         let code = matter.pairing_code();
         fs::write(run_dir.join("matter-pairing-code.txt"), format!("{code}\n"))?;
-        progress.status(&format!("Matter pairing code: {code} (Home Assistant: Add device, Matter, enter the code; \
-                                  the unit must be on Wi-Fi)"));
     }
     Ok(match shell {
         Some(name) => format!("Root shell confirmed on {name} (UID 0)"),
