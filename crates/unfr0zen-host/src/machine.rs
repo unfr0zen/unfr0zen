@@ -22,8 +22,16 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
         ("OS", run("/usr/bin/sw_vers", &["-productVersion"]).map(|version| format!("macOS {version} ({build})"))),
         ("CPU", sysctl("machdep.cpu.brand_string")),
         ("Model", sysctl("hw.model")),
+        ("Country", run("/usr/bin/defaults", &["read", "-g", "AppleLocale"]).and_then(|locale| country(&locale))),
         ("Rosetta", sysctl("sysctl.proc_translated").filter(|v| v == "1").map(|_| "this x86_64 build is translated".into())),
     ]
+}
+
+/// The country of a POSIX locale name such as en_CA.UTF-8: CA.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn country(locale: &str) -> Option<String> {
+    let country: String = locale.split_once('_')?.1.chars().take_while(char::is_ascii_alphabetic).collect();
+    (country.len() == 2).then(|| country.to_ascii_uppercase())
 }
 
 #[cfg(target_os = "linux")]
@@ -41,6 +49,8 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
         ("OS", os.map(|os| format!("{os}, kernel {}", kernel.trim()))),
         ("CPU", read("/proc/cpuinfo").and_then(|text| field(text, "model name"))),
         ("Model", model),
+        ("Country", ["LC_ALL", "LANG"].iter().find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+            .and_then(|locale| country(&locale))),
     ]
 }
 
@@ -48,19 +58,21 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
 fn facts() -> Vec<(&'static str, Option<String>)> {
     const VERSION: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
     const BIOS: &str = r"HARDWARE\DESCRIPTION\System\BIOS";
-    let os = registry(VERSION, "CurrentBuild").map(|build| {
+    let machine = |key, value| registry(HKEY_LOCAL_MACHINE, key, value);
+    let os = machine(VERSION, "CurrentBuild").map(|build| {
         // ProductName says Windows 10 on Windows 11 too; the build tells them apart.
         let name = if build.parse::<u32>().is_ok_and(|b| b >= 22000) { "Windows 11" } else { "Windows 10" };
-        let release = registry(VERSION, "DisplayVersion").unwrap_or_default();
-        let update = registry(VERSION, "UBR").unwrap_or_default();
+        let release = machine(VERSION, "DisplayVersion").unwrap_or_default();
+        let update = machine(VERSION, "UBR").unwrap_or_default();
         format!("{name} {release}, build {build}.{update}")
     });
     vec![
         ("OS", os),
         // The system's processor, also when this build runs emulated on it.
         ("CPU", std::env::var("PROCESSOR_IDENTIFIER").ok()),
-        ("Model", registry(BIOS, "SystemManufacturer").zip(registry(BIOS, "SystemProductName"))
+        ("Model", machine(BIOS, "SystemManufacturer").zip(machine(BIOS, "SystemProductName"))
             .map(|(maker, product)| format!("{maker} {product}"))),
+        ("Country", registry(HKEY_CURRENT_USER, r"Control Panel\International\Geo", "Name")),
     ]
 }
 
@@ -69,16 +81,20 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
     Vec::new()
 }
 
-/// A string or DWORD value under HKEY_LOCAL_MACHINE, which any user can read.
 #[cfg(windows)]
-fn registry(key: &str, value: &str) -> Option<String> {
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, REG_DWORD, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
+use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+
+/// A string or DWORD value under `hive`: the machine's, which any user can
+/// read, or the user's own.
+#[cfg(windows)]
+fn registry(hive: HKEY, key: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, REG_DWORD, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let (key, value) = (wide(key), wide(value));
     let mut data = [0u16; 256];
     let (mut size, mut kind) = (std::mem::size_of_val(&data) as u32, 0);
     let status = unsafe {
-        RegGetValueW(HKEY_LOCAL_MACHINE, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_DWORD,
+        RegGetValueW(hive, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_DWORD,
                      &mut kind, data.as_mut_ptr().cast(), &mut size)
     };
     if status != 0 {
@@ -92,6 +108,16 @@ fn registry(key: &str, value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn the_country_is_the_locale_name_s_territory() {
+        assert_eq!(super::country("en_CA.UTF-8").as_deref(), Some("CA"));
+        assert_eq!(super::country("fr_fr@euro").as_deref(), Some("FR"));
+        assert_eq!(super::country("en_US").as_deref(), Some("US"));
+        assert_eq!(super::country("C.UTF-8"), None);
+        assert_eq!(super::country("POSIX"), None);
+    }
+
     #[test]
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn names_the_operating_system_without_naming_the_computer() {
