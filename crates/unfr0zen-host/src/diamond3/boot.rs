@@ -37,7 +37,7 @@ pub fn boot(wait_usb: Duration, progress: &mut dyn Progress) -> Result<String> {
         return Ok("The application firmware is running".into());
     }
     let port = reach_recovery(progress, port, id)?;
-    let mut board = stage(progress, "Connect to recovery console", || connect_recovery(&port))?;
+    let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
     stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port)))?;

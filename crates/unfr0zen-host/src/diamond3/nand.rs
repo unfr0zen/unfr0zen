@@ -22,10 +22,10 @@ use std::path::Path;
 use unfr0zen_core::diamond3::nand::{all_chunks, fcb_matches, image_firmware, restore_chunks, BLOCK, BOOT_CONTROL, BOOT_SIZE};
 pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
 use unfr0zen_core::shell::sha256_hex;
-use unfr0zen_core::{Error, Result};
+use unfr0zen_core::Result;
 
 use super::usb::{self, Mode};
-use super::{connect_recovery, find_unit, reach_recovery, report_silicon, Board, WATCHDOG_SECONDS};
+use super::{connect_recovery, find_unit, reach_recovery, report_silicon, Board};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
 use crate::nand::{checksum_path, file, read_at, Job};
@@ -37,54 +37,34 @@ pub fn is_image(len: u64) -> bool {
     len == u64::from(NAND_SIZE)
 }
 
-/// Recovery U-Boot and the port it is on, which a reload may change, and the
-/// chip's bad blocks.
+/// Recovery U-Boot, its USB port, and the chip's bad blocks.
 struct Unit {
     board: Board,
     port: String,
     bad: Vec<u32>,
 }
 
-impl Unit {
-    /// Runs `step` on each chunk but those `kept` from an earlier run, as one
-    /// stage with its progress in bytes. Recovery U-Boot sometimes dies after
-    /// large transfers and resets to SDP: then it is reloaded and the chunk
-    /// done again, once.
-    fn each_chunk(&mut self, progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
-                  kept: impl Fn(u32) -> bool, mut step: impl FnMut(&mut Board, &[u32], u32, u32) -> Result<()>) -> Result<()> {
-        let total: u64 = chunks.iter().map(|c| u64::from(c.1)).sum();
-        stage_with(progress, &format!("{verb} NAND"), |progress| {
-            let mut done = 0;
-            for &(offset, size) in chunks {
-                if kept(offset) {
-                    log::info!("NAND {offset:#x}+{size:#x} kept from an earlier run");
-                } else {
-                    progress.transfer(done, size.into(), total);
-                    match step(&mut self.board, &self.bad, offset, size) {
-                        Err(Error::Io(dropped)) => {
-                            log::warn!("Recovery dropped at NAND {offset:#x} ({dropped}); reloading it");
-                            self.reload().map_err(|e| failure(format!("{dropped}; recovery did not come back: {e}")))?;
-                            step(&mut self.board, &self.bad, offset, size)
-                        }
-                        other => other,
-                    }?;
-                    log::info!("{verb} NAND {offset:#x}+{size:#x}: done");
-                }
-                done += u64::from(size);
+/// Runs `step` on each chunk but those `kept` from an earlier run, as one
+/// stage with its progress in bytes. A failed chunk ends the stage; verified
+/// backup parts remain available for the next run.
+fn each_chunk(progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
+              kept: impl Fn(u32) -> bool, mut step: impl FnMut(u32, u32) -> Result<()>) -> Result<()> {
+    let total: u64 = chunks.iter().map(|c| u64::from(c.1)).sum();
+    stage_with(progress, &format!("{verb} NAND"), |progress| {
+        let mut done = 0;
+        for &(offset, size) in chunks {
+            if kept(offset) {
+                log::info!("NAND {offset:#x}+{size:#x} kept from an earlier run");
+            } else {
+                progress.transfer(done, size.into(), total);
+                step(offset, size)?;
+                log::info!("{verb} NAND {offset:#x}+{size:#x}: done");
             }
-            progress.transfer(total, 0, total);
-            Ok(())
-        })
-    }
-
-    fn reload(&mut self) -> Result<()> {
-        let (port, _) = usb::wait_device(&[Mode::Sdp], seconds(180), Some(&self.port))?;
-        usb::load_recovery(WATCHDOG_SECONDS)?;
-        let (port, _) = usb::wait_device(&[Mode::Recovery], seconds(45), Some(&port))?;
-        self.board = connect_recovery(&port)?;
-        self.port = port;
+            done += u64::from(size);
+        }
+        progress.transfer(total, 0, total);
         Ok(())
-    }
+    })
 }
 
 /// Runs the job from whatever mode the unit is in and boots it normally after.
@@ -110,7 +90,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
     let port = reach_recovery(progress, port, id)?;
-    let mut board = stage(progress, "Connect to recovery console", || connect_recovery(&port))?;
+    let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     let bad = stage(progress, "Check for bad blocks", || board.bad_blocks())?;
     if bad.is_empty() {
@@ -154,9 +134,9 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     file(parts, fs::create_dir_all(parts))?;
     let part = |offset: u32| parts.join(format!("{offset:08x}.bin"));
     // Parts are renamed into place only once read and checked.
-    unit.each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |board, bad, offset, size| {
+    each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |offset, size| {
         let part = part(offset);
-        let data = board.read_nand(offset, size, bad)?;
+        let data = unit.board.read_nand(offset, size, &unit.bad)?;
         let partial = part.with_extension("tmp");
         file(&partial, fs::write(&partial, &data))?;
         file(&part, fs::rename(&partial, &part))
@@ -172,10 +152,10 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
 }
 
 fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<()> {
-    unit.each_chunk(progress, "Verify", &all_chunks(), |_| false, |board, bad, offset, size| {
+    each_chunk(progress, "Verify", &all_chunks(), |_| false, |offset, size| {
         let expected = read_at(image, offset.into(), size as usize)?;
         if offset < BOOT_SIZE {
-            let actual = board.read_nand(offset, size, bad)?;
+            let actual = unit.board.read_nand(offset, size, &unit.bad)?;
             let control = BOOT_CONTROL as usize;
             if actual[control..] != expected[control..] {
                 return Err(failure("the boot partition reads differently a second time outside the boot-control blocks"));
@@ -184,7 +164,7 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
             log::info!("Boot-control blocks: {flips} bits differ between reads");
             return Ok(());
         }
-        let (actual, expected) = (board.nand_crc(offset, size, bad)?, crc32fast::hash(&expected));
+        let (actual, expected) = (unit.board.nand_crc(offset, size, &unit.bad)?, crc32fast::hash(&expected));
         if actual != expected {
             return Err(failure(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
                                         the image has {expected:08x}")));
@@ -220,8 +200,8 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
     if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
-    unit.each_chunk(progress, "Restore", &chunks, |_| false, |board, bad, offset, size| {
-        board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, bad)
+    each_chunk(progress, "Restore", &chunks, |_| false, |offset, size| {
+        unit.board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, &unit.bad)
     })?;
     if !keep {
         stage(progress, "Regenerate the FCB and DBBT", || unit.board.write_boot_control(copies))?;
@@ -233,4 +213,56 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
         }
         Some(_) => Ok(()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use unfr0zen_core::Error;
+
+    #[derive(Default)]
+    struct ProgressLog {
+        transfers: Vec<(u64, u64, u64)>,
+        outcomes: Vec<bool>,
+    }
+
+    impl Progress for ProgressLog {
+        fn begin(&mut self, _: &str) {}
+        fn end(&mut self, _: &str, _: Duration, ok: bool) { self.outcomes.push(ok); }
+        fn status(&mut self, _: &str) {}
+        fn waiting(&mut self, _: &str) {}
+        fn transfer(&mut self, done: u64, next: u64, total: u64) {
+            self.transfers.push((done, next, total));
+        }
+    }
+
+    #[test]
+    fn a_disconnect_ends_the_stage_without_retrying_or_advancing() {
+        for verb in ["Back up", "Verify", "Restore"] {
+            let mut progress = ProgressLog::default();
+            let mut attempted = Vec::new();
+            let error = each_chunk(&mut progress, verb, &[(0, 4), (4, 4), (8, 4)], |_| false, |offset, _| {
+                attempted.push(offset);
+                if offset == 4 { Err(Error::Io("USB disconnected".into())) } else { Ok(()) }
+            }).unwrap_err();
+            assert!(matches!(error, Error::Io(ref message) if message == "USB disconnected"));
+            assert_eq!(attempted, [0, 4]);
+            assert_eq!(progress.transfers, [(0, 4, 12), (4, 4, 12)]);
+            assert_eq!(progress.outcomes, [false]);
+        }
+    }
+
+    #[test]
+    fn a_resumed_backup_skips_saved_chunks_and_reports_completion() {
+        let mut progress = ProgressLog::default();
+        let mut attempted = Vec::new();
+        each_chunk(&mut progress, "Back up", &[(0, 4), (4, 4)], |offset| offset == 0, |offset, _| {
+            attempted.push(offset);
+            Ok(())
+        }).unwrap();
+        assert_eq!(attempted, [4]);
+        assert_eq!(progress.transfers, [(4, 4, 8), (8, 0, 8)]);
+        assert_eq!(progress.outcomes, [true]);
+    }
 }

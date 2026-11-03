@@ -89,7 +89,10 @@ fn pinned(cache: &Path, out: &Path, name: &str, url: &str, sha: &str) -> Vec<u8>
             let target = if fs::create_dir_all(cache).is_ok() { cache.join(name) } else { out.join(name) };
             // Per process: building several targets at once runs this concurrently.
             let partial = target.with_extension(format!("part.{}", std::process::id()));
-            let status = Command::new("curl").args(["-fsSL", "-o"]).arg(&partial).arg(url).status()
+            let status = Command::new("curl").args([
+                "-fsSL", "--retry", "3", "--retry-all-errors", "--connect-timeout", "20",
+                "--max-time", "120", "--retry-max-time", "300", "-o",
+            ]).arg(&partial).arg(url).status()
                 .unwrap_or_else(|_| panic!("curl is needed once to fetch {name}"));
             assert!(status.success(), "downloading {url} failed");
             fs::rename(&partial, &target).unwrap();

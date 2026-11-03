@@ -243,6 +243,7 @@ pub(crate) struct RomId {
 pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<RomId> {
     let (digprog, digprog_hab) = sdp::read_word_and_hab(rom, DIGPROG)?;
     let silicon = silicon(digprog);
+    log::info!("SoC: {silicon}");
     let rom_hab = match sdp::read_word_and_hab(rom, 0x80) {
         Ok((version, hab)) => {
             log::info!("Boot ROM version: {version:#010x}");

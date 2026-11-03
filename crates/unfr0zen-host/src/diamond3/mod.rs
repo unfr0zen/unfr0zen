@@ -18,7 +18,7 @@ use unfr0zen_core::diamond3::initramfs;
 use unfr0zen_core::diamond3::recovery::Recovery;
 use unfr0zen_core::patch::{self, changes_text};
 use unfr0zen_core::shell::{sha256_hex, InitramfsShell};
-use unfr0zen_core::Result;
+use unfr0zen_core::{Error, Result};
 
 use crate::device::{Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
@@ -31,9 +31,39 @@ pub(crate) const WATCHDOG_SECONDS: u32 = 128;
 
 pub(crate) type Board = Recovery<Port, Protocol<Pipe>>;
 
-pub(crate) fn connect_recovery(port: &str) -> Result<Board> {
-    let console = UBoot::connect(open_acm(usb::RECOVERY, seconds(45))?, seconds(20))?;
-    Ok(Recovery::new(console, usb::open_fastboot(port)?))
+pub(crate) fn connect_recovery(progress: &mut dyn Progress, port: &str) -> Result<Board> {
+    connect_with_retry(progress, || {
+        let console = UBoot::connect(open_acm(usb::RECOVERY, seconds(45))?, seconds(20))?;
+        Ok(Recovery::new(console, usb::open_fastboot(port)?))
+    }, || {
+        let (_, id) = usb::wait_device(&[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs], seconds(10), Some(port))?;
+        if id == usb::SDP {
+            usb::load_recovery(WATCHDOG_SECONDS)?;
+            usb::wait_device(&[Mode::Recovery], seconds(45), Some(port))?;
+        } else if id != usb::RECOVERY {
+            return Err(failure(format!("the unit restarted in {} mode", usb::mode(id).unwrap().name())));
+        }
+        Ok(())
+    })
+}
+
+/// Only establishing the connection is retried; no operation on NAND is replayed.
+fn connect_with_retry<T>(progress: &mut dyn Progress, mut connect: impl FnMut() -> Result<T>,
+                         mut reconnect: impl FnMut() -> Result<()>) -> Result<T> {
+    stage(progress, "Connect to recovery console", || {
+        for attempt in 1..=3 {
+            log::info!("Recovery connection attempt {attempt}/3");
+            match connect() {
+                Ok(board) => return Ok(board),
+                Err(error @ (Error::Io(_) | Error::Timeout(_))) if attempt < 3 => {
+                    log::warn!("Recovery connection attempt {attempt}/3 failed: {error}; reconnecting");
+                    reconnect().map_err(|retry| failure(format!("{error}; recovery reconnect failed: {retry}")))?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!()
+    })
 }
 
 /// The SoC and its silicon revision, as recovery reads them, for the front
@@ -109,7 +139,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
         ..config.options.clone()
     };
-    let mut board = stage(progress, "Connect to recovery console", || connect_recovery(port))?;
+    let mut board = connect_recovery(progress, port)?;
     report_silicon(progress, &mut board);
     let environment = stage(progress, "Read installed boot order from NAND", || {
         board.attach_ubi()?;
@@ -177,7 +207,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port)))?;
     if id == usb::SDP {
         let (port, _) = load_recovery(progress, &port)?;
-        let mut board = stage(progress, "Reconnect to recovery console", || connect_recovery(&port))?;
+        let mut board = connect_recovery(progress, &port)?;
         board.attach_ubi()?;
         stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
     }
@@ -203,4 +233,67 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
                                            confirmed: the USB root shell is off"),
         None => format!("Patched {slot}; the unit booted back to its app"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct ProgressLog(Vec<bool>);
+
+    impl Progress for ProgressLog {
+        fn begin(&mut self, _: &str) {}
+        fn end(&mut self, _: &str, _: Duration, ok: bool) { self.0.push(ok); }
+        fn status(&mut self, _: &str) { panic!("connection retries must only be logged"); }
+        fn waiting(&mut self, _: &str) { panic!("connection retries must only be logged"); }
+    }
+
+    #[test]
+    fn a_dropped_connection_can_succeed_on_retry() {
+        let mut progress = ProgressLog::default();
+        let (mut attempts, mut reconnects) = (0, 0);
+        let board = connect_with_retry(&mut progress, || {
+            attempts += 1;
+            match attempts {
+                1 => Err(Error::Io("Broken pipe".into())),
+                2 => Err(Error::Timeout("no prompt".into())),
+                _ => Ok("connected"),
+            }
+        }, || { reconnects += 1; Ok(()) }).unwrap();
+        assert_eq!(board, "connected");
+        assert_eq!((attempts, reconnects), (3, 2));
+        assert_eq!(progress.0, [true]);
+    }
+
+    #[test]
+    fn connection_retries_stop_after_three_attempts() {
+        let (mut attempts, mut reconnects) = (0, 0);
+        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
+            attempts += 1;
+            Err(Error::Io("Broken pipe".into()))
+        }, || { reconnects += 1; Ok(()) });
+        assert!(matches!(result, Err(Error::Io(_))));
+        assert_eq!((attempts, reconnects), (3, 2));
+    }
+
+    #[test]
+    fn an_absent_device_stops_retries_and_keeps_the_original_error() {
+        let mut attempts = 0;
+        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
+            attempts += 1;
+            Err(Error::Io("Broken pipe".into()))
+        }, || Err(Error::Timeout("USB device absent".into())));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Broken pipe") && error.contains("USB device absent"), "{error}");
+        assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn device_errors_are_not_retried() {
+        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
+            Err(Error::Device("invalid interface".into()))
+        }, || panic!("device errors must not reconnect"));
+        assert!(matches!(result, Err(Error::Device(_))));
+    }
 }
