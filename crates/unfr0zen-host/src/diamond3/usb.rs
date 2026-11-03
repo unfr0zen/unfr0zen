@@ -60,13 +60,15 @@ pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>) -> Re
     let until = Instant::now() + timeout;
     let mut last = None;
     while Instant::now() < until {
-        let found: BTreeMap<String, Id> = devices()?.into_iter()
-            .filter(|(name, id)| mode(*id).is_some_and(|m| wanted.contains(&m)) && port.is_none_or(|p| p == name))
+        let seen: BTreeMap<String, Id> = devices()?.into_iter()
+            .filter(|(_, id)| mode(*id).is_some_and(|m| wanted.contains(&m)))
             .collect();
-        if last.as_ref() != Some(&found) {
-            log::info!("USB: {:?}", found.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>());
-            last = Some(found.clone());
+        if last.as_ref() != Some(&seen) {
+            log::info!("USB: {:?}{}", seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
+                       port.map(|p| format!(", waiting on {p}")).unwrap_or_default());
+            last = Some(seen.clone());
         }
+        let found: Vec<(String, Id)> = seen.into_iter().filter(|(name, _)| port.is_none_or(|p| p == name)).collect();
         if found.len() > 1 {
             return Err(Error::Device("multiple matching USB devices; connect only one diamond3".into()));
         }
