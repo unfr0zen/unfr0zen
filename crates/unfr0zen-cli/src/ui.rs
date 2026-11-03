@@ -111,6 +111,7 @@ fn running(label: &str, secs: u64, transfer: Option<&Transfer>) -> String {
 pub struct TerminalProgress {
     heartbeat: Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>,
     transfer: Arc<Mutex<Option<Transfer>>>,
+    device: Option<String>,
 }
 
 impl Progress for TerminalProgress {
@@ -181,6 +182,14 @@ impl Progress for TerminalProgress {
 
     fn status(&mut self, message: &str) {
         line(message, '✓');
+    }
+
+    fn device(&mut self, description: &str) {
+        if self.device.as_deref() == Some(description) {
+            return;
+        }
+        self.device = Some(description.to_string());
+        self.status(&format!("Device: {description}"));
     }
 
     fn waiting(&mut self, message: &str) {
