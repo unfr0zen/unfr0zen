@@ -531,6 +531,19 @@ pub(crate) mod tests {
         assert_eq!(rom_revision(0x0062_0100), RomRevision::Updated); // 2.0
     }
 
+    /// Recovery's nandbcb corrects each FCB copy as the boot ROM does, notes
+    /// a copy that still differs and dumps the first, which the ROM boots
+    /// from; stock U-Boot's dumps nothing then.
+    #[test]
+    fn a_differing_fcb_copy_does_not_hide_the_fcb() {
+        let warning = "NAND FCB read from 0x0 offset 0x400 read: OK\nNAND FCB read from 0x20000 offset 0x400 read: OK\n\
+                       FCB at 0x20000: 1 bit(s) corrected\nFCB copies are not identical\n";
+        let dump = "FCB :\n  fingerprint = 0x20424346\n  fw1_start = 0x80\n  fw1_pages = 0x100\n  fw2_start = 0x180\n  \
+                    fw2_pages = 0x100\nDBBT :\n  fingerprint = 0x54424244\n";
+        assert_eq!(fcb_fields(&format!("{warning}{dump}")).unwrap()["fw1_start"], 0x80);
+        assert_eq!(fcb_fields(warning), None);
+    }
+
     /// A unit behind recovery U-Boot: UBI volumes, NAND, and RAM as the latest
     /// writes, answering commands the way the real ones do.
     #[derive(Default)]

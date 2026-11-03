@@ -1,0 +1,115 @@
+diff --git a/arch/arm/mach-imx/cmd_nandbcb.c b/arch/arm/mach-imx/cmd_nandbcb.c
+index d747770c0e3..fb5e61f61f3 100644
+--- a/arch/arm/mach-imx/cmd_nandbcb.c
++++ b/arch/arm/mach-imx/cmd_nandbcb.c
+@@ -411,6 +411,40 @@ static void encode_hamming_13_8(void *_src, void *_ecc, size_t size)
+ 	for (i = 0; i < size; i++)
+ 		ecc[i] = calculate_parity_13_8(src[i]);
+ }
++
++/*
++ * Corrects one flipped bit per byte, data or parity, as the boot ROM
++ * does when it reads the FCB. Returns the bits corrected, or -1 for a
++ * byte the code cannot account for.
++ */
++static int decode_hamming_13_8(void *_src, const void *_ecc, size_t size)
++{
++	int bit, corrected = 0;
++	size_t i;
++	u8 *src = _src;
++	const u8 *ecc = _ecc;
++
++	for (i = 0; i < size; i++) {
++		u8 syndrome = calculate_parity_13_8(src[i]) ^ ecc[i];
++
++		if (!syndrome)
++			continue;
++		/* One parity bit flipped: the data byte is sound. */
++		if (!(syndrome & (syndrome - 1))) {
++			corrected++;
++			continue;
++		}
++		for (bit = 0; bit < 8; bit++)
++			if (calculate_parity_13_8(1 << bit) == syndrome)
++				break;
++		if (bit == 8)
++			return -1;
++		src[i] ^= 1 << bit;
++		corrected++;
++	}
++
++	return corrected;
++}
+ #endif
+ 
+ static u32 calc_chksum(void *buf, size_t size)
+@@ -552,10 +586,26 @@ static int read_fcb(struct boot_config *boot_cfg, struct fcb_block *fcb,
+ 		goto fcb_raw_page_err;
+ 
+ 	if ((plat_config.misc_flags & FCB_ENCODE_HAMMING) &&
+-	    (plat_config.misc_flags & FCB_LAYOUT_RESV_12B))
+-		memcpy(fcb, fcb_raw_page + 12, sizeof(struct fcb_block));
+-
+-/* TODO: check if it can pass Hamming check */
++	    (plat_config.misc_flags & FCB_LAYOUT_RESV_12B)) {
++		/*
++		 * The page as the boot ROM sees it, through its Hamming
++		 * code. A copy beyond correction reads as no FCB at all.
++		 */
++		ret = decode_hamming_13_8(fcb_raw_page + 12,
++					  fcb_raw_page + 12 + 512, 512);
++		if (ret < 0) {
++			printf("FCB at 0x%llx is beyond Hamming correction\n",
++			       off);
++			memset(fcb, 0, sizeof(struct fcb_block));
++		} else {
++			if (ret)
++				printf("FCB at 0x%llx: %d bit(s) corrected\n",
++				       off, ret);
++			memcpy(fcb, fcb_raw_page + 12,
++			       sizeof(struct fcb_block));
++		}
++		ret = 0;
++	}
+ 
+ fcb_raw_page_err:
+ 	kfree(fcb_raw_page);
+@@ -1366,12 +1416,13 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+ 
+ 			if (ret < 0)
+ 				goto dbbt_page_copy_err;
++			/*
++			 * The boot ROM boots from the first valid copy, so a
++			 * differing one is worth a note, not a failed dump.
++			 */
+ 			if (memcmp(&fcb, &fcb_copy,
+-				   sizeof(struct fcb_block))) {
++				   sizeof(struct fcb_block)))
+ 				printf("FCB copies are not identical\n");
+-				ret = -EINVAL;
+-				goto dbbt_page_copy_err;
+-			}
+ 		}
+ 
+ 		/* next read location */
+@@ -1399,18 +1450,12 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+ 			if (ret < 0)
+ 				goto dbbt_page_copy_err;
+ 			if (memcmp(&dbbt, &dbbt_copy,
+-				   sizeof(struct dbbt_block))) {
++				   sizeof(struct dbbt_block)))
+ 				printf("DBBT copies are not identical\n");
+-				ret = -EINVAL;
+-				goto dbbt_page_copy_err;
+-			}
+ 			if (dbbt.dbbtpages > 0 &&
+ 			    memcmp(dbbt_data_page, dbbt_data_page_copy,
+-				   mtd->writesize)) {
++				   mtd->writesize))
+ 				printf("DBBT data copies are not identical\n");
+-				ret = -EINVAL;
+-				goto dbbt_page_copy_err;
+-			}
+ 		}
+ 
+ 		/* next read location */
