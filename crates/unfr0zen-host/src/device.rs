@@ -35,7 +35,7 @@ pub fn mode_name(device: Device, id: Id) -> Option<&'static str> {
         Device::Diamond3 => diamond3::usb::mode(id).map(diamond3::usb::Mode::name),
         Device::Diamond => j49::usb::mode_for(id, j49::usb::DIAMOND_APP).map(j49::usb::Mode::name),
         Device::J49 => j49::usb::mode(id).map(j49::usb::Mode::name),
-        Device::Onyx => (id == onyx::SDP).then_some("USB download (SDP)"),
+        Device::Onyx => (id == onyx::usb::SDP).then_some("USB download (SDP)"),
     }
 }
 
@@ -45,7 +45,7 @@ fn usb_boot(device: Device) -> Id {
         Device::Diamond3 => diamond3::usb::SDP,
         Device::Diamond => j49::usb::ROM,
         Device::J49 => j49::usb::ROM,
-        Device::Onyx => onyx::SDP,
+        Device::Onyx => onyx::usb::SDP,
     }
 }
 
@@ -136,11 +136,11 @@ mod tests {
     #[test]
     fn onyx_is_identified_only_in_sdp_mode() {
         assert_eq!(identify((0x15a2, 0x007d)), Some(Device::Onyx));
-        assert_eq!(usb_boot(Device::Onyx), onyx::SDP);
-        assert_eq!(mode_name(Device::Onyx, onyx::SDP), Some("USB download (SDP)"));
-        assert_eq!(mode_name(Device::Diamond3, onyx::SDP), None);
+        assert_eq!(usb_boot(Device::Onyx), onyx::usb::SDP);
+        assert_eq!(mode_name(Device::Onyx, onyx::usb::SDP), Some("USB download (SDP)"));
+        assert_eq!(mode_name(Device::Diamond3, onyx::usb::SDP), None);
         assert_eq!(mode_name(Device::Onyx, diamond3::usb::SDP), None);
-        let unit = Unit { device: Device::Onyx, port: "1-1".into(), id: onyx::SDP };
+        let unit = Unit { device: Device::Onyx, port: "1-1".into(), id: onyx::usb::SDP };
         assert_eq!(selected(unit, Some(Device::Diamond)).device, Device::Onyx);
     }
 

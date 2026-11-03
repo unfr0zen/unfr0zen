@@ -1,16 +1,15 @@
 //! Detection-only support for the Nest Thermostat E's i.MX6UL SDP ROM.
 
+pub mod usb;
+
 use unfr0zen_core::{Device, Error};
 
 use crate::diamond3::usb::rom_silicon;
 use crate::progress::Progress;
-use crate::usb::Id;
-
-pub const SDP: Id = (0x15A2, 0x007D);
 
 /// Diagnostics must never turn an unsupported device into a recovery attempt.
 pub(crate) fn unsupported(progress: &mut dyn Progress) -> Error {
-    match crate::diamond3::usb::open_sdp(SDP).and_then(|mut rom| rom_silicon(&mut rom)) {
+    match crate::diamond3::usb::open_sdp(usb::SDP).and_then(|mut rom| rom_silicon(&mut rom)) {
         Ok(chip) => progress.device(&format!("{}: {chip}", Device::Onyx.description())),
         Err(error) => log::warn!("Onyx silicon revision not read: {error}"),
     }
