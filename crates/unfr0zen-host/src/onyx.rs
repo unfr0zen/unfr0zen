@@ -1,27 +1,16 @@
 //! Detection-only support for the Nest Thermostat E's i.MX6UL SDP ROM.
 
-use unfr0zen_core::diamond3::recovery::{silicon, DIGPROG};
-use unfr0zen_core::diamond3::sdp::{self, Hid};
-use unfr0zen_core::{Device, Error, Result};
+use unfr0zen_core::{Device, Error};
 
+use crate::diamond3::usb::rom_silicon;
 use crate::progress::Progress;
 use crate::usb::Id;
 
 pub const SDP: Id = (0x15A2, 0x007D);
 
-fn versions(rom: &mut impl Hid) -> Result<String> {
-    let chip = silicon(sdp::read_word(rom, DIGPROG)?);
-    // Keep the ROM version in diagnostics, separate from the silicon revision.
-    match sdp::read_word(rom, 0x80) {
-        Ok(version) => log::info!("Onyx boot ROM version: {version:#010x}"),
-        Err(error) => log::warn!("Onyx boot ROM version not read: {error}"),
-    }
-    Ok(chip)
-}
-
 /// Diagnostics must never turn an unsupported device into a recovery attempt.
 pub(crate) fn unsupported(progress: &mut dyn Progress) -> Error {
-    match crate::diamond3::usb::open_sdp(SDP).and_then(|mut rom| versions(&mut rom)) {
+    match crate::diamond3::usb::open_sdp(SDP).and_then(|mut rom| rom_silicon(&mut rom)) {
         Ok(chip) => progress.device(&format!("{}: {chip}", Device::Onyx.description())),
         Err(error) => log::warn!("Onyx silicon revision not read: {error}"),
     }
@@ -31,6 +20,8 @@ pub(crate) fn unsupported(progress: &mut dyn Progress) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unfr0zen_core::diamond3::sdp::Hid;
+    use unfr0zen_core::Result;
     use std::collections::VecDeque;
 
     struct Rom {
@@ -58,7 +49,7 @@ mod tests {
             ]),
             writes: Vec::new(),
         };
-        assert_eq!(versions(&mut rom).unwrap(), "i.MX6UL rev 1.1");
+        assert_eq!(rom_silicon(&mut rom).unwrap(), "i.MX6UL rev 1.1");
         assert_eq!(rom.writes, vec![
             vec![1, 1, 1, 2, 0x0c, 0x82, 0x60, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
             vec![1, 1, 1, 0, 0, 0, 0x80, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
@@ -68,13 +59,13 @@ mod tests {
     #[test]
     fn silicon_is_shown_even_if_the_rom_version_is_unreadable() {
         let mut rom = Rom { replies: VecDeque::from([vec![4, 2, 0, 0x64, 0]]), writes: Vec::new() };
-        assert_eq!(versions(&mut rom).unwrap(), "i.MX6UL rev 1.2");
+        assert_eq!(rom_silicon(&mut rom).unwrap(), "i.MX6UL rev 1.2");
     }
 
     #[test]
     fn an_unreadable_version_does_not_upload_or_jump() {
         let mut rom = Rom { replies: VecDeque::new(), writes: Vec::new() };
-        assert!(matches!(versions(&mut rom), Err(Error::Timeout(_))));
+        assert!(matches!(rom_silicon(&mut rom), Err(Error::Timeout(_))));
         assert_eq!(rom.writes.len(), 1);
         assert_eq!(&rom.writes[0][1..3], &[1, 1]);
     }

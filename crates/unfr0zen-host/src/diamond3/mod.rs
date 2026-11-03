@@ -47,7 +47,9 @@ pub(crate) fn report_silicon(progress: &mut dyn Progress, board: &mut Board) {
 
 /// SDP to recovery U-Boot on the same port.
 fn load_recovery(progress: &mut dyn Progress, port: &str) -> Result<(String, Id)> {
-    stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS))?;
+    if let Some(chip) = stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS))? {
+        progress.device(&format!("{}: {chip}", Device::Diamond3.description()));
+    }
     stage(progress, "Wait for recovery USB", || usb::wait_device(&[Mode::Recovery], seconds(45), Some(port)))
 }
 

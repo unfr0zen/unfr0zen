@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use nusb::MaybeFuture;
 use unfr0zen_core::diamond3::fastboot::Protocol;
-use unfr0zen_core::diamond3::recovery::RAM_BASE;
+use unfr0zen_core::diamond3::recovery::{silicon, DIGPROG, RAM_BASE};
 use unfr0zen_core::diamond3::sdp::{self, Hid, UBOOT_BASE};
 use unfr0zen_core::{Error, Result};
 
@@ -231,9 +231,26 @@ const DDR_INIT: [(u32, u32); 74] = [
 /// the bootstrap chain into OCRAM, and enters it — one ROM SDP session, no
 /// intermediate loader. The boot wrapper arms the watchdog; recovery services
 /// it while its console has DTR.
-pub fn load_recovery(watchdog_seconds: u32) -> Result<()> {
+/// The SoC and its silicon revision, read through the SDP ROM; the ROM's
+/// own version is only logged.
+pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<String> {
+    let chip = silicon(sdp::read_word(rom, DIGPROG)?);
+    match sdp::read_word(rom, 0x80) {
+        Ok(version) => log::info!("Boot ROM version: {version:#010x}"),
+        Err(error) => log::warn!("Boot ROM version not read: {error}"),
+    }
+    Ok(chip)
+}
+
+/// Uploads recovery U-Boot through the SDP ROM and starts it: the silicon
+/// revision the ROM reported, if it did.
+pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     let mut api = hidapi::HidApi::new().map_err(|e| Error::Io(e.to_string()))?;
     let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(130))?;
+    let chip = rom_silicon(&mut rom).inspect_err(|error| {
+        log::warn!("Silicon revision not read over SDP: {error}");
+        sdp::drain(&mut rom, 50);
+    }).ok();
     for &(address, value) in &DDR_INIT {
         sdp::write_register(&mut rom, address, value)?;
         // The MMDC start bit launches the DDR initialization state machine.
@@ -259,5 +276,5 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<()> {
         Err(e) => return Err(e),
     }
     log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
-    Ok(())
+    Ok(chip)
 }
