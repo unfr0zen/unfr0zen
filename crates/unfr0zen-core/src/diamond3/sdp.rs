@@ -74,6 +74,39 @@ pub fn read_word_and_hab(dev: &mut impl Hid, address: u32) -> Result<(u32, Optio
     Err(Error::Timeout(format!("No word read reply at {address:#x}")))
 }
 
+/// Bytes one READ_REGISTER asks for; the ROM answers each in 64-byte report 4s.
+const READ_CHUNK: usize = 1024;
+
+/// Reads `len` bytes of memory, a chunk per command.
+pub fn read_memory(dev: &mut impl Hid, address: u32, len: usize) -> Result<Vec<u8>> {
+    let mut data = Vec::with_capacity(len);
+    for start in (0..len).step_by(READ_CHUNK) {
+        let count = READ_CHUNK.min(len - start);
+        let at = address + start as u32;
+        command(dev, READ_REGISTER, at, count as u32)?;
+        let (mut got, mut quiet) = (0, 0);
+        while got < count {
+            let reply = dev.read(1000)?;
+            match reply.first() {
+                Some(&REPORT_STATUS) => {
+                    let take = (count - got).min(reply.len() - 1);
+                    data.extend_from_slice(&reply[1..1 + take]);
+                    got += take;
+                    quiet = 0;
+                }
+                Some(&REPORT_HAB) => {}
+                _ => {
+                    quiet += 1;
+                    if quiet >= 4 {
+                        return Err(Error::Timeout(format!("Memory read at {at:#x} stopped after {got} of {count} bytes")));
+                    }
+                }
+            }
+        }
+    }
+    Ok(data)
+}
+
 /// Writes one 32-bit peripheral register and waits for the completion status.
 /// The value travels where the file commands carry their byte count; the
 /// write lands only inside the ROM's hardcoded peripheral windows.
@@ -102,7 +135,7 @@ pub fn write_register(dev: &mut impl Hid, address: u32, value: u32) -> Result<()
     Err(Error::Timeout(format!("No register write acknowledgement for {address:#x}")))
 }
 
-/// Uploads with padded reports, then spot-checks three words. The caller
+/// Uploads with padded reports, then reads the whole upload back. The caller
 /// must reserve the padded extent past the end of `data`.
 pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()> {
     if data.len() < 4 {
@@ -134,17 +167,11 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
     if !acknowledged {
         return Err(Error::Timeout(format!("No upload acknowledgement for {address:#x}")));
     }
-    // Spread-out words catch bad placement or truncation.
-    let mut offsets = vec![0, data.len() / 8 * 4, (data.len() - 4) / 4 * 4];
-    offsets.dedup();
-    for offset in offsets {
-        let expected = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        let got = read_word(dev, address + offset as u32)?;
-        if got != expected {
-            return Err(Error::Device(format!(
-                "Upload readback mismatch at {:#x}: {got:#x} != {expected:#x}",
-                address + offset as u32)));
-        }
+    let readback = read_memory(dev, address, data.len())?;
+    if let Some(at) = readback.iter().zip(data).position(|(got, sent)| got != sent) {
+        return Err(Error::Device(format!(
+            "Upload readback mismatch at {:#x}: {:#04x} != {:#04x}",
+            address + at as u32, readback[at], data[at])));
     }
     Ok(())
 }
@@ -271,13 +298,38 @@ mod tests {
         assert!(write_checked(&mut scripted(&[]), UBOOT_BASE, &[1; 3]).is_err());
     }
 
+    /// Memory as the ROM reports it: 64 bytes per report 4.
+    fn reports(data: &[u8]) -> Vec<Vec<u8>> {
+        data.chunks(64).map(|chunk| [&[REPORT_STATUS][..], chunk].concat()).collect()
+    }
+
+    fn scripted_owned(replies: &[Vec<u8>]) -> Scripted {
+        scripted(&replies.iter().map(Vec::as_slice).collect::<Vec<_>>())
+    }
+
     #[test]
-    fn a_word_that_did_not_land_fails_the_spot_check() {
-        let ack: &[u8] = &[4, 0x88, 0x88, 0x88, 0x88];
-        let mut device = scripted(&[ack, &[4, 1, 2, 3, 4], &[4, 0, 0, 0, 0]]);
-        let data: Vec<u8> = (1..=64).collect();
+    fn a_byte_that_did_not_land_fails_the_readback() {
+        let ack = vec![4, 0x88, 0x88, 0x88, 0x88];
+        let data: Vec<u8> = (1..=100).collect();
+        let mut landed = data.clone();
+        landed[32] = 0;
+        let mut device = scripted_owned(&[vec![ack.clone()], reports(&landed)].concat());
         let error = write_checked(&mut device, UBOOT_BASE, &data).unwrap_err();
         assert!(error.to_string().contains(&format!("mismatch at {:#x}", UBOOT_BASE + 32)), "{error}");
+        write_checked(&mut scripted_owned(&[vec![ack], reports(&data)].concat()), UBOOT_BASE, &data).unwrap();
+    }
+
+    #[test]
+    fn memory_reads_gather_reports_past_a_hab_preamble_a_chunk_per_command() {
+        let data: Vec<u8> = (0..=255).cycle().take(READ_CHUNK + 100).collect();
+        let replies = [vec![vec![3, 0x12, 0x34, 0x34, 0x12]], reports(&data)].concat();
+        let mut device = scripted_owned(&replies);
+        assert_eq!(read_memory(&mut device, 0x80, data.len()).unwrap(), data);
+        assert_eq!(device.writes.len(), 2);
+        assert_eq!(&device.writes[1][3..7], &(0x80 + READ_CHUNK as u32).to_be_bytes());
+        assert_eq!(&device.writes[1][8..12], &100u32.to_be_bytes());
+        let cut = scripted_owned(&reports(&data[..64]));
+        assert!(matches!(read_memory(&mut { cut }, 0x80, READ_CHUNK), Err(Error::Timeout(_))));
     }
 
     #[test]

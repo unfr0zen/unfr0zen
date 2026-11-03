@@ -295,7 +295,7 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     for (address, data) in [(UBOOT_BASE, assets::RECOVERY), (0x90BF00, parameters.as_slice()),
                             (0x90B000, assets::BOOT_WRAPPER), (0x907000, assets::ROM_STAGE)] {
         sdp::write_checked(&mut rom, address, data)?;
-        log::info!("Uploaded {} bytes at {address:#x}; samples match", data.len());
+        log::info!("Uploaded {} bytes at {address:#x}; read back intact", data.len());
     }
     // The ROM answers JUMP with its HAB report, then either drops USB as it
     // jumps or stays in SDP with an error status; a read error only means
