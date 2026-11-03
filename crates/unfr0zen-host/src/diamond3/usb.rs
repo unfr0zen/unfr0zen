@@ -254,7 +254,8 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<()> {
     // The ROM sends its HAB report before it jumps; a read error only means
     // the jump already dropped USB.
     match sdp::jump(&mut rom, 0x907000) {
-        Ok(_) | Err(Error::Io(_)) => {}
+        Ok(replies) => log::info!("JUMP replies: {:02x?}", replies),
+        Err(Error::Io(e)) => log::info!("JUMP reply read: {e}"),
         Err(e) => return Err(e),
     }
     log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
