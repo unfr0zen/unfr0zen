@@ -1001,7 +1001,7 @@ const MIB: f64 = (1u64 << 20) as f64;
 
 /// What is known of the NAND and the image before the unit is reached.
 fn image_facts(mode: Mode, image: Option<&std::path::Path>) -> Vec<(&'static str, String)> {
-    let mut facts = vec![("NAND", "the whole chip; OMAP units as raw pages".to_string())];
+    let mut facts = vec![("NAND", "the whole chip".to_string())];
     let Some(image) = image else { return facts };
     let checksum = PathBuf::from(format!("{}.sha256", image.display()));
     if mode == Mode::Backup {
