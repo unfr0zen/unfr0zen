@@ -2,6 +2,10 @@
 //! 2048-byte pages, no OOB, byte offset equal to NAND offset. Reads go through
 //! `nand read` and the fastboot buffer; writes through `nand write.trimffs`
 //! (erased pages stay erased for UBI). Port of scripts/backup_nand.py.
+//!
+//! Both commands skip bad blocks and carry on in the next good one, which
+//! would shift everything after. So every access is split around the bad
+//! blocks: they read as erased and are never written.
 
 use std::time::Duration;
 
@@ -17,7 +21,7 @@ pub const BOOT_SIZE: u32 = 0x40_0000;
 pub const BOOT_CONTROL: u32 = 0x8_0000;
 const CHUNK: u32 = 0x400_0000;
 const PAGE: u32 = 0x800;
-const BLOCK: u32 = 0x2_0000;
+pub const BLOCK: u32 = 0x2_0000;
 /// The first U-Boot copy may start here, after the FCB and DBBT search areas.
 pub const FIRMWARE: u32 = 0x10_0000;
 /// Stock U-Boot and Linux keep their flash bad block table in the last 4 blocks.
@@ -51,6 +55,21 @@ pub fn all_chunks() -> Vec<(u32, u32)> {
 /// anyway, and never the chip's own bad block table at the end.
 pub fn restore_chunks(keep_fcb: bool) -> Vec<(u32, u32)> {
     chunks(if keep_fcb { BOOT_CONTROL } else { FIRMWARE }, NAND_SIZE - BBT_AREA)
+}
+
+/// `offset..offset + size` in pieces `nand read` and `nand write` take as they
+/// are: (offset, size, bad) each, split where the boot-control blocks end and
+/// around each bad block.
+fn pieces(offset: u32, size: u32, bad: &[u32]) -> Vec<(u32, u32, bool)> {
+    let end = offset + size;
+    let mut cuts = vec![offset, end, BOOT_CONTROL];
+    cuts.extend(bad.iter().flat_map(|&block| [block, block + BLOCK]));
+    cuts.retain(|&cut| offset <= cut && cut <= end);
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.windows(2)
+        .map(|w| (w[0], w[1] - w[0], bad.iter().any(|&block| block <= w[0] && w[0] < block + BLOCK)))
+        .collect()
 }
 
 /// The blocks `nand bad` lists, as U-Boot prints them ("  %08llx"), up to
@@ -102,16 +121,19 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         bad_blocks(&self.console.command("nand bad", seconds(60))?)
     }
 
-    /// Reads NAND into the fastboot buffer. ECC errors are allowed in the
-    /// boot-control blocks only, which are not BCH18; they are read on their
-    /// own, as U-Boot names only the start of a read that fails.
-    fn nand_to_ram(&mut self, offset: u32, size: u32) -> Result<()> {
-        if offset < BOOT_CONTROL && offset + size > BOOT_CONTROL {
-            let head = BOOT_CONTROL - offset;
-            self.nand_to_address(RAM_BASE, offset, head)?;
-            return self.nand_to_address(RAM_BASE + head, BOOT_CONTROL, size - head);
+    /// Reads NAND into the fastboot buffer, `bad` blocks as erased. ECC errors
+    /// are allowed in the boot-control blocks only, which are not BCH18; they
+    /// are read on their own, as U-Boot names only the start of a read that fails.
+    fn nand_to_ram(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<()> {
+        for (at, size, is_bad) in pieces(offset, size, bad) {
+            let address = RAM_BASE + (at - offset);
+            if is_bad {
+                self.console.command(&format!("mw.b {address:#x} 0xff {size:#x}"), seconds(10))?;
+            } else {
+                self.nand_to_address(address, at, size)?;
+            }
         }
-        self.nand_to_address(RAM_BASE, offset, size)
+        Ok(())
     }
 
     fn nand_to_address(&mut self, address: u32, offset: u32, size: u32) -> Result<()> {
@@ -125,31 +147,37 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         Ok(())
     }
 
-    pub fn read_nand(&mut self, offset: u32, size: u32) -> Result<Vec<u8>> {
-        self.nand_to_ram(offset, size)?;
+    pub fn read_nand(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<Vec<u8>> {
+        self.nand_to_ram(offset, size, bad)?;
         self.upload_ram(size as usize)
     }
 
     /// The CRC32 of NAND as it reads now, computed on the unit.
-    pub fn nand_crc(&mut self, offset: u32, size: u32) -> Result<u32> {
-        self.nand_to_ram(offset, size)?;
+    pub fn nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<u32> {
+        self.nand_to_ram(offset, size, bad)?;
         self.checked_crc(RAM_BASE, size as usize)
     }
 
-    /// Erases NAND at `offset` and writes `data` there, checked in RAM first and
-    /// read back after.
-    pub fn write_nand(&mut self, offset: u32, data: &[u8]) -> Result<()> {
+    /// Erases NAND at `offset` and writes `data` there but in the `bad` blocks,
+    /// checked in RAM first and read back after: `data` must be erased there.
+    pub fn write_nand(&mut self, offset: u32, data: &[u8], bad: &[u32]) -> Result<()> {
         let (size, expected) = self.stage(data)?;
-        let response = self.console.command(&format!("nand erase {offset:#x} {size:#x}"), seconds(120))?;
-        if !response.contains("OK") {
-            return device(format!("nand erase at {offset:#x} failed: {}", response.trim()));
+        for (at, size, is_bad) in pieces(offset, size as u32, bad) {
+            if is_bad {
+                continue;
+            }
+            let response = self.console.command(&format!("nand erase {at:#x} {size:#x}"), seconds(120))?;
+            if !response.contains("OK") {
+                return device(format!("nand erase at {at:#x} failed: {}", response.trim()));
+            }
+            let address = RAM_BASE + (at - offset);
+            let response = self.console.command(&format!("nand write.trimffs {address:#x} {at:#x} {size:#x}"),
+                                                seconds(300))?;
+            if !response.contains(&format!("{size} bytes written: OK")) {
+                return device(format!("nand write at {at:#x} failed: {}", response.trim()));
+            }
         }
-        let response = self.console.command(&format!("nand write.trimffs {RAM_BASE:#x} {offset:#x} {size:#x}"),
-                                            seconds(300))?;
-        if !response.contains(&format!("{size} bytes written: OK")) {
-            return device(format!("nand write at {offset:#x} failed: {}", response.trim()));
-        }
-        let actual = self.nand_crc(offset, size as u32)?;
+        let actual = self.nand_crc(offset, size as u32, bad)?;
         if actual != expected {
             return device(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
                                    the image has {expected:08x}"));
@@ -269,8 +297,8 @@ mod tests {
         let mut unit = Unit::default();
         unit.ecc_errors = true;
         let (mut board, _) = board(unit);
-        assert_eq!(board.read_nand(0, 0x1000).unwrap().len(), 0x1000);
-        assert!(board.read_nand(BOOT_SIZE, 0x1000).is_err());
+        assert_eq!(board.read_nand(0, 0x1000, &[]).unwrap().len(), 0x1000);
+        assert!(board.read_nand(BOOT_SIZE, 0x1000, &[]).is_err());
     }
 
     #[test]
@@ -278,10 +306,10 @@ mod tests {
         let mut unit = Unit::default();
         unit.ecc_errors = true;
         let (mut board, _) = board(unit);
-        assert!(board.read_nand(0, BOOT_SIZE).is_err());
-        assert!(board.read_nand(BOOT_CONTROL, 0x1000).is_err());
-        assert!(board.read_nand(BOOT_CONTROL - 0x1000, 0x2000).is_err());
-        assert_eq!(board.read_nand(0, BOOT_CONTROL).unwrap().len(), BOOT_CONTROL as usize);
+        assert!(board.read_nand(0, BOOT_SIZE, &[]).is_err());
+        assert!(board.read_nand(BOOT_CONTROL, 0x1000, &[]).is_err());
+        assert!(board.read_nand(BOOT_CONTROL - 0x1000, 0x2000, &[]).is_err());
+        assert_eq!(board.read_nand(0, BOOT_CONTROL, &[]).unwrap().len(), BOOT_CONTROL as usize);
     }
 
     #[test]
@@ -290,7 +318,7 @@ mod tests {
         unit.nand.insert(0, vec![1u8; BOOT_CONTROL as usize]);
         unit.nand.insert(BOOT_CONTROL, vec![2u8; (BOOT_SIZE - BOOT_CONTROL) as usize]);
         let (mut board, unit) = board(unit);
-        let data = board.read_nand(0, BOOT_SIZE).unwrap();
+        let data = board.read_nand(0, BOOT_SIZE, &[]).unwrap();
         assert_eq!(data.len(), BOOT_SIZE as usize);
         assert!(data[..BOOT_CONTROL as usize].iter().all(|&b| b == 1));
         assert!(data[BOOT_CONTROL as usize..].iter().all(|&b| b == 2));
@@ -302,7 +330,7 @@ mod tests {
     fn writes_are_erased_first_and_read_back() {
         let (mut board, unit) = board(Unit::default());
         let data: Vec<u8> = (0..0x2000u32).map(|i| i as u8).collect();
-        board.write_nand(BOOT_SIZE, &data).unwrap();
+        board.write_nand(BOOT_SIZE, &data, &[]).unwrap();
         assert_eq!(unit.borrow().nand[&BOOT_SIZE], data);
         {
             let lines = &unit.borrow().lines;
@@ -311,6 +339,52 @@ mod tests {
             assert!(erase < write);
         }
         unit.borrow_mut().corrupt_writes = true;
-        assert!(board.write_nand(BOOT_SIZE, &data).unwrap_err().to_string().contains("reads back"));
+        assert!(board.write_nand(BOOT_SIZE, &data, &[]).unwrap_err().to_string().contains("reads back"));
+    }
+
+    #[test]
+    fn pieces_split_around_bad_blocks_and_the_boot_control_blocks() {
+        assert_eq!(pieces(BOOT_SIZE, 0x10_0000, &[]), [(BOOT_SIZE, 0x10_0000, false)]);
+        assert_eq!(pieces(0, BOOT_SIZE, &[]), [(0, BOOT_CONTROL, false), (BOOT_CONTROL, BOOT_SIZE - BOOT_CONTROL, false)]);
+        let bad = [BOOT_SIZE + BLOCK, BOOT_SIZE + 2 * BLOCK, 0x1000_0000];
+        assert_eq!(pieces(BOOT_SIZE, 8 * BLOCK, &bad), [
+            (BOOT_SIZE, BLOCK, false),
+            (BOOT_SIZE + BLOCK, BLOCK, true),
+            (BOOT_SIZE + 2 * BLOCK, BLOCK, true),
+            (BOOT_SIZE + 3 * BLOCK, 5 * BLOCK, false),
+        ]);
+        assert_eq!(pieces(BOOT_SIZE + BLOCK, BLOCK, &bad), [(BOOT_SIZE + BLOCK, BLOCK, true)]);
+    }
+
+    #[test]
+    fn bad_blocks_read_as_erased_and_keep_offsets() {
+        let mut unit = Unit::default();
+        unit.nand.insert(BOOT_SIZE, vec![1u8; BLOCK as usize]);
+        unit.nand.insert(BOOT_SIZE + 2 * BLOCK, vec![3u8; BLOCK as usize]);
+        let (mut board, unit) = board(unit);
+        // RAM holds older data where the bad block lands.
+        board.stage(&vec![7u8; 3 * BLOCK as usize]).unwrap();
+        let data = board.read_nand(BOOT_SIZE, 3 * BLOCK, &[BOOT_SIZE + BLOCK]).unwrap();
+        let block = BLOCK as usize;
+        assert!(data[..block].iter().all(|&b| b == 1));
+        assert!(data[block..2 * block].iter().all(|&b| b == 0xff));
+        assert!(data[2 * block..].iter().all(|&b| b == 3));
+        let reads: Vec<String> = unit.borrow().lines.iter().filter(|l| l.starts_with("nand read")).cloned().collect();
+        assert_eq!(reads, ["nand read 0x88000000 0x400000 0x20000", "nand read 0x88040000 0x440000 0x20000"]);
+    }
+
+    #[test]
+    fn writes_skip_bad_blocks() {
+        let (mut board, unit) = board(Unit::default());
+        let block = BLOCK as usize;
+        let mut data = vec![1u8; 3 * block];
+        data[block..2 * block].fill(0xff);
+        data[2 * block..].fill(3);
+        board.write_nand(BOOT_SIZE, &data, &[BOOT_SIZE + BLOCK]).unwrap();
+        assert_eq!(unit.borrow().nand[&BOOT_SIZE], vec![1u8; block]);
+        assert_eq!(unit.borrow().nand[&(BOOT_SIZE + 2 * BLOCK)], vec![3u8; block]);
+        assert!(!unit.borrow().lines.iter().any(|l| l.starts_with("nand") && l.contains("0x420000")));
+        data[block] = 0;
+        assert!(board.write_nand(BOOT_SIZE, &data, &[BOOT_SIZE + BLOCK]).unwrap_err().to_string().contains("reads back"));
     }
 }

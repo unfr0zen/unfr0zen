@@ -5,20 +5,21 @@
 //! checked against U-Boot's CRC32, then reads NAND a second time and compares
 //! (the boot-control pages, whose bits flip between reads, are the only bytes
 //! allowed to differ). Chunks already read are kept in OUT.parts/, so running
-//! the same command again resumes an interrupted backup. A chip with bad
-//! blocks is refused: `nand read` skips them and would shift everything after.
+//! the same command again resumes an interrupted backup. Bad blocks are kept
+//! in the image as erased, at their own offsets.
 //!
 //! A restore writes such a backup back, beside its .sha256. Two areas are not
 //! copied from the image: the FCB blocks, whose ROM encoding a BCH18 read
 //! cannot capture, and the last four blocks, which hold this chip's own bad
 //! block table. The current FCB is kept when it points at the image's U-Boot
 //! copies; otherwise the FCB and DBBT are regenerated from the copies' IVTs.
+//! This chip's bad blocks are skipped, and must be erased in the image.
 
 use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 
-use unfr0zen_core::diamond3::nand::{all_chunks, fcb_matches, image_firmware, restore_chunks, BOOT_CONTROL, BOOT_SIZE};
+use unfr0zen_core::diamond3::nand::{all_chunks, fcb_matches, image_firmware, restore_chunks, BLOCK, BOOT_CONTROL, BOOT_SIZE};
 pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::{Error, Result};
@@ -36,10 +37,12 @@ pub fn is_image(len: u64) -> bool {
     len == u64::from(NAND_SIZE)
 }
 
-/// Recovery U-Boot and the port it is on, which a reload may change.
+/// Recovery U-Boot and the port it is on, which a reload may change, and the
+/// chip's bad blocks.
 struct Unit {
     board: Board,
     port: String,
+    bad: Vec<u32>,
 }
 
 impl Unit {
@@ -48,7 +51,7 @@ impl Unit {
     /// large transfers and resets to SDP: then it is reloaded and the chunk
     /// done again, once.
     fn each_chunk(&mut self, progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
-                  kept: impl Fn(u32) -> bool, mut step: impl FnMut(&mut Board, u32, u32) -> Result<()>) -> Result<()> {
+                  kept: impl Fn(u32) -> bool, mut step: impl FnMut(&mut Board, &[u32], u32, u32) -> Result<()>) -> Result<()> {
         let total: u64 = chunks.iter().map(|c| u64::from(c.1)).sum();
         stage_with(progress, &format!("{verb} NAND"), |progress| {
             let mut done = 0;
@@ -57,11 +60,11 @@ impl Unit {
                     log::info!("NAND {offset:#x}+{size:#x} kept from an earlier run");
                 } else {
                     progress.transfer(done, size.into(), total);
-                    match step(&mut self.board, offset, size) {
+                    match step(&mut self.board, &self.bad, offset, size) {
                         Err(Error::Io(dropped)) => {
                             log::warn!("Recovery dropped at NAND {offset:#x} ({dropped}); reloading it");
                             self.reload().map_err(|e| failure(format!("{dropped}; recovery did not come back: {e}")))?;
-                            step(&mut self.board, offset, size)
+                            step(&mut self.board, &self.bad, offset, size)
                         }
                         other => other,
                     }?;
@@ -109,12 +112,14 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     let port = reach_recovery(progress, port, id)?;
     let mut board = stage(progress, "Connect to recovery console", || connect_recovery(&port))?;
     report_silicon(progress, &mut board);
-    let mut unit = Unit { board, port };
-    let bad = stage(progress, "Check for bad blocks", || unit.board.bad_blocks())?;
-    if !bad.is_empty() {
-        return Err(failure(format!("NAND has bad blocks at {bad:#x?}; `nand read` skips them, so an image would shift")));
+    let bad = stage(progress, "Check for bad blocks", || board.bad_blocks())?;
+    if bad.is_empty() {
+        progress.status("NAND has no bad blocks");
+    } else {
+        log::info!("Bad blocks: {bad:#x?}");
+        progress.status(&format!("NAND has {} bad blocks; they are skipped and kept as erased", bad.len()));
     }
-    progress.status("NAND has no bad blocks");
+    let mut unit = Unit { board, port, bad };
     let message = match job {
         Job::Backup(out) => {
             let parts = out.with_extension("parts");
@@ -139,7 +144,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
             format!("NAND restored from {}", image.display())
         }
     };
-    let Unit { board, port } = unit;
+    let Unit { board, port, .. } = unit;
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
     stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port)))?;
     Ok(message)
@@ -149,9 +154,9 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     file(parts, fs::create_dir_all(parts))?;
     let part = |offset: u32| parts.join(format!("{offset:08x}.bin"));
     // Parts are renamed into place only once read and checked.
-    unit.each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |board, offset, size| {
+    unit.each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |board, bad, offset, size| {
         let part = part(offset);
-        let data = board.read_nand(offset, size)?;
+        let data = board.read_nand(offset, size, bad)?;
         let partial = part.with_extension("tmp");
         file(&partial, fs::write(&partial, &data))?;
         file(&part, fs::rename(&partial, &part))
@@ -167,10 +172,10 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
 }
 
 fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<()> {
-    unit.each_chunk(progress, "Verify", &all_chunks(), |_| false, |board, offset, size| {
+    unit.each_chunk(progress, "Verify", &all_chunks(), |_| false, |board, bad, offset, size| {
         let expected = read_at(image, offset.into(), size as usize)?;
         if offset < BOOT_SIZE {
-            let actual = board.read_nand(offset, size)?;
+            let actual = board.read_nand(offset, size, bad)?;
             let control = BOOT_CONTROL as usize;
             if actual[control..] != expected[control..] {
                 return Err(failure("the boot partition reads differently a second time outside the boot-control blocks"));
@@ -179,7 +184,7 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
             log::info!("Boot-control blocks: {flips} bits differ between reads");
             return Ok(());
         }
-        let (actual, expected) = (board.nand_crc(offset, size)?, crc32fast::hash(&expected));
+        let (actual, expected) = (board.nand_crc(offset, size, bad)?, crc32fast::hash(&expected));
         if actual != expected {
             return Err(failure(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
                                         the image has {expected:08x}")));
@@ -202,11 +207,21 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
     }
     let chunks = restore_chunks(keep);
     let (start, end) = (chunks[0].0, chunks.last().map_or(0, |c| c.0 + c.1));
+    let mut lost = Vec::new();
+    for &block in unit.bad.iter().filter(|&&block| (start..end).contains(&block)) {
+        if read_at(image, block.into(), BLOCK as usize)?.iter().any(|&b| b != 0xff) {
+            lost.push(block);
+        }
+    }
+    if !lost.is_empty() {
+        return Err(failure(format!("NAND blocks {lost:#x?} are bad on this chip but hold data in {}: \
+                                    it is another unit's backup, or they went bad since", image.display())));
+    }
     if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
-    unit.each_chunk(progress, "Restore", &chunks, |_| false, |board, offset, size| {
-        board.write_nand(offset, &read_at(image, offset.into(), size as usize)?)
+    unit.each_chunk(progress, "Restore", &chunks, |_| false, |board, bad, offset, size| {
+        board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, bad)
     })?;
     if !keep {
         stage(progress, "Regenerate the FCB and DBBT", || unit.board.write_boot_control(copies))?;

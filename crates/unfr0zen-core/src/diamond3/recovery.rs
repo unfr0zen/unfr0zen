@@ -581,6 +581,10 @@ pub(crate) mod tests {
                     }
                     format!("\nNAND read: device 0 offset {offset:#x}, size {length:#x}\n {length} bytes read: OK\n")
                 }
+                ["mw.b", address, value, count] => {
+                    self.ram.push((hex(address), vec![hex(value) as u8; hex(count) as usize]));
+                    String::new()
+                }
                 ["nand", "erase", offset, length] => {
                     self.nand.remove(&hex(offset));
                     format!("\nNAND erase: device 0 offset {offset}, size {length}\nErasing at {offset} -- 100% complete.\nOK\n")
