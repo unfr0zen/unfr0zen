@@ -425,8 +425,13 @@ const definition = {
             result.push(e.numeric('target_humidity', ea.ALL).withUnit('%').withValueMin(10).withValueMax(60)
                 .withValueStep(5).withCategory('config').withDescription('Humidity the (de)humidifier aims for'));
         }
+        // With no target, null renders as an empty string, which a timestamp
+        // sensor rejects; "None" makes it unknown instead. Zigbee2MQTT takes
+        // valueTemplate from 2.13.0 on.
         result.push(e.text('time_to_target', ea.STATE).withLabel('Time to temperature')
-            .withHomeAssistant({deviceClass: 'timestamp', name: 'Time to temperature'}).withDescription('When the target is reached'));
+            .withHomeAssistant({deviceClass: 'timestamp', name: 'Time to temperature',
+                valueTemplate: '{% if "time_to_target" in value_json %}{{ value_json["time_to_target"] or "None" }}{% endif %}'})
+            .withDescription('When the target is reached'));
         if (has(device, INPUTS.filter_runtime)) {
             result.push(e.numeric('filter_runtime', ea.STATE).withUnit('h').withCategory('diagnostic')
                 .withLabel('Filter runtime').withHomeAssistant({deviceClass: 'duration', name: 'Filter runtime'})
