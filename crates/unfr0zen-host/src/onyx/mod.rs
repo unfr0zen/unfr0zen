@@ -10,7 +10,7 @@ use crate::progress::Progress;
 /// Diagnostics must never turn an unsupported device into a recovery attempt.
 pub(crate) fn unsupported(progress: &mut dyn Progress) -> Error {
     match crate::diamond3::usb::open_sdp(usb::SDP).and_then(|mut rom| rom_silicon(&mut rom)) {
-        Ok(chip) => progress.device(&format!("{}: {chip}", Device::Onyx.description())),
+        Ok(id) => progress.device(&format!("{}: {}", Device::Onyx.description(), id.silicon)),
         Err(error) => log::warn!("Onyx silicon revision not read: {error}"),
     }
     Error::Device("Nest Thermostat E is not supported".into())
@@ -48,7 +48,7 @@ mod tests {
             ]),
             writes: Vec::new(),
         };
-        assert_eq!(rom_silicon(&mut rom).unwrap(), "i.MX6UL rev 1.1");
+        assert_eq!(rom_silicon(&mut rom).unwrap().silicon, "i.MX6UL rev 1.1");
         assert_eq!(rom.writes, vec![
             vec![1, 1, 1, 2, 0x0c, 0x82, 0x60, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
             vec![1, 1, 1, 0, 0, 0, 0x80, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn silicon_is_shown_even_if_the_rom_version_is_unreadable() {
         let mut rom = Rom { replies: VecDeque::from([vec![4, 2, 0, 0x64, 0]]), writes: Vec::new() };
-        assert_eq!(rom_silicon(&mut rom).unwrap(), "i.MX6UL rev 1.2");
+        assert_eq!(rom_silicon(&mut rom).unwrap().silicon, "i.MX6UL rev 1.2");
     }
 
     #[test]

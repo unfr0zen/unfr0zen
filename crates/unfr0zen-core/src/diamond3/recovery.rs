@@ -115,7 +115,36 @@ pub fn silicon(digprog: u32) -> String {
         0x64 => "i.MX6UL".to_string(),
         other => format!("i.MX6 type {other:#04x}"),
     };
-    format!("{name} rev {}.{}", ((digprog >> 8) & 0xff) + 1, digprog & 0xff)
+    let (major, minor) = revision(digprog);
+    format!("{name} rev {major}.{minor}")
+}
+
+/// The first silicon revision that ships the updated boot ROM: from it on,
+/// the ROM's image checks hold even on units whose fuses enforce secure
+/// boot, and no recovery image can be started on them. The 6SoloX runs
+/// rev 1.0 through 1.4.
+pub const UPDATED_ROM_REV: (u32, u32) = (1, 4);
+
+/// A boot ROM generation, from the silicon revision DIGPROG reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RomRevision {
+    /// A stepping below UPDATED_ROM_REV.
+    Original,
+    /// UPDATED_ROM_REV or later.
+    Updated,
+}
+
+/// The silicon revision DIGPROG encodes, major first.
+pub fn revision(digprog: u32) -> (u32, u32) {
+    (((digprog >> 8) & 0xff) + 1, digprog & 0xff)
+}
+
+pub fn rom_revision(digprog: u32) -> RomRevision {
+    if revision(digprog) < UPDATED_ROM_REV {
+        RomRevision::Original
+    } else {
+        RomRevision::Updated
+    }
 }
 
 /// `count` words of RAM at `address`, as `md.l` printed them.
@@ -492,6 +521,14 @@ pub(crate) mod tests {
         assert_eq!(silicon(0x0062_0101), "i.MX6SoloX rev 2.1");
         assert_eq!(silicon(0x0062_0000), "i.MX6SoloX rev 1.0");
         assert_eq!(silicon(0x0063_0002), "i.MX6 type 0x63 rev 1.2");
+    }
+
+    #[test]
+    fn roms_before_rev_1_4_are_the_original_generation() {
+        assert_eq!(rom_revision(0x0062_0000), RomRevision::Original); // 1.0
+        assert_eq!(rom_revision(0x0062_0003), RomRevision::Original); // 1.3
+        assert_eq!(rom_revision(0x0062_0004), RomRevision::Updated); // 1.4
+        assert_eq!(rom_revision(0x0062_0100), RomRevision::Updated); // 2.0
     }
 
     /// A unit behind recovery U-Boot: UBI volumes, NAND, and RAM as the latest

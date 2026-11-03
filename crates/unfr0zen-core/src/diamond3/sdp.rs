@@ -1,6 +1,8 @@
 //! Serial Download Protocol over HID, spoken by the i.MX6SX boot ROM. Port of
 //! scripts/sdp.py and the upload half of scripts/boot_device.py.
 
+use std::fmt;
+
 pub const UBOOT_BASE: u32 = 0x8780_0000;
 pub const HID_DATA_SIZE: usize = 1024;
 
@@ -16,6 +18,10 @@ const WRITE_COMPLETE: [u8; 4] = [0x88; 4];
 /// WRITE_REGISTER answers with its own completion word, 0x128a8a12, not the
 /// 0x88888888 the file commands use.
 const REGISTER_COMPLETE: [u8; 4] = [0x12, 0x8a, 0x8a, 0x12];
+/// The HAB security state word, as NXP's uuu decodes it (sdp.h): the fuses
+/// enforce image authentication, or they do not.
+const HAB_ENABLED: [u8; 4] = [0x12, 0x34, 0x34, 0x12];
+const HAB_DISABLED: [u8; 4] = [0x56, 0x78, 0x78, 0x56];
 
 /// A HID device that exchanges whole reports, report ID first.
 pub trait Hid {
@@ -44,11 +50,24 @@ pub fn command(dev: &mut impl Hid, kind: u16, address: u32, count: u32) -> Resul
 
 /// Reads one 32-bit word; the i.MX6SX answers in report 4.
 pub fn read_word(dev: &mut impl Hid, address: u32) -> Result<u32> {
+    Ok(read_word_and_hab(dev, address)?.0)
+}
+
+/// Reads one 32-bit word and keeps any HAB report the ROM sends ahead of
+/// its answer: a unit with secure boot closed announces its state before
+/// command replies.
+pub fn read_word_and_hab(dev: &mut impl Hid, address: u32) -> Result<(u32, Option<HabState>)> {
     command(dev, READ_REGISTER, address, 4)?;
+    let mut hab = None;
     for _ in 0..4 {
         let reply = dev.read(1000)?;
-        if reply.len() >= 5 && reply[0] == REPORT_STATUS {
-            return Ok(u32::from_le_bytes(reply[1..5].try_into().unwrap()));
+        if reply.len() >= 5 {
+            let word: [u8; 4] = reply[1..5].try_into().unwrap();
+            match reply[0] {
+                REPORT_HAB => hab = Some(HabState::from_word(word)),
+                REPORT_STATUS => return Ok((u32::from_le_bytes(word), hab)),
+                _ => {}
+            }
         }
     }
     Err(Error::Timeout(format!("No word read reply at {address:#x}")))
@@ -127,6 +146,46 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// The HAB security state of a unit, from the magic word in the ROM's HAB
+/// report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HabState {
+    /// 0x12343412: secure boot closed. This reports fuse state, not whether
+    /// a particular image was accepted or a jump succeeded.
+    Enabled,
+    /// 0x56787856: secure boot open. The ROM runs any image.
+    Disabled,
+    /// A state word outside this table.
+    Unknown([u8; 4]),
+}
+
+impl HabState {
+    fn from_word(word: [u8; 4]) -> HabState {
+        match word {
+            HAB_ENABLED => HabState::Enabled,
+            HAB_DISABLED => HabState::Disabled,
+            other => HabState::Unknown(other),
+        }
+    }
+}
+
+impl fmt::Display for HabState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            HabState::Enabled => write!(f, "enabled (secure boot closed)"),
+            HabState::Disabled => write!(f, "disabled (secure boot open)"),
+            HabState::Unknown(word) => write!(f, "unknown state {:02x?}", word),
+        }
+    }
+}
+
+/// The HAB state in the replies to JUMP: the report the ROM sends before it
+/// jumps.
+pub fn hab_state(replies: &[Vec<u8>]) -> Option<HabState> {
+    let report = replies.iter().find(|r| r.first() == Some(&REPORT_HAB))?;
+    Some(HabState::from_word(report.get(1..5)?.try_into().ok()?))
 }
 
 /// Sends JUMP and waits for the HAB report the ROM sends before it
@@ -214,9 +273,35 @@ mod tests {
 
     #[test]
     fn jump_waits_for_the_hab_report() {
-        let mut device = scripted(&[&[4, 0, 0, 0, 0], &[3, 0x12, 0x34, 0x34, 0x12]]);
-        assert_eq!(jump(&mut device, UBOOT_BASE).unwrap().len(), 2);
-        assert_eq!(&device.writes[0][1..7], &[0x0b, 0x0b, 0x87, 0x80, 0x00, 0x00]);
+        for (word, state) in [(HAB_ENABLED, HabState::Enabled), (HAB_DISABLED, HabState::Disabled)] {
+            let report = [&[REPORT_HAB][..], &word].concat();
+            let mut device = scripted(&[&[4, 0, 0, 0, 0], &report]);
+            let replies = jump(&mut device, UBOOT_BASE).unwrap();
+            assert_eq!(replies.len(), 2);
+            assert_eq!(hab_state(&replies), Some(state));
+            assert_eq!(&device.writes[0][1..7], &[0x0b, 0x0b, 0x87, 0x80, 0x00, 0x00]);
+        }
         assert!(matches!(jump(&mut scripted(&[]), UBOOT_BASE), Err(Error::Timeout(_))));
+    }
+
+    #[test]
+    fn hab_state_decodes_the_security_word() {
+        // A closed unit's refusal: the HAB report, then an error status.
+        let refused = vec![vec![3, 0x12, 0x34, 0x34, 0x12], vec![4, 0x33, 0x21, 0xc0, 0x00]];
+        assert_eq!(hab_state(&refused), Some(HabState::Enabled));
+        assert_eq!(hab_state(&[vec![3, 0x56, 0x78, 0x78, 0x56]]), Some(HabState::Disabled));
+        assert_eq!(
+            hab_state(&[vec![3, 0x11, 0x22, 0x33, 0x44]]),
+            Some(HabState::Unknown([0x11, 0x22, 0x33, 0x44]))
+        );
+        assert_eq!(hab_state(&[vec![4, 0x88, 0x88, 0x88, 0x88]]), None);
+        assert_eq!(hab_state(&[vec![3, 0x56, 0x78]]), None);
+    }
+
+    #[test]
+    fn word_reads_capture_a_hab_preamble() {
+        let mut device = scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x22, 0, 0, 0]]);
+        assert_eq!(read_word_and_hab(&mut device, 0x80).unwrap(), (0x22, Some(HabState::Enabled)));
+        assert_eq!(read_word(&mut scripted(&[&[4, 0x22, 0, 0, 0]]), 0x80).unwrap(), 0x22);
     }
 }

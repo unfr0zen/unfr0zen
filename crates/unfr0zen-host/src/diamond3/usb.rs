@@ -7,8 +7,10 @@ use std::time::{Duration, Instant};
 
 use nusb::MaybeFuture;
 use unfr0zen_core::diamond3::fastboot::Protocol;
-use unfr0zen_core::diamond3::recovery::{silicon, DIGPROG, RAM_BASE};
-use unfr0zen_core::diamond3::sdp::{self, Hid, UBOOT_BASE};
+use unfr0zen_core::diamond3::recovery::{
+    revision, rom_revision, silicon, RomRevision, DIGPROG, RAM_BASE,
+};
+use unfr0zen_core::diamond3::sdp::{self, HabState, Hid, UBOOT_BASE};
 use unfr0zen_core::{Error, Result};
 
 use super::assets;
@@ -227,30 +229,68 @@ const DDR_INIT: [(u32, u32); 74] = [
     (0x021b_001c, 0x0000_0000),
 ];
 
+/// What the SDP ROM reports about the plugged unit: the SoC and its silicon
+/// revision, the raw DIGPROG word, and the HAB state when the ROM announces
+/// one ahead of its answers.
+#[derive(Debug)]
+pub(crate) struct RomId {
+    pub silicon: String,
+    pub digprog: u32,
+    pub hab: Option<sdp::HabState>,
+}
+
+/// Reads the unit's identity through the SDP ROM.
+pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<RomId> {
+    let (digprog, digprog_hab) = sdp::read_word_and_hab(rom, DIGPROG)?;
+    let silicon = silicon(digprog);
+    let rom_hab = match sdp::read_word_and_hab(rom, 0x80) {
+        Ok((version, hab)) => {
+            log::info!("Boot ROM version: {version:#010x}");
+            hab
+        }
+        Err(error) => {
+            log::warn!("Boot ROM version not read: {error}");
+            None
+        }
+    };
+    let hab = rom_hab.or(digprog_hab);
+    if let Some(state) = &hab {
+        log::info!("HAB {state} at plug");
+    }
+    Ok(RomId { silicon, digprog, hab })
+}
+
+/// The refusal for a closed unit on a stepping that ships the updated boot
+/// ROM.
+fn updated_rom(digprog: u32) -> String {
+    let (major, minor) = revision(digprog);
+    format!(
+        "this unit's fuses enforce secure boot (HAB enabled) and its silicon rev \
+         {major}.{minor} ships the updated boot ROM; the unsigned recovery image \
+         cannot run on it"
+    )
+}
+
 /// Brings up DDR with register writes, then loads recovery U-Boot into it and
 /// the bootstrap chain into OCRAM, and enters it — one ROM SDP session, no
 /// intermediate loader. The boot wrapper arms the watchdog; recovery services
-/// it while its console has DTR.
-/// The SoC and its silicon revision, read through the SDP ROM; the ROM's
-/// own version is only logged.
-pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<String> {
-    let chip = silicon(sdp::read_word(rom, DIGPROG)?);
-    match sdp::read_word(rom, 0x80) {
-        Ok(version) => log::info!("Boot ROM version: {version:#010x}"),
-        Err(error) => log::warn!("Boot ROM version not read: {error}"),
-    }
-    Ok(chip)
-}
-
-/// Uploads recovery U-Boot through the SDP ROM and starts it: the silicon
-/// revision the ROM reported, if it did.
+/// it while its console has DTR. Returns the silicon revision the ROM
+/// reported, if it did.
 pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     let mut api = hidapi::HidApi::new().map_err(|e| Error::Io(e.to_string()))?;
     let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(130))?;
-    let chip = rom_silicon(&mut rom).inspect_err(|error| {
+    let rom_id = rom_silicon(&mut rom).inspect_err(|error| {
         log::warn!("Silicon revision not read over SDP: {error}");
         sdp::drain(&mut rom, 50);
     }).ok();
+    // A unit that already announced closed fuses on a stepping with the
+    // updated boot ROM can never run the recovery image; stop before the
+    // DDR writes.
+    if let Some(RomId { hab: Some(HabState::Enabled), digprog, .. }) = &rom_id {
+        if rom_revision(*digprog) == RomRevision::Updated {
+            return Err(Error::Device(updated_rom(*digprog)));
+        }
+    }
     for &(address, value) in &DDR_INIT {
         sdp::write_register(&mut rom, address, value)?;
         // The MMDC start bit launches the DDR initialization state machine.
@@ -271,10 +311,17 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     // The ROM sends its HAB report before it jumps; a read error only means
     // the jump already dropped USB.
     match sdp::jump(&mut rom, 0x907000) {
-        Ok(replies) => log::info!("JUMP replies: {:02x?}", replies),
+        Ok(replies) => {
+            log::info!("JUMP replies: {:02x?}", replies);
+            // HAB reports fuse state; recovery USB enumeration confirms the jump.
+            match sdp::hab_state(&replies) {
+                Some(state) => log::info!("HAB {state}"),
+                None => log::warn!("The jump replies carry no HAB state"),
+            }
+        }
         Err(Error::Io(e)) => log::info!("JUMP reply read: {e}"),
         Err(e) => return Err(e),
     }
     log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
-    Ok(chip)
+    Ok(rom_id.map(|id| id.silicon))
 }
