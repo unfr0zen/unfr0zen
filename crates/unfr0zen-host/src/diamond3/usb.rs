@@ -10,7 +10,7 @@ use unfr0zen_core::diamond3::fastboot::Protocol;
 use unfr0zen_core::diamond3::recovery::{
     revision, rom_revision, silicon, RomRevision, DIGPROG, RAM_BASE,
 };
-use unfr0zen_core::diamond3::sdp::{self, HabState, Hid, UBOOT_BASE};
+use unfr0zen_core::diamond3::sdp::{self, Hid, UBOOT_BASE};
 use unfr0zen_core::{Error, Result};
 
 use super::assets;
@@ -230,13 +230,11 @@ const DDR_INIT: [(u32, u32); 74] = [
 ];
 
 /// What the SDP ROM reports about the plugged unit: the SoC and its silicon
-/// revision, the raw DIGPROG word, and the HAB state when the ROM announces
-/// one ahead of its answers.
+/// revision, and the raw DIGPROG word behind it.
 #[derive(Debug)]
 pub(crate) struct RomId {
     pub silicon: String,
     pub digprog: u32,
-    pub hab: Option<sdp::HabState>,
 }
 
 /// Reads the unit's identity through the SDP ROM.
@@ -254,21 +252,19 @@ pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<RomId> {
             None
         }
     };
-    let hab = rom_hab.or(digprog_hab);
-    if let Some(state) = &hab {
-        log::info!("HAB {state} at plug");
+    if let Some(state) = rom_hab.or(digprog_hab) {
+        log::info!("HAB {state}");
     }
-    Ok(RomId { silicon, digprog, hab })
+    Ok(RomId { silicon, digprog })
 }
 
-/// The refusal for a closed unit on a stepping that ships the updated boot
-/// ROM.
+/// The refusal for a unit whose fuses enforce secure boot on a stepping
+/// that ships the updated boot ROM.
 fn updated_rom(digprog: u32) -> String {
     let (major, minor) = revision(digprog);
     format!(
-        "this unit's fuses enforce secure boot (HAB enabled) and its silicon rev \
-         {major}.{minor} ships the updated boot ROM; the unsigned recovery image \
-         cannot run on it"
+        "this unit's fuses enforce secure boot and its silicon rev {major}.{minor} ships \
+         the updated boot ROM; the unsigned recovery image cannot run on it"
     )
 }
 
@@ -284,14 +280,6 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
         log::warn!("Silicon revision not read over SDP: {error}");
         sdp::drain(&mut rom, 50);
     }).ok();
-    // A unit that already announced closed fuses on a stepping with the
-    // updated boot ROM can never run the recovery image; stop before the
-    // DDR writes.
-    if let Some(RomId { hab: Some(HabState::Enabled), digprog, .. }) = &rom_id {
-        if rom_revision(*digprog) == RomRevision::Updated {
-            return Err(Error::Device(updated_rom(*digprog)));
-        }
-    }
     for &(address, value) in &DDR_INIT {
         sdp::write_register(&mut rom, address, value)?;
         // The MMDC start bit launches the DDR initialization state machine.
@@ -309,15 +297,26 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
         sdp::write_checked(&mut rom, address, data)?;
         log::info!("Uploaded {} bytes at {address:#x}; samples match", data.len());
     }
-    // The ROM sends its HAB report before it jumps; a read error only means
+    // The ROM answers JUMP with its HAB report, then either drops USB as it
+    // jumps or stays in SDP with an error status; a read error only means
     // the jump already dropped USB.
     match sdp::jump(&mut rom, 0x907000) {
         Ok(replies) => {
             log::info!("JUMP replies: {:02x?}", replies);
-            // HAB reports fuse state; recovery USB enumeration confirms the jump.
-            match sdp::hab_state(&replies) {
-                Some(state) => log::info!("HAB {state}"),
-                None => log::warn!("The jump replies carry no HAB state"),
+            if let Some(state) = sdp::hab_state(&replies) {
+                log::info!("HAB {state}");
+            }
+            if sdp::jump_refusal(&replies).is_some() {
+                let digprog = rom_id.as_ref().map(|id| id.digprog);
+                return Err(Error::Device(match digprog {
+                    Some(digprog) if rom_revision(digprog) == RomRevision::Updated => {
+                        updated_rom(digprog)
+                    }
+                    _ => "the ROM refused the jump and stayed in serial download: this \
+                          unit's fuses enforce secure boot; this build cannot start \
+                          recovery on it"
+                        .into(),
+                }));
             }
         }
         Err(Error::Io(e)) => log::info!("JUMP reply read: {e}"),

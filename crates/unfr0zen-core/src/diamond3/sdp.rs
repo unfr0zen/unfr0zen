@@ -18,8 +18,10 @@ const WRITE_COMPLETE: [u8; 4] = [0x88; 4];
 /// WRITE_REGISTER answers with its own completion word, 0x128a8a12, not the
 /// 0x88888888 the file commands use.
 const REGISTER_COMPLETE: [u8; 4] = [0x12, 0x8a, 0x8a, 0x12];
-/// The HAB security state word, as NXP's uuu decodes it (sdp.h): the fuses
-/// enforce image authentication, or they do not.
+/// The HAB security state word, as NXP's uuu names it (sdp.h): whether the
+/// ROM's HAB is engaged in this session. It does not say whether the unit's
+/// fuses enforce image authentication — units that run any image report
+/// `enabled` too, and enforcement only shows as a refused jump.
 const HAB_ENABLED: [u8; 4] = [0x12, 0x34, 0x34, 0x12];
 const HAB_DISABLED: [u8; 4] = [0x56, 0x78, 0x78, 0x56];
 
@@ -54,8 +56,7 @@ pub fn read_word(dev: &mut impl Hid, address: u32) -> Result<u32> {
 }
 
 /// Reads one 32-bit word and keeps any HAB report the ROM sends ahead of
-/// its answer: a unit with secure boot closed announces its state before
-/// command replies.
+/// its answer: engaged HAB reports its state before command replies.
 pub fn read_word_and_hab(dev: &mut impl Hid, address: u32) -> Result<(u32, Option<HabState>)> {
     command(dev, READ_REGISTER, address, 4)?;
     let mut hab = None;
@@ -152,10 +153,10 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
 /// report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HabState {
-    /// 0x12343412: secure boot closed. This reports fuse state, not whether
-    /// a particular image was accepted or a jump succeeded.
+    /// 0x12343412: HAB engaged. Units whose fuses enforce image
+    /// authentication and units that run any image report this alike.
     Enabled,
-    /// 0x56787856: secure boot open. The ROM runs any image.
+    /// 0x56787856: HAB not engaged.
     Disabled,
     /// A state word outside this table.
     Unknown([u8; 4]),
@@ -174,8 +175,8 @@ impl HabState {
 impl fmt::Display for HabState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            HabState::Enabled => write!(f, "enabled (secure boot closed)"),
-            HabState::Disabled => write!(f, "disabled (secure boot open)"),
+            HabState::Enabled => write!(f, "enabled"),
+            HabState::Disabled => write!(f, "disabled"),
             HabState::Unknown(word) => write!(f, "unknown state {:02x?}", word),
         }
     }
@@ -188,16 +189,43 @@ pub fn hab_state(replies: &[Vec<u8>]) -> Option<HabState> {
     Some(HabState::from_word(report.get(1..5)?.try_into().ok()?))
 }
 
-/// Sends JUMP and waits for the HAB report the ROM sends before it
-/// jumps. Returns every reply read, for diagnostics.
+/// The completion words the ROM uses in status replies; after a JUMP, a
+/// status report carrying anything else is the ROM's error report and means
+/// it stayed in serial download.
+const KNOWN_ACKS: [&[u8]; 3] = [
+    &[0x88, 0x88, 0x88, 0x88],
+    &[0x12, 0x8a, 0x8a, 0x12],
+    &[0x90, 0x0d, 0xd0, 0x09],
+];
+
+/// The error report the ROM sends after refusing a JUMP, if it sent one.
+pub fn jump_refusal(replies: &[Vec<u8>]) -> Option<&[u8]> {
+    replies
+        .iter()
+        .filter(|r| r.len() >= 5 && r[0] == REPORT_STATUS)
+        .find(|r| !KNOWN_ACKS.contains(&&r[1..5]))
+        .map(Vec::as_slice)
+}
+
+/// Sends JUMP and collects the ROM's answers: the HAB report it sends
+/// before it jumps, and — when it refuses the jump — the error status that
+/// follows. Returns every non-empty reply, for diagnostics.
 pub fn jump(dev: &mut impl Hid, address: u32) -> Result<Vec<Vec<u8>>> {
     command(dev, JUMP_ADDRESS, address, 0)?;
-    let mut replies = Vec::new();
+    let mut replies: Vec<Vec<u8>> = Vec::new();
     for _ in 0..8 {
         let reply = dev.read(1000)?;
-        let hab = reply.first() == Some(&REPORT_HAB);
+        if reply.is_empty() {
+            // Quiet after the HAB report: the ROM dropped USB and jumped.
+            if replies.iter().any(|r| r.first() == Some(&REPORT_HAB)) {
+                return Ok(replies);
+            }
+            continue;
+        }
+        let after_hab = replies.iter().any(|r| r.first() == Some(&REPORT_HAB));
         replies.push(reply);
-        if hab {
+        if after_hab {
+            // An answer after the HAB report: the ROM stayed in SDP.
             return Ok(replies);
         }
     }
@@ -286,7 +314,7 @@ mod tests {
 
     #[test]
     fn hab_state_decodes_the_security_word() {
-        // A closed unit's refusal: the HAB report, then an error status.
+        // A refused jump: the HAB report, then an error status.
         let refused = vec![vec![3, 0x12, 0x34, 0x34, 0x12], vec![4, 0x33, 0x21, 0xc0, 0x00]];
         assert_eq!(hab_state(&refused), Some(HabState::Enabled));
         assert_eq!(hab_state(&[vec![3, 0x56, 0x78, 0x78, 0x56]]), Some(HabState::Disabled));
@@ -296,6 +324,27 @@ mod tests {
         );
         assert_eq!(hab_state(&[vec![4, 0x88, 0x88, 0x88, 0x88]]), None);
         assert_eq!(hab_state(&[vec![3, 0x56, 0x78]]), None);
+    }
+
+    #[test]
+    fn a_refused_jump_collects_the_error_status() {
+        // The ROM stays in SDP and reports an error after the HAB report.
+        let mut device = scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x33, 0x21, 0xc0, 0x00]]);
+        let replies = jump(&mut device, UBOOT_BASE).unwrap();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(jump_refusal(&replies), Some(&[4, 0x33, 0x21, 0xc0, 0x00][..]));
+
+        // A quiet ROM after the HAB report jumped, and a completion word
+        // after the HAB report is not a refusal.
+        let quiet = jump(&mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12]]), UBOOT_BASE).unwrap();
+        assert_eq!(quiet.len(), 1);
+        assert_eq!(jump_refusal(&quiet), None);
+        let acked = jump(
+            &mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x90, 0x0d, 0xd0, 0x09]]),
+            UBOOT_BASE,
+        )
+        .unwrap();
+        assert_eq!(jump_refusal(&acked), None);
     }
 
     #[test]
