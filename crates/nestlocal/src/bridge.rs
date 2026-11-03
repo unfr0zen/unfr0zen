@@ -340,8 +340,10 @@ impl Bridge {
         sensor(&mut add, "backplate_temperature", "Backplate temperature", "°C", "temperature", diag());
         sensor(&mut add, "battery_level", "Battery voltage", "V", "voltage", diag());
         sensor(&mut add, "rssi", "WiFi signal", "", "", fields!{"entity_category" => "diagnostic", "icon" => "mdi:wifi"});
+        // With no target, the state's null renders as an empty string, which a
+        // timestamp sensor rejects; "None" makes it unknown instead.
         add("sensor", "time_to_target", "Time to temperature",
-            fields!{"value_template" => tmpl("time_to_target"), "device_class" => "timestamp"});
+            fields!{"value_template" => "{{ value_json.time_to_target or 'None' }}", "device_class" => "timestamp"});
         add("sensor", "hvac_action", "HVAC action", fields!{"value_template" => tmpl("action"), "icon" => "mdi:hvac"});
         add("sensor", "local_ip", "IP address",
             fields!{"value_template" => tmpl("local_ip"), "entity_category" => "diagnostic", "icon" => "mdi:ip-network"});
