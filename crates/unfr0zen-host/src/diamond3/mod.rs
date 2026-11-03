@@ -193,7 +193,11 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         let shell = InitramfsShell::connect(open_acm(usb::INITRAMFS, seconds(45))?, seconds(30))?;
         Ok((port, shell))
     })?;
-    shell.run("uname -a; cat /proc/mtd; grep \" /mnt \" /proc/mounts")?;
+    let probe = shell.run("uname -a; cat /proc/mtd; grep \" /mnt \" /proc/mounts")?;
+    if let Some(release) = probe.lines().find(|l| l.starts_with("Linux ")).and_then(|l| l.split_whitespace().nth(2)) {
+        let firmware = release.split_once('-').map_or(release, |(_, build)| build);
+        log::info!("Firmware {firmware} (kernel release {release})");
+    }
     let label = if config.dry_run { format!("Patch copies of {slot} files (dry run)") } else { format!("Patch {slot} in place") };
     let payload: BTreeSet<String> = payload.into_keys().collect();
     let pki_dir = config.data_dir.join("nestlocal-pki");
