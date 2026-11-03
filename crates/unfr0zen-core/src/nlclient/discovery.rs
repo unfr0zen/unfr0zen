@@ -378,9 +378,17 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         api.insert(name.into(), value);
     }
     let enter = elf.read(lv + 0x2c)?;
-    let draw = elf.read(lv + 0x28)?;
+    let mut draw = elf.read(lv + 0x28)?;
     let ec = arm.calls(enter)?;
-    let dc = arm.calls(draw)?;
+    let mut dc = arm.calls(draw)?;
+    // A build may keep the draw's visibility guard in a wrapper around the
+    // drawing itself: the wrapper calls the guard, then the body, whose calls
+    // follow the guard's in a build that draws in one function.
+    if let [guard, body] = dc[..] {
+        let mut calls = vec![guard];
+        calls.extend(arm.calls(body)?);
+        (draw, dc) = (body, calls);
+    }
     require(
         [4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()),
         "Legal Info lifecycle call shape changed",
@@ -611,8 +619,10 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
         }),
         ("native_screen_init", { let code = body("native_screen_init")?; stores(&code, 0xe4) && loads(&code, 0xe8) == 1 && calls(&code) == 5 }),
         ("native_config_draw", {
+            // The renderer's body is its own function the native calls, or
+            // inlined: its measure and draw calls, and the stack check.
             let code = body("native_config_draw")?;
-            calls(&code) == 1 && [0x28, 0x2c, 0x34, 0x38, 0x3c].iter().all(|&d| loads(&code, d) == 1)
+            [1, 4].contains(&calls(&code)) && [0x28, 0x2c, 0x34, 0x38, 0x3c].iter().all(|&d| loads(&code, d) == 1)
         }),
         ("view_dispatch", { let code = body("view_dispatch")?; loads(&code, 0) >= 2 && indirect(&code) }),
     ] {
