@@ -65,7 +65,7 @@ Firmware, nestlocal and Doom (macOS / Linux), into `build/`:
 
 ```sh
 git submodule update --init
-scripts/build-firmware.sh
+utils/build-firmware.sh
 ```
 
 The app, which embeds `build/`:
@@ -81,5 +81,5 @@ The version comes from `git describe --tag --always --dirty`.
 
 ### Packaging
 
-- macOS universal app bundle: `sh scripts/make_macos_app.sh` → `dist/unfr0zen.app`
-- Linux desktop entry and icon: `sh scripts/install_linux.sh`
+- macOS universal app bundle: `sh utils/make_macos_app.sh` → `dist/unfr0zen.app`
+- Linux desktop entry and icon: `sh utils/install_linux.sh`

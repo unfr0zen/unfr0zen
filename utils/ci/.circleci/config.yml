@@ -1,0 +1,136 @@
+version: 2.1
+
+# The build image, from utils/ci/Dockerfile, on Docker Hub as
+# unfr0zen/unfr0zen-build for the jobs to run in. Built once per Dockerfile
+# and reused until it changes, so the rust base tag and the apt packages only
+# move when it is edited. Tagged by the first twelve hex digits of the
+# Dockerfile's SHA-256: each architecture builds natively on a machine of its
+# own, as <hash>-<uname -m>; the manifest job then joins the two under <hash>.
+#
+# Run by .circleci/config.yml, which sets build-image when a push changes
+# utils/ci/; the build's image gate waits for the manifest meanwhile.
+
+parameters:
+  build-image:
+    type: boolean
+    default: false
+
+commands:
+  # The Dockerfile's tag, for every step after.
+  image-tag:
+    steps:
+      - run:
+          name: The build image's tag
+          command: echo "export TAG=$(sha256sum utils/ci/Dockerfile | cut -c1-12)" >> "$BASH_ENV"
+
+  # Ends the job, successfully, when the tag is already on Docker Hub. Only a
+  # missing tag means build; any other answer (auth, network) fails the job
+  # rather than rebuilding behind its back.
+  skip-if-on-docker-hub:
+    parameters:
+      tag:
+        type: string
+    steps:
+      - run:
+          name: Look for << parameters.tag >> on Docker Hub
+          command: |
+            curl -fsS -o /tmp/token.json -u "$DOCKERHUB_USER:$DOCKERHUB_TOKEN" \
+              "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$REPO:pull" \
+              || { echo "Docker Hub refused the docker-hub context's DOCKERHUB_USER and DOCKERHUB_TOKEN"; exit 1; }
+            token=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])' < /tmp/token.json)
+            status=$(curl -sS -o /dev/null -D /tmp/headers -w '%{http_code}' -I \
+              -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://registry-1.docker.io/v2/$REPO/manifests/<< parameters.tag >>")
+            case $status in
+              200)
+                digest=$(tr -d '\r' < /tmp/headers | sed -n 's/^docker-content-digest: //Ip')
+                [ -n "$digest" ] || { echo "no digest for $REPO:<< parameters.tag >>"; exit 1; }
+                echo "$REPO:<< parameters.tag >> is already on Docker Hub: $digest"
+                circleci-agent step halt ;;
+              404) echo "$REPO:<< parameters.tag >> is not on Docker Hub yet" ;;
+              *) echo "Docker Hub answered $status for $REPO:<< parameters.tag >>"; exit 1 ;;
+            esac
+
+  docker-hub-login:
+    steps:
+      - run:
+          name: Log in to Docker Hub
+          command: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+jobs:
+  # One architecture of the build image, built on a machine of that
+  # architecture: the Dockerfile installs toolchains and Python wheels for the
+  # host, which emulation would make hours long.
+  image:
+    parameters:
+      arch:
+        description: The architecture as uname -m names it, the tag's suffix.
+        type: enum
+        enum: [x86_64, aarch64]
+      resource_class:
+        type: string
+    machine:
+      image: ubuntu-2404:current
+    resource_class: << parameters.resource_class >>
+    environment:
+      REPO: unfr0zen/unfr0zen-build
+    steps:
+      - checkout
+      - image-tag
+      - skip-if-on-docker-hub:
+          tag: $TAG-<< parameters.arch >>
+      - docker-hub-login
+      # Over stdin, with no build context: the Dockerfile needs none, and
+      # sending one would upload the whole worktree. No provenance, so this is
+      # one manifest rather than an index with attestations beside it, and the
+      # manifest job joins exactly one image per architecture.
+      - run:
+          name: Build and push the << parameters.arch >> image
+          no_output_timeout: 30m
+          command: |
+            [ "$(uname -m)" = << parameters.arch >> ] || { echo "this machine is $(uname -m), not << parameters.arch >>"; exit 1; }
+            docker buildx build --tag "$REPO:$TAG-<< parameters.arch >>" \
+              --provenance=false --push - < utils/ci/Dockerfile
+
+  # The multi-architecture tag, from the two images' manifests.
+  image-manifest:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    environment:
+      REPO: unfr0zen/unfr0zen-build
+    steps:
+      - checkout
+      - image-tag
+      - skip-if-on-docker-hub:
+          tag: $TAG
+      - docker-hub-login
+      - run:
+          name: Publish the manifest
+          command: |
+            docker buildx imagetools create --tag "$REPO:$TAG" "$REPO:$TAG-x86_64" "$REPO:$TAG-aarch64"
+            docker buildx imagetools inspect "$REPO:$TAG"
+
+workflows:
+  build-image:
+    when: << pipeline.parameters.build-image >>
+    jobs:
+      - image:
+          name: image-x86_64
+          arch: x86_64
+          resource_class: medium
+          context: docker-hub
+          filters: &on-tags-too
+            tags:
+              only: /.*/
+      - image:
+          name: image-aarch64
+          arch: aarch64
+          resource_class: arm.medium
+          context: docker-hub
+          filters: *on-tags-too
+      - image-manifest:
+          requires: [image-x86_64, image-aarch64]
+          context: docker-hub
+          filters: *on-tags-too

@@ -1,0 +1,207 @@
+version: 2.1
+
+# The app: every module of what it carries, gathered as one build/ by the
+# firmware job, then the workspace's tests and the app for each target. Its
+# workflow runs on a branch when anything built changes; the release workflow
+# (.circleci/release.yml) runs the same jobs for a release tag.
+
+parameters:
+  app:
+    type: boolean
+    default: false
+
+commands:
+  # The firmware job's build/.
+  firmware:
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Unpack the firmware
+          command: tar xf .work/cache/firmware.tar && find build -type f | sort
+
+jobs:
+  # Every module's outputs as one build/, for the tests and the apps.
+  firmware:
+    executor: tools
+    steps:
+      - modules
+      - run:
+          name: Pack the firmware
+          command: tar cf .work/cache/firmware.tar build
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .work/cache/firmware.tar
+
+  # Every test the build image can run: the workspace's Rust tests and clippy,
+  # the radio's dispatcher and image checks, the radio firmware under ARM
+  # emulation, and the Thread diagnostics producer. The ones needing the stock
+  # nlclient or NAND images (not in this repository) skip.
+  test:
+    executor: build-large
+    steps:
+      - checkout
+      - firmware
+      - cargo-registry-restore
+      # nextest for its JUnit report (.config/nextest.toml); the report goes
+      # to CircleCI whether the tests pass or not.
+      - run:
+          name: Rust
+          no_output_timeout: 30m
+          command: |
+            status=0
+            cargo nextest run --workspace --locked --profile ci || status=$?
+            mkdir -p .work/test-results/rust && cp target/nextest/ci/junit.xml .work/test-results/rust/
+            exit $status
+      - run:
+          name: Clippy
+          no_output_timeout: 30m
+          command: |
+            rustup component add clippy
+            cargo clippy --workspace --locked --all-targets -- -D warnings
+      - cargo-registry-store
+      - run:
+          name: radio
+          command: python3 -m pytest platform/common/radio/tests --junitxml=.work/test-results/radio/junit.xml
+      # The built image's ARM code under Unicorn: source matching and the PHY's
+      # early-ACK ISR, the radio's measurements and entropy, and the selection
+      # between its Thread and Zigbee personalities.
+      - run:
+          name: radio firmware
+          command: |
+            for test in source-match radio personality; do
+              python3 platform/common/radio/thread/test-$test.py build/radio/radio.elf
+            done
+            # The EM357's Thread image has no Zigbee personality to select.
+            for test in source-match radio; do
+              python3 platform/common/radio/thread/test-$test.py build/radio-em357-thread/radio.elf
+            done
+      # The daemon's nest-diag producer against mocked OpenThread APIs: only
+      # OpenThread's headers are needed, at the revision the firmware pins.
+      - run:
+          name: Thread diagnostics
+          command: |
+            revision=$(sed -n 's/^revision=//p' platform/common/radio/thread/fetch-openthread.sh)
+            git init -q /tmp/openthread
+            git -C /tmp/openthread fetch -q --depth 1 https://github.com/openthread/openthread.git "$revision"
+            git -C /tmp/openthread checkout -q FETCH_HEAD
+            c++ -std=c++11 -Wall -Wextra -Werror -I /tmp/openthread/include \
+              platform/common/radio/thread/test-diagnostics.cpp -o /tmp/test-thread-diag
+            /tmp/test-thread-diag > /dev/null
+      - store_test_results:
+          path: .work/test-results
+
+  # The app for one platform, into dist/. On Linux and macOS the same
+  # executable is the command-line tool when given arguments. Linux builds
+  # against glibc 2.28, so the binaries also run on older distributions; the
+  # macOS build is universal2, both architectures merged, so the
+  # single-architecture binaries come with it.
+  app:
+    parameters:
+      platform:
+        type: enum
+        enum: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
+    executor: build-large
+    environment:
+      PLATFORM: << parameters.platform >>
+    steps:
+      - checkout
+      - firmware
+      - cargo-registry-restore
+      - run:
+          name: Version and target
+          command: |
+            git fetch --tags --force origin
+            case $PLATFORM in
+              linux-x86_64)   TARGET=x86_64-unknown-linux-gnu;  BUILD="cargo zigbuild --target $TARGET.2.28" ;;
+              linux-arm64)    TARGET=aarch64-unknown-linux-gnu; BUILD="cargo zigbuild --target $TARGET.2.28" ;;
+              linux-riscv64)  TARGET=riscv64gc-unknown-linux-gnu; BUILD="cargo zigbuild --target $TARGET.2.28" ;;
+              windows-x86_64) TARGET=x86_64-pc-windows-gnu;     BUILD="cargo build --target $TARGET" ;;
+              windows-arm64)  TARGET=aarch64-pc-windows-gnullvm; BUILD="cargo zigbuild --target $TARGET" ;;
+              macos)          TARGET=universal2-apple-darwin;   BUILD="cargo zigbuild --target $TARGET" ;;
+            esac
+            {
+              echo "export VERSION=$(git describe --tags --always --dirty)"
+              echo "export TARGET=$TARGET"
+              echo "export BUILD='$BUILD'"
+            } >> "$BASH_ENV"
+      - run:
+          name: Build unfr0zen
+          no_output_timeout: 45m
+          command: $BUILD --release --locked --bin unfr0zen
+      - cargo-registry-store
+      # Linux binaries in tarballs, which keep them executable; Windows and the
+      # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
+      # without compression or extra fields so every unzipper reads them.
+      - run:
+          name: Package
+          command: |
+            out=target/$TARGET/release
+            mkdir -p dist
+            case $PLATFORM in
+              linux-*)
+                tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen ;;
+              windows-*)
+                zip -0 -jqX dist/unfr0zen-$PLATFORM-$VERSION.zip "$out/unfr0zen.exe" ;;
+              macos)
+                for arch in universal:universal2 arm64:aarch64 x86_64:x86_64; do
+                  UNFR0ZEN_BINARY="target/${arch#*:}-apple-darwin/release/unfr0zen" sh utils/make_macos_app.sh
+                  (cd dist && zip -0 -qryX unfr0zen-macos-${arch%%:*}-$VERSION.zip unfr0zen.app && rm -rf unfr0zen.app)
+                done ;;
+            esac
+            ls -l dist
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+
+workflows:
+  app:
+    when: << pipeline.parameters.app >>
+    jobs:
+      - image-ready:
+          context: docker-hub
+      - recovery:
+          requires: [image-ready]
+          context: docker-hub
+      - j49:
+          requires: [image-ready]
+          context: docker-hub
+      - j49-kernel
+      - zbwake-release:
+          matrix:
+            parameters:
+              release: __ZBWAKE_RELEASES__
+          name: zbwake-<< matrix.release >>
+          requires: [image-ready]
+          context: docker-hub
+      - zbwake:
+          requires: [zbwake-release]
+      - radio:
+          requires: [image-ready]
+          context: docker-hub
+      - thread:
+          requires: [image-ready]
+          context: docker-hub
+      - doom:
+          requires: [image-ready]
+          context: docker-hub
+      - nlclient:
+          requires: [image-ready]
+          context: docker-hub
+      - nestlocal:
+          requires: [radio, zbwake, j49-kernel]
+          context: docker-hub
+      - firmware:
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+      - test:
+          requires: [firmware]
+          context: docker-hub
+      - app:
+          matrix:
+            parameters:
+              platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
+          name: app-<< matrix.platform >>
+          requires: [firmware]
+          context: docker-hub

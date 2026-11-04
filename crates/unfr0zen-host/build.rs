@@ -1,13 +1,13 @@
 //! Gathers what the unfr0zen binary carries, so it needs nothing on the host:
 //!
-//! - the diamond3's recovery firmware scripts/build-firmware.sh makes in
+//! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
 //! - the j49's NAND flasher, dropbear, kernel and the x-loader its boot ROM
 //!   takes over USB, built there too;
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
 //!   .work/initramfs, fetched with curl when absent);
-//! - nestlocal for --mqtt, the ARMv7 build scripts/build-firmware.sh makes in build/;
+//! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way).
 
@@ -43,7 +43,7 @@ fn firmware(root: &Path, out: &Path) {
     let read = |name: &str| {
         println!("cargo:rerun-if-changed={}", build.join(name).display());
         fs::read(build.join(name)).unwrap_or_else(|_| {
-            panic!("build/{name} is missing: build the recovery firmware first (scripts/build-firmware.sh)")
+            panic!("build/{name} is missing: build the recovery firmware first (utils/build-firmware.sh)")
         })
     };
     let rom_stage = read("rom-stage.imx");
@@ -128,7 +128,7 @@ fn doom(root: &Path, out: &Path) {
     let binary = root.join("build/doom-armv7");
     println!("cargo:rerun-if-changed={}", binary.display());
     let data = fs::read(&binary)
-        .unwrap_or_else(|_| panic!("build/doom-armv7 is missing: build it first (scripts/build-firmware.sh)"));
+        .unwrap_or_else(|_| panic!("build/doom-armv7 is missing: build it first (utils/build-firmware.sh)"));
     assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/doom-armv7 is not an ARM ELF binary");
     gzip(&data, &out.join("doom.gz"));
     let deb = deb(root, out, DOOM_WAD_DEB, DOOM_WAD_URL, DOOM_WAD_DEB_SHA256);
@@ -141,7 +141,7 @@ fn j49(root: &Path, out: &Path) {
     let flasher = root.join("build/j49/nand-flasher.bin");
     println!("cargo:rerun-if-changed={}", flasher.display());
     let data = fs::read(&flasher)
-        .unwrap_or_else(|_| panic!("build/j49/nand-flasher.bin is missing: build it first (scripts/build-firmware.sh)"));
+        .unwrap_or_else(|_| panic!("build/j49/nand-flasher.bin is missing: build it first (utils/build-firmware.sh)"));
     // Its entry: ldr sp, =... (ldr sp, [pc, #imm12]).
     let entry = u32::from_le_bytes(data[..4].try_into().unwrap());
     assert_eq!(entry & 0xffff_f000, 0xe59f_d000, "build/j49/nand-flasher.bin does not start at its entry");
@@ -156,7 +156,7 @@ fn j49(root: &Path, out: &Path) {
     let dropbear = root.join("build/j49/dropbearmulti");
     println!("cargo:rerun-if-changed={}", dropbear.display());
     let data = fs::read(&dropbear)
-        .unwrap_or_else(|_| panic!("build/j49/dropbearmulti is missing: build it first (scripts/build-firmware.sh)"));
+        .unwrap_or_else(|_| panic!("build/j49/dropbearmulti is missing: build it first (utils/build-firmware.sh)"));
     assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/j49/dropbearmulti is not an ARM ELF binary");
     gzip(&data, &out.join("dropbearmulti.gz"));
     // x-loader builds in Docker too; without it the app reaches no OMAP unit.
@@ -172,7 +172,7 @@ fn nestlocal(root: &Path, out: &Path) {
     let binary = root.join("build/nestlocal-armv7");
     println!("cargo:rerun-if-changed={}", binary.display());
     let data = fs::read(&binary)
-        .unwrap_or_else(|_| panic!("build/nestlocal-armv7 is missing: build it first (scripts/build-firmware.sh)"));
+        .unwrap_or_else(|_| panic!("build/nestlocal-armv7 is missing: build it first (utils/build-firmware.sh)"));
     assert_eq!(&data[..4], b"\x7fELF", "nestlocal is not an ELF binary");
     assert_eq!(data[18], 40, "nestlocal is not an ARM binary");
     gzip(&data, &out.join("nestlocal.gz"));
@@ -182,7 +182,7 @@ fn custom_screen(root: &Path, out: &Path) {
     let object = root.join("build/custom-screen.o");
     println!("cargo:rerun-if-changed={}", object.display());
     let data = fs::read(&object)
-        .unwrap_or_else(|_| panic!("build/custom-screen.o is missing: build it first (scripts/build-firmware.sh)"));
+        .unwrap_or_else(|_| panic!("build/custom-screen.o is missing: build it first (utils/build-firmware.sh)"));
     assert_eq!(&data[..6], b"\x7fELF\x01\x01", "custom-screen.o is not a 32-bit little-endian ELF");
     assert_eq!((data[16], data[18]), (1, 40), "custom-screen.o is not an ARM relocatable object");
     fs::write(out.join("custom-screen.o"), data).unwrap();

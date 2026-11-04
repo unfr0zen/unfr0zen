@@ -1,0 +1,164 @@
+version: 2.1
+
+# A release tag on main, vX.Y.Z or vX.Y.Z-rcN as a pre-release: the draft
+# release with the pull requests merged since the previous one as its notes,
+# the app's jobs (crates/.circleci/config.yml) building every target into it,
+# then its publication. The setup workflow runs this alone for a tag.
+
+parameters:
+  release:
+    type: boolean
+    default: false
+
+jobs:
+  # Drafted before the apps build, so a bad tag fails in seconds.
+  release-draft:
+    executor: tools
+    environment:
+      GITHUB_REPOSITORY: unfr0zen/unfr0zen
+    steps:
+      - checkout
+      - run:
+          name: Draft the release
+          command: |
+            git fetch --quiet --tags --force origin main
+            git merge-base --is-ancestor HEAD origin/main || { echo "$CIRCLE_TAG is not on main"; exit 1; }
+            api="https://api.github.com/repos/$GITHUB_REPOSITORY"
+            previous=$(git tag --list 'v*' --sort=-v:refname --merged HEAD | grep -vx "$CIRCLE_TAG" \
+                       | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' | head -1 || true)
+            API="$api" PREVIOUS="$previous" python3 - > release.json \<<'NOTES'
+            import json, os, urllib.request
+            from datetime import datetime, timezone
+
+            def get(path):
+                request = urllib.request.Request(os.environ["API"] + path,
+                                                 headers={"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                                                          "Accept": "application/vnd.github+json"})
+                with urllib.request.urlopen(request) as response:
+                    return json.load(response)
+
+            tag, previous = os.environ["CIRCLE_TAG"], os.environ["PREVIOUS"]
+            # Since the previous release was made, not since its commit: a pull
+            # request merged in between went out after it. GitHub's created_at is
+            # the tagged commit's date, so published_at is the one that means
+            # this.
+            if previous:
+                release = get(f"/releases/tags/{previous}")
+                since = datetime.fromisoformat(release["published_at"] or release["created_at"])
+            else:
+                since = datetime.min.replace(tzinfo=timezone.utc)
+            merged, page = [], 1
+            while batch := get(f"/pulls?state=closed&per_page=100&page={page}"):
+                merged += [p for p in batch if p.get("merged_at") and datetime.fromisoformat(p["merged_at"]) > since]
+                page += 1
+            merged.sort(key=lambda p: p["merged_at"])
+            lines = [f"- {p['title']}" for p in merged] or ["- No pull requests merged"]
+            body = "## Changes" + (f" since {previous}" if previous else "") + "\n\n" + "\n".join(lines) + "\n"
+            print(json.dumps({"tag_name": tag, "name": tag, "prerelease": "-rc" in tag, "body": body, "draft": True}))
+            NOTES
+            python3 -c 'import json; print(json.load(open("release.json"))["body"])'
+            mkdir -p .work/release
+            curl -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
+              -d @release.json "$api/releases" | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])' > .work/release/id
+            echo "Drafted $CIRCLE_TAG as release $(cat .work/release/id)"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .work/release/id
+
+  # Every app built and tested: into the draft, which is then published.
+  release-publish:
+    executor: tools
+    environment:
+      GITHUB_REPOSITORY: unfr0zen/unfr0zen
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Publish the release
+          command: |
+            id=$(cat .work/release/id)
+            for file in dist/*; do
+              curl -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
+                -H 'Content-Type: application/octet-stream' --data-binary "@$file" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$(basename "$file")" > /dev/null
+              echo "uploaded $(basename "$file")"
+            done
+            curl -fsS -X PATCH -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
+              -d '{"draft": false}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$id" > /dev/null
+            echo "Published $CIRCLE_TAG to $GITHUB_REPOSITORY"
+
+workflows:
+  release:
+    when: << pipeline.parameters.release >>
+    jobs:
+      - release-draft:
+          context: github
+          filters: &release-tags
+            tags:
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$/
+            branches:
+              ignore: /.*/
+      - image-ready:
+          context: docker-hub
+          filters: *release-tags
+      - recovery:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - j49:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - j49-kernel:
+          filters: *release-tags
+      - zbwake-release:
+          matrix:
+            parameters:
+              release: __ZBWAKE_RELEASES__
+          name: zbwake-<< matrix.release >>
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - zbwake:
+          requires: [zbwake-release]
+          filters: *release-tags
+      - radio:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - thread:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - doom:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - nlclient:
+          requires: [image-ready]
+          context: docker-hub
+          filters: *release-tags
+      - nestlocal:
+          requires: [radio, zbwake, j49-kernel]
+          context: docker-hub
+          filters: *release-tags
+      - firmware:
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+          filters: *release-tags
+      - test:
+          requires: [firmware]
+          context: docker-hub
+          filters: *release-tags
+      - app:
+          matrix:
+            parameters:
+              platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
+          name: app-<< matrix.platform >>
+          requires: [firmware, release-draft]
+          context: docker-hub
+          filters: *release-tags
+      - release-publish:
+          requires: [test, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]
+          context: github
+          filters: *release-tags

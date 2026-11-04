@@ -13,9 +13,10 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
   - `common/`: both generations. `nlclient/` (native settings screen, assets, binary discovery references, C tests), `radio/` (radio firmware, each radio's board, linker and OpenThread files in `em3581/` and `em357/`; OpenThread integration in `thread/`), `doom/` (doomgeneric submodule plus its platform layer).
   - `diamond3/`: the gen 3. `bootstrap/` (ROM stage and boot wrapper), `uboot/` (recovery U-Boot submodule, patches and build scripts), `initramfs-init`, `zbwake/` (kernel wake module for each gen 3 release).
   - `j49/`: the gen 2. x-loader build and bare-metal NAND flasher, loaded through x-loader's USB loader, its USB-serial kernel, `zbwake/` module, and dropbear for `--ssh`.
-- `scripts/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app.
+- `utils/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app. `ci/` holds the build image's Dockerfile and the CircleCI config that publishes it, run only when `utils/ci/` changes.
 - `assets/`: app icons, the Linux `.desktop` entry, and the README's app screenshot and overview diagram (light and dark).
 - `integrations/`: files users install on their side: Home Assistant blueprints (`home-assistant/`) and the Zigbee2MQTT converter (`zigbee2mqtt/`).
+- `.circleci/`: `config.yml` is the setup workflow, choosing the configs to merge by the paths a push changed (`utils/ci/configs.py` holds the table and validates every selection); `common.yml` the executors and module commands they share; `release.yml` the release workflow. Each subsystem has a `.circleci/config.yml` of its own with its workflow, run when its files change: `utils/ci` (the build image), `platform/diamond3` (recovery), `platform/diamond3/zbwake`, `platform/j49`, `platform/common/radio`, `platform/common/doom`, `platform/common/nlclient`, `crates/nestlocal`, and `crates` (the app: every module, the tests and each target).
 
 Generated outputs belong in ignored `build/`, `target/`, `dist/`, or `.work/` directories.
 
@@ -27,11 +28,11 @@ Run commands from the repository root:
 
 ```sh
 git submodule update --init
-scripts/build-firmware.sh
+utils/build-firmware.sh
 cargo build --release -p unfr0zen-gui
 cargo run -p unfr0zen-gui -- --help
 cargo test --workspace --locked
-sh scripts/make_macos_app.sh
+sh utils/make_macos_app.sh
 ```
 
 The firmware build supplies assets embedded by the host crates; build it before workspace tests or application builds. macOS uses Docker for firmware compilation. See `BUILDING.md` for platform dependencies. The packaging command produces `dist/unfr0zen.app`.
@@ -47,7 +48,7 @@ Rust tests use `#[test]` and integration tests under `crates/unfr0zen-core/tests
 ```sh
 clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/custom_flow_test.c -o /tmp/custom-flow-test
 /tmp/custom-flow-test
-python3 -m unittest discover -s platform/common/radio/tests -v
+python3 -m pytest platform/common/radio/tests
 cargo clippy --workspace --locked --all-targets -- -D warnings
 ```
 
@@ -64,7 +65,7 @@ Everything after the colon is **lowercase**. The subject fits in 72 columns, no 
 | `app:` | the unfr0zen application (GUI, CLI, self-update, host library) |
 | `nestlocal:` | the on-device service; nest deeper with `nestlocal: thread:` |
 | `client-ng:` | the thermostat UI submodule |
-| `ci:` | GitHub Actions workflows and build infrastructure |
+| `ci:` | CircleCI configs and build infrastructure |
 | `radio:` | radio firmware and Thread/Zigbee protocol |
 | `j49:` | gen 2 device-specific code |
 | `platform:` | build scripts, bootstrap, x-loader, kernel modules |
@@ -83,7 +84,7 @@ Body is optional — omit it for self-explanatory changes. When present, wrap at
 
 - A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it must follow the `subsys: lowercase summary` format above.
 - PR body is short — one or two sentences describing the change. No padding.
-- CI (`.github/workflows/build.yml`) builds the firmware and every app target and runs the tests above; a PR merges only when it is green.
+- CI (`.circleci/`) runs the workflow of each subsystem a PR changes and the app's, which builds each module of the firmware (cached by its inputs), every app target and the tests above; a PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, publishing the apps as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
 - Never describe an undisclosed vulnerability in a public issue, PR or commit.
 
 ## Security & Device Configuration

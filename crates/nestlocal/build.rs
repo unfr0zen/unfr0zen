@@ -1,4 +1,4 @@
-//! Embeds the radio's firmware (platform/common/radio/, which scripts/build-firmware.sh
+//! Embeds the radio's firmware (platform/common/radio/, which utils/build-firmware.sh
 //! builds first) from the files NESTLOCAL_RADIO (the gen3's EM3581 image)
 //! and NESTLOCAL_RADIO_EM357 (the gen2's Zigbee image) name. Without one,
 //! -zigbee runs a radio that already has the firmware but cannot install it.

@@ -5,7 +5,7 @@ Doom (the shareware episode) on the gen 3 and the gen 2, in place of their UI: u
 Built from [doomgeneric](https://github.com/ozkl/doomgeneric)
 (`platform/common/doom/doomgeneric`, a submodule) with this unit's platform layer,
 `doomgeneric_nest.c`, as one static ARMv7 binary for both (`build.sh`, run by
-`scripts/build-firmware.sh` into `build/doom-armv7`).
+`utils/build-firmware.sh` into `build/doom-armv7`).
 
 On the unit:
 

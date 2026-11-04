@@ -1,0 +1,54 @@
+version: 2.1
+
+# The setup half of every pipeline: which subsystems' configs run, from the
+# files the push changed against main. Each mapping names a path pattern and
+# the subsystem whose parameter it sets; utils/ci/configs.py then picks the
+# configs to merge (each subsystem's, those its workflow depends on, and the
+# shared .circleci/common.yml), adds the build image's tag for the Dockerfile
+# at this commit, and makes a release tag run the release workflow alone. The
+# pipeline continues with the merged config and the parameters. With nothing
+# matched it continues with .circleci/none.yml.
+setup: true
+
+orbs:
+  path-filtering: circleci/path-filtering@1
+  continuation: circleci/continuation@1
+
+jobs:
+  setup:
+    docker:
+      - image: cimg/python:3.13
+    resource_class: small
+    steps:
+      - checkout
+      - path-filtering/set-parameters:
+          base-revision: main
+          mapping: |
+            utils/ci/.* build-image true
+            platform/diamond3/(bootstrap|uboot)/.* recovery true
+            platform/diamond3/zbwake/.* zbwake true
+            platform/j49/.* j49 true
+            platform/common/radio/.* radio true
+            platform/common/doom/.* doom true
+            platform/common/nlclient/.* nlclient true
+            crates/nestlocal/.* nestlocal true
+            (crates|platform|utils|\.circleci)/.* app true
+            Cargo\.(toml|lock) app true
+          output-path: /tmp/pipeline-parameters.json
+      - run:
+          name: The configs to merge
+          command: python3 utils/ci/configs.py setup /tmp/pipeline-parameters.json /tmp/filtered-config-list
+      - path-filtering/generate-config:
+          config-list-path: /tmp/filtered-config-list
+          generated-config-path: /tmp/generated-config.yml
+      - continuation/continue:
+          configuration_path: /tmp/generated-config.yml
+          parameters: /tmp/pipeline-parameters.json
+
+workflows:
+  setup:
+    jobs:
+      - setup:
+          filters:
+            tags:
+              only: /.*/

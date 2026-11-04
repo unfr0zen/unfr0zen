@@ -1,0 +1,17 @@
+version: 2.1
+
+# What a pipeline continues with when the push changed nothing that is built:
+# one job saying so, for a status all the same.
+
+jobs:
+  nothing:
+    docker:
+      - image: cimg/base:current
+    resource_class: small
+    steps:
+      - run: echo "nothing to build for this change"
+
+workflows:
+  nothing:
+    jobs:
+      - nothing

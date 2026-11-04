@@ -2,9 +2,9 @@
 # Build the universal unfr0zen binary and wrap it in a macOS .app bundle,
 # into dist/unfr0zen.app. Run on macOS.
 #
-#     sh scripts/make_macos_app.sh
+#     sh utils/make_macos_app.sh
 #
-# The firmware under build/ must exist first (scripts/build-firmware.sh). The app
+# The firmware under build/ must exist first (utils/build-firmware.sh). The app
 # is self-contained: the binary carries the firmware, busybox and nestlocal.
 #
 # UNFR0ZEN_BINARY=path bundles an already-built universal binary instead; CI

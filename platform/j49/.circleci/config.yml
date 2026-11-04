@@ -1,0 +1,55 @@
+version: 2.1
+
+# The gen 2: its bare-metal NAND flasher and SSH server, and the OMAP boards'
+# x-loader and the j49's kernel with its zbwake.ko. Its workflow runs when
+# platform/j49 changes.
+
+parameters:
+  j49:
+    type: boolean
+    default: false
+
+jobs:
+  j49:
+    executor: build
+    steps:
+      - checkout
+      - module-restore:
+          module: j49
+          paths: platform/j49
+      - module-build:
+          module: j49
+          command: sh platform/j49/build.sh build/j49 && sh platform/j49/dropbear.sh build/j49
+      - module-store:
+          module: j49
+          outputs: build/j49/nand-flasher.bin build/j49/dropbearmulti
+
+  # The x-loader and the kernel build in Ubuntu 14.04 containers of their own:
+  # on a machine, with Docker, x86 because that release has the ARM cross
+  # compiler for x86 hosts only. Needs no build image.
+  j49-kernel:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    steps:
+      - checkout
+      - module-restore:
+          module: j49-kernel
+          paths: platform/j49/kernel.sh platform/j49/xloader.sh platform/j49/zbwake
+      - module-build:
+          module: j49-kernel
+          command: sh platform/j49/xloader.sh build/j49 && sh platform/j49/kernel.sh build/j49
+      - module-store:
+          module: j49-kernel
+          outputs: build/j49/x-load.bin build/j49/uImage build/j49/zbwake.ko
+
+workflows:
+  j49:
+    when: << pipeline.parameters.j49 >>
+    jobs:
+      - image-ready:
+          context: docker-hub
+      - j49:
+          requires: [image-ready]
+          context: docker-hub
+      - j49-kernel

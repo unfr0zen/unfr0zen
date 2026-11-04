@@ -3,7 +3,7 @@
 # .desktop entry. This is what gives the window an icon under Wayland (and a
 # launcher entry everywhere) -- the app_id dev.unfr0zen.gui maps to this entry.
 #
-#     sh scripts/install_linux.sh
+#     sh utils/install_linux.sh
 #
 # Build the binary first: cargo build --release -p unfr0zen-gui
 set -eu

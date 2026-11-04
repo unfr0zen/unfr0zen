@@ -1,0 +1,190 @@
+version: 2.1
+
+# What every workflow shares: the build image as the executors, the module
+# commands, and the gate that the image is on Docker Hub. Merged into every
+# pipeline by the setup workflow (.circleci/config.yml, utils/ci/configs.py).
+#
+# A module's job restores its outputs from the cache under a key of its inputs
+# (the image, its sources' git trees, the artifacts it embeds), builds only on
+# a miss, and persists them as one tarball to the workspace for the jobs
+# downstream in its workflow. A workflow needing a module lists the module's
+# job as its own, so it stands on its own; the cache keeps the repeats short.
+
+parameters:
+  image:
+    description: The build image, unfr0zen/unfr0zen-build at the Dockerfile's tag.
+    type: string
+    default: ""
+  build-image:
+    description: utils/ci/ changed, so this pipeline publishes the image and the gate waits for it.
+    type: boolean
+    default: false
+
+executors:
+  build:
+    docker:
+      - image: << pipeline.parameters.image >>
+        auth:
+          username: $DOCKERHUB_USER
+          password: $DOCKERHUB_TOKEN
+    resource_class: arm.medium.gen2
+    environment:
+      IMAGE: << pipeline.parameters.image >>
+      # The container reports the host's cores; the class has two.
+      CARGO_BUILD_JOBS: "2"
+      JOBS: "2"
+  # Four cores for the firmware's cmake builds and everything cargo.
+  build-large:
+    docker:
+      - image: << pipeline.parameters.image >>
+        auth:
+          username: $DOCKERHUB_USER
+          password: $DOCKERHUB_TOKEN
+    resource_class: arm.large.gen2
+    environment:
+      IMAGE: << pipeline.parameters.image >>
+      CARGO_BUILD_JOBS: "4"
+      JOBS: "4"
+  # For the jobs needing only git, curl and python.
+  tools:
+    docker:
+      - image: cimg/python:3.13
+    resource_class: small
+
+commands:
+  # The module's cache key from its inputs, then its tarball from the cache,
+  # unpacked when there.
+  module-restore:
+    parameters:
+      module:
+        type: string
+      paths:
+        description: Its sources, as git paths whose tree ids key the cache.
+        type: string
+      files:
+        description: Built files it embeds, keyed by content.
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: << parameters.module >>'s key
+          command: |
+            mkdir -p .work/keys .work/cache
+            {
+              echo "<< parameters.module >> $IMAGE"
+              set -- << parameters.paths >>
+              for path in "$@"; do git rev-parse "HEAD:$path"; done
+              set -- << parameters.files >>
+              for file in "$@"; do sha256sum "$file"; done
+            } | sha256sum | cut -d' ' -f1 > .work/keys/<< parameters.module >>
+            echo "<< parameters.module >> $(cat .work/keys/<< parameters.module >>)"
+      - restore_cache:
+          keys:
+            - module-<< parameters.module >>-v1-{{ checksum ".work/keys/<< parameters.module >>" }}
+      - run:
+          name: Unpack << parameters.module >> if cached
+          command: |
+            if [ -f .work/cache/<< parameters.module >>.tar ]; then
+              tar xf .work/cache/<< parameters.module >>.tar && echo "<< parameters.module >> is cached"
+            else
+              echo "<< parameters.module >> is not cached"
+            fi
+
+  # The build, unless the cache had it.
+  module-build:
+    parameters:
+      module:
+        type: string
+      command:
+        type: string
+    steps:
+      - run:
+          name: Build << parameters.module >>
+          no_output_timeout: 30m
+          command: |
+            [ ! -f .work/cache/<< parameters.module >>.tar ] || { echo "<< parameters.module >> is cached"; exit 0; }
+            << parameters.command >>
+
+  # The outputs as one tarball, into the cache and the workspace.
+  module-store:
+    parameters:
+      module:
+        type: string
+      outputs:
+        type: string
+    steps:
+      - run:
+          name: Pack << parameters.module >>
+          command: |
+            [ -f .work/cache/<< parameters.module >>.tar ] || tar cf .work/cache/<< parameters.module >>.tar << parameters.outputs >>
+            tar tf .work/cache/<< parameters.module >>.tar
+      - save_cache:
+          key: module-<< parameters.module >>-v1-{{ checksum ".work/keys/<< parameters.module >>" }}
+          paths:
+            - .work/cache/<< parameters.module >>.tar
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .work/cache/<< parameters.module >>.tar
+
+  # What the jobs upstream in the workflow built.
+  modules:
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Unpack the modules
+          command: |
+            for tar in .work/cache/*.tar; do tar xf "$tar"; done
+            find build -type f | sort
+
+  cargo-registry-restore:
+    steps:
+      - restore_cache:
+          keys:
+            - cargo-registry-v1-{{ checksum "Cargo.lock" }}
+  cargo-registry-store:
+    steps:
+      - save_cache:
+          key: cargo-registry-v1-{{ checksum "Cargo.lock" }}
+          paths:
+            - /usr/local/cargo/registry
+
+jobs:
+  # The gate: the build image for this Dockerfile is on Docker Hub. When this
+  # push changed utils/ci/, the build-image workflow is publishing it in this
+  # same pipeline, so wait for it; otherwise a missing image is an error.
+  image-ready:
+    executor: tools
+    environment:
+      IMAGE: << pipeline.parameters.image >>
+      IMAGE_BUILDING: << pipeline.parameters.build-image >>
+    steps:
+      - run:
+          name: Wait for << pipeline.parameters.image >>
+          no_output_timeout: 60m
+          command: |
+            [ -n "$IMAGE" ] || { echo "no image parameter: the setup workflow sets it"; exit 1; }
+            repo=${IMAGE%%:*}; tag=${IMAGE#*:}
+            for attempt in $(seq 1 100); do
+              curl -fsS -o /tmp/token.json -u "$DOCKERHUB_USER:$DOCKERHUB_TOKEN" \
+                "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$repo:pull" \
+                || { echo "Docker Hub refused the docker-hub context's DOCKERHUB_USER and DOCKERHUB_TOKEN"; exit 1; }
+              token=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])' < /tmp/token.json)
+              status=$(curl -sS -o /dev/null -w '%{http_code}' -I -H "Authorization: Bearer $token" \
+                -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+                "https://registry-1.docker.io/v2/$repo/manifests/$tag")
+              case $status in
+                200) echo "$IMAGE is on Docker Hub"; exit 0 ;;
+                404)
+                  if [ "$IMAGE_BUILDING" = true ]; then
+                    echo "$IMAGE is not on Docker Hub yet; the build-image workflow is making it ($attempt)"
+                    sleep 30
+                  else
+                    echo "$IMAGE is not on Docker Hub. It is built when a push changes utils/ci/; rerun that workflow or push a change there."
+                    exit 1
+                  fi ;;
+                *) echo "Docker Hub answered $status for $IMAGE"; exit 1 ;;
+              esac
+            done
+            echo "gave up waiting for $IMAGE"; exit 1

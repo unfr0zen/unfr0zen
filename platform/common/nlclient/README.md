@@ -63,7 +63,7 @@ happen in memory, without launching an external process or extracting source
 into a temporary directory.
 
 Developers still need the ordinary firmware/app build toolchain.
-`scripts/build-firmware.sh` compiles `build/custom-screen.o` with ARM clang;
+`utils/build-firmware.sh` compiles `build/custom-screen.o` with ARM clang;
 `unfr0zen-host` embeds it into both front ends. Cargo builds the bundled static
 Capstone decoder with a C compiler, as it builds other native dependencies.
 These compilers are build requirements only. There is no runtime compilation.

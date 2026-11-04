@@ -162,7 +162,7 @@ fn the_patch_applies_to_both_slots() {
     use unfr0zen_core::Device;
     let Some(image) = image() else { return };
     let object = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o");
-    let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (scripts/build-firmware.sh)", object.display()) };
+    let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (utils/build-firmware.sh)", object.display()) };
     let build_screen = |source: &[u8]| unfr0zen_core::nlclient::build(source, &object);
     let pki = generate_pki().unwrap();
     let options = Options {

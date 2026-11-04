@@ -6,9 +6,9 @@
 # screen's object for the app to link into the unit's nlclient. The build logs
 # go to .work/.
 #
-#     scripts/build-firmware.sh
+#     utils/build-firmware.sh
 #
-# On macOS this builds inside Docker, from Dockerfile; on Linux with the native
+# On macOS this builds inside Docker, from utils/ci/Dockerfile; on Linux with the native
 # toolchains (see README.md). JOBS=N limits the parallel make jobs (default 8).
 set -eu
 
@@ -22,7 +22,7 @@ if [ "$(uname -s)" = Darwin ]; then
     command -v docker > /dev/null || { echo "Missing build tool: docker. See README.md." >&2; exit 1; }
     image=unfr0zen-build
     echo "Building Docker image $image"
-    docker build -q -t "$image" - < Dockerfile > /dev/null
+    docker build -q -t "$image" - < utils/ci/Dockerfile > /dev/null
     # The repository at the same path inside, so the submodule's and .work's
     # paths stay valid on both sides; cargo keeps its downloads in .work.
     run() {
@@ -88,9 +88,6 @@ step thread sh platform/common/radio/thread/build.sh
 cp build/thread/nestlocal build/nestlocal-armv7
 step doom sh platform/common/doom/build.sh build/doom-armv7
 # One relocatable object for every firmware build: the app links it at the
-# addresses and layouts discovered in the unit's nlclient. No compiler or
-# linker is required when the finished app patches a unit.
-step custom-screen clang --target=arm-linux-gnueabihf -march=armv7-a -marm -mfpu=vfpv3-d16 -mfloat-abi=hard \
-    -std=c11 -O2 -fPIE -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables \
-    -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -c platform/common/nlclient/src/custom_screen.c -o build/custom-screen.o
+# addresses and layouts discovered in the unit's nlclient.
+step custom-screen sh platform/common/nlclient/build.sh build
 echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loader and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom and the screen object under build/."
