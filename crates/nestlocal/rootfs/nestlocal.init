@@ -20,8 +20,7 @@ start)
     fi
     # nlclient reads its settings at start, before it asks nestlocal anything:
     # firmware 6.4-8 moves a unit with no structure to Nest's newer service
-    # (crates/nestlocal/src/structure.rs), and a Heat Link unit whose radio
-    # nestlocal holds needs using_wwn_boiler (crates/nestlocal/src/heatlink.rs).
+    # (crates/nestlocal/src/structure.rs).
     ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}`
     start-stop-daemon -S -q -b -m -p ${PIDFILE} -x ${DAEMON} -- -syslog `cat ${OPTIONS}`
     ;;

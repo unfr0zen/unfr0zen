@@ -19,6 +19,32 @@ pub const DEFAULT_NTP_SERVER: &str = "pool.ntp.org";
 const NTP_LINES: [(&str, &str); 2] = [("etc/ntp.conf", "server "), ("etc/connman/main.conf", "FallbackTimeservers = ")];
 /// nlclient's backplate simulator: run it as 1H1C with made-up temperature and humidity.
 const BACKPLATE_SIM: [&str; 3] = ["backplatesimulationrun", "backplatesimulationhvactype", "backplatesimulatetempandhum"];
+/// A Heat Link model (Display-3.x, Display-5.x) whose radio nestlocal holds
+/// has no Heat Link any more: nlclient would block on its loss. rcS sets
+/// using_wwn_boiler in nlclient's settings before it starts, so it runs as
+/// heating a Works With Nest boiler through W1 instead: on, every boot the
+/// radio is ours; off, once, if the marker says an earlier run set it.
+/// nlclient keeps every key it read when it writes its settings back, so a
+/// run with the radio back to stock has to take the key out itself; a unit
+/// that never had the block keeps its stock rcS. The block stands before
+/// nestlocal's start line when there is one: nestlocal's rcS edit wants its
+/// line right before nestlabs's.
+const WWN_BEGIN: &str = "# unfr0zen: Works With Nest boiler\n";
+const WWN_END: &str = "# unfr0zen: end\n";
+const WWN_SETTINGS: &str = "/media/user-config/settings.config";
+const WWN_MARKER: &str = "/media/user-config/.unfr0zen-wwn-boiler";
+const WWN_ON: &str = r#"case "$(fw_printenv -n nlmodel 2>/dev/null)" in Display-3.*|Display-5.*)
+  [ -f SETTINGS ] || printf '%s\n' '<?xml version="1.0" encoding="ISO-8859-1"?>' '<settings>' '</settings>' > SETTINGS
+  touch MARKER
+  sed -i -e '/<s key="using_wwn_boiler" /d' -e 's|^</settings>|  <s key="using_wwn_boiler" value="1"/>\n</settings>|' SETTINGS
+  ;;
+esac
+"#;
+const WWN_OFF: &str = r#"if [ -f MARKER ]; then
+  sed -i '/<s key="using_wwn_boiler" /d' SETTINGS
+  rm -f MARKER
+fi
+"#;
 /// (file, the line to follow, the line read-write root adds after it)
 const ROOT_RW_LINES: [(&str, &str, &str); 2] = [
     ("etc/init.d/rcS", "${INITDIR}/mountfs start\n", "${MOUNT} -n -o remount,rw /\n"),
@@ -233,6 +259,37 @@ pub fn patch_root_rw(tree: &mut Tree, enabled: bool) -> Result<()> {
         check_mode(tree, name, 0o750)?;
     }
     Ok(())
+}
+
+/// Puts the Works With Nest boiler block in rcS, setting using_wwn_boiler
+/// while nestlocal holds the radio and taking it back when not (WWN_ON,
+/// WWN_OFF).
+pub fn patch_wwn_boiler(tree: &mut Tree, enabled: bool) -> Result<()> {
+    let mut content = text(tree, "etc/init.d/rcS")?;
+    let Some(start) = content.find(WWN_BEGIN) else {
+        if !enabled {
+            return Ok(());
+        }
+        return install_wwn_boiler(tree, content, enabled);
+    };
+    let end = content[start..].find(WWN_END)
+        .map_or_else(|| device("etc/init.d/rcS: unfr0zen boiler block without its end line"), |end| Ok(start + end + WWN_END.len()))?;
+    content.replace_range(start..end, "");
+    install_wwn_boiler(tree, content, enabled)
+}
+
+fn install_wwn_boiler(tree: &mut Tree, mut content: String, enabled: bool) -> Result<()> {
+    let anchor = ["${INITDIR}/nestlocal start\n${INITDIR}/nestlabs start\n", "${INITDIR}/nestlabs start\n"]
+        .into_iter().find(|anchor| content.contains(anchor))
+        .ok_or_else(|| crate::Error::Device("etc/init.d/rcS: expected a nestlabs start line".into()))?;
+    if content.matches(anchor).count() != 1 {
+        return device("etc/init.d/rcS: expected one nestlabs start line");
+    }
+    let script = if enabled { WWN_ON } else { WWN_OFF };
+    let block = format!("{WWN_BEGIN}{}{WWN_END}", script.replace("SETTINGS", WWN_SETTINGS).replace("MARKER", WWN_MARKER));
+    content = content.replace(anchor, &format!("{block}{anchor}"));
+    put(tree, "etc/init.d/rcS", content);
+    check_mode(tree, "etc/init.d/rcS", 0o750)
 }
 
 /// Resolves the cloud's names to nowhere in etc/hosts, which the resolver reads
@@ -567,6 +624,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
     patch_root_rw(&mut tree, true)?;
+    patch_wwn_boiler(&mut tree, options.zigbee || options.thread.is_some())?;
     (rootfs.patch)(&mut tree, options)?;
     if let Some(key) = &public_key {
         patch_authorized_key(&mut tree, key)?;
@@ -1384,6 +1442,37 @@ mod tests {
         assert_eq!(made, 1);
         // As Python's with_ca: the empty bundle's newline, then the CA.
         assert_eq!(fresh.files["etc/ssl/certs/ca-bundle.pem"].2, [b"\n", pki.ca.as_slice()].concat());
+    }
+
+    #[test]
+    fn wwn_boiler_is_set_from_rcs_while_the_radio_is_ours_and_taken_back_after() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        // Nest's radio: rcS has no block.
+        patch(&mut volume, &Options { mqtt: Some(Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() }), ..options() }, false).unwrap();
+        let without = volume.text("etc/init.d/rcS");
+        assert!(!without.contains(WWN_BEGIN));
+        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        let rcs = volume.text("etc/init.d/rcS");
+        let block = &rcs[rcs.find(WWN_BEGIN).unwrap()..rcs.find(WWN_END).unwrap() + WWN_END.len()];
+        assert_eq!(rcs.replace(block, ""), without);
+        assert!(block.contains("case \"$(fw_printenv -n nlmodel 2>/dev/null)\" in Display-3.*|Display-5.*)\n"));
+        assert!(block.contains("  touch /media/user-config/.unfr0zen-wwn-boiler\n"));
+        assert!(block.contains(r#"<s key="using_wwn_boiler" value="1"/>"#) && !block.contains("SETTINGS") && !block.contains("MARKER"));
+        // Before nestlocal's line, which keeps its place right before
+        // nestlabs's on the next run; the same run changes nothing.
+        assert!(rcs.contains(&format!("{WWN_END}${{INITDIR}}/nestlocal start\n${{INITDIR}}/nestlabs start\n")), "{rcs}");
+        assert_eq!(volume.files["etc/init.d/rcS"].1, 0o750);
+        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        assert_eq!(volume.text("etc/init.d/rcS"), rcs);
+        // Nest's radio again: the block takes the key back once, then the
+        // marker, and stays the only change around nestlabs's line.
+        patch(&mut volume, &options(), false).unwrap();
+        let rcs = volume.text("etc/init.d/rcS");
+        assert_eq!(rcs.matches(WWN_BEGIN).count(), 1);
+        assert!(rcs.contains("if [ -f /media/user-config/.unfr0zen-wwn-boiler ]; then\n  sed -i '/<s key=\"using_wwn_boiler\" /d' /media/user-config/settings.config\n  rm -f /media/user-config/.unfr0zen-wwn-boiler\nfi\n"));
+        assert!(!rcs.contains("value=\"1\""));
+        assert!(rcs.contains(&format!("{WWN_END}${{INITDIR}}/nestlocal start\n${{INITDIR}}/nestlabs start\n")), "{rcs}");
     }
 
     #[test]

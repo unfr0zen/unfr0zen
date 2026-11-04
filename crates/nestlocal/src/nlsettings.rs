@@ -58,25 +58,6 @@ pub fn set(b: &[u8], key: &str, value: &str) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// b without key: an entry alone on its line goes with its indentation and
-/// line end.
-pub fn remove(b: &[u8], key: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(b.len());
-    let mut at = 0;
-    for (mut start, mut end, _) in entries(b, key) {
-        let indent = b[at..start].iter().rev().take_while(|&&c| c == b' ' || c == b'\t').count();
-        let line_start = start - indent;
-        if (line_start == 0 || b[line_start - 1] == b'\n') && b.get(end) == Some(&b'\n') {
-            start = line_start;
-            end += 1;
-        }
-        out.extend_from_slice(&b[at..start]);
-        at = end;
-    }
-    out.extend_from_slice(&b[at..]);
-    out
-}
-
 /// Replaces the file at path with b, through a sibling and a rename.
 pub fn write(path: &Path, b: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
@@ -112,15 +93,5 @@ mod tests {
         assert_eq!(String::from_utf8(out).unwrap(),
                    FILE.replace("</settings>", "  <s key=\"c\" value=\"1\"/>\n</settings>"));
         assert!(set(b"<settings>\n", "c", "1").is_err());
-    }
-
-    #[test]
-    fn remove_takes_the_whole_line() {
-        let out = remove(FILE.as_bytes(), "a");
-        assert_eq!(String::from_utf8(out).unwrap(), "<settings>\n  <s key=\"b\" value=\"\"/>\n</settings>\n");
-        // Sharing a line, only the entry goes.
-        let out = remove(br#"<settings><s key="a" value="1"/><s key="b" value=""/></settings>"#, "a");
-        assert_eq!(String::from_utf8(out).unwrap(), r#"<settings><s key="b" value=""/></settings>"#);
-        assert_eq!(remove(FILE.as_bytes(), "c"), FILE.as_bytes());
     }
 }

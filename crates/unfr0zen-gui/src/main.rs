@@ -734,7 +734,6 @@ impl eframe::App for App {
             });
             ui.add_space(8.0);
             logo(ui);
-            ui.add_space(6.0);
         });
 
         egui::Panel::bottom("actions").show(ui, |ui| {
@@ -1196,8 +1195,6 @@ impl Form {
         self.drain_certificate_dialog();
         // One vertical gap everywhere, so every checkbox is spaced the same.
         ui.spacing_mut().item_spacing.y = 6.0;
-        ui.add_space(2.0);
-        ui.checkbox(&mut self.backplate_sim, "Backplate simulator (1H1C, simulated temperature)");
         ui.checkbox(&mut self.block_cloud, "Block Nest and Google servers");
         // time.nest.com is blocked too, so time has to come from elsewhere.
         if self.block_cloud {
@@ -1291,6 +1288,7 @@ impl Form {
                     .hint_text("unfr0zen").desired_width(220.0));
             });
         }
+        ui.checkbox(&mut self.backplate_sim, "Backplate simulator (1H1C, simulated temperature)");
     }
 }
 

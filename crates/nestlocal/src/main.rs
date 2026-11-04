@@ -112,17 +112,6 @@ fn prepare_settings(config: &flags::Config) {
         Ok(false) => {}
         Err(e) => fatal!("{e}"),
     }
-    let store = store::Store::new(&config.state);
-    let model = heatlink::model();
-    let wanted = heatlink::wanted(config.zigbee || config.matter_thread, device::current().generation, model.as_deref(),
-                                  heatlink::w1_wired(&store, &config.serial));
-    match heatlink::prepare(std::path::Path::new(path), &heatlink::marker(&config.state), wanted) {
-        Ok(Some(true)) => logf!("nestlocal: set {} in {path}: the {} has no Heat Link without its radio",
-                                heatlink::KEY, model.unwrap_or_default()),
-        Ok(Some(false)) => logf!("nestlocal: removed {} from {path}", heatlink::KEY),
-        Ok(None) => {}
-        Err(e) => fatal!("{e}"),
-    }
 }
 
 async fn run(config: flags::Config) {
@@ -145,18 +134,6 @@ async fn run(config: flags::Config) {
         bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
                             Some(live.clone()), wwn_boiler)
     });
-    if let Some(bridge) = &bridge {
-        let holds_radio = config.zigbee || config.matter_thread;
-        if heatlink::heat_link_unit(holds_radio, device::current().generation, heatlink::model().as_deref()) {
-            let unit = heatlink::Unit {
-                serial: config.serial.clone(),
-                settings: config.settings.clone().into(),
-                marker: heatlink::marker(&config.state),
-            };
-            let bridge = bridge.clone();
-            heatlink::keep(store.clone(), unit, move |on| bridge.set_wwn_boiler(on));
-        }
-    }
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {
         let password = match config.mqtt_password_file.as_str() {

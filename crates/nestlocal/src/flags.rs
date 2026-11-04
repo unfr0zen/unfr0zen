@@ -34,7 +34,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("mqtt-user", Kind::Text, "", "MQTT user name, empty for none"),
     ("ntp-server", Kind::Text, "pool.ntp.org", "NTP server to set the unit's clock from when it is off (clock.rs), empty for none"),
     ("origin", Kind::Text, "https://127.0.0.1", "base URL handed to the device in /entry"),
-    ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id, and using_wwn_boiler on a Heat Link unit whose radio nestlocal holds"),
+    ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id"),
     ("serial", Kind::Text, "", "the unit's serial (default: the hostname, which the unit sets to it)"),
     ("settings", Kind::Text, "/media/user-config/settings.config", "nlclient's settings file"),
     ("stale", Kind::Duration, "5m", "availability goes offline when nlclient has made no request for this long"),

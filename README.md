@@ -117,7 +117,7 @@ broker, Matter's pairing code), plug in the thermostat, press **Start** and
 follow the prompts. The arrow beside Start switches to Back up NAND or Restore
 NAND.
 
-<p align="center"><img src="assets/app.png" width="420" alt="The unfr0zen app on macOS: checkboxes for the backplate simulator, blocking Nest and Google servers, a custom NTP server, the MQTT broker with its address, user, password and TLS, Matter with its pairing code and Thread support, Zigbee, the SSH server and the USB root shell, above the Start button and its mode menu arrow."></p>
+<p align="center"><img src="assets/app.png" width="420" alt="The unfr0zen app on macOS: checkboxes for blocking Nest and Google servers, a custom NTP server, the MQTT broker with its address, user, password and TLS, Matter with its pairing code and Thread support, Zigbee, the SSH server, the USB root shell and the backplate simulator, above the Start button and its mode menu arrow."></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few options the app doesn't have
