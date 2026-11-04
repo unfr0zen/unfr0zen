@@ -46,7 +46,10 @@ pub fn command(dev: &mut impl Hid, kind: u16, address: u32, count: u32) -> Resul
     report[3..7].copy_from_slice(&address.to_be_bytes());
     report[7] = 0x20; // 32-bit access
     report[8..12].copy_from_slice(&count.to_be_bytes());
-    dev.write(&report)?;
+    let sent = dev.write(&report)?;
+    if sent != report.len() {
+        return Err(Error::Io(format!("Short HID command {kind:#06x} write: {sent}/{}", report.len())));
+    }
     Ok(())
 }
 
@@ -118,7 +121,10 @@ pub fn write_register(dev: &mut impl Hid, address: u32, value: u32) -> Result<()
     report[7] = 0x20; // 32-bit access
     report[8..12].copy_from_slice(&4u32.to_be_bytes());
     report[12..16].copy_from_slice(&value.to_be_bytes());
-    dev.write(&report)?;
+    let sent = dev.write(&report)?;
+    if sent != report.len() {
+        return Err(Error::Io(format!("Short HID command {WRITE_REGISTER:#06x} write: {sent}/{}", report.len())));
+    }
     for _ in 0..5 {
         let reply = dev.read(1000)?;
         if reply.first() == Some(&REPORT_HAB) {
@@ -176,29 +182,47 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
     Ok(())
 }
 
+/// How a WRITE FILE ended, for callers that need more than the transport's
+/// word: completed by the ROM, answered with a status that is not the
+/// completion word — the write was rejected — or left without one, either
+/// from silence or from a data report the transport could not finish, both
+/// of which for a write whose side effects take the session with it are
+/// expected.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WriteOutcome {
+    Completed,
+    Rejected,
+    Silent,
+}
+
 /// Uploads with padded reports and waits for the completion word, without
 /// reading the upload back. The ROM range-checks only the first eighth of
 /// the transfer, so the tail may land past the checked window; the caller
-/// owns the geometry. Returns whether the ROM completed before the
-/// transfer's side effects took over the session.
-pub fn write_file(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<bool> {
+/// owns the geometry. Only a failure before any data reaches the ROM is an
+/// error; once the transfer is under way its side effects own the session.
+pub fn write_file(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<WriteOutcome> {
     command(dev, WRITE_FILE, address, data.len() as u32)?;
     for block in data.chunks(HID_DATA_SIZE) {
         let mut packet = vec![0u8; 1 + HID_DATA_SIZE];
         packet[0] = REPORT_DATA;
         packet[1..1 + block.len()].copy_from_slice(block);
-        let sent = dev.write(&packet)?;
-        if sent != packet.len() {
-            return Err(Error::Io(format!("Short HID write at {address:#x}: {sent}/{}", packet.len())));
+        match dev.write(&packet) {
+            Ok(sent) if sent == packet.len() => {}
+            _ => return Ok(WriteOutcome::Silent),
         }
     }
     for _ in 0..5 {
-        let reply = dev.read(1000)?;
+        // A read that fails here is the session going down as the write's
+        // side effects land: indistinguishable from silence, and expected.
+        let reply = match dev.read(1000) {
+            Ok(reply) => reply,
+            Err(_) => return Ok(WriteOutcome::Silent),
+        };
         if reply.len() >= 5 && reply[0] == REPORT_STATUS {
-            return Ok(reply[1..5] == WRITE_COMPLETE);
+            return Ok(if reply[1..5] == WRITE_COMPLETE { WriteOutcome::Completed } else { WriteOutcome::Rejected });
         }
     }
-    Ok(false)
+    Ok(WriteOutcome::Silent)
 }
 
 /// The HAB security state of a unit, from the magic word in the ROM's HAB
@@ -243,11 +267,12 @@ pub fn hab_state(replies: &[Vec<u8>]) -> Option<HabState> {
 
 /// The completion words the ROM uses in status replies; after a JUMP, a
 /// status report carrying anything else is the ROM's error report and means
-/// it stayed in serial download.
+/// it stayed in serial download. The ROM copies these words out as native
+/// little-endian bytes, which only the palindrome words hide.
 const KNOWN_ACKS: [&[u8]; 3] = [
     &[0x88, 0x88, 0x88, 0x88],
     &[0x12, 0x8a, 0x8a, 0x12],
-    &[0x90, 0x0d, 0xd0, 0x09],
+    &[0x09, 0xd0, 0x0d, 0x90],
 ];
 
 /// The error report the ROM sends after refusing a JUMP, if it sent one.
@@ -259,22 +284,68 @@ pub fn jump_refusal(replies: &[Vec<u8>]) -> Option<&[u8]> {
         .map(Vec::as_slice)
 }
 
+/// HAB status values, reasons and contexts from NXP's HAB tables, the
+/// subset a refused jump can report.
+const HAB_STATUS: [(u8, &str); 3] = [(0x33, "failure"), (0x69, "warning"), (0xf0, "success")];
+const HAB_REASON: [(u8, &str); 12] = [
+    (0x03, "unsupported command"),
+    (0x05, "invalid ivt"),
+    (0x11, "invalid csf"),
+    (0x17, "invalid size"),
+    (0x18, "invalid signature"),
+    (0x0c, "invalid assertion"),
+    (0x1d, "invalid key"),
+    (0x21, "invalid certificate"),
+    (0x22, "invalid address"),
+    (0x27, "invalid dcd"),
+    (0x28, "call out of sequence"),
+    (0x30, "engine failure"),
+];
+const HAB_CONTEXT: [(u8, &str); 6] = [
+    (0x0a, "authenticate image"),
+    (0xc0, "csf or dcd command"),
+    (0xcf, "run csf"),
+    (0xdb, "authenticated data block"),
+    (0xdd, "run dcd"),
+    (0xe1, "hab entry"),
+];
+
+/// Names the four bytes of an HAB status word: status, reason, context and
+/// engine, low byte first.
+pub fn hab_word_description(word: [u8; 4]) -> String {
+    fn lookup<'a>(table: &'a [(u8, &'a str)], byte: u8) -> &'a str {
+        table.iter().find(|(value, _)| *value == byte).map(|(_, name)| *name).unwrap_or("unknown")
+    }
+    let [status, reason, context, engine] = word;
+    format!("status {status:#04x} ({}), reason {reason:#04x} ({}), context {context:#04x} ({}), \
+             engine {engine:#04x}",
+            lookup(&HAB_STATUS, status), lookup(&HAB_REASON, reason),
+            lookup(&HAB_CONTEXT, context))
+}
+
 /// Sends JUMP and collects the ROM's answers: the HAB report it sends
 /// before it jumps, and — when it refuses the jump — the error status that
-/// follows. Returns every non-empty reply, for diagnostics.
+/// follows. A read that fails after the HAB report is the ROM dropping USB
+/// as it jumps; one that fails before it is a session that never saw the
+/// command. Returns every non-empty reply, for diagnostics.
 pub fn jump(dev: &mut impl Hid, address: u32) -> Result<Vec<Vec<u8>>> {
     command(dev, JUMP_ADDRESS, address, 0)?;
+    let hab_seen = |replies: &[Vec<u8>]| replies.iter().any(|r| r.first() == Some(&REPORT_HAB));
     let mut replies: Vec<Vec<u8>> = Vec::new();
     for _ in 0..8 {
-        let reply = dev.read(1000)?;
-        if reply.is_empty() {
+        let reply = match dev.read(1000) {
+            Ok(reply) => reply,
             // Quiet after the HAB report: the ROM dropped USB and jumped.
-            if replies.iter().any(|r| r.first() == Some(&REPORT_HAB)) {
+            Err(_) if hab_seen(&replies) => return Ok(replies),
+            Err(error) => return Err(error),
+        };
+        if reply.is_empty() {
+            if hab_seen(&replies) {
                 return Ok(replies);
             }
             continue;
         }
-        let after_hab = replies.iter().any(|r| r.first() == Some(&REPORT_HAB));
+        let after_hab = hab_seen(&replies);
         replies.push(reply);
         if after_hab {
             // An answer after the HAB report: the ROM stayed in SDP.
@@ -316,7 +387,7 @@ mod tests {
         let ack = vec![4, 0x88, 0x88, 0x88, 0x88];
         let data: Vec<u8> = (0..2048).map(|i| (i % 251) as u8).collect();
         let mut device = scripted_owned(&[ack]);
-        assert!(write_file(&mut device, 0x0090_7000, &data).unwrap());
+        assert_eq!(write_file(&mut device, 0x0090_7000, &data).unwrap(), WriteOutcome::Completed);
         assert_eq!(device.writes.len(), 3); // command, then two padded data reports
         assert_eq!(&device.writes[0][1..3], &WRITE_FILE.to_be_bytes());
         assert_eq!(&device.writes[0][3..7], &0x0090_7000u32.to_be_bytes());
@@ -325,11 +396,15 @@ mod tests {
             assert_eq!(report[0], REPORT_DATA);
             assert_eq!(&report[1..1 + 1024], &data[index * 1024..(index + 1) * 1024]);
         }
-        // No completion word: the write's side effects took the session.
+        // A status that is not the completion word: the write was rejected.
+        let rejected = scripted(&[&[4, 0x12, 0x34, 0x56, 0x78]]);
+        assert_eq!(write_file(&mut { rejected }, 0x0090_7000, &[0x41; 16]).unwrap(), WriteOutcome::Rejected);
+        // No completion word, or a data report the transport could not
+        // finish: the write's side effects took the session.
         let quiet = scripted(&[&[3, 0x12, 0x34, 0x34, 0x12]]);
-        assert!(!write_file(&mut { quiet }, 0x0090_7000, &[0x41; 16]).unwrap());
+        assert_eq!(write_file(&mut { quiet }, 0x0090_7000, &[0x41; 16]).unwrap(), WriteOutcome::Silent);
         let mut short = Scripted { accept: 100, ..scripted(&[]) };
-        assert!(write_file(&mut short, 0x0090_7000, &[0x41; 16]).unwrap_err().to_string().contains("Short HID write"));
+        assert_eq!(write_file(&mut short, 0x0090_7000, &[0x41; 16]).unwrap(), WriteOutcome::Silent);
     }
 
     #[test]
@@ -425,6 +500,18 @@ mod tests {
     }
 
     #[test]
+    fn hab_refusals_name_their_status_reason_and_context() {
+        let word = [0x33, 0x21, 0xc0, 0x00];
+        let described = hab_word_description(word);
+        assert!(described.contains("failure"), "{described}");
+        assert!(described.contains("invalid certificate"), "{described}");
+        assert!(described.contains("csf or dcd command"), "{described}");
+        // An untouched word: fuse words read as OTP, nothing HAB-shaped.
+        let opaque = hab_word_description([0x00, 0x0f, 0xf0, 0x1a]);
+        assert_eq!(opaque.matches("unknown").count(), 3, "{opaque}");
+    }
+
+    #[test]
     fn a_refused_jump_collects_the_error_status() {
         // The ROM stays in SDP and reports an error after the HAB report.
         let mut device = scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x33, 0x21, 0xc0, 0x00]]);
@@ -438,7 +525,7 @@ mod tests {
         assert_eq!(quiet.len(), 1);
         assert_eq!(jump_refusal(&quiet), None);
         let acked = jump(
-            &mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x90, 0x0d, 0xd0, 0x09]]),
+            &mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x09, 0xd0, 0x0d, 0x90]]),
             UBOOT_BASE,
         )
         .unwrap();

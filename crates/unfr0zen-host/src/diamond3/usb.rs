@@ -300,31 +300,29 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     // The ROM answers JUMP with its HAB report, then either drops USB as it
     // jumps or stays in SDP with an error status; a read error only means
     // the jump already dropped USB.
-    match sdp::jump(&mut rom, ROM_STAGE_BASE) {
-        Ok(replies) => {
-            log::info!("JUMP replies: {:02x?}", replies);
-            if let Some(state) = sdp::hab_state(&replies) {
-                log::info!("HAB {state}");
-            }
-            if sdp::jump_refusal(&replies).is_some() {
-                if let Some(digprog) = rom_id.as_ref().map(|id| id.digprog)
-                    .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
-                    return Err(Error::Device(updated_rom(digprog)));
-                }
-                // The certificates were refused, but this ROM still ships
-                // the range-check hole: fall back to entering the stage
-                // through the WRITE FILE overflow. Only the run log
-                // records the fallback; the front end sees the same load
-                // it always sees.
-                log::warn!("JUMP refused; falling back to the WRITE FILE overflow");
-                spray_stack(&mut rom);
-                log::info!("Recovery U-Boot started through the overflow fallback; \
-                            fastboot buffer at {RAM_BASE:#x}");
-                return Ok(rom_id.map(|id| id.silicon));
-            }
+    let replies = sdp::jump(&mut rom, ROM_STAGE_BASE)?;
+    log::info!("JUMP replies: {:02x?}", replies);
+    if let Some(state) = sdp::hab_state(&replies) {
+        log::info!("HAB {state}");
+    }
+    if let Some(refusal) = sdp::jump_refusal(&replies) {
+        if let Ok(word) = <[u8; 4]>::try_from(&refusal[1..5]) {
+            log::info!("HAB refusal: {}", sdp::hab_word_description(word));
         }
-        Err(Error::Io(e)) => log::info!("JUMP reply read: {e}"),
-        Err(e) => return Err(e),
+        if let Some(digprog) = rom_id.as_ref().map(|id| id.digprog)
+            .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
+            return Err(Error::Device(updated_rom(digprog)));
+        }
+        // The certificates were refused, but this ROM still ships
+        // the range-check hole: fall back to entering the stage
+        // through the WRITE FILE overflow. Only the run log
+        // records the fallback; the front end sees the same load
+        // it always sees.
+        log::warn!("JUMP refused; falling back to the WRITE FILE overflow");
+        spray_stack(&mut rom)?;
+        log::info!("Recovery U-Boot started through the overflow fallback; \
+                    fastboot buffer at {RAM_BASE:#x}");
+        return Ok(rom_id.map(|id| id.silicon));
     }
     log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
     Ok(rom_id.map(|id| id.silicon))
@@ -351,13 +349,26 @@ const SPRAY_START: u32 = 0x0091_6000;
 /// stage's entry, so the handler's corrupted return addresses unwind
 /// straight into it — no authenticated JUMP, no certificates, no fuses.
 /// The USB session dying mid-write is expected: the overwrite includes the
-/// ROM's own USB state.
-fn spray_stack(rom: &mut impl sdp::Hid) {
+/// ROM's own USB state. A write the ROM answers with anything but the
+/// completion word never overwrote anything, and fails the load.
+fn spray_stack(rom: &mut impl sdp::Hid) -> Result<()> {
     let spray = vec![ROM_STAGE_ENTRY.to_le_bytes(); ((OCRAM_TOP - SPRAY_START) / 4) as usize].concat();
     log::info!("Spraying {:#x} bytes at {SPRAY_START:#x} past the write window into the stack",
                OCRAM_TOP - SPRAY_START);
     match sdp::write_file(rom, SPRAY_START, &spray) {
-        Ok(acked) => log::info!("Spray complete, ROM acked: {acked}"),
-        Err(error) => log::info!("Spray took the session with it: {error}"),
+        Ok(sdp::WriteOutcome::Completed) => {
+            log::info!("Spray complete, ROM acked");
+            Ok(())
+        }
+        Ok(sdp::WriteOutcome::Silent) => {
+            // The overwrite taking the session with it is the expected end.
+            log::info!("Spray took the session with it");
+            Ok(())
+        }
+        Ok(sdp::WriteOutcome::Rejected) => Err(Error::Device(
+            "the ROM rejected the overflow write; this build cannot start recovery on it".into(),
+        )),
+        Err(error) => Err(Error::Device(format!(
+            "the overflow write never reached the ROM: {error}"))),
     }
 }
