@@ -11,10 +11,12 @@ mod about;
 mod macos_about;
 mod run;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -110,6 +112,33 @@ fn main() -> eframe::Result<()> {
         }
     }
     result
+}
+
+/// Runs a file dialog to its answer on its own thread and sends the chosen
+/// path. The dialog must not run inside the frame: its modal panel pumps
+/// its own event loop, which macOS delivers re-entrantly into winit's
+/// event handler and aborts the process.
+fn spawn_dialog(
+    dialog: Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>,
+    sender: Sender<Option<PathBuf>>,
+) {
+    std::thread::spawn(move || {
+        let mut dialog = Box::into_pin(dialog);
+        loop {
+            let mut context = Context::from_waker(Waker::noop());
+            match dialog.as_mut().poll(&mut context) {
+                Poll::Ready(Some(handle)) => {
+                    let _ = sender.send(Some(handle.path().to_path_buf()));
+                    return;
+                }
+                Poll::Ready(None) => {
+                    let _ = sender.send(None);
+                    return;
+                }
+                Poll::Pending => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+    });
 }
 
 /// Where an update from GitHub's releases stands.
@@ -282,6 +311,9 @@ struct Form {
     mqtt_password: String,
     mqtt_tls: bool,
     mqtt_ca: Option<PathBuf>,
+    /// The certificate dialog a click opened, and the channel its choice
+    /// arrives on over the following frames.
+    pending_certificate: Option<Receiver<Option<PathBuf>>>,
     matter: MatterCode,
     matter_thread: bool,
     zigbee: bool,
@@ -435,6 +467,9 @@ struct App {
     saved_logs: [LogContext; 3],
     /// The question a restore waits on before it writes, and where the answer goes.
     confirm: Option<(String, Sender<bool>)>,
+    /// The image dialog a click opened, the mode it belongs to, and the
+    /// channel its choice arrives on over the following frames.
+    pending_image: Option<(Mode, Receiver<Option<PathBuf>>)>,
     /// When the wait for USB download mode began: it shows as a popup, not a step.
     sdp_wait: Option<Instant>,
     drawer_open: bool,
@@ -472,7 +507,11 @@ impl App {
 
     /// Start can run: a NAND job needs its image chosen.
     fn ready(&self) -> bool {
-        self.mode == Mode::Patch || self.image.is_some()
+        // A pending dialog holds Start back: the job would run on the shown
+        // image or the previous certificate while the choice is still on its
+        // way.
+        self.pending_image.is_none() && self.form.pending_certificate.is_none()
+            && (self.mode == Mode::Patch || self.image.is_some())
     }
 
     /// Switches what Start does. A backup gets a fresh file name in the data
@@ -494,20 +533,39 @@ impl App {
     }
 
     fn choose_image(&mut self) {
-        let dialog = rfd::FileDialog::new().add_filter("NAND image", &["bin"]);
-        let chosen = match self.mode {
+        if self.pending_image.is_some() {
+            return;
+        }
+        let dialog = rfd::AsyncFileDialog::new().add_filter("NAND image", &["bin"]);
+        let dialog = match self.mode {
             Mode::Backup => {
                 let current = self.image.clone().unwrap_or_else(nand::default_backup);
                 let dialog = match current.parent().filter(|dir| dir.is_dir()) {
                     Some(dir) => dialog.set_directory(dir),
                     None => dialog,
                 };
-                dialog.set_file_name(current.file_name().unwrap_or_default().to_string_lossy()).save_file()
+                dialog.set_file_name(current.file_name().unwrap_or_default().to_string_lossy())
             }
-            _ => dialog.pick_file(),
+            _ => dialog,
         };
-        if chosen.is_some() {
-            self.image = chosen;
+        let chosen: Box<dyn Future<Output = Option<rfd::FileHandle>> + Send> =
+            match self.mode { Mode::Backup => Box::new(dialog.save_file()), _ => Box::new(dialog.pick_file()) };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        spawn_dialog(chosen, sender);
+        self.pending_image = Some((self.mode, receiver));
+    }
+
+    /// Takes the image dialog's answer when it arrives. Only a choice made
+    /// for the mode the dialog opened in applies: on Windows the dialog
+    /// leaves the window interactive, and a mode switch in between would
+    /// otherwise land a restore's source in the backup's destination.
+    fn drain_image_dialog(&mut self) {
+        if let Some((mode, receiver)) = self.pending_image.take() {
+            match receiver.try_recv() {
+                Ok(Some(path)) if mode == self.mode => self.image = Some(path),
+                Ok(_) => {}
+                Err(_) => self.pending_image = Some((mode, receiver)),
+            }
         }
     }
 
@@ -636,8 +694,11 @@ const BAD: egui::Color32 = egui::Color32::from_rgb(0xd0, 0x33, 0x2e);
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain();
-        if self.running() {
-            // Often enough for the progress bar to glide through a piece under way.
+        self.drain_image_dialog();
+        if self.running() || self.pending_image.is_some() || self.form.pending_certificate.is_some() {
+            // Often enough for the progress bar to glide through a piece under
+            // way, and for a pending file dialog's answer to land the frame it
+            // arrives in.
             let moving = self.logs.transfer.as_ref().is_some_and(|t| t.next > 0);
             ui.ctx().request_repaint_after(Duration::from_millis(if moving { 33 } else { 120 }));
         }
@@ -1115,7 +1176,19 @@ impl App {
 }
 
 impl Form {
+    /// Takes the certificate dialog's answer when it arrives.
+    fn drain_certificate_dialog(&mut self) {
+        if let Some(receiver) = self.pending_certificate.take() {
+            match receiver.try_recv() {
+                Ok(Some(path)) => self.mqtt_ca = Some(path),
+                Ok(None) => {}
+                Err(_) => self.pending_certificate = Some(receiver),
+            }
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui) {
+        self.drain_certificate_dialog();
         // One vertical gap everywhere, so every checkbox is spaced the same.
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.add_space(2.0);
@@ -1156,10 +1229,14 @@ impl Form {
                             ui.checkbox(&mut self.mqtt_tls, "");
                             if self.mqtt_tls {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button("CA certificate").clicked() {
-                                        if let Some(chosen) = rfd::FileDialog::new().add_filter("certificate", &["pem", "crt"]).pick_file() {
-                                            self.mqtt_ca = Some(chosen);
-                                        }
+                                    if ui.button("CA certificate").clicked()
+                                        && self.pending_certificate.is_none() {
+                                        let (sender, receiver) = std::sync::mpsc::channel();
+                                        spawn_dialog(
+                                            Box::new(rfd::AsyncFileDialog::new()
+                                                .add_filter("certificate", &["pem", "crt"]).pick_file()),
+                                            sender);
+                                        self.pending_certificate = Some(receiver);
                                     }
                                     if let Some(chosen) = self.mqtt_ca.clone() {
                                         if ui.small_button("clear").clicked() {
