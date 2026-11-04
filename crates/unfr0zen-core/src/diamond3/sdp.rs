@@ -176,6 +176,31 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
     Ok(())
 }
 
+/// Uploads with padded reports and waits for the completion word, without
+/// reading the upload back. The ROM range-checks only the first eighth of
+/// the transfer, so the tail may land past the checked window; the caller
+/// owns the geometry. Returns whether the ROM completed before the
+/// transfer's side effects took over the session.
+pub fn write_file(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<bool> {
+    command(dev, WRITE_FILE, address, data.len() as u32)?;
+    for block in data.chunks(HID_DATA_SIZE) {
+        let mut packet = vec![0u8; 1 + HID_DATA_SIZE];
+        packet[0] = REPORT_DATA;
+        packet[1..1 + block.len()].copy_from_slice(block);
+        let sent = dev.write(&packet)?;
+        if sent != packet.len() {
+            return Err(Error::Io(format!("Short HID write at {address:#x}: {sent}/{}", packet.len())));
+        }
+    }
+    for _ in 0..5 {
+        let reply = dev.read(1000)?;
+        if reply.len() >= 5 && reply[0] == REPORT_STATUS {
+            return Ok(reply[1..5] == WRITE_COMPLETE);
+        }
+    }
+    Ok(false)
+}
+
 /// The HAB security state of a unit, from the magic word in the ROM's HAB
 /// report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +309,27 @@ mod tests {
         fn read(&mut self, _timeout_ms: i32) -> Result<Vec<u8>> {
             Ok(self.replies.pop_front().unwrap_or_default())
         }
+    }
+
+    #[test]
+    fn a_raw_write_file_sends_the_command_then_whole_data_reports() {
+        let ack = vec![4, 0x88, 0x88, 0x88, 0x88];
+        let data: Vec<u8> = (0..2048).map(|i| (i % 251) as u8).collect();
+        let mut device = scripted_owned(&[ack]);
+        assert!(write_file(&mut device, 0x0090_7000, &data).unwrap());
+        assert_eq!(device.writes.len(), 3); // command, then two padded data reports
+        assert_eq!(&device.writes[0][1..3], &WRITE_FILE.to_be_bytes());
+        assert_eq!(&device.writes[0][3..7], &0x0090_7000u32.to_be_bytes());
+        assert_eq!(&device.writes[0][8..12], &(data.len() as u32).to_be_bytes());
+        for (index, report) in device.writes[1..].iter().enumerate() {
+            assert_eq!(report[0], REPORT_DATA);
+            assert_eq!(&report[1..1 + 1024], &data[index * 1024..(index + 1) * 1024]);
+        }
+        // No completion word: the write's side effects took the session.
+        let quiet = scripted(&[&[3, 0x12, 0x34, 0x34, 0x12]]);
+        assert!(!write_file(&mut { quiet }, 0x0090_7000, &[0x41; 16]).unwrap());
+        let mut short = Scripted { accept: 100, ..scripted(&[]) };
+        assert!(write_file(&mut short, 0x0090_7000, &[0x41; 16]).unwrap_err().to_string().contains("Short HID write"));
     }
 
     #[test]

