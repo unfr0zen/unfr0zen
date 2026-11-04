@@ -3,6 +3,8 @@
 //! as a j49 until the flasher runs and the NAND's U-Boot environment names
 //! the generation (j49::route), unless `--device` names it first.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -79,9 +81,14 @@ fn selected(mut unit: Unit, omap: Option<Device>) -> Unit {
     unit
 }
 
+/// A flag the front end can set to cancel the USB download wait early.
+pub type CancelFlag = Arc<AtomicBool>;
+
 /// The unit on the bus, in whatever mode it is in. With none, asks for the
 /// button and waits up to `wait` for one in its boot ROM's USB download mode.
-pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>) -> Result<Unit> {
+/// A set `cancel` flag cuts the wait short.
+pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>,
+              cancel: &CancelFlag) -> Result<Unit> {
     if let Some(unit) = single(units()?)?.map(|unit| selected(unit, omap)) {
         if omap.is_some_and(|wanted| unit.device != wanted) {
             return Err(Error::Device(format!("selected {}, but USB has {}", omap.unwrap().name(), unit.device.name())));
@@ -97,7 +104,7 @@ pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>)
     let unit = stage(progress, WAIT_USB_BOOT_STAGE, || {
         let until = Instant::now() + wait;
         let mut last = None;
-        while Instant::now() < until {
+        while Instant::now() < until && !cancel.load(Ordering::Relaxed) {
             let found: Vec<Unit> = units()?.into_iter().filter(|u| u.id == usb_boot(u.device)).collect();
             if last.as_ref() != Some(&found) {
                 log::info!("USB: {:?}", found.iter().map(|u| format!("{} {} {:04x}:{:04x}", u.device.name(), u.port, u.id.0, u.id.1))

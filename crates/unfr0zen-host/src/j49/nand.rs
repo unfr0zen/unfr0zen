@@ -234,7 +234,7 @@ fn restore(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path,
 /// Runs the job and restarts the unit after, on failure too. `confirm` is
 /// asked before a restore writes anything.
 pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn Progress,
-                  confirm: &mut dyn FnMut(&str) -> bool) -> Result<String> {
+                  confirm: &mut dyn FnMut(&str) -> bool, cancel: &super::CancelFlag) -> Result<String> {
     if let Job::Restore(image) = job {
         let checksum = checksum_path(image);
         let Ok(expected) = fs::read_to_string(&checksum) else {
@@ -246,7 +246,7 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
         }
     }
     let usb = unit.device;
-    find_unit(progress, wait_usb, unit)?;
+    find_unit(progress, wait_usb, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
     let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;

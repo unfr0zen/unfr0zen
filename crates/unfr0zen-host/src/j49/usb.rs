@@ -46,14 +46,16 @@ pub fn mode_for(id: Id, app: Id) -> Option<Mode> {
 }
 
 /// Waits for the unit in one of the wanted modes, on the given port if any.
-pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>) -> Result<(String, Id)> {
-    wait_device_for(wanted, timeout, port, APP)
+pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>,
+                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+    wait_device_for(wanted, timeout, port, APP, cancel)
 }
 
-pub fn wait_device_for(wanted: &[Mode], timeout: Duration, port: Option<&str>, app: Id) -> Result<(String, Id)> {
+pub fn wait_device_for(wanted: &[Mode], timeout: Duration, port: Option<&str>, app: Id,
+                       cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
     let until = Instant::now() + timeout;
     let mut last = None;
-    while Instant::now() < until {
+    while Instant::now() < until && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
         let seen: BTreeMap<String, Id> = usb::list()?.into_iter()
             .filter(|(_, id)| mode_for(*id, app).is_some_and(|m| wanted.contains(&m)))
             .collect();

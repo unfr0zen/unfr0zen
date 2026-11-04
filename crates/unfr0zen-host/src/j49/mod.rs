@@ -24,14 +24,15 @@ use unfr0zen_core::j49::omap;
 use unfr0zen_core::patch::{self, changes_text};
 use unfr0zen_core::{Device, Result, Slot};
 
-use crate::device::{Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
+use crate::device::{CancelFlag, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
 use crate::progress::{stage, stage_with, Progress};
 use crate::usb::{verify_shell, Id, Pipe};
 use usb::Mode;
 
 /// Brings the unit to its boot ROM's USB mode: (port, identity).
-pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: Unit) -> Result<(String, Id)> {
+pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: Unit,
+                        cancel: &CancelFlag) -> Result<(String, Id)> {
     let Unit { device, port, id } = unit;
     if !matches!(device, Device::Diamond | Device::J49) {
         return Err(failure(format!("this needs an OMAP Nest; the unit on USB is a {}", device.name())));
@@ -39,7 +40,7 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: U
     let app = app_id(device);
     if usb::mode_for(id, app) == Some(Mode::App) {
         progress.waiting(HOLD_BUTTON);
-        return stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device_for(&[Mode::Rom], wait_usb, Some(&port), app));
+        return stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device_for(&[Mode::Rom], wait_usb, Some(&port), app, cancel));
     }
     Ok((port, id))
 }
@@ -292,11 +293,12 @@ fn check(config: &Config) -> Result<()> {
 
 /// Runs the recovery from whatever mode the unit is in, as the diamond3's
 /// does: run records under `work_dir`, the run log, the final status line.
-pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit) -> Result<String> {
+pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
+                  cancel: &CancelFlag) -> Result<String> {
     let usb = unit.device;
     check(config)?;
     unsupported(usb, &config.options)?;
-    let (port, _) = find_unit(progress, config.wait_usb, unit)?;
+    let (port, _) = find_unit(progress, config.wait_usb, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
@@ -310,7 +312,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit) -> R
     let outcome = outcome?;
     reset?;
     let app = app_id(outcome.device);
-    stage(progress, "Wait for the unit to restart", || usb::wait_device_for(&[Mode::App], seconds(180), Some(&port), app))?;
+    stage(progress, "Wait for the unit to restart", || usb::wait_device_for(&[Mode::App], seconds(180), Some(&port), app, &Default::default()))?;
     finish(progress, config, &run_dir, &outcome, Some(&port))
 }
 

@@ -983,11 +983,11 @@ impl App {
         }
     }
 
-    /// The restore's last question, as a modal: nothing else can be clicked
-    /// until it is answered.
-    fn sdp_ui(&self, ctx: &egui::Context) {
+    /// The USB download mode dialog. Clicking the backdrop or pressing Escape
+    /// dismisses it and cancels the wait.
+    fn sdp_ui(&mut self, ctx: &egui::Context) {
         let Some(since) = self.sdp_wait else { return };
-        egui::Modal::new(egui::Id::new("enter_sdp")).show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::new("enter_sdp")).show(ctx, |ui| {
             ui.set_max_width(320.0);
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.label(egui::RichText::new("Put the device in USB download mode").strong().size(16.0));
@@ -1007,6 +1007,11 @@ impl App {
                 ui.label(egui::RichText::new(format!("Waiting for the unit, {}:{:02} left", left / 60, left % 60)).weak());
             });
         });
+        if response.should_close() {
+            if let Some(run) = &self.run {
+                run.cancel_wait();
+            }
+        }
     }
 
     fn confirm_ui(&mut self, ctx: &egui::Context) {

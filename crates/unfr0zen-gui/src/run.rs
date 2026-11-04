@@ -1,12 +1,14 @@
 //! Running the recovery flow or a NAND job off the UI thread. A [`Run`] spawns
 //! it and streams its progress back as [`Event`]s the window drains each frame.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use unfr0zen_host::nand::{self, Job};
-use unfr0zen_host::{run, Config, Progress};
+use unfr0zen_host::{run, CancelFlag, Config, Progress};
 
 /// One thing that happened in the flow, for the window.
 pub enum Event {
@@ -59,29 +61,37 @@ fn confirm(tx: &Sender<Event>, question: &str) -> bool {
 /// A recovery flow or NAND job running on its own thread.
 pub struct Run {
     events: Receiver<Event>,
+    cancel: CancelFlag,
     _worker: thread::JoinHandle<()>,
 }
 
 impl Run {
     /// The recovery flow that patches the unit.
     pub fn start(config: Config) -> Self {
-        Self::spawn(move |progress, _| run(&config, progress))
+        Self::spawn(move |progress, _, cancel| run(&config, progress, &cancel))
     }
 
     /// A whole-NAND backup or restore.
     pub fn nand(job: Job, wait_usb: Duration) -> Self {
-        Self::spawn(move |progress, tx| nand::run(&job, wait_usb, None, progress, &mut |question| confirm(&tx, question)))
+        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, progress, &mut |question| confirm(&tx, question), &cancel))
     }
 
-    fn spawn(job: impl FnOnce(&mut ChannelProgress, Sender<Event>) -> unfr0zen_host::Result<String> + Send + 'static)
+    /// Signals the running flow to cut the USB download wait short.
+    pub fn cancel_wait(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    fn spawn(job: impl FnOnce(&mut ChannelProgress, Sender<Event>, CancelFlag) -> unfr0zen_host::Result<String> + Send + 'static)
              -> Self {
         let (tx, events) = mpsc::channel();
+        let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
         let worker = thread::spawn(move || {
             let mut progress = ChannelProgress { tx: tx.clone() };
-            let result = job(&mut progress, tx.clone()).map_err(|e| e.to_string());
+            let result = job(&mut progress, tx.clone(), flag).map_err(|e| e.to_string());
             let _ = tx.send(Event::Done(result));
         });
-        Run { events, _worker: worker }
+        Run { events, cancel, _worker: worker }
     }
 
     /// Every event that has arrived since the last call.

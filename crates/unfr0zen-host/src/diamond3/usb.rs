@@ -58,10 +58,11 @@ pub fn devices() -> Result<BTreeMap<String, Id>> {
 }
 
 /// Waits for the unit in one of the wanted modes, on the given port if any.
-pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>) -> Result<(String, Id)> {
+pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>,
+                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
     let until = Instant::now() + timeout;
     let mut last = None;
-    while Instant::now() < until {
+    while Instant::now() < until && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
         let seen: BTreeMap<String, Id> = devices()?.into_iter()
             .filter(|(_, id)| mode(*id).is_some_and(|m| wanted.contains(&m)))
             .collect();

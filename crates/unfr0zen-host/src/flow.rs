@@ -302,11 +302,12 @@ pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<Path
 /// Runs the recovery from whatever mode the unit is in to a confirmed root
 /// shell, writing run records under `work_dir` and the timestamped run log.
 /// Returns the final status line.
-pub fn run(config: &Config, progress: &mut dyn Progress) -> Result<String> {
-    let unit = device::detect(progress, config.wait_usb, config.omap)?;
+pub fn run(config: &Config, progress: &mut dyn Progress,
+           cancel: &device::CancelFlag) -> Result<String> {
+    let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
-        Device::Diamond3 => diamond3::run(config, progress, unit),
-        Device::Diamond | Device::J49 => j49::run(config, progress, unit),
+        Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
+        Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }

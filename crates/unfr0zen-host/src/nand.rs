@@ -59,7 +59,8 @@ pub(crate) fn checksum_path(image: &Path) -> PathBuf {
 /// Runs the job on the unit, whichever device it is, from whatever mode it is
 /// in, and boots it normally after. `confirm` is asked before a restore
 /// writes anything. Returns the final status line.
-pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut dyn Progress, confirm: &mut dyn FnMut(&str) -> bool)
+pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut dyn Progress,
+           confirm: &mut dyn FnMut(&str) -> bool, cancel: &device::CancelFlag)
            -> Result<String> {
     let expected = match job {
         Job::Backup(out) if out.exists() => return Err(failure(format!("{} exists", out.display()))),
@@ -69,13 +70,13 @@ pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut d
             Some(image_device(len).ok_or_else(|| failure(format!("{} is not a whole-NAND image ({len} bytes)", image.display())))?)
         }
     };
-    let unit = device::detect(progress, wait_usb, omap)?;
+    let unit = device::detect(progress, wait_usb, omap, cancel)?;
     if let Some(device) = expected.filter(|&device| unit.device != Device::Onyx && device != unit.device && !(device == Device::J49 && unit.device == Device::Diamond)) {
         return Err(failure(format!("the image is a {}'s NAND; the unit is a {}", device.name(), unit.device.name())));
     }
     match unit.device {
-        Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, progress, confirm),
-        Device::Diamond | Device::J49 => j49::nand::run(job, unit, wait_usb, progress, confirm),
+        Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, progress, confirm, cancel),
+        Device::Diamond | Device::J49 => j49::nand::run(job, unit, wait_usb, progress, confirm, cancel),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }
@@ -110,7 +111,7 @@ mod tests {
             fn status(&mut self, _: &str) {}
             fn waiting(&mut self, _: &str) {}
         }
-        let error = run(&Job::Verify(image), Duration::ZERO, None, &mut Silent, &mut |_| false).err().unwrap();
+        let error = run(&Job::Verify(image), Duration::ZERO, None, &mut Silent, &mut |_| false, &Default::default()).err().unwrap();
         assert!(error.to_string().contains("is not a whole-NAND image"), "{error}");
         fs::remove_dir_all(dir).unwrap();
     }

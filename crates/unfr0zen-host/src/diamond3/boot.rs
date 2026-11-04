@@ -13,8 +13,9 @@ use crate::progress::{stage, Progress};
 use crate::usb::{wait_acm, Id};
 
 fn log_and_find(progress: &mut dyn Progress, wait_usb: Duration, stop_at_app: bool) -> Result<(String, Id)> {
-    let unit = device::detect(progress, wait_usb, None)?;
-    let (port, id) = find_unit(progress, wait_usb, stop_at_app, unit)?;
+    let cancel: device::CancelFlag = Default::default();
+    let unit = device::detect(progress, wait_usb, None, &cancel)?;
+    let (port, id) = find_unit(progress, wait_usb, stop_at_app, unit, &cancel)?;
     start_log(progress, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string())?;
     Ok((port, id))
 }
@@ -40,6 +41,6 @@ pub fn boot(wait_usb: Duration, progress: &mut dyn Progress) -> Result<String> {
     let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port)))?;
+    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port), &Default::default()))?;
     Ok("The application firmware is running".into())
 }

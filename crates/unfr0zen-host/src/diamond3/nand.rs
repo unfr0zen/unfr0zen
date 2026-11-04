@@ -71,7 +71,7 @@ fn each_chunk(progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
 /// `confirm` is asked before a restore writes anything. Returns the final
 /// status line.
 pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, progress: &mut dyn Progress,
-                  confirm: &mut dyn FnMut(&str) -> bool) -> Result<String> {
+                  confirm: &mut dyn FnMut(&str) -> bool, cancel: &device::CancelFlag) -> Result<String> {
     // Everything that can be checked before the unit is touched.
     let mut copies = Vec::new();
     if let Job::Restore(image) = job {
@@ -86,7 +86,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
         copies = image_firmware(&data[..BOOT_SIZE as usize])?;
     }
 
-    let (port, id) = find_unit(progress, wait_usb, false, unit)?;
+    let (port, id) = find_unit(progress, wait_usb, false, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
     let port = reach_recovery(progress, port, id)?;
@@ -126,7 +126,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     };
     let Unit { board, port, .. } = unit;
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port)))?;
+    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port), &Default::default()))?;
     Ok(message)
 }
 

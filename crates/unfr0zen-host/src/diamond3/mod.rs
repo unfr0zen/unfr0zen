@@ -20,7 +20,7 @@ use unfr0zen_core::patch::{self, changes_text};
 use unfr0zen_core::shell::{sha256_hex, InitramfsShell};
 use unfr0zen_core::{Error, Result};
 
-use crate::device::{Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
+use crate::device::{CancelFlag, Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
 use crate::progress::{stage, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
@@ -36,10 +36,10 @@ pub(crate) fn connect_recovery(progress: &mut dyn Progress, port: &str) -> Resul
         let console = UBoot::connect(open_acm(usb::RECOVERY, seconds(45))?, seconds(20))?;
         Ok(Recovery::new(console, usb::open_fastboot(port)?))
     }, || {
-        let (_, id) = usb::wait_device(&[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs], seconds(10), Some(port))?;
+        let (_, id) = usb::wait_device(&[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs], seconds(10), Some(port), &Default::default())?;
         if id == usb::SDP {
             usb::load_recovery(WATCHDOG_SECONDS)?;
-            usb::wait_device(&[Mode::Recovery], seconds(45), Some(port))?;
+            usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default())?;
         } else if id != usb::RECOVERY {
             return Err(failure(format!("the unit restarted in {} mode", usb::mode(id).unwrap().name())));
         }
@@ -80,13 +80,13 @@ fn load_recovery(progress: &mut dyn Progress, port: &str) -> Result<(String, Id)
     if let Some(chip) = stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS))? {
         progress.device(&format!("{}: {chip}", Device::Diamond3.description()));
     }
-    stage(progress, "Wait for recovery USB", || usb::wait_device(&[Mode::Recovery], seconds(45), Some(port)))
+    stage(progress, "Wait for recovery USB", || usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default()))
 }
 
 /// Brings the unit from whatever mode it is in to SDP or recovery, or leaves
 /// it in the application firmware with `stop_at_app`: (port, identity).
-pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at_app: bool, unit: Unit)
-                        -> Result<(String, Id)> {
+pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at_app: bool, unit: Unit,
+                        cancel: &CancelFlag) -> Result<(String, Id)> {
     let Unit { device, mut port, mut id } = unit;
     if device == Device::Onyx {
         return Err(crate::onyx::unsupported(progress));
@@ -99,12 +99,12 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at
         (port, id) = stage(progress, "Restart the unit from an earlier initramfs shell", || {
             let shell = InitramfsShell::connect(open_acm(usb::INITRAMFS, seconds(45))?, seconds(30))?;
             shell.restart()?;
-            usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port))
+            usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default())
         })?;
     }
     if usb::mode(id) == Some(Mode::App) && !stop_at_app {
         progress.waiting(HOLD_BUTTON);
-        (port, id) = stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device(&[Mode::Sdp], wait_usb, Some(&port)))?;
+        (port, id) = stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device(&[Mode::Sdp], wait_usb, Some(&port), cancel))?;
     }
     Ok((port, id))
 }
@@ -121,8 +121,9 @@ pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id) 
 /// Runs the recovery from whatever mode the unit is in to a confirmed root
 /// shell, writing run records under `work_dir` and the timestamped run log.
 /// Returns the final status line.
-pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit) -> Result<String> {
-    let (port, id) = find_unit(progress, config.wait_usb, false, unit)?;
+pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
+                  cancel: &CancelFlag) -> Result<String> {
+    let (port, id) = find_unit(progress, config.wait_usb, false, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
@@ -184,7 +185,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     stage(progress, &format!("Boot the {slot} kernel with the initramfs"), || board.boot_initramfs(slot, &environment, length))?;
 
     let (port, mut shell) = stage(progress, "Wait for the initramfs USB shell", || {
-        let (port, id) = usb::wait_device(&[Mode::Initramfs, Mode::Sdp, Mode::App], seconds(120), Some(port))?;
+        let (port, id) = usb::wait_device(&[Mode::Initramfs, Mode::Sdp, Mode::App], seconds(120), Some(port), &Default::default())?;
         if id != usb::INITRAMFS {
             let mode = usb::mode(id).map_or("unknown", Mode::name);
             return Err(failure(format!("the unit came back in {mode} mode, not the initramfs shell; {slot} is \
@@ -208,7 +209,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
     shell.restart()?;
 
-    let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port)))?;
+    let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default()))?;
     if id == usb::SDP {
         let (port, _) = load_recovery(progress, &port)?;
         let mut board = connect_recovery(progress, &port)?;

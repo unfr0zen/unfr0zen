@@ -14,7 +14,7 @@ use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
-use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, Config, Device, PatchInputs, Slot};
+use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, PatchInputs, Slot};
 
 use ui::TerminalProgress;
 
@@ -275,23 +275,24 @@ pub fn main() {
         data_dir,
     };
     let mut progress = TerminalProgress::default();
+    let cancel: CancelFlag = Default::default();
     let result = match &args.command {
         None => match &args.nand_image {
             Some(image) => unfr0zen_host::j49::run_image(&config, image, &mut progress),
-            None => run(&config, &mut progress),
+            None => run(&config, &mut progress, &cancel),
         },
         Some(Command::Nlclient { .. }) => unreachable!("handled before USB setup"),
         Some(Command::Uboot) => boot::uboot(config.wait_usb, &mut progress),
         Some(Command::Boot) => boot::boot(config.wait_usb, &mut progress),
         Some(Command::Backup { out }) => {
             let job = Job::Backup(out.clone().unwrap_or_else(nand::default_backup));
-            nand::run(&job, config.wait_usb, config.omap, &mut progress, &mut confirm_restore)
+            nand::run(&job, config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Verify { image }) => {
-            nand::run(&Job::Verify(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore)
+            nand::run(&Job::Verify(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Restore { image }) => {
-            nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore)
+            nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Update) => update(),
     };
