@@ -258,6 +258,52 @@ pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<RomId> {
     Ok(RomId { silicon, digprog })
 }
 
+/// One word for the run log: a unit that does not answer an address is
+/// worth a warning, never a failed load.
+fn diag_word(rom: &mut impl sdp::Hid, address: u32, name: &str) -> Option<u32> {
+    sdp::read_word(rom, address)
+        .inspect_err(|error| log::warn!("{name} at {address:#010x} not read: {error}"))
+        .ok()
+}
+
+fn diag_words(rom: &mut impl sdp::Hid, address: u32, len: usize, name: &str) {
+    match sdp::read_memory(rom, address, len) {
+        Ok(data) => {
+            let words: Vec<String> = data.chunks(4)
+                .map(|w| format!("{:#010x}", u32::from_le_bytes(w.try_into().unwrap())))
+                .collect();
+            log::info!("{name}: {}", words.join(" "));
+        }
+        Err(error) => log::warn!("{name} at {address:#010x} not read: {error}"),
+    }
+}
+
+/// Fuse state, boot straps and a boot-ROM fingerprint for the run log, so
+/// a field report can answer what differs about a unit without hardware
+/// access: the OTP shadow banks hold the security configuration and, in
+/// bank 3, the SRK hash; the SRC straps hold how the unit entered download
+/// mode; and the boot ROM's vector-table data words move with a mask
+/// change even when the reported version does not. Each OTP bank spans
+/// 0x80 bytes with every fuse value aliased four times at a four-byte
+/// stride, so a bank's eight values sit at sixteens and the SRK hash
+/// fills bank 3, at 0x021bc580.
+fn log_unit_diagnostics(rom: &mut impl sdp::Hid) {
+    // OCOTP shadow strip: banks 0 through 3, deduplicated.
+    if let Ok(strip) = sdp::read_memory(rom, 0x021B_C400, 0x200) {
+        let words: Vec<String> = (0..0x20)
+            .map(|i| format!("{:#010x}",
+                             u32::from_le_bytes(strip[i * 0x10..i * 0x10 + 4].try_into().unwrap())))
+            .collect();
+        log::info!("OTP: {}", words.join(" "));
+    }
+    for (address, name) in [(0x020D_8004, "SBMR1"), (0x020D_801C, "SBMR2")] {
+        if let Some(word) = diag_word(rom, address, name) {
+            log::info!("{name}: {word:#010x}");
+        }
+    }
+    diag_words(rom, 0x24, 0x24, "ROM vectors");
+}
+
 /// The refusal for a unit whose fuses enforce secure boot on a stepping
 /// that ships the updated boot ROM.
 fn updated_rom(digprog: u32) -> String {
@@ -280,6 +326,7 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
         log::warn!("Silicon revision not read over SDP: {error}");
         sdp::drain(&mut rom, 50);
     }).ok();
+    log_unit_diagnostics(&mut rom);
     for &(address, value) in &DDR_INIT {
         sdp::write_register(&mut rom, address, value)?;
         // The MMDC start bit launches the DDR initialization state machine.
