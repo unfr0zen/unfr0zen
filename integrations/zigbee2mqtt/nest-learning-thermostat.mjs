@@ -257,12 +257,12 @@ const nest = {
         },
     },
     switches: {
-        cluster: 'genOnOff',
+        cluster: 'genBinaryOutput',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg) => {
             const name = byEndpoint(SWITCHES, msg.endpoint.ID);
-            if (name && msg.data.onOff !== undefined) {
-                return {[name]: msg.data.onOff ? 'ON' : 'OFF'};
+            if (name && msg.data.presentValue !== undefined) {
+                return {[name]: msg.data.presentValue ? 'ON' : 'OFF'};
             }
         },
     },
@@ -330,18 +330,16 @@ const set = {
     switches: {
         key: Object.keys(SWITCHES),
         convertSet: async (entity, key, value, meta) => {
-            const state = String(value).toUpperCase();
-            const command = {ON: 'on', OFF: 'off', TOGGLE: 'toggle'}[state];
-            if (!command) {
+            const requested = String(value).toUpperCase();
+            if (!['ON', 'OFF', 'TOGGLE'].includes(requested)) {
                 throw new Error(`${key}: expected ON, OFF or TOGGLE, got '${value}'`);
             }
-            await meta.device.getEndpoint(SWITCHES[key]).command('genOnOff', command, {});
-            if (command !== 'toggle') {
-                return {state: {[key]: state}};
-            }
+            const on = requested === 'TOGGLE' ? meta.state[key] !== 'ON' : requested === 'ON';
+            await meta.device.getEndpoint(SWITCHES[key]).write('genBinaryOutput', {presentValue: on});
+            return {state: {[key]: on ? 'ON' : 'OFF'}};
         },
         convertGet: async (entity, key, meta) => {
-            await meta.device.getEndpoint(SWITCHES[key]).read('genOnOff', ['onOff']);
+            await meta.device.getEndpoint(SWITCHES[key]).read('genBinaryOutput', ['presentValue']);
         },
     },
 };
@@ -509,7 +507,7 @@ const definition = {
             await report(id, 'genAnalogOutput', ['presentValue']);
         }
         for (const id of Object.values(SWITCHES)) {
-            await report(id, 'genOnOff', ['onOff']);
+            await report(id, 'genBinaryOutput', ['presentValue']);
         }
         // The unit reports to the coordinator bound or not, and its binding
         // table (16 entries) is about full: these are only read.

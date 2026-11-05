@@ -17,7 +17,8 @@
 //!       Output
 //!   5   the time to temperature, seconds left: Analog Input
 //!   6   the filter's runtime, hours (with an air filter): Analog Input
-//!   10+ the unit's switches: On/Off, see SWITCHES
+//!   10+ the unit's switches: Binary Output, see SWITCHES; a coordinator
+//!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
@@ -39,10 +40,10 @@ use super::zcl::{status, Clusters, Value};
 pub const BASIC: u16 = 0x0000;
 pub const POWER: u16 = 0x0001;
 pub const IDENTIFY: u16 = 0x0003;
-pub const ON_OFF: u16 = 0x0006;
 pub const ANALOG_INPUT: u16 = 0x000C;
 pub const ANALOG_OUTPUT: u16 = 0x000D;
 pub const BINARY_INPUT: u16 = 0x000F;
+pub const BINARY_OUTPUT: u16 = 0x0010;
 pub const THERMOSTAT: u16 = 0x0201;
 pub const FAN: u16 = 0x0202;
 pub const DISPLAY: u16 = 0x0204;
@@ -96,28 +97,28 @@ const HUMIDITY_TARGET_ENDPOINT: u8 = 4;
 const TIME_TO_TARGET_ENDPOINT: u8 = 5;
 const FILTER_RUNTIME_ENDPOINT: u8 = 6;
 
-/// The switches, by endpoint: their bucket field.
-const SWITCHES: &[(u8, &str)] = &[
-    (10, "learning_mode"),                 // Auto-Schedule
-    (11, "auto_away_enable"),              // Home/Away Assist
-    (12, "sunlight_correction_enabled"),   // Sunblock
-    (13, "preconditioning_enabled"),       // Early-On
-    (14, "away_temperature_low_enabled"),  // the eco heat limit, to heat
-    (15, "away_temperature_high_enabled"), // the eco cool limit, to cool
-    (16, "target_humidity_enabled"),       // humidity control
+/// The switches, by endpoint: their bucket field and description.
+const SWITCHES: &[(u8, &str, &str)] = &[
+    (10, "learning_mode", "Auto-Schedule"),
+    (11, "auto_away_enable", "Home/Away Assist"),
+    (12, "sunlight_correction_enabled", "Sunblock"),
+    (13, "preconditioning_enabled", "Early-On"),
+    (14, "away_temperature_low_enabled", "Eco heat limit"),  // to heat
+    (15, "away_temperature_high_enabled", "Eco cool limit"), // to cool
+    (16, "target_humidity_enabled", "Humidity control"),
 ];
 
-/// The states, by endpoint: their bucket field and, past the first four,
-/// the equipment they come with.
-const STATES: &[(u8, &str, &str)] = &[
-    (20, "leaf", ""),
-    (21, "preconditioning_active", ""),       // Early-On
-    (22, "sunlight_correction_active", ""),   // Sunblock
-    (23, "hvac_safety_shutoff_active", ""),
-    (24, "filter_replacement_needed", "has_air_filter"),
-    (25, "hot_water_active", "has_hot_water_control"),
-    (26, "humidifier_state", "has_humidifier"),
-    (27, "dehumidifier_state", "has_dehumidifier"),
+/// The states, by endpoint: their bucket field, description and, past the
+/// first four, the equipment they come with.
+const STATES: &[(u8, &str, &str, &str)] = &[
+    (20, "leaf", "Leaf", ""),
+    (21, "preconditioning_active", "Early-On active", ""),
+    (22, "sunlight_correction_active", "Sunblock active", ""),
+    (23, "hvac_safety_shutoff_active", "Safety shutoff", ""),
+    (24, "filter_replacement_needed", "Filter replacement", "has_air_filter"),
+    (25, "hot_water_active", "Hot water", "has_hot_water_control"),
+    (26, "humidifier_state", "Humidifier", "has_humidifier"),
+    (27, "dehumidifier_state", "Dehumidifier", "has_dehumidifier"),
 ];
 
 // Home Automation device types.
@@ -134,7 +135,7 @@ const THERMOSTAT_ATTRIBUTES: &[u16] = &[
 ];
 const ANALOG_OUTPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0041, 0x0045, 0x0051, 0x0055, 0x006F, 0x0075];
 const ANALOG_INPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F, 0x0075];
-const BINARY_INPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F];
+const BINARY_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F];
 const MEASUREMENT_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002];
 
 pub const MANUFACTURER: &str = "Google Nest";
@@ -234,7 +235,7 @@ impl Nest {
         if has("has_air_filter") {
             endpoints.push(Endpoint { id: FILTER_RUNTIME_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![ANALOG_INPUT] });
         }
-        for &(id, key) in SWITCHES {
+        for &(id, key, _) in SWITCHES {
             let present = match key {
                 "away_temperature_low_enabled" => has("can_heat"),
                 "away_temperature_high_enabled" => has("can_cool"),
@@ -242,10 +243,10 @@ impl Nest {
                 _ => true,
             };
             if present {
-                endpoints.push(Endpoint { id, device: ON_OFF_OUTPUT, clusters: vec![ON_OFF] });
+                endpoints.push(Endpoint { id, device: ON_OFF_OUTPUT, clusters: vec![BINARY_OUTPUT] });
             }
         }
-        for &(id, _, equipment) in STATES {
+        for &(id, _, _, equipment) in STATES {
             if equipment.is_empty() || has(equipment) {
                 endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
             }
@@ -261,8 +262,8 @@ impl Nest {
                 let attributes: &'static [u16] = match cluster {
                     THERMOSTAT => &[0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0025, 0x0029],
                     POWER => &[0x0020],
-                    FAN | DISPLAY | HUMIDITY | TEMPERATURE | ON_OFF => &[0x0000],
-                    ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT => &[0x0055],
+                    FAN | DISPLAY | HUMIDITY | TEMPERATURE => &[0x0000],
+                    ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT | BINARY_OUTPUT => &[0x0055],
                     _ => continue,
                 };
                 out.push((e.id, cluster, attributes));
@@ -452,26 +453,12 @@ impl Nest {
         })
     }
 
-    fn state(&self, endpoint: u8) -> Option<&'static str> {
-        STATES.iter().find(|(e, _, _)| *e == endpoint).map(|(_, key, _)| *key)
+    fn state(&self, endpoint: u8) -> Option<(&'static str, &'static str)> {
+        STATES.iter().find(|(e, _, _, _)| *e == endpoint).map(|(_, key, description, _)| (*key, *description))
     }
 
-    fn switch(&self, endpoint: u8) -> Option<&'static str> {
-        SWITCHES.iter().find(|(e, _)| *e == endpoint).map(|(_, key)| *key)
-    }
-
-    /// On/Off's commands: off, on, toggle.
-    fn switch_command(&self, endpoint: u8, command: u8) -> u8 {
-        let Some(key) = self.switch(endpoint) else {
-            return status::UNSUP_CLUSTER_COMMAND;
-        };
-        let on = match command {
-            0x00 => false,
-            0x01 => true,
-            0x02 => !truthy(self.view().dev.get(key)),
-            _ => return status::UNSUP_CLUSTER_COMMAND,
-        };
-        self.apply(key, if on { "ON" } else { "OFF" })
+    fn switch(&self, endpoint: u8) -> Option<(&'static str, &'static str)> {
+        SWITCHES.iter().find(|(e, _, _)| *e == endpoint).map(|(_, key, description)| (*key, *description))
     }
 
     /// A Weather attribute: as written, or none.
@@ -567,13 +554,13 @@ impl Clusters for Nest {
         Some(match cluster {
             BASIC => BASIC_ATTRIBUTES,
             POWER => &[0x0020],
-            IDENTIFY | ON_OFF => &[0x0000],
+            IDENTIFY => &[0x0000],
             THERMOSTAT => THERMOSTAT_ATTRIBUTES,
             FAN | DISPLAY => &[0x0000, 0x0001],
             TEMPERATURE | HUMIDITY => MEASUREMENT_ATTRIBUTES,
             ANALOG_OUTPUT => ANALOG_OUTPUT_ATTRIBUTES,
             ANALOG_INPUT => ANALOG_INPUT_ATTRIBUTES,
-            BINARY_INPUT => BINARY_INPUT_ATTRIBUTES,
+            BINARY_INPUT | BINARY_OUTPUT => BINARY_ATTRIBUTES,
             WEATHER => WEATHER_ATTRIBUTES.as_slice(),
             _ => return None,
         })
@@ -623,11 +610,12 @@ impl Clusters for Nest {
             (TEMPERATURE, 0x0002) => Some(Value::I16(6000)),
             (ANALOG_OUTPUT, a) => self.analog_output(endpoint, a),
             (ANALOG_INPUT, a) => self.analog_input(endpoint, a),
-            (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|key| Value::Str(key.into())),
-            (BINARY_INPUT, 0x0051) => Some(Value::Bool(false)),
-            (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|key| Value::Bool(truthy(self.view().dev.get(key)))),
-            (BINARY_INPUT, 0x006F) => Some(Value::Bitmap8(0)),
-            (ON_OFF, 0x0000) => self.switch(endpoint).map(|key| Value::Bool(truthy(self.view().dev.get(key)))),
+            (BINARY_INPUT | BINARY_OUTPUT, 0x0051) => Some(Value::Bool(false)),
+            (BINARY_INPUT | BINARY_OUTPUT, 0x006F) => Some(Value::Bitmap8(0)),
+            (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(_, description)| Value::Str(description.into())),
+            (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
+            (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
+            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
             (WEATHER, a) => self.weather(a),
             _ => None,
         }
@@ -647,17 +635,20 @@ impl Clusters for Nest {
                 _ => status::INVALID_VALUE,
             },
             (ANALOG_OUTPUT, a, v) => self.write_analog_output(endpoint, a, v),
+            (BINARY_OUTPUT, 0x0055, Value::Bool(on)) => match self.switch(endpoint) {
+                Some((key, _)) => self.apply(key, if on { "ON" } else { "OFF" }),
+                None => status::READ_ONLY,
+            },
             (IDENTIFY, 0x0000, _) => status::SUCCESS, // nothing to blink
             (WEATHER, a, v) => self.write_weather(a, v),
             _ => status::READ_ONLY,
         }
     }
 
-    fn command(&self, endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> u8 {
+    fn command(&self, _endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> u8 {
         match (cluster, command) {
             (THERMOSTAT, 0x00) => self.raise_lower(payload),
             (THERMOSTAT, 0x03) => self.apply("clear_schedule", ""), // Clear Weekly Schedule
-            (ON_OFF, c) => self.switch_command(endpoint, c),
             (IDENTIFY, 0x00 | 0x01) => status::SUCCESS,
             _ => status::UNSUP_CLUSTER_COMMAND,
         }
@@ -712,7 +703,7 @@ mod tests {
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(0)));
         assert_eq!(n.read(1, POWER, 0x0020), Some(Value::U8(39)));
         assert_eq!(n.read(2, TEMPERATURE, 0x0000), Some(Value::I16(2210)));
-        assert_eq!(n.read(10, ON_OFF, 0x0000), Some(Value::Bool(false)));
+        assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert!(n.attributes(3, ANALOG_OUTPUT).is_none()); // no fan
     }
 
@@ -733,7 +724,7 @@ mod tests {
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::INVALID_VALUE); // no schedule yet
         n.bridge.store.merge(&format!("schedule.{}", n.bridge.serial), &fields!{"ver" => 2}, 0, 0, true);
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::SUCCESS);
-        assert_eq!(n.read(10, ON_OFF, 0x0000), Some(Value::Bool(false))); // learning off with the schedule
+        assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false))); // learning off with the schedule
     }
 
     #[test]
@@ -755,7 +746,7 @@ mod tests {
             assert!(attributes.iter().all(|a| ids.contains(a)), "{endpoint} {cluster:#06x}");
         }
         // Clusters an endpoint does not have.
-        assert!(n.attributes(1, ON_OFF).is_none());
+        assert!(n.attributes(1, BINARY_OUTPUT).is_none());
         assert!(n.attributes(10, THERMOSTAT).is_none());
         assert!(n.attributes(99, BASIC).is_none());
     }
@@ -852,8 +843,9 @@ mod tests {
     #[test]
     fn commands_the_endpoint_does_not_have_are_refused() {
         let n = nest(fields!{}, fields!{"can_heat" => true});
-        assert_eq!(n.command(10, ON_OFF, 0x40, &[]), status::UNSUP_CLUSTER_COMMAND);
-        assert_eq!(n.command(20, ON_OFF, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND); // a state, not a switch
+        assert_eq!(n.command(10, BINARY_OUTPUT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND);
+        assert_eq!(n.write(20, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY); // a state, not a switch
+        assert_eq!(n.write(20, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
         assert_eq!(n.command(1, THERMOSTAT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND);
         assert_eq!(n.write(1, BASIC, 0x0005, Value::Str("x".into())), status::READ_ONLY);
     }
@@ -868,8 +860,8 @@ mod tests {
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(2150)));
         let out = serve(&n, 1, THERMOSTAT, &[0x00, 2, 0x02, 0x12, 0x00, 0x30, 0x01]).unwrap();
         assert_eq!(out, [0x18, 2, 0x04, 0x8D, 0x12, 0x00]);
-        // The thermostat's endpoint has no On/Off.
-        let out = serve(&n, 1, ON_OFF, &[0x01, 3, 0x01]).unwrap();
+        // The thermostat's endpoint has no Binary Output.
+        let out = serve(&n, 1, BINARY_OUTPUT, &[0x01, 3, 0x01]).unwrap();
         assert_eq!(out, [0x18, 3, 0x0B, 0x01, 0xC3]);
     }
 
@@ -892,10 +884,36 @@ mod tests {
         assert_eq!(n.read(3, ANALOG_OUTPUT, 0x0055), Some(Value::F32(15.0)));
         assert_eq!(n.write(3, ANALOG_OUTPUT, 0x0055, Value::F32(60.0)), status::SUCCESS);
         assert_eq!(n.read(3, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
-        assert_eq!(n.command(11, ON_OFF, 0x01, &[]), status::SUCCESS);
-        assert_eq!(n.read(11, ON_OFF, 0x0000), Some(Value::Bool(true)));
-        assert_eq!(n.command(11, ON_OFF, 0x02, &[]), status::SUCCESS);
-        assert_eq!(n.read(11, ON_OFF, 0x0000), Some(Value::Bool(false)));
+        assert_eq!(n.write(11, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(11, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.write(11, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
+        assert_eq!(n.read(11, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.write(11, BINARY_OUTPUT, 0x001C, Value::Str("x".into())), status::READ_ONLY);
+    }
+
+    #[test]
+    fn switches_and_states_tell_their_names() {
+        let n = nest(fields!{"has_humidifier" => true}, fields!{"can_heat" => true, "can_cool" => true});
+        let names = |cluster, ids: &[u8]| -> Vec<Option<Value>> {
+            ids.iter().map(|&id| n.read(id, cluster, 0x001C)).collect()
+        };
+        let text = |names: &[&str]| -> Vec<Option<Value>> {
+            names.iter().map(|name| Some(Value::Str((*name).into()))).collect()
+        };
+        assert_eq!(names(BINARY_OUTPUT, &[10, 11, 12, 13, 14, 15, 16]),
+                   text(&["Auto-Schedule", "Home/Away Assist", "Sunblock", "Early-On", "Eco heat limit", "Eco cool limit",
+                          "Humidity control"]));
+        assert_eq!(names(BINARY_INPUT, &[20, 21, 22, 23, 26]),
+                   text(&["Leaf", "Early-On active", "Sunblock active", "Safety shutoff", "Humidifier"]));
+        assert!(SWITCHES.iter().all(|(id, _, _)| n.attributes(*id, 0x0006).is_none()), "no On/Off beside them");
+    }
+
+    #[test]
+    fn a_write_attributes_frame_flips_a_switch() {
+        let n = nest(fields!{}, fields!{"can_heat" => true});
+        let out = serve(&n, 11, BINARY_OUTPUT, &[0x00, 1, 0x02, 0x55, 0x00, 0x10, 0x01]).unwrap();
+        assert_eq!(out, [0x18, 1, 0x04, 0x00]);
+        assert_eq!(n.read(11, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
     }
 
     #[test]
