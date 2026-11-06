@@ -49,8 +49,9 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
   protocol, so there is no Zigbee, Matter over Thread or USB shell.
 - **2nd generation:** Matter keeps the unit awake.
 - **Thread and Zigbee** share the 2nd and 3rd generation's 802.15.4 radio (an
-  EM357 or EM3581 on SPI), so only one of them can be on. Zigbee drives it
-  directly; Matter over Thread goes through OpenThread's `ot-daemon`.
+  EM357 or EM3581 on SPI), so only one of them can be on, and on European
+  models either one replaces the wireless Heat Link connection. Zigbee drives
+  it directly; Matter over Thread goes through OpenThread's `ot-daemon`.
 
 MQTT, Matter and Zigbee are nestlocal's: choosing any of them installs it on the
 thermostat. With MQTT or Matter, the thermostat reaches the broker or the
@@ -142,8 +143,8 @@ Common options:
   --dry-run             List the changes, write nothing
   --mqtt <URL>          Relay to this MQTT broker
   --matter              Serve the unit over Matter (default code 0347-100-5534)
-  --matter-thread       Serve Matter over Thread too (excludes --zigbee)
-  --zigbee              Join a Zigbee network as a router
+  --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
+  --zigbee              Join a Zigbee network as a router (replaces Heat Link)
   --doom                Install Doom, launched from UNFR0ZEN → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
@@ -170,9 +171,11 @@ commits past a tag, or local changes) never update.
 
 ## When something is wrong
 **The app doesn't see the thermostat.** Use a USB cable that carries data:
-charge-only cables are the usual cause. On Windows, the 1st and 2nd generation
-need the WinUSB driver bound to `0451:d00e` with [Zadig](https://zadig.akeo.ie).
-On Linux, add the [udev rule](#install) and reconnect the unit.
+charge-only cables are the usual cause. Connect to the USB port on the back of
+the detached display, not the power-only USB port on a European stand or Heat
+Link base. On Windows, the 1st and 2nd generation need the WinUSB driver bound
+to `0451:d00e` with [Zadig](https://zadig.akeo.ie). On Linux, add the
+[udev rule](#install) and reconnect the unit.
 
 **macOS won't open the app.** It is signed ad hoc, not notarized: run
 `xattr -dr com.apple.quarantine unfr0zen.app`, or allow it under System
