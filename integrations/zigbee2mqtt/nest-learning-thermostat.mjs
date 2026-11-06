@@ -429,8 +429,12 @@ const definition = {
             result.push(e.numeric('target_humidity', ea.ALL).withUnit('%').withValueMin(10).withValueMax(60)
                 .withValueStep(5).withCategory('config').withDescription('Humidity the (de)humidifier aims for'));
         }
+        // None is the only payload a timestamp sensor takes for no value: the
+        // text expose's own template turns null into '', which it logs as invalid.
         result.push(e.text('time_to_target', ea.STATE).withLabel('Time to temperature')
-            .withHomeAssistant({deviceClass: 'timestamp', name: 'Time to temperature'}).withDescription('When the target is reached'));
+            .withHomeAssistant({deviceClass: 'timestamp', name: 'Time to temperature',
+                valueTemplate: "{{ value_json.time_to_target | default('None', true) }}"})
+            .withDescription('When the target is reached'));
         if (has(device, INPUTS.filter_runtime)) {
             result.push(e.numeric('filter_runtime', ea.STATE).withUnit('h').withCategory('diagnostic')
                 .withLabel('Filter runtime').withHomeAssistant({deviceClass: 'duration', name: 'Filter runtime'})
