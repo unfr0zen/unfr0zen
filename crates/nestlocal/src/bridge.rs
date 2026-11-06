@@ -484,6 +484,15 @@ pub fn shown(v: Option<&Value>, scale: &str) -> Value {
     num((c * 2.0).round() / 2.0)
 }
 
+/// An eco temperature as `shown`, within the range its number entity offers.
+/// Home Assistant refuses a state outside that range, and the unit's limits
+/// in Fahrenheit (40, 70 and 90 °F) fall just outside its Celsius bounds; the
+/// bound itself still shows the same whole degree on the unit's screen.
+fn shown_eco(v: Option<&Value>, scale: &str, (low, high): (f64, f64)) -> Value {
+    let t = shown(v, scale);
+    number(Some(&t)).map_or(t, |c| num(c.clamp(low, high)))
+}
+
 fn rfc3339(t: f64) -> Value {
     chrono::DateTime::from_timestamp(t as i64, 0).map_or(Value::Null, |t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string().into())
 }
@@ -547,8 +556,8 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
               "current_version", "filter_runtime_sec", "target_humidity", "temperature_scale"] {
         s.insert(k.into(), dev.get(k).cloned().unwrap_or(Value::Null));
     }
-    s.insert("away_temperature_low".into(), shown(dev.get("away_temperature_low"), &scale));
-    s.insert("away_temperature_high".into(), shown(dev.get("away_temperature_high"), &scale));
+    s.insert("away_temperature_low".into(), shown_eco(dev.get("away_temperature_low"), &scale, ECO_LOW));
+    s.insert("away_temperature_high".into(), shown_eco(dev.get("away_temperature_high"), &scale, ECO_HIGH));
     for k in ["leaf", "hot_water_active", "preconditioning_active", "sunlight_correction_active",
               "filter_replacement_needed", "hvac_safety_shutoff_active", "humidifier_state",
               "dehumidifier_state", "learning_mode", "auto_away_enable", "sunlight_correction_enabled",
@@ -617,6 +626,23 @@ pub mod tests {
         for (k, want) in [("current_temperature", 20.0), ("target", 18.5), ("away_temperature_low", 20.0)] {
             assert_eq!(s[k], num(want), "state {k}");
         }
+    }
+
+    #[test]
+    fn eco_state_stays_within_its_number_entities() {
+        let degrees = |f: f64| (f - 32.0) * 5.0 / 9.0;
+        for (key, fahrenheit, want) in [
+            ("away_temperature_low", 40.0, ECO_LOW.0),
+            ("away_temperature_low", 41.0, 5.0),
+            ("away_temperature_low", 70.0, ECO_LOW.1),
+            ("away_temperature_high", 76.0, degrees(76.0)),
+            ("away_temperature_high", 90.0, ECO_HIGH.1),
+        ] {
+            let s = state(&obj(json!({"temperature_scale": "F", key: degrees(fahrenheit)})), &obj(json!({})));
+            assert_eq!(s[key], num(want), "{key} at {fahrenheit} °F");
+        }
+        let s = state(&obj(json!({"temperature_scale": "F"})), &obj(json!({})));
+        assert_eq!(s["away_temperature_low"], Value::Null);
     }
 
     #[test]
