@@ -1,5 +1,5 @@
-//! A settings pairing replaces existing fabrics only after the new fabric is
-//! committed by CommissioningComplete. AddNOC alone must never revoke a host.
+//! Confirmed pairing forgets controllers before opening a fresh window.
+//! Legacy pairing requests replace fabrics only after CommissioningComplete.
 use std::io::Write;
 use std::num::NonZeroU8;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,36 @@ impl Replacement {
             Err(e) => return Err(io_error(e)),
         };
         Ok(Self { path, previous })
+    }
+
+    pub async fn forget(&mut self, matter: &Matter<'_>, kv: &impl KvBlobStoreAccess,
+                        notify: &impl rs_matter::dm::AttrChangeNotifier) -> Result<Vec<NonZeroU8>, Error> {
+        matter.close_comm_window(notify)?;
+        matter.with_state(|state| state.sessions.remove_where(|_| true));
+        matter.transport().notify_session_removed();
+        // Let an in-flight commissioning roll back before deleting its baseline.
+        // Its fail-safe can otherwise restore credentials from persistent storage.
+        while matter.is_icd_busy() {
+            async_io::Timer::after(std::time::Duration::from_millis(250)).await;
+        }
+        let mut removed = Vec::new();
+        let indices: Vec<_> = matter.with_state(|state| state.fabrics.iter().map(|f| f.fab_idx()).collect());
+        let mut persist = FabricPersist::new(kv);
+        for index in indices {
+            persist.remove(index)?;
+            matter.with_state(|state| state.fabrics.remove(index))?;
+            removed.push(index);
+        }
+        persist.run()?;
+        matter.with_state(|state| state.sessions.remove_where(|_| true));
+        matter.transport().notify_session_removed();
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(io_error(e)),
+        }
+        self.previous = None;
+        Ok(removed)
     }
 
     pub fn begin(&mut self, matter: &Matter<'_>, kv: &impl KvBlobStoreAccess) -> Result<(), Error> {
@@ -149,6 +179,41 @@ mod tests {
             if save { FabricPersist::new(kv).store(fabric).unwrap(); }
             fabric.fab_idx()
         })
+    }
+
+    #[test]
+    fn confirmed_pairing_forgets_controllers_before_the_new_window_and_after_restart() {
+        let store = Store::new();
+        let info = BasicInfoConfig::new();
+        let matter = Matter::new(&info, credentials(), &TEST_DEV_ATT, 5540);
+        let kv = matter.kv(DirKvBlobStore::new(store.0.clone()));
+        std::fs::write(store.0.join("k_0102"), b"saved network settings").unwrap();
+        let first = add(&matter, &kv, true);
+        let second = add(&matter, &kv, true);
+        let mut replacement = Replacement::load(&store.0).unwrap();
+        replacement.begin(&matter, &kv).unwrap();
+        matter.open_basic_comm_window(900, default_crypto(rand::rng(), DAC_PRIVKEY), &Notify).unwrap();
+        matter.with_state(|state| {
+            state.sessions.add(0, false, rs_matter::transport::network::Address::new(), None).unwrap();
+        });
+        assert_eq!(futures_lite::future::block_on(replacement.forget(&matter, &kv, &Notify)).unwrap(), vec![first, second]);
+        assert!(!matter.has_fabrics());
+        assert_eq!(matter.with_state(|state| state.sessions.iter().count()), 0);
+        assert!(matches!(matter.comm_window_state(), CommWindowState::Closed));
+        assert!(!committed(&kv, first).unwrap());
+        assert!(!committed(&kv, second).unwrap());
+        assert!(!store.0.join("pairing-replacement.json").exists());
+        assert_eq!(std::fs::read(store.0.join("k_0102")).unwrap(), b"saved network settings");
+        let restarted = Matter::new(&info, credentials(), &TEST_DEV_ATT, 5540);
+        let restarted_kv = restarted.kv(DirKvBlobStore::new(store.0.clone()));
+        restarted.startup(&restarted_kv).unwrap();
+        assert!(!restarted.has_fabrics());
+        matter.open_basic_comm_window(900, default_crypto(rand::rng(), DAC_PRIVKEY), &Notify).unwrap();
+        let new = add(&matter, &kv, true);
+        assert!(replacement.finish(&matter, &kv).unwrap().is_empty());
+        assert!(committed(&kv, new).unwrap());
+        assert_eq!(futures_lite::future::block_on(replacement.forget(&matter, &kv, &Notify)).unwrap(), vec![new]);
+        assert!(!matter.has_fabrics());
     }
 
     #[test]

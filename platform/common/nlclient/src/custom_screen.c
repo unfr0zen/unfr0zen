@@ -318,9 +318,9 @@ static int request_action(int which) {
         same_text(status, "Zigbee not enabled") || same_text(status, "Starting Matter...") ||
         same_text(status, "Starting Zigbee...") || same_text(status, "Radio unavailable. Try again.")) return -1;
     const char *tmp = which == 2 ? "/var/run/unfr0zen/doom.request.tmp" : which ? "/var/run/unfr0zen/zigbee.request.tmp" :
-                      "/var/run/unfr0zen/matter.request.tmp";
+                      "/var/run/unfr0zen/matter-reset.request.tmp";
     const char *path = which == 2 ? "/var/run/unfr0zen/doom.request" : which ? "/var/run/unfr0zen/zigbee.request" :
-                       "/var/run/unfr0zen/matter.request";
+                       "/var/run/unfr0zen/matter-reset.request";
     void *file = native_fopen(tmp, "w");
     if (!file) return -1;
     unsigned int written = native_fwrite("1", 1, 1, file);
@@ -330,8 +330,9 @@ static int request_action(int which) {
 }
 static void matter_detail(struct custom_state *s) {
     unsigned int n = 0;
-    const char *code = s->code;
+    const char *code = s->activity_started ? s->code : "";
     const char *status = s->flow.page == CUSTOM_MATTER_PAIRING && !s->activity_started ? "Opening pairing..." : s->status;
+    if (starts_with(status, "Pairing open. ")) status += sizeof("Pairing open. ") - 1;
     while (*code && n < sizeof(s->detail) - 1) s->detail[n++] = *code++;
     if (n < sizeof(s->detail) - 1) s->detail[n++] = '\n';
     if (n < sizeof(s->detail) - 1) s->detail[n++] = '\n';
@@ -351,8 +352,8 @@ static void load_image(void *raw) {
     int error = 0;
     void *image = 0;
     enum custom_page page = state(raw)->flow.page;
-    const char *path = custom_matter(page) ? "/var/run/unfr0zen/matter.png" : CUSTOM_IMAGE;
-    if (page == CUSTOM_HOME || custom_matter(page)) {
+    const char *path = page == CUSTOM_MATTER_PAIRING ? "/var/run/unfr0zen/matter.png" : CUSTOM_IMAGE;
+    if (page == CUSTOM_HOME || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
         void *file = native_fopen(path, "rb");
         if (file) { native_fclose(file); image = native_image_load(path, &error); }
     }
@@ -367,10 +368,6 @@ static void load_image(void *raw) {
     trace(raw, 0x494d4702, image ? ((u32)native_image_width(image) << 16) |
                                  (u32)native_image_height(image) : (u32)error);
 #endif
-}
-static int starts_with(const char *text, const char *prefix) {
-    while (*prefix) { if (*text++ != *prefix++) return 0; }
-    return 1;
 }
 static void load_activity(void *raw) {
     struct custom_state *s = state(raw);
@@ -414,32 +411,42 @@ static void show(void *raw, int opening) {
     float old_y = *(float *)((u8 *)raw + 8);
     int old_selection = WORD(common(raw), 0x7c);
     struct custom_state *s = state(raw);
+    if (s->flow.page != CUSTOM_HOME) {
+        read_text(custom_matter(s->flow.page) ? "/var/run/unfr0zen/matter.status" :
+                  "/var/run/unfr0zen/zigbee.status", s->status, sizeof(s->status), "Not enabled or service unavailable");
+        if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
+            custom_matter_refresh(&s->flow, s->status, 0, &s->activity_started, 0))
+            s->activity_ticks = 0;
+    }
     int activity = custom_activity(s->flow.page);
+    int matter_pairing = s->flow.page == CUSTOM_MATTER_PAIRING;
     if (s->flow.page == CUSTOM_HOME) s->features = enabled_features();
     int choice_count = s->flow.page == CUSTOM_HOME ? custom_home_count(s->features) : activity ? 1 : 2;
     native_config_invalidate(&s->config);
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
     s->config.text_count = activity ? 3 : 2;
-    /* An image slot is part of the scrolling document, with no page heading.
-     * Image positions below come from the actual native text-row anchors. */
+    /* Image slots scroll with the text. Matter labels its open window above
+     * the code; image positions come from the native text-row anchors. */
     native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" :
-                       custom_matter(s->flow.page) ? "\n\n\n\n\n" : "");
+                       matter_pairing ? (s->activity_started ? "Ready to pair\n\n\n\n\n" :
+                                         "Opening pairing...\n\n\n\n\n") : "");
     native_string_copy(&s->text[2], "");
     if (s->flow.page == CUSTOM_HOME) {
-        native_string_copy(&s->text[1], "This device is running free from Google thanks to unfr0zen.");
+        char name[64];
+        read_text("/etc/unfr0zen/version", name, sizeof(name), "unfr0zen");
+        native_string_copy(&s->text[1], name);
         for (int i = 0; i < 4; i++) {
             int action = custom_home_action(i, s->features);
             native_string_copy(&s->choices[i], action == 0 ? "Matter" : action == 1 ? "Zigbee" :
                                action == 2 ? "Done" : action == 3 ? "Doom" : "");
         }
     } else {
-        read_text(custom_matter(s->flow.page) ? "/var/run/unfr0zen/matter.status" :
-                  "/var/run/unfr0zen/zigbee.status", s->status, sizeof(s->status), "Not enabled or service unavailable");
         read_text("/var/run/unfr0zen/matter.code", s->code, sizeof(s->code), "Code unavailable");
         matter_detail(s);
         native_string_copy(&s->text[1], s->flow.action_failed ? "Service unavailable. Try again." :
+                           s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget all Matter controllers and pair again? This cannot be undone." :
                            s->flow.page == CUSTOM_ZIGBEE_CONFIRM ? "Leave current network and pair again? Permit joining on your coordinator first." :
-                           custom_matter(s->flow.page) ? s->detail :
+                           matter_pairing ? s->detail :
                            activity && !s->activity_started ? "Starting pairing..." : s->status);
         if (activity) {
             native_string_copy(&s->text[2], "\n\n");
@@ -447,20 +454,16 @@ static void show(void *raw, int opening) {
             native_string_copy(&s->choices[1], "");
             load_activity(raw);
         } else {
-            native_string_copy(&s->choices[0], "Enable pairing");
+            native_string_copy(&s->choices[0], s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget and pair" : "Enable pairing");
             native_string_copy(&s->choices[1], "Back");
         }
         native_string_copy(&s->choices[2], "");
         native_string_copy(&s->choices[3], "");
-        if (s->flow.page == CUSTOM_MATTER && starts_with(s->status, "Pairing open")) {
-            native_string_copy(&s->choices[0], "Back");
-            native_string_copy(&s->choices[1], "");
-            choice_count = 1;
-        }
-        if (!custom_matter(s->flow.page)) {
+        if (!matter_pairing) {
             /* Text-only pages start at their first real row. Empty rows still
              * occupy native line height and must not create scroll margins. */
             native_string_copy(&s->text[0], s->flow.action_failed ? "Service unavailable. Try again." :
+                               s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget all Matter controllers and pair again? This cannot be undone." :
                                s->flow.page == CUSTOM_ZIGBEE_CONFIRM ? "Leave current network and pair again? Permit joining on your coordinator first." :
                                activity && !s->activity_started ? "Starting pairing..." : s->status);
             native_string_copy(&s->text[1], activity ? "\n\n" : "");
@@ -501,8 +504,6 @@ static int click(void *raw) {
         int action = custom_home_action(selected, s->features);
         result = action < 0 ? 1 : custom_choose(&s->flow, action, request_action);
         if (result != 2) s->flow.parent_selection = selected;
-    } else if (before == CUSTOM_MATTER && starts_with(s->status, "Pairing open") && selected == 0) {
-        custom_back(&s->flow); result = 1;
     } else result = custom_choose(&s->flow, selected, request_action);
     if (s->flow.page != before && custom_activity(s->flow.page)) {
         s->activity_ticks = 0; s->activity_started = 0;
@@ -517,33 +518,49 @@ static void refresh_status(void *raw) {
         if (s->features != enabled_features()) show(raw, 0);
         return;
     }
-    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM) return;
+    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM) return;
     enum custom_page before = s->flow.page;
+    int pending = 0;
+    if (s->flow.page == CUSTOM_MATTER_PAIRING) {
+        void *request = native_fopen("/var/run/unfr0zen/matter-reset.request", "r");
+        pending = request != 0;
+        if (request) native_fclose(request);
+    }
     char status[96], code[32];
     read_text(custom_matter(s->flow.page) ? "/var/run/unfr0zen/matter.status" :
               "/var/run/unfr0zen/zigbee.status", status, sizeof(status), "Not enabled or service unavailable");
     read_text("/var/run/unfr0zen/matter.code", code, sizeof(code), "Code unavailable");
     int changed = !same_text(status, s->status) || !same_text(code, s->code);
+    if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
+        custom_matter_refresh(&s->flow, status, pending, &s->activity_started, 0)) {
+        s->activity_ticks = 0;
+        changed = 1;
+    }
     if (custom_activity(s->flow.page)) {
         s->activity_ticks++;
-        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING && s->activity_ticks < 120 && !(s->activity_ticks % 4))
+        if ((s->flow.page == CUSTOM_MATTER_PAIRING || s->activity_ticks < 120) && !(s->activity_ticks % 4))
             keep_awake(raw);
-        if (!s->activity_started && (starts_with(status, "Pairing...") || starts_with(status, "Pairing open"))) {
-            s->activity_started = 1; changed = 1;
-        }
-        int failed = starts_with(status, "Pairing timed out") || starts_with(status, "Radio unavailable") ||
-                     starts_with(status, "Not enabled") || starts_with(status, "Zigbee not enabled");
-        if (failed || (s->activity_started && (starts_with(status, "Paired") || starts_with(status, "Ready to pair")))) {
-            custom_back(&s->flow); changed = 1;
-        }
-        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING && s->activity_ticks >= 120) {
-            custom_back(&s->flow); changed = 1;
+        if (s->flow.page == CUSTOM_MATTER_PAIRING) {
+            changed |= custom_matter_refresh(&s->flow, status, pending, &s->activity_started, s->activity_ticks);
+        } else {
+            if (!s->activity_started && (starts_with(status, "Pairing...") || starts_with(status, "Pairing open"))) {
+                s->activity_started = 1; changed = 1;
+            }
+            int failed = starts_with(status, "Pairing timed out") || starts_with(status, "Radio unavailable") ||
+                         starts_with(status, "Not enabled") || starts_with(status, "Zigbee not enabled");
+            if (failed || (s->activity_started && (starts_with(status, "Paired") || starts_with(status, "Ready to pair")))) {
+                custom_back(&s->flow); changed = 1;
+            }
+            if (s->flow.page == CUSTOM_ZIGBEE_PAIRING && s->activity_ticks >= 120) {
+                custom_back(&s->flow); changed = 1;
+            }
         }
     }
+    if (before == CUSTOM_MATTER_PAIRING && s->flow.page != before) keep_awake(raw);
     if (changed) {
         show(raw, s->flow.page != before);
     }
-    if (custom_matter(s->flow.page) && !PTR(raw, 0xa0)) load_image(raw);
+    if (s->flow.page == CUSTOM_MATTER_PAIRING && !PTR(raw, 0xa0)) load_image(raw);
 }
 static void stop_refresh(void *raw) {
     struct custom_state *s = state(raw);
@@ -599,12 +616,12 @@ static int draw(void *raw, void *context) {
     void (*set_style)(void *, int, int) = PTR(PTR(base, 0), 0x5c);
     set_style(base, style, 255);
     int y = native_config_y(&s->config, context, WORD(base, 0xc), 0, 0x10000);
-    /* Image documents start at the viewport edge. Short text-only pages
-     * retain the circular display's safe inset, without a blank title row. */
-    int inset = SCALED(s, s->flow.page == CUSTOM_HOME || custom_matter(s->flow.page) ? 240 : 120);
+    /* The home image starts at the viewport edge. Pairing headings and
+     * text-only pages retain the circular display's safe inset. */
+    int inset = SCALED(s, s->flow.page == CUSTOM_HOME ? 240 : 120);
     y = (s->at_top ? 0 : (int)*(float *)((u8 *)raw + 8)) - y - inset;
     void *image = PTR(raw, 0xa0);
-    if (image && (s->flow.page == CUSTOM_HOME || custom_matter(s->flow.page))) {
+    if (image && (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_MATTER_PAIRING)) {
         void (*draw_image)(void *, int, int, void *, int) = PTR(PTR(context, 0), 0x50);
 #ifdef CUSTOM_TRACE
         if (!s->image_traced) {

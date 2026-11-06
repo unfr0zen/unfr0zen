@@ -350,13 +350,25 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
                     }
                 }
             }
+            let reset = crate::settings_ui::take_request("matter-reset");
+            if reset {
+                SLEEP_BLOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
+                crate::settings_ui::status("matter", "Removing controllers...");
+                for index in replacement.forget(&matter, &kv, &im).await.inspect_err(|_| {
+                    crate::settings_ui::status("matter", "Unavailable. Could not forget controllers.");
+                })? {
+                    im.notify_fabric_removed(index);
+                }
+                im.notify_all_changed();
+                let _ = refresh_mdns.try_send(());
+            }
             let requested = crate::settings_ui::take_request("matter");
-            if requested {
+            if requested && !reset {
                 SLEEP_BLOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
                 replacement.begin(&matter, &kv)?;
             }
             if requested { matter.close_comm_window(&im)?; }
-            if (requested || !matter.has_fabrics()) && matches!(matter.comm_window_state(), CommWindowState::Closed) {
+            if (reset || requested || !matter.has_fabrics()) && matches!(matter.comm_window_state(), CommWindowState::Closed) {
                 matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, &im)?;
                 logf!("matter: open for commissioning (passcode {}, discriminator {})", settings.passcode,
                       settings.discriminator);

@@ -3,14 +3,14 @@
 /* Firmware-independent navigation. Actions are acknowledged by nestlocal. */
 enum custom_page {
     CUSTOM_HOME, CUSTOM_MATTER, CUSTOM_ZIGBEE, CUSTOM_ZIGBEE_CONFIRM,
-    CUSTOM_MATTER_PAIRING, CUSTOM_ZIGBEE_PAIRING
+    CUSTOM_MATTER_PAIRING, CUSTOM_ZIGBEE_PAIRING, CUSTOM_MATTER_CONFIRM
 };
 struct custom_flow { enum custom_page page; int parent_selection; int action_failed; };
 static int custom_activity(enum custom_page page) {
     return page == CUSTOM_MATTER_PAIRING || page == CUSTOM_ZIGBEE_PAIRING;
 }
 static inline int custom_matter(enum custom_page page) {
-    return page == CUSTOM_MATTER || page == CUSTOM_MATTER_PAIRING;
+    return page == CUSTOM_MATTER || page == CUSTOM_MATTER_PAIRING || page == CUSTOM_MATTER_CONFIRM;
 }
 /* Canonical home actions: Matter=0, Zigbee=1, Done=2, Doom=3, shown as
  * Matter, Zigbee, Doom, Done. Compact the visible list without ever
@@ -27,10 +27,46 @@ static inline int custom_home_action(int choice, unsigned int features) {
 }
 static int custom_back(struct custom_flow *flow) {
     if (flow->page == CUSTOM_HOME) return 0;
-    flow->page = flow->page == CUSTOM_MATTER_PAIRING ? CUSTOM_MATTER :
+    flow->page = flow->page == CUSTOM_MATTER_CONFIRM ? CUSTOM_MATTER :
                  flow->page == CUSTOM_ZIGBEE_PAIRING || flow->page == CUSTOM_ZIGBEE_CONFIRM ? CUSTOM_ZIGBEE : CUSTOM_HOME;
     flow->action_failed = 0;
     return 1;
+}
+static inline int starts_with(const char *text, const char *prefix) {
+    while (*prefix) { if (*text++ != *prefix++) return 0; }
+    return 1;
+}
+/* Request consumption acknowledges an attempt even when polling misses its
+ * open window. Wait another poll before accepting a terminal status, since
+ * the worker removes the request before publishing its new status. */
+static inline int custom_matter_refresh(struct custom_flow *flow, const char *status,
+                                       int pending, int *started, unsigned int ticks) {
+    if (flow->page == CUSTOM_MATTER && starts_with(status, "Pairing open") &&
+        !starts_with(status, "Pairing open. Already paired")) {
+        flow->page = CUSTOM_MATTER_PAIRING;
+        *started = 1;
+        return 1;
+    }
+    if (flow->page != CUSTOM_MATTER_PAIRING) return 0;
+    if (starts_with(status, "Matter not enabled") || starts_with(status, "Starting Matter") ||
+        starts_with(status, "Not enabled") || starts_with(status, "Unavailable") ||
+        (!*started && pending && ticks >= 120)) {
+        flow->page = CUSTOM_MATTER;
+        flow->action_failed = 1;
+        return 1;
+    }
+    if (starts_with(status, "Removing controllers")) return 0;
+    if (!*started && !pending) {
+        *started = 1;
+        return 1;
+    }
+    if (*started && !pending && (starts_with(status, "Paired") || starts_with(status, "Ready to pair") ||
+                                starts_with(status, "Pairing timed out"))) {
+        flow->page = CUSTOM_MATTER;
+        flow->action_failed = 0;
+        return 1;
+    }
+    return 0;
 }
 /* Requests: Matter's pairing=0, Zigbee's=1, Doom's launch=2. */
 static int custom_choose(struct custom_flow *flow, int choice, int (*request)(int)) {
@@ -47,6 +83,11 @@ static int custom_choose(struct custom_flow *flow, int choice, int (*request)(in
         flow->page = choice == 0 ? CUSTOM_MATTER : CUSTOM_ZIGBEE;
     } else if (custom_activity(flow->page)) {
         if (choice == 0) custom_back(flow);
+    } else if (flow->page == CUSTOM_MATTER_CONFIRM) {
+        if (choice == 0) {
+            flow->action_failed = request(0) != 0;
+            flow->page = flow->action_failed ? CUSTOM_MATTER : CUSTOM_MATTER_PAIRING;
+        } else if (choice == 1) custom_back(flow);
     } else if (flow->page == CUSTOM_ZIGBEE_CONFIRM) {
         if (choice == 0) {
             flow->action_failed = request(1) != 0;
@@ -54,8 +95,7 @@ static int custom_choose(struct custom_flow *flow, int choice, int (*request)(in
         } else if (choice == 1) custom_back(flow);
     } else if (choice == 0) {
         if (flow->page == CUSTOM_MATTER) {
-            flow->action_failed = request(0) != 0;
-            if (!flow->action_failed) flow->page = CUSTOM_MATTER_PAIRING;
+            flow->page = CUSTOM_MATTER_CONFIRM;
         } else flow->page = CUSTOM_ZIGBEE_CONFIRM;
     } else if (choice == 1) custom_back(flow);
     return 1;
