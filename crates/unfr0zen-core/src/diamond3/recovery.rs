@@ -103,6 +103,14 @@ pub fn verified_fit(output: &str) -> bool {
     output.contains("FIT image found") && !output.contains("Bad hash") && output.matches("sha256+").count() >= 10
 }
 
+/// The firmware version a mounted rootfs declares: the kernel release its
+/// /lib/modules directory is named for — 4.1.15-6.4-8 is firmware 6.4-8,
+/// 4.1.15-5.9.4-5 is firmware 5.9.4-5. From a `ubifsls` listing.
+pub fn firmware_version(modules: &str) -> Option<&str> {
+    static VERSION: LazyLock<Regex> = LazyLock::new(|| regex(r"\b\d+\.\d+\.\d+-(\d+(?:\.\d+)*-\d+)\b"));
+    VERSION.captures(modules).and_then(|found| found.get(1).map(|name| name.as_str()))
+}
+
 pub fn parse_crc(response: &str) -> Option<u32> {
     static CRC: LazyLock<Regex> = LazyLock::new(|| regex(r"==> ([0-9a-fA-F]{8})"));
     CRC.captures(response).map(|c| u32::from_str_radix(&c[1], 16).unwrap())
@@ -261,11 +269,14 @@ pub struct Recovery<S: Serial, F: Fastboot> {
     pub fastboot: F,
     /// The FIT select_slot verified at FIT_ADDR: slot, size, CRC32.
     fit: Option<(Slot, usize, u32)>,
+    /// The firmware version the slot's rootfs declares in /lib/modules, read
+    /// while it was mounted.
+    firmware: Option<String>,
 }
 
 impl<S: Serial, F: Fastboot> Recovery<S, F> {
     pub fn new(console: UBoot<S>, fastboot: F) -> Self {
-        Recovery { console, fastboot, fit: None }
+        Recovery { console, fastboot, fit: None, firmware: None }
     }
 
     pub fn attach_ubi(&mut self) -> Result<()> {
@@ -336,6 +347,14 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
                 log::info!("{slot}: UBIFS mount failed; checking fallback");
                 continue;
             }
+            // The firmware version, for the log and for any refusal below.
+            let modules = self.console.command_allow_failure("ubifsls /lib/modules", seconds(30))?;
+            if let Some(found) = firmware_version(&modules) {
+                if self.firmware.as_deref() != Some(found) {
+                    log::info!("{slot}: firmware {found}");
+                }
+                self.firmware = Some(found.to_string());
+            }
             let loaded = self.console.command_allow_failure(
                 &format!("ubifsload {FIT_ADDR:#x} /boot/kernel_fdt.itb"), seconds(60))?;
             // A raw `ubi read` can corrupt a live UBIFS mount's volume
@@ -356,7 +375,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
             }
             log::info!("{slot}: FIT load or verification failed; checking fallback");
         }
-        device("neither root0 nor root1 has a verified bootable FIT")
+        let firmware = self.firmware.as_deref().map(|firmware| format!(" (firmware {firmware})")).unwrap_or_default();
+        device(format!("neither root0 nor root1 has a verified bootable FIT{firmware}"))
     }
 
     /// The size of the file the last ubifsload loaded.
@@ -611,6 +631,7 @@ pub(crate) mod tests {
                     self.ram.push((FIT_ADDR, b"FIT image".repeat(100)));
                     "Loading file '/boot/kernel_fdt.itb' to addr 0x83000000...\nDone\n".into()
                 }
+                ["ubifsls", _] => "<DIR>\t        32  Wed Nov  5 07:22:11 2025  4.1.15-6.4-8\n".into(),
                 ["printenv", "filesize"] => "filesize=384\n".into(),
                 ["iminfo", _] => format!("FIT image found\n{}", "Hash(es) for Image: sha256+\n".repeat(10)),
                 ["bdinfo"] => format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {:#010x}\n", self.dram),
@@ -745,9 +766,20 @@ pub(crate) mod tests {
         let unit = Unit { bootable: ["root0".to_string(), "root1".to_string()].into(), ..Unit::default() };
         let (mut board, unit) = board(unit);
         assert_eq!(board.select_slot([Slot::Root1, Slot::Root0], None).unwrap(), Slot::Root1);
+        assert_eq!(board.firmware.as_deref(), Some("6.4-8"));
         unit.borrow_mut().bootable.remove("root1");
         assert_eq!(board.select_slot([Slot::Root1, Slot::Root0], None).unwrap(), Slot::Root0);
-        assert!(board.select_slot([Slot::Root0, Slot::Root1], Some(Slot::Root1)).is_err());
+        unit.borrow_mut().bootable.clear();
+        let error = board.select_slot([Slot::Root0, Slot::Root1], None).err().unwrap().to_string();
+        assert!(error.contains("firmware 6.4-8"), "{error}");
+    }
+
+    #[test]
+    fn the_rootfs_names_its_firmware_version() {
+        assert_eq!(firmware_version("<DIR>\t        32  Wed Nov  5 07:22:11 2025  4.1.15-6.4-8\n"), Some("6.4-8"));
+        assert_eq!(firmware_version("<DIR>\t        32  Wed Nov  5 07:22:11 2016  4.1.15-5.9.4-5\n"), Some("5.9.4-5"));
+        assert_eq!(firmware_version("** File not found /lib/modules **\n"), None);
+        assert_eq!(firmware_version("<DIR>\t        32  Wed Nov  5 07:22:11 2025  firmware\n"), None);
     }
 
     #[test]
