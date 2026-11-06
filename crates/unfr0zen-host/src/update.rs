@@ -5,12 +5,17 @@
 //! same release asset (`unfr0zen-<platform>-<version>`); the distinction
 //! only matters for install: macOS GUI swaps the whole .app bundle, everything
 //! else swaps the executable.
+//!
+//! A download must match the SHA-256 GitHub reports for the asset before it is
+//! unpacked. That catches a damaged download, not a tampered release: GitHub
+//! recomputes the digest when an asset is replaced.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use self_update::backends::github;
 use self_update::{Download, Extract};
+use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::{Error, Result};
 
 pub const REPO_OWNER: &str = "unfr0zen";
@@ -56,6 +61,8 @@ pub struct Available {
     pub body: Option<String>,
     pub(crate) asset: String,
     pub(crate) download: String,
+    /// GitHub's digest of the asset, as `sha256:<hex>`.
+    pub(crate) digest: Option<String>,
 }
 
 /// The semver of a release build's version ("v0.1.5" → "0.1.5"), or None for
@@ -91,8 +98,8 @@ fn pick_asset(names: &[&str]) -> Option<usize> {
 /// A release fetched from GitHub, stripped to what `evaluate` needs.
 struct FetchedRelease {
     version: String,
-    /// (file name, download URL).
-    assets: Vec<(String, String)>,
+    /// (file name, download URL, digest).
+    assets: Vec<(String, String, Option<String>)>,
     notes_url: Option<String>,
     body: Option<String>,
 }
@@ -103,7 +110,7 @@ fn evaluate(current: &str, release: &FetchedRelease) -> Option<Available> {
     if !self_update::version::bump_is_greater(current, &release.version).unwrap_or(false) {
         return None;
     }
-    let names: Vec<&str> = release.assets.iter().map(|(n, _)| n.as_str()).collect();
+    let names: Vec<&str> = release.assets.iter().map(|(n, _, _)| n.as_str()).collect();
     let index = pick_asset(&names)?;
     let tag = format!("v{}", release.version);
     Some(Available {
@@ -113,6 +120,7 @@ fn evaluate(current: &str, release: &FetchedRelease) -> Option<Available> {
         body: release.body.clone(),
         asset: release.assets[index].0.clone(),
         download: release.assets[index].1.clone(),
+        digest: release.assets[index].2.clone(),
     })
 }
 
@@ -140,7 +148,7 @@ pub fn check(app: App, build: &str) -> Result<Option<Available>> {
     let fetched = FetchedRelease {
         version: latest.version().to_string(),
         assets: latest.assets().iter()
-            .map(|a| (a.name().to_string(), a.download_url().to_string()))
+            .map(|a| (a.name().to_string(), a.download_url().to_string(), a.digest().map(str::to_string)))
             .collect(),
         notes_url: latest.release_notes_url().map(str::to_string),
         body: latest.body().map(str::to_string),
@@ -148,8 +156,20 @@ pub fn check(app: App, build: &str) -> Result<Option<Available>> {
     Ok(evaluate(current, &fetched))
 }
 
+/// Fails unless `data` hashes to `digest`, GitHub's `sha256:<hex>` for `name`.
+fn verify_digest(digest: &str, name: &str, data: &[u8]) -> Result<()> {
+    let expected = digest.strip_prefix("sha256:")
+        .ok_or_else(|| failed("digest", format!("{name} has an unknown digest {digest}; nothing was installed")))?;
+    if !expected.eq_ignore_ascii_case(&sha256_hex(data)) {
+        return Err(failed("digest", format!("{name} does not match its digest; nothing was installed")));
+    }
+    Ok(())
+}
+
 /// Downloads `release` and puts it in place of the running app.
 pub fn install(app: App, release: &Available) -> Result<()> {
+    let digest = release.digest.as_deref()
+        .ok_or_else(|| failed("digest", format!("{} has no digest; nothing was installed", release.asset)))?;
     let exe = std::env::current_exe().map_err(|e| failed("current executable", e))?;
     let bundle = if cfg!(target_os = "macos") && app == App::Gui {
         app_bundle(&exe).ok()
@@ -167,6 +187,8 @@ pub fn install(app: App, release: &Available) -> Result<()> {
         .request_header("Accept", "application/octet-stream")
         .download_to(file)
         .map_err(|e| failed("download", e))?;
+    let data = fs::read(&archive).map_err(|e| failed("download", e))?;
+    verify_digest(digest, &release.asset, &data)?;
     install_archive(app, &archive, work.path(), bundle.as_deref(), &exe)
 }
 
@@ -302,6 +324,40 @@ mod tests {
         assert_eq!(check(App::Cli, "abcdef0").unwrap(), None);
     }
 
+    // ── digests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn a_download_must_match_its_digest() {
+        let data = b"the archive";
+        let digest = format!("sha256:{}", sha256_hex(data));
+        assert!(verify_digest(&digest, "a.zip", data).is_ok());
+        assert!(verify_digest(&digest.to_uppercase().replace("SHA256:", "sha256:"), "a.zip", data).is_ok());
+        for damaged in [&b"the archivf"[..], b"the archiv", b""] {
+            let error = verify_digest(&digest, "a.zip", damaged).unwrap_err().to_string();
+            assert!(error.contains("does not match"), "{error}");
+        }
+        for unusable in [sha256_hex(data), format!("md5:{}", sha256_hex(data)), String::new()] {
+            let error = verify_digest(&unusable, "a.zip", data).unwrap_err().to_string();
+            assert!(error.contains("unknown digest"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_release_without_a_digest_installs_nothing() {
+        let release = Available { tag: "v9.9.9".into(), url: String::new(), body: None, asset: "a.zip".into(),
+                                  download: "http://127.0.0.1:9/a.zip".into(), digest: None };
+        let error = install(App::Cli, &release).unwrap_err().to_string();
+        assert!(error.contains("has no digest"), "{error}");
+    }
+
+    #[test]
+    fn evaluate_keeps_the_digest_of_the_asset_it_picks() {
+        let mut release = fake_release("9.9.9");
+        release.assets[0].2 = Some("sha256:picked".into());
+        release.assets.insert(0, ("notes.txt".into(), "url".into(), Some("sha256:other".into())));
+        assert_eq!(evaluate("0.1.0", &release).unwrap().digest.as_deref(), Some("sha256:picked"));
+    }
+
     // ── asset picking ───────────────────────────────────────────────
 
     #[test]
@@ -383,7 +439,7 @@ mod tests {
         };
         FetchedRelease {
             version: version.to_string(),
-            assets: vec![(asset, format!("https://example.com/{version}"))],
+            assets: vec![(asset, format!("https://example.com/{version}"), None)],
             notes_url: None,
             body: None,
         }
@@ -410,7 +466,7 @@ mod tests {
     fn evaluate_skips_when_no_matching_asset() {
         let release = FetchedRelease {
             version: "0.2.0".into(),
-            assets: vec![("unfr0zen-other-platform-v0.2.0.zip".into(), "url".into())],
+            assets: vec![("unfr0zen-other-platform-v0.2.0.zip".into(), "url".into(), None)],
             notes_url: None,
             body: None,
         };
