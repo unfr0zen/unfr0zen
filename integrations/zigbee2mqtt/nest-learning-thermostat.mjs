@@ -13,13 +13,13 @@
 //   4   target humidity         Analog Output, % (with a humidifier or dehumidifier)
 //   5   time to temperature     Analog Input, seconds left (0: none)
 //   6   filter runtime          Analog Input, hours (with an air filter)
-//   10  Auto-Schedule           On/Off
-//   11  Home/Away Assist        On/Off
-//   12  Sunblock                On/Off
-//   13  Early-On                On/Off
-//   14  eco heat limit          On/Off (to heat)
-//   15  eco cool limit          On/Off (to cool)
-//   16  humidity control        On/Off (with a humidifier or dehumidifier)
+//   10  Auto-Schedule           Binary Output
+//   11  Home/Away Assist        Binary Output
+//   12  Sunblock                Binary Output
+//   13  Early-On                Binary Output
+//   14  eco heat limit          Binary Output (to heat)
+//   15  eco cool limit          Binary Output (to cool)
+//   16  humidity control        Binary Output (with a humidifier or dehumidifier)
 //   20  leaf                    Binary Input
 //   21  Early-On active         Binary Input
 //   22  Sunblock active         Binary Input
