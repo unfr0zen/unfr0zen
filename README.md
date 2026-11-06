@@ -120,7 +120,7 @@ press **Start** and follow the prompts. The sidebar's other pages are Backups
 (every run's steps and log), About and, under Advanced, the 3rd generation's
 application boot and a serial console on a patched unit's USB root shell.
 
-<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="700" alt="The unfr0zen app on macOS, rotating through its Patch, Backups and Logs pages."></a></p>
+<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Patch, Backups and Logs pages."></a></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few things the app doesn't have
