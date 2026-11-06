@@ -5,7 +5,8 @@ version: 2.1
 # the subsystem whose parameter it sets; utils/ci/configs.py then picks the
 # configs to merge (each subsystem's, those its workflow depends on, and the
 # shared .circleci/common.yml), adds the build image's tag for the Dockerfile
-# at this commit, and makes a release tag run the release workflow alone. The
+# at this commit, makes a push to main run every workflow, and a release tag
+# run the release workflow alone. The
 # pipeline continues with the merged config and the parameters. With nothing
 # matched it continues with .circleci/none.yml.
 setup: true

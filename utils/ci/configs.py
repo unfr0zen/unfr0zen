@@ -6,8 +6,10 @@ The setup workflow's path filtering sets a parameter per subsystem whose files
 a push changed; each subsystem's config declares the parameter and gates its
 workflow on it. A workflow lists the module jobs it needs as its own, so the
 configs defining them are merged too (their workflows stay off): that is the
-dependency table below. A release tag runs the release workflow alone, with
-the image's. The build image's tag is the Dockerfile's SHA-256, twelve hex
+dependency table below. A push to main runs every subsystem's workflow, as
+main has no base to compare with: what it changed says nothing about what
+reached it. A release tag runs the release workflow alone, with the image's.
+The build image's tag is the Dockerfile's SHA-256, twelve hex
 digits, as utils/ci/.circleci/config.yml publishes it. The configs are
 rendered on their way: __ZBWAKE_RELEASES__ becomes the list of gen 3 releases
 of platform/diamond3/zbwake/releases, for the zbwake matrix.
@@ -89,6 +91,10 @@ def setup(parameters_path, config_list_path):
         parameters = json.load(f)
     if os.environ.get("CIRCLE_TAG"):
         parameters = {"build-image": parameters.get("build-image", False), "release": True}
+    elif os.environ.get("CIRCLE_BRANCH") == "main":
+        # The image only when its Dockerfile changed: this one publishes it.
+        parameters = {name: True for name in CONFIGS if name not in ("build-image", "release")} \
+            | {"build-image": parameters.get("build-image", False)}
     parameters["image"] = image_tag()
     with open(parameters_path, "w") as f:
         json.dump(parameters, f)

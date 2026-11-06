@@ -84,7 +84,7 @@ Body is optional — omit it for self-explanatory changes. When present, wrap at
 
 - A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it must follow the `subsys: lowercase summary` format above.
 - PR body is short — one or two sentences describing the change. No padding.
-- CI (`.circleci/`) runs the workflow of each subsystem a PR changes and the app's, which builds each module of the firmware (cached by its inputs), every app target and the tests above; a PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, publishing the apps as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
+- CI (`.circleci/`) runs the workflow of each subsystem a PR changes and the app's, and all of them on a push to `main`, which builds each module of the firmware (cached by its inputs), every app target and the tests above; a PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, publishing the apps as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
 - Never describe an undisclosed vulnerability in a public issue, PR or commit.
 
 ## Security & Device Configuration

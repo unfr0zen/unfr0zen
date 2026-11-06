@@ -2,7 +2,7 @@ version: 2.1
 
 # The app: every module of what it carries, gathered as one build/ by the
 # firmware job, then the workspace's tests and the app for each target. Its
-# workflow runs on a branch when anything built changes; the release workflow
+# workflow runs on main, and on a branch when anything built changes; the release workflow
 # (.circleci/release.yml) runs the same jobs for a release tag.
 
 parameters:
