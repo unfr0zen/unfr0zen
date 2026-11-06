@@ -238,7 +238,7 @@ impl Bridge {
             let mut c = fields!{
                 "name" => if name.is_empty() { Value::Null } else { name.into() }, // null: the device's own name
                 "unique_id" => format!("{id}_{key}"),
-                "object_id" => format!("{id}_{key}"),
+                "default_entity_id" => format!("{component}.{id}_{key}"),
                 "device" => Value::Object(device.clone()),
                 "availability_topic" => format!("{}/availability", self.base),
                 "state_topic" => st.clone(),
@@ -779,7 +779,9 @@ pub mod tests {
             let c: Value = serde_json::from_str(config).unwrap();
             let id = c["unique_id"].as_str().unwrap();
             assert!(ids.insert(id.to_string()), "{topic}: unique_id {id} used twice");
-            assert_eq!(c["object_id"], c["unique_id"], "{topic}");
+            let component = topic.split('/').nth(1).unwrap();
+            assert_eq!(c["default_entity_id"], json!(format!("{component}.{id}")), "{topic}");
+            assert!(c.get("object_id").is_none(), "{topic}");
             let key = id.strip_prefix("nestlocal_s_").unwrap_or_else(|| panic!("{topic}: unique_id {id}"));
             assert!(topic.ends_with(&format!("/nestlocal_s/{key}/config")), "{topic}");
             assert_eq!(c["availability_topic"], json!("nestlocal/S/availability"), "{topic}");
