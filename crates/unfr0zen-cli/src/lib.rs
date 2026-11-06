@@ -18,8 +18,15 @@ use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, Cancel
 
 use ui::TerminalProgress;
 
+fn help_styles() -> clap::builder::Styles {
+    use clap::builder::styling::RgbColor;
+    let heading = RgbColor(129, 206, 250).on_default().bold();
+    let literal = RgbColor(225, 235, 239).on_default().bold();
+    clap::builder::Styles::styled().header(heading).usage(heading).literal(literal)
+}
+
 #[derive(Parser, Debug)]
-#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
+#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
     Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
     is written; --backup saves the volume first, --dry-run writes nothing.", args_conflicts_with_subcommands = true)]
 struct Args {
@@ -224,7 +231,15 @@ pub fn main() {
     update::remove_previous();
     ui::enable_colors();
     set_selection(logged_arguments(std::env::args().skip(1)));
-    let args = Args::parse();
+    let args = Args::try_parse().unwrap_or_else(|error| {
+        if error.kind() == clap::error::ErrorKind::DisplayHelp {
+            if !std::env::args_os().any(|arg| arg == "--skip-logo") {
+                ui::logo();
+            }
+            ui::help(error);
+        }
+        error.exit();
+    });
     if let Some(Command::Nlclient { binary, out, undo, discover }) = &args.command {
         if *discover {
             let found = std::fs::read(binary).map_err(|e| e.to_string())

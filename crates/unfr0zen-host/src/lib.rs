@@ -19,8 +19,11 @@ pub use device::{CancelFlag, Device, WAIT_USB_BOOT_STAGE};
 pub use flow::{mask_url, run, Config, PatchInputs};
 pub use unfr0zen_core::nlclient;
 pub use progress::{init_logging, log_path, set_selection, Progress, Stage};
-/// The unfr0zen logo, block-character art.
+/// The icy house icon rendered as braille dots.
 pub const LOGO: &str = include_str!("logo.txt");
+/// RGB colours sampled from the app icon, one per braille cell, with rows
+/// padded to the widest line in [`LOGO`].
+pub const LOGO_RGB: &[u8] = include_bytes!("logo.rgb");
 
 /// The colours down the diamond3 boot logo's UNFROZEN text, top to bottom,
 /// so the terminal and the window colour the logo the same.

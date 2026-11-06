@@ -50,19 +50,55 @@ pub fn error(message: &str) {
     }
 }
 
-/// The logo with a white-to-cyan gradient.
-pub fn logo() {
-    let mut lines: Vec<&str> = LOGO.lines().collect();
-    while lines.last().is_some_and(|l| l.trim().is_empty()) {
-        lines.pop();
+/// Muted help prose with Clap's headings and option styles preserved.
+pub fn help(error: clap::Error) -> ! {
+    let no_color = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
+    if !terminal() || no_color || std::env::var("TERM").as_deref() == Ok("dumb") {
+        error.exit();
     }
-    let last = lines.len().saturating_sub(1).max(1) as f32;
+    const GRAY: &str = "\x1b[38;2;155;163;173m";
+    let text = error.render().ansi().to_string().replace(RESET, &format!("{RESET}{GRAY}"));
+    print!("{GRAY}{text}{RESET}");
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
+}
+
+/// The icy house in its original colours beside a large name and build version.
+pub fn logo() {
+    const WORDMARK: [&str; 4] = [
+        r"            __      __",
+        r" _  _ _ _  / _|_ _ /  \ ______ _ _",
+        r"| || | ' \|  _| '_| () |_ / -_) ' \",
+        r" \_,_|_||_|_| |_|  \__//__\___|_||_|",
+    ];
+    let lines: Vec<&str> = LOGO.lines().collect();
+    let width = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let title_row = (lines.len() - WORDMARK.len() - 2) / 2;
+    let tty = terminal();
+    println!();
     for (index, text) in lines.iter().enumerate() {
-        if terminal() {
-            let [r, g, b] = unfr0zen_host::logo_color(index as f32 / last);
-            println!("\x1b[38;2;{r};{g};{b}m{text}{RESET}");
+        let wordmark_row = index.checked_sub(title_row).filter(|&row| row < WORDMARK.len());
+        let label = if let Some(row) = wordmark_row {
+            WORDMARK[row]
+        } else if index == title_row + WORDMARK.len() + 1 {
+            env!("UNFR0ZEN_BUILD_VERSION")
         } else {
-            println!("{text}");
+            ""
+        };
+        let padding = " ".repeat(width - text.chars().count() + 3);
+        if tty {
+            print!("  ");
+            for (column, cell) in text.chars().enumerate() {
+                let offset = (index * width + column) * 3;
+                let rgb = &unfr0zen_host::LOGO_RGB[offset..offset + 3];
+                print!("\x1b[38;2;{};{};{}m{cell}", rgb[0], rgb[1], rgb[2]);
+            }
+            let [r, g, b] = wordmark_row.map_or([168, 212, 236], |row| {
+                unfr0zen_host::logo_color(row as f32 / (WORDMARK.len() - 1) as f32 * 0.55)
+            });
+            println!("{RESET}{padding}\x1b[38;2;{r};{g};{b}m{label}{RESET}");
+        } else {
+            println!("  {text}{padding}{label}");
         }
     }
     println!();

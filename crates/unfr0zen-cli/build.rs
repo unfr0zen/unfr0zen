@@ -2,7 +2,7 @@
 //! of the tree at build time, as the GUI has it.
 
 fn main() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     println!("cargo:rerun-if-env-changed=UNFR0ZEN_BUILD_VERSION");
     let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&root).output().ok()
         .filter(|out| out.status.success()).map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
