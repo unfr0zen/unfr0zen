@@ -20,6 +20,8 @@
 //   14  eco heat limit          Binary Output (to heat)
 //   15  eco cool limit          Binary Output (to cool)
 //   16  humidity control        Binary Output (with a humidifier or dehumidifier)
+//   17  hot water boost         Binary Output (with hot water control): on is 30 minutes
+//   18  hot water schedule      Binary Output (with hot water control): off stops it
 //   20  leaf                    Binary Input
 //   21  Early-On active         Binary Input
 //   22  Sunblock active         Binary Input
@@ -71,6 +73,8 @@ const SWITCHES = {
     eco_heat_limit: 14,
     eco_cool_limit: 15,
     humidity_control: 16,
+    hot_water_boost: 17,
+    hot_water_schedule: 18,
 };
 // Label, icon, description.
 const SWITCH_LABELS = {
@@ -81,6 +85,8 @@ const SWITCH_LABELS = {
     eco_heat_limit: ['Eco heat limit', 'mdi:leaf', 'Heats to the eco heat temperature while in eco'],
     eco_cool_limit: ['Eco cool limit', 'mdi:leaf', 'Cools to the eco cool temperature while in eco'],
     humidity_control: ['Humidity control', 'mdi:water-percent', 'Runs the (de)humidifier'],
+    hot_water_boost: ['Hot water boost', 'mdi:water-boiler-alert', 'Heats the hot water for 30 minutes'],
+    hot_water_schedule: ['Hot water schedule', 'mdi:water-boiler', 'Hot water follows its schedule; off stops it'],
 };
 const STATES = {
     leaf: 20,
@@ -506,9 +512,6 @@ const definition = {
         for (const id of Object.values(OUTPUTS)) {
             await report(id, 'genAnalogOutput', ['presentValue']);
         }
-        for (const id of Object.values(SWITCHES)) {
-            await report(id, 'genBinaryOutput', ['presentValue']);
-        }
         // The unit reports to the coordinator bound or not, and its binding
         // table (16 entries) is about full: these are only read.
         const read = async (id, cluster) => {
@@ -516,6 +519,13 @@ const definition = {
                 await device.getEndpoint(id).read(cluster, ['presentValue']);
             }
         };
+        for (const [name, id] of Object.entries(SWITCHES)) {
+            if (name.startsWith('hot_water')) {
+                await read(id, 'genBinaryOutput');
+            } else {
+                await report(id, 'genBinaryOutput', ['presentValue']);
+            }
+        }
         for (const id of Object.values(INPUTS)) {
             await read(id, 'genAnalogInput');
         }

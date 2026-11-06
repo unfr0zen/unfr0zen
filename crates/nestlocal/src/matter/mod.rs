@@ -168,6 +168,11 @@ impl View {
         truthy(self.dev.get(key))
     }
 
+    /// Whether the switch with this key is on.
+    pub fn switch_on(&self, key: &str) -> bool {
+        bridge::switch_on(&self.dev, key)
+    }
+
     pub fn device_number(&self, key: &str) -> Option<f64> {
         number(self.dev.get(key))
     }

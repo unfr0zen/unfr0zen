@@ -106,6 +106,8 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (14, "away_temperature_low_enabled", "Eco heat limit"),  // to heat
     (15, "away_temperature_high_enabled", "Eco cool limit"), // to cool
     (16, "target_humidity_enabled", "Humidity control"),
+    (17, "hot_water_boost", "Hot water boost"),
+    (18, "hot_water_schedule", "Hot water schedule"),
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -240,6 +242,7 @@ impl Nest {
                 "away_temperature_low_enabled" => has("can_heat"),
                 "away_temperature_high_enabled" => has("can_cool"),
                 "target_humidity_enabled" => humidity_control,
+                "hot_water_boost" | "hot_water_schedule" => has("has_hot_water_control"),
                 _ => true,
             };
             if present {
@@ -615,7 +618,7 @@ impl Clusters for Nest {
             (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(_, description)| Value::Str(description.into())),
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
-            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
+            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(bridge::switch_on(&self.view().dev, key))),
             (WEATHER, a) => self.weather(a),
             _ => None,
         }
@@ -906,6 +909,26 @@ mod tests {
         assert_eq!(names(BINARY_INPUT, &[20, 21, 22, 23, 26]),
                    text(&["Leaf", "Early-On active", "Sunblock active", "Safety shutoff", "Humidifier"]));
         assert!(SWITCHES.iter().all(|(id, _, _)| n.attributes(*id, 0x0006).is_none()), "no On/Off beside them");
+    }
+
+    #[test]
+    fn hot_water_endpoints_come_with_its_control_and_drive_its_fields() {
+        let without = nest(fields!{}, fields!{});
+        assert!(without.attributes(17, BINARY_OUTPUT).is_none());
+        assert!(without.attributes(18, BINARY_OUTPUT).is_none());
+
+        let n = nest(fields!{"has_hot_water_control" => true}, fields!{});
+        assert_eq!(n.read(17, BINARY_OUTPUT, 0x001C), Some(Value::Str("Hot water boost".into())));
+        assert_eq!(n.read(17, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.write(17, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(17, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.write(17, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
+        assert_eq!(n.read(17, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+
+        assert_eq!(n.read(18, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.write(18, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
+        assert_eq!(n.read(18, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.view().dev["hot_water_mode"], "off");
     }
 
     #[test]

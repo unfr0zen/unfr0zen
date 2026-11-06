@@ -390,6 +390,20 @@ impl Bridge {
         sw(&mut add, "auto_away_enable", "Home/Away Assist", "mdi:home-account");
         sw(&mut add, "sunlight_correction_enabled", "Sunblock", "mdi:weather-sunny");
         sw(&mut add, "preconditioning_enabled", "Early-On", "mdi:clock-fast");
+        if truthy(dev.get("has_hot_water_control")) {
+            add("switch", "hot_water_schedule", "Hot water schedule", fields!{
+                "value_template" => on_off("hot_water_schedule"),
+                "command_topic" => format!("{set}hot_water_schedule"),
+                "icon" => "mdi:water-boiler",
+            });
+            add("select", "hot_water_boost", "Hot water boost", fields!{
+                "value_template" => tmpl("hot_water_boost"),
+                "command_topic" => format!("{set}hot_water_boost"),
+                "options" => vec!["off", "30", "60", "120"],
+                "unit_of_measurement" => "min",
+                "icon" => "mdi:water-boiler-alert",
+            });
+        }
         if can_heat {
             sw(&mut add, "away_temperature_low_enabled", "Eco heat limit", "mdi:leaf");
         }
@@ -466,6 +480,29 @@ impl mqtt::Handler for Bridge {
     }
     fn message(&self, topic: &str, payload: &[u8]) {
         Bridge::message(self, topic, payload);
+    }
+}
+
+/// The boost lengths the unit's screen offers, minutes.
+pub const HOT_WATER_BOOST_MINUTES: [i64; 3] = [30, 60, 120];
+
+/// The running boost as the choice that covers the time it has left, if one runs.
+fn hot_water_boost(dev: &Fields) -> Option<i64> {
+    let left = number(dev.get("hot_water_boost_time_to_end"))? - chrono::Utc::now().timestamp() as f64;
+    (left > 0.0).then(|| HOT_WATER_BOOST_MINUTES.into_iter().find(|m| (*m * 60) as f64 >= left).unwrap_or(120))
+}
+
+/// Whether hot water follows its schedule: "off" is the unit's one other mode.
+fn hot_water_schedule(dev: &Fields) -> bool {
+    sprint(dev.get("hot_water_mode")) != "off"
+}
+
+/// Whether a switch is on: its device field, or what the hot water's fields say.
+pub fn switch_on(dev: &Fields, key: &str) -> bool {
+    match key {
+        "hot_water_boost" => hot_water_boost(dev).is_some(),
+        "hot_water_schedule" => hot_water_schedule(dev),
+        _ => truthy(dev.get(key)),
     }
 }
 
@@ -546,6 +583,8 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     if let Some(d) = number(dev.get("fan_timer_duration")) {
         s.insert("fan_timer_duration".into(), ((d / 60.0) as i64).to_string().into());
     }
+    s.insert("hot_water_boost".into(), hot_water_boost(dev).map_or("off".to_string(), |m| m.to_string()).into());
+    s.insert("hot_water_schedule".into(), hot_water_schedule(dev).into());
 
     let eco_mode = sprint(dev.get("eco").and_then(|e| e.get("mode")));
     let preset = if eco_mode == "manual-eco" || eco_mode == "auto-eco" { "eco" } else { "none" };
@@ -689,6 +728,34 @@ pub mod tests {
         plain.store.merge("shared.S", &obj(json!({"can_heat": false})), 0, 0, true);
         assert_eq!(plain.buckets()["shared"]["can_heat"], json!(false));
         assert_eq!(test_bridge().buckets().len(), 0);
+    }
+
+    #[test]
+    fn hot_water_controls_come_with_the_equipment_and_read_its_fields() {
+        let announced = |dev: Fields| {
+            let b = test_bridge();
+            b.announce(&dev, &Fields::new());
+            let configs = b.announced.lock().unwrap().clone().unwrap();
+            [("select", "hot_water_boost"), ("switch", "hot_water_schedule")]
+                .map(|(component, key)| configs.keys().any(|t| t.contains(component) && t.contains(key)))
+        };
+        assert_eq!(announced(Fields::new()), [false, false]);
+        assert_eq!(announced(obj(json!({"has_hot_water_control": true}))), [true, true]);
+
+        let now = chrono::Utc::now().timestamp();
+        let read = |dev: Value| {
+            let s = state(&obj(dev), &Fields::new());
+            (s["hot_water_boost"].as_str().unwrap().to_string(), s["hot_water_schedule"].as_bool().unwrap())
+        };
+        assert_eq!(read(json!({})), ("off".to_string(), true), "a unit that has said nothing follows its schedule");
+        assert_eq!(read(json!({"hot_water_mode": "off", "hot_water_boost_time_to_end": 0})), ("off".to_string(), false));
+        for (left, shown) in [(60, "30"), (1800, "30"), (1801, "60"), (3700, "120"), (90000, "120")] {
+            assert_eq!(read(json!({"hot_water_boost_time_to_end": now + left})).0, shown, "{left} s left");
+        }
+        assert_eq!(read(json!({"hot_water_boost_time_to_end": now - 5})).0, "off", "a boost that ended");
+        assert!(switch_on(&obj(json!({"hot_water_boost_time_to_end": now + 60})), "hot_water_boost"));
+        assert!(!switch_on(&obj(json!({"hot_water_mode": "off"})), "hot_water_schedule"));
+        assert!(switch_on(&obj(json!({"learning_mode": true})), "learning_mode"));
     }
 
     /// Equipment with everything discovery can announce.

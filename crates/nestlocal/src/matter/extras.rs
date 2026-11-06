@@ -55,6 +55,10 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     if view.device_flag("has_humidifier") || view.device_flag("has_dehumidifier") {
         all.push(("target_humidity_enabled", "Humidity control"));
     }
+    if view.device_flag("has_hot_water_control") {
+        all.push(("hot_water_boost", "Hot water boost"));
+        all.push(("hot_water_schedule", "Hot water schedule"));
+    }
     all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect()
 }
 
@@ -386,7 +390,7 @@ impl Switches {
 
     fn set(&self, endpoint: u16, on: Option<bool>) -> Result<(), Error> {
         let key = self.key(endpoint)?;
-        let on = on.unwrap_or_else(|| !self.nest.view().device_flag(key));
+        let on = on.unwrap_or_else(|| !self.nest.view().switch_on(key));
         self.nest.apply(key, if on { "ON" } else { "OFF" }).map_err(failed)
     }
 }
@@ -399,7 +403,7 @@ impl on_off::ClusterHandler for Switches {
     dataver!();
 
     fn on_off(&self, ctx: impl ReadContext) -> Result<bool, Error> {
-        Ok(self.nest.view().device_flag(self.key(ctx.attr().endpoint_id)?))
+        Ok(self.nest.view().switch_on(self.key(ctx.attr().endpoint_id)?))
     }
 
     fn handle_on(&self, ctx: impl InvokeContext) -> Result<(), Error> {
@@ -464,6 +468,8 @@ mod tests {
         assert_eq!(keys(fields!{"has_dehumidifier" => true}, fields!{"can_heat" => true, "can_cool" => true})[4..],
                    [(14, "away_temperature_low_enabled"), (15, "away_temperature_high_enabled"),
                     (16, "target_humidity_enabled")]);
+        assert_eq!(keys(fields!{"has_hot_water_control" => true}, fields!{"can_heat" => true})[4..],
+                   [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]);
     }
 
     #[test]

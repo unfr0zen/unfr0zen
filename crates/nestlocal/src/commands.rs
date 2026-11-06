@@ -159,6 +159,24 @@ impl Bridge {
                 _ => Err("expected minutes, 15-1440".into()),
             },
 
+            // ON is the shortest boost, for On/Off endpoints; the rest are minutes.
+            "hot_water_boost" => {
+                let minutes = match arg.to_uppercase().as_str() {
+                    "ON" => crate::bridge::HOT_WATER_BOOST_MINUTES[0],
+                    "OFF" => 0,
+                    other => match other.parse() {
+                        Ok(m) if crate::bridge::HOT_WATER_BOOST_MINUTES.contains(&m) => m,
+                        _ => return Err("expected off, 30, 60 or 120".into()),
+                    },
+                };
+                let end = if minutes == 0 { 0 } else { now + minutes * 60 };
+                device(fields!{"hot_water_boost_time_to_end" => num(end as f64)})
+            }
+
+            "hot_water_schedule" => {
+                device(fields!{"hot_water_mode" => if on_off(arg)? { "schedule" } else { "off" }})
+            }
+
             "preset" => {
                 let mode = match arg {
                     "eco" => "manual-eco",
@@ -411,6 +429,26 @@ mod tests {
         assert!((e["mode_update_timestamp"].as_f64().unwrap() - now).abs() <= 2.0, "{e}");
         assert_eq!(eco("none")["mode"], json!("schedule"));
         assert_eq!(eco("")["mode"], json!("schedule"));
+    }
+
+    #[test]
+    fn hot_water_commands_set_the_fields_nlclient_takes() {
+        let b = test_bridge();
+        let field = |name: &str, arg: &str, key: &str| b.fields(name, arg).unwrap().unwrap().1[key].clone();
+        let left = |arg: &str| field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
+            - chrono::Utc::now().timestamp() as f64;
+        for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("60", 3600.0), ("120", 7200.0)] {
+            assert!((seconds - 2.0..=seconds).contains(&left(arg)), "{arg}");
+        }
+        for arg in ["off", "OFF"] {
+            assert_eq!(field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64(), Some(0.0), "{arg}");
+        }
+        for arg in ["45", "-1", "", "maybe"] {
+            assert!(b.fields("hot_water_boost", arg).is_err(), "{arg}");
+        }
+        assert_eq!(field("hot_water_schedule", "ON", "hot_water_mode"), json!("schedule"));
+        assert_eq!(field("hot_water_schedule", "OFF", "hot_water_mode"), json!("off"));
+        assert!(b.fields("hot_water_schedule", "maybe").is_err());
     }
 
     #[test]
