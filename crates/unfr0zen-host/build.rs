@@ -1,4 +1,5 @@
-//! Gathers what the unfr0zen binary carries, so it needs nothing on the host:
+//! Gathers what the unfr0zen binary carries, so it needs nothing on the host,
+//! first running utils/build-firmware.sh when build/ lacks any of it:
 //!
 //! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
@@ -15,11 +16,12 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
 const ROM_STAGE_SHA256: &str = "d60cc77f12d3bf217e800b9b3f576fa78cc2082836e48f8f6fc744a086e87146";
+const OFFICIAL_LOADER_SHA256: &str = "abbde0ce71d8764067ddc982b8ac4f49d27ad3d2587b44d92c55c8a73a5fe826";
 const BUSYBOX_DEB: &str = "busybox-static_1.37.0-6+b9_armhf.deb";
 const BUSYBOX_URL: &str = "https://snapshot.debian.org/file/188a1b20b6150354ee95a5a6405d826e3e6fdaa5";
 const BUSYBOX_SHA256: &str = "8b35210e08d559ecc0ddb660dd96f6f9694f69eb27f1dc608f5eeda56d94509e";
@@ -27,6 +29,52 @@ const DOOM_WAD_DEB: &str = "doom-wad-shareware_1.9.fixed-5_all.deb";
 const DOOM_WAD_URL: &str = "https://snapshot.debian.org/file/732562ea15f0a6623611bdb739a03af72d8dbaf1";
 const DOOM_WAD_DEB_SHA256: &str = "5802f176c0303e228095b5312def53de602781cf4c53e79842257484a0d9e938";
 const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771";
+
+/// What the app cannot be built without. The kernel and x-loader are left out:
+/// without Docker the firmware build goes on without them.
+const REQUIRED: [&str; 17] = [
+    "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
+    "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o",
+    "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
+    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl",
+];
+
+fn firmware_missing(root: &Path) -> Vec<&'static str> {
+    REQUIRED.into_iter().filter(|name| !root.join("build").join(name).is_file()).collect()
+}
+
+/// Runs the firmware build when build/ lacks anything. Cargo may run this
+/// script several times at once, for several targets, so one builds and the
+/// others wait for it. CI brings build/ along, and Windows cannot build it.
+fn build_firmware(root: &Path) {
+    let missing = firmware_missing(root);
+    if missing.is_empty() {
+        return;
+    }
+    assert!(!cfg!(windows) && env::var_os("CI").is_none(),
+            "build/ lacks {missing:?}: build it first with utils/build-firmware.sh, on macOS or Linux");
+    let work = root.join(".work");
+    fs::create_dir_all(&work).unwrap();
+    let lock = fs::File::create(work.join("firmware.lock")).unwrap();
+    lock.lock().unwrap();
+    if firmware_missing(root).is_empty() {
+        return;
+    }
+    let mut script = Command::new("sh");
+    script.arg(root.join("utils/build-firmware.sh")).current_dir(root).stdout(Stdio::from(std::io::stderr()));
+    // What cargo sets for this script is not for the cargo the firmware runs.
+    for (name, _) in env::vars_os() {
+        let name = name.to_string_lossy();
+        if (name.starts_with("CARGO") && name != "CARGO_HOME") || name.starts_with("RUSTC") || name.starts_with("RUSTDOC")
+            || ["TARGET", "HOST", "PROFILE", "OPT_LEVEL", "DEBUG", "NUM_JOBS", "OUT_DIR"].contains(&&*name) {
+            script.env_remove(&*name);
+        }
+    }
+    let status = script.status().expect("sh runs utils/build-firmware.sh");
+    assert!(status.success(), "utils/build-firmware.sh failed, as above; step logs are in .work/");
+    let missing = firmware_missing(root);
+    assert!(missing.is_empty(), "utils/build-firmware.sh left build/ without {missing:?}");
+}
 
 fn sha256(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
@@ -59,6 +107,10 @@ fn firmware(root: &Path, out: &Path) {
                          ("u-boot-recovery.bin", recovery)] {
         fs::write(out.join(name), data).unwrap();
     }
+    let official = read("u-boot-sdp-official.hab");
+    assert_eq!(sha256(&official), OFFICIAL_LOADER_SHA256,
+               "build/u-boot-sdp-official.hab is not the pinned official SDP loader");
+    fs::write(out.join("u-boot-sdp-official.hab"), official).unwrap();
 }
 
 /// The member of an ar archive (a .deb) whose name starts with prefix.
@@ -191,6 +243,7 @@ fn custom_screen(root: &Path, out: &Path) {
 fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..").canonicalize().unwrap();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    build_firmware(&root);
     firmware(&root, &out);
     j49(&root, &out);
     busybox(&root, &out);

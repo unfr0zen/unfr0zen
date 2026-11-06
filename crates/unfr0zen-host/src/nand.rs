@@ -7,10 +7,11 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::{Device, Result};
 
 use crate::flow::failure;
-use crate::progress::Progress;
+use crate::progress::{stage, Progress};
 use crate::{device, diamond3, j49};
 
 pub enum Job {
@@ -50,16 +51,40 @@ pub(crate) fn read_at(path: &Path, offset: u64, size: usize) -> Result<Vec<u8>> 
     Ok(data)
 }
 
-pub(crate) fn checksum_path(image: &Path) -> PathBuf {
+/// The .sha256 written beside an image.
+pub fn checksum_path(image: &Path) -> PathBuf {
     let mut name = image.as_os_str().to_owned();
     name.push(".sha256");
     PathBuf::from(name)
 }
 
+/// The SHA-256 the .sha256 beside a restore's image records.
+pub(crate) fn recorded_sha256(image: &Path) -> Result<String> {
+    let checksum = checksum_path(image);
+    let Ok(text) = fs::read_to_string(&checksum) else {
+        return Err(failure(format!("{} is missing; restore only a verified backup", checksum.display())));
+    };
+    Ok(text.split_whitespace().next().unwrap_or_default().to_string())
+}
+
+/// Reads a restore's image and checks it against its recorded SHA-256. This
+/// takes seconds, so it runs after the wait for download mode: the prompt
+/// comes first.
+pub(crate) fn read_checked(progress: &mut dyn Progress, image: &Path, recorded: &str) -> Result<Vec<u8>> {
+    stage(progress, "Check the image's SHA-256", || {
+        let data = file(image, fs::read(image))?;
+        if sha256_hex(&data) != recorded {
+            return Err(failure(format!("{} does not match {}", image.display(), checksum_path(image).display())));
+        }
+        Ok(data)
+    })
+}
+
 /// Runs the job on the unit, whichever device it is, from whatever mode it is
 /// in, and boots it normally after. `confirm` is asked before a restore
 /// writes anything. Returns the final status line.
-pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut dyn Progress,
+pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>,
+           entry_point: diamond3::usb::EntryPoint, progress: &mut dyn Progress,
            confirm: &mut dyn FnMut(&str) -> bool, cancel: &device::CancelFlag)
            -> Result<String> {
     let expected = match job {
@@ -75,7 +100,7 @@ pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>, progress: &mut d
         return Err(failure(format!("the image is a {}'s NAND; the unit is a {}", device.name(), unit.device.name())));
     }
     match unit.device {
-        Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, progress, confirm, cancel),
+        Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, entry_point, progress, confirm, cancel),
         Device::Diamond | Device::J49 => j49::nand::run(job, unit, wait_usb, progress, confirm, cancel),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
@@ -88,6 +113,28 @@ mod tests {
     #[test]
     fn the_checksum_sits_beside_the_image() {
         assert_eq!(checksum_path(Path::new("dir/nand.bin")), Path::new("dir/nand.bin.sha256"));
+    }
+
+    #[test]
+    fn a_restores_image_must_have_and_match_its_checksum() {
+        struct Silent;
+        impl Progress for Silent {
+            fn begin(&mut self, _: &str) {}
+            fn end(&mut self, _: &str, _: Duration, _: bool) {}
+            fn status(&mut self, _: &str) {}
+            fn waiting(&mut self, _: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("unfr0zen-nand-sum-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("nand.bin");
+        fs::write(&image, b"image").unwrap();
+        assert!(recorded_sha256(&image).unwrap_err().to_string().contains("is missing"));
+        let sha = sha256_hex(b"image");
+        fs::write(checksum_path(&image), format!("{sha}  nand.bin\n")).unwrap();
+        assert_eq!(recorded_sha256(&image).unwrap(), sha);
+        assert_eq!(read_checked(&mut Silent, &image, &sha).unwrap(), b"image");
+        assert!(read_checked(&mut Silent, &image, "other").unwrap_err().to_string().contains("does not match"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -111,7 +158,7 @@ mod tests {
             fn status(&mut self, _: &str) {}
             fn waiting(&mut self, _: &str) {}
         }
-        let error = run(&Job::Verify(image), Duration::ZERO, None, &mut Silent, &mut |_| false, &Default::default()).err().unwrap();
+        let error = run(&Job::Verify(image), Duration::ZERO, None, Default::default(), &mut Silent, &mut |_| false, &Default::default()).err().unwrap();
         assert!(error.to_string().contains("is not a whole-NAND image"), "{error}");
         fs::remove_dir_all(dir).unwrap();
     }

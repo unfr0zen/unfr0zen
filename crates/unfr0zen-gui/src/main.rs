@@ -361,6 +361,8 @@ impl Form {
             matter_thread: self.matter.on && self.matter_thread,
             matter_code: self.matter.on.then(|| self.matter.code.clone()),
             zigbee: self.zigbee,
+            wwn_boiler: self.zigbee || (self.matter.on && self.matter_thread),
+            entry_point: Default::default(),
             doom: false,  // the CLI's --doom has no window control
             ssh: self.ssh,
             ssh_public_key: None,
@@ -377,6 +379,7 @@ impl Form {
             slot: None,
             dry_run: false,
             backup: false,
+            entry_point: Default::default(),
             wait_usb: WAIT_USB,
             wait_shell: Duration::from_secs(180),
             work_dir: data_dir.join("runs"),

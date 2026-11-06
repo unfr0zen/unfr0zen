@@ -1,6 +1,7 @@
 //! How the flow reports: a stage begins, ends with its elapsed time and
 //! outcome, or a one-line status. A terminal renders it as spinner lines, a
-//! window as a list. The run log, timestamped, is separate and always written.
+//! window as a list. The run log, timestamped, is separate, and opens when a
+//! run first acts on the unit.
 
 use std::fs;
 use std::io::Write;
@@ -9,13 +10,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::Result;
-
-static STARTED: OnceLock<Instant> = OnceLock::new();
-
-/// Seconds since the process started, for the run log.
-fn elapsed() -> f64 {
-    STARTED.get_or_init(Instant::now).elapsed().as_secs_f64()
-}
 
 /// What the flow tells its front end as it runs.
 pub trait Progress: Send {
@@ -69,16 +63,18 @@ pub struct Stage {
 
 /// The run log: every `log` record at or above info, and the flow's own
 /// debug lines (console transcripts, USB changes), each with the seconds
-/// since the process started. File contents never reach it.
-struct RunLog(Mutex<Option<fs::File>>);
+/// since the log opened. File contents never reach it, nor the window
+/// toolkit's own notes, which say nothing about the unit.
+struct RunLog(Mutex<Option<(fs::File, Instant)>>);
 
 impl log::Log for RunLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.target().starts_with("unfr0zen") || metadata.level() <= log::Level::Info
+        let toolkit = ["egui", "eframe", "winit", "wgpu", "naga"].iter().any(|t| metadata.target().starts_with(t));
+        !toolkit && (metadata.target().starts_with("unfr0zen") || metadata.level() <= log::Level::Info)
     }
     fn log(&self, record: &log::Record) {
-        if let (true, Some(file)) = (self.enabled(record.metadata()), self.0.lock().unwrap().as_mut()) {
-            let _ = writeln!(file, "[{:8.3}] {}", elapsed(), record.args().to_string().trim_end());
+        if let (true, Some((file, opened))) = (self.enabled(record.metadata()), self.0.lock().unwrap().as_mut()) {
+            let _ = writeln!(file, "[{:8.3}] {}", opened.elapsed().as_secs_f64(), record.args().to_string().trim_end());
         }
     }
     fn flush(&self) {}
@@ -99,16 +95,20 @@ pub fn set_selection(selection: String) {
 /// Installs the run logger once, early, with the app's version for the top of
 /// each run log. Later a run points it at its file.
 pub fn init_logging(app_version: &'static str) {
-    STARTED.get_or_init(Instant::now);
     APP_VERSION.get_or_init(|| app_version);
     let _ = log::set_logger(&RUN_LOG).map(|()| log::set_max_level(log::LevelFilter::Debug));
 }
 
+/// The version init_logging was given.
+pub(crate) fn app_version() -> &'static str {
+    APP_VERSION.get().copied().unwrap_or("(version unknown)")
+}
+
 /// Sends the run log to `path` from now on.
 pub(crate) fn set_log_file(path: &Path) -> Result<()> {
-    *RUN_LOG.0.lock().unwrap() = Some(fs::File::create(path)?);
+    *RUN_LOG.0.lock().unwrap() = Some((fs::File::create(path)?, Instant::now()));
     *LOG_PATH.lock().unwrap() = Some(path.to_path_buf());
-    log::info!("unfr0zen {}, built for {} {}", APP_VERSION.get().unwrap_or(&"(version unknown)"),
+    log::info!("unfr0zen {}, built for {} {}", app_version(),
                std::env::consts::OS, std::env::consts::ARCH);
     for line in crate::machine::describe() {
         log::info!("{line}");
@@ -122,4 +122,31 @@ pub(crate) fn set_log_file(path: &Path) -> Result<()> {
 /// The current run's log file, once a run has opened one.
 pub fn log_path() -> Option<PathBuf> {
     LOG_PATH.lock().unwrap().clone()
+}
+
+/// Closes the run's log and forgets its path: before the next run, which may
+/// never open one, and for a run called off, whose folder is then removed.
+pub fn end_log() {
+    *RUN_LOG.0.lock().unwrap() = None;
+    *LOG_PATH.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_log_counts_from_when_it_opened() {
+        let path = std::env::temp_dir().join(format!("unfr0zen-log-clock-{}.log", std::process::id()));
+        init_logging("test");
+        let waited = Duration::from_millis(300);
+        std::thread::sleep(waited);
+        set_log_file(&path).unwrap();
+        end_log();
+        let text = fs::read_to_string(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let first = text.lines().next().unwrap();
+        let seconds: f64 = first.trim_start_matches('[').split(']').next().unwrap().trim().parse().unwrap();
+        assert!(seconds < waited.as_secs_f64(), "{first}");
+    }
 }

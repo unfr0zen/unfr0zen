@@ -14,6 +14,9 @@ use crate::shell::sha256_hex;
 pub const BINARY: &str = "nestlabs/sbin/nlclient";
 pub const ORIGINAL: &str = "etc/unfr0zen/nlclient.original";
 pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";
+/// The line the home screen shows: unfr0zen and the patching app's version.
+/// A file, so the screen's object and its goldens do not change per revision.
+pub const VERSION: &str = "etc/unfr0zen/version";
 pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
 pub const ICON_BYTES: &[u8] = include_bytes!("../../../platform/common/nlclient/assets/unfr0zen.png");
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";

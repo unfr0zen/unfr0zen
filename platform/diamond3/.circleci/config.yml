@@ -22,7 +22,7 @@ jobs:
           command: git submodule update --init --depth 1 platform/diamond3/uboot/upstream && python3 platform/diamond3/bootstrap/build_bootstrap.py && sh platform/diamond3/uboot/build_uboot.sh
       - module-store:
           module: recovery
-          outputs: build/rom-stage.imx build/boot-wrapper.bin build/u-boot-recovery.bin build/u-boot-recovery.json
+          outputs: build/u-boot-sdp-official.hab build/rom-stage.imx build/boot-wrapper.bin build/u-boot-recovery.bin build/u-boot-recovery.json
 
 workflows:
   recovery:

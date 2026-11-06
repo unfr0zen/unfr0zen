@@ -19,3 +19,6 @@ opt-level = "s"
 
 [profile.dev.package.rsa]
 opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3

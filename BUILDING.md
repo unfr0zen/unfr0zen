@@ -61,18 +61,23 @@ The firmware can't be built on Windows: build it on macOS or Linux and copy
 
 ## Build
 
-Firmware, nestlocal and Doom (macOS / Linux), into `build/`:
+The app, which embeds `build/` (macOS / Linux). If `build/` lacks any of the
+firmware, nestlocal or Doom, cargo runs `utils/build-firmware.sh` first, which
+takes minutes with no output of its own; its step logs go to `.work/`:
 
 ```sh
 git submodule update --init
+cargo build --release -p unfr0zen-gui
+```
+
+To rebuild the firmware after changing its sources, run it yourself:
+
+```sh
 utils/build-firmware.sh
 ```
 
-The app, which embeds `build/`:
-
-```sh
-cargo build --release -p unfr0zen-gui
-```
+On Windows, and where `CI` is set, cargo does not run it: `build/` must already
+be there.
 
 The executable is `target/release/unfr0zen` (`unfr0zen.exe` on Windows). On
 Linux and macOS, run with arguments, it is the command-line tool.

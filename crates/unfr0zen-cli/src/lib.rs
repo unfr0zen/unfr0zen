@@ -12,6 +12,7 @@ use std::time::Duration;
 use clap::{CommandFactory, Parser, Subcommand};
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
+use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
 use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, PatchInputs, Slot};
@@ -98,6 +99,12 @@ struct Args {
     /// join a Zigbee network through the unit's radio, as a thermostat (replaces Heat Link); pair by permitting joins on the coordinator
     #[arg(long, help_heading = "Root filesystem options")]
     zigbee: bool,
+    /// run a Heat Link model (Display-3.x, Display-5.x) as heating a Works With Nest boiler through W1; without it firmware 6.4-8 can stop on H71 with no Heat Link (needs --zigbee or --matter-thread)
+    #[arg(long, help_heading = "Root filesystem options")]
+    wwn_boiler: bool,
+    /// how the 3rd generation's boot ROM is entered for recovery: auto, cve-2017-7932, cve-2017-7936 or official-loader
+    #[arg(long, global = true)]
+    entry_point: Option<EntryPoint>,
     /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
@@ -141,7 +148,7 @@ enum Command {
     // A diamond3's whole 512 MiB NAND as an ECC-corrected image (2048-byte
     // pages, no OOB); the OMAP boards' as raw 2112-byte pages with OOB.
     /// Back up the whole NAND to OUT and check it with a second read; nothing is
-    /// written to NAND. Run the same command again to resume an interrupted backup
+    /// written to NAND. Run it again with the same OUT to resume an interrupted backup
     Backup {
         /// default: nand-<date>-<time>.bin in the current directory
         out: Option<PathBuf>,
@@ -191,6 +198,8 @@ impl Args {
             matter_thread: self.matter_thread,
             matter_code: self.matter_code.clone(),
             zigbee: self.zigbee,
+            wwn_boiler: self.wwn_boiler,
+            entry_point: self.entry_point.unwrap_or_default(),
             doom: self.doom,
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
@@ -284,6 +293,7 @@ pub fn main() {
         slot: args.slot.as_deref().and_then(Slot::parse),
         dry_run: args.dry_run,
         backup: args.backup,
+        entry_point: args.entry_point.unwrap_or_default(),
         wait_usb: Duration::from_secs(args.wait_usb),
         wait_shell: Duration::from_secs(args.wait_shell),
         work_dir,
@@ -297,17 +307,17 @@ pub fn main() {
             None => run(&config, &mut progress, &cancel),
         },
         Some(Command::Nlclient { .. }) => unreachable!("handled before USB setup"),
-        Some(Command::Uboot) => boot::uboot(config.wait_usb, &mut progress),
-        Some(Command::Boot) => boot::boot(config.wait_usb, &mut progress),
+        Some(Command::Uboot) => boot::uboot(config.wait_usb, config.entry_point, &mut progress),
+        Some(Command::Boot) => boot::boot(config.wait_usb, config.entry_point, &mut progress),
         Some(Command::Backup { out }) => {
             let job = Job::Backup(out.clone().unwrap_or_else(nand::default_backup));
-            nand::run(&job, config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
+            nand::run(&job, config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Verify { image }) => {
-            nand::run(&Job::Verify(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
+            nand::run(&Job::Verify(image.clone()), config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Restore { image }) => {
-            nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
+            nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Update) => update(),
     };
@@ -407,5 +417,40 @@ mod logged_arguments_tests {
         assert_eq!(logged_arguments(args.iter().map(|a| a.to_string())),
                    "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
                     --mqtt-user *** --matter-code=*** --overlay extra.tar --slot root0");
+    }
+}
+
+#[cfg(test)]
+mod entry_point_tests {
+    use super::{Args, EntryPoint};
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn every_command_takes_the_entry_point() {
+        for command in [&["uboot"][..], &["boot"], &["backup"], &["verify", "nand.bin"], &["restore", "nand.bin"], &["update"]] {
+            let line = [&["unfr0zen"], command, &["--entry-point", "official-loader"]].concat();
+            let args = Args::try_parse_from(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"));
+            assert_eq!(args.entry_point, Some(EntryPoint::OfficialLoader), "{line:?}");
+        }
+        let patch = Args::try_parse_from(["unfr0zen", "--entry-point", "official-loader"]).unwrap();
+        assert_eq!(patch.entry_point, Some(EntryPoint::OfficialLoader));
+        assert!(Args::try_parse_from(["unfr0zen", "backup", "--entry-point", "nope"]).is_err());
+    }
+
+    #[test]
+    fn options_go_after_a_command_the_entry_point_like_the_others() {
+        for option in [&["--entry-point", "official-loader"][..], &["--wait-usb", "5"], &["--device", "diamond3"]] {
+            let before = [&["unfr0zen"], option, &["backup"]].concat();
+            assert!(Args::try_parse_from(&before).is_err(), "{before:?}");
+            let after = [&["unfr0zen", "backup"][..], option].concat();
+            assert!(Args::try_parse_from(&after).is_ok(), "{after:?}");
+        }
+    }
+
+    #[test]
+    fn help_names_the_entry_point_option_by_what_it_takes() {
+        let help = Args::command().render_long_help().to_string();
+        assert!(help.contains("--entry-point <ENTRY_POINT>"), "{help}");
+        assert!(!help.contains("TECHNIQUE"), "{help}");
     }
 }

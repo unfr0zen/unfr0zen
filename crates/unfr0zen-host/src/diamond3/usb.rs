@@ -60,11 +60,25 @@ pub fn devices() -> Result<BTreeMap<String, Id>> {
 /// Waits for the unit in one of the wanted modes, on the given port if any.
 pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>,
                    cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+    wait_device_ids(wanted, &[], timeout, port, cancel)
+}
+
+/// A restored system may use Buildroot's ACM/ECM gadget on the same USB port.
+pub fn wait_restored_application(timeout: Duration, port: &str) -> Result<(String, Id)> {
+    wait_device_ids(&[Mode::App], &[(0x1d6b, 0x0104)], timeout, Some(port), &Default::default())
+}
+
+fn wanted_identity(id: Id, wanted: &[Mode], extra: &[Id]) -> bool {
+    mode(id).is_some_and(|m| wanted.contains(&m)) || extra.contains(&id)
+}
+
+fn wait_device_ids(wanted: &[Mode], extra: &[Id], timeout: Duration, port: Option<&str>,
+                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
     let until = Instant::now() + timeout;
     let mut last = None;
     while Instant::now() < until && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        let seen: BTreeMap<String, Id> = devices()?.into_iter()
-            .filter(|(_, id)| mode(*id).is_some_and(|m| wanted.contains(&m)))
+        let seen: BTreeMap<String, Id> = usb::list()?.into_iter()
+            .filter(|(_, id)| wanted_identity(*id, wanted, extra))
             .collect();
         if last.as_ref() != Some(&seen) {
             log::info!("USB: {:?}{}", seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
@@ -102,9 +116,17 @@ pub fn open_fastboot(port: &str) -> Result<Protocol<usb::Pipe>> {
 
 struct HidDevice(hidapi::HidDevice);
 
+/// How much of a report a HID write took. On Windows, hidapi pads a report to
+/// the device's longest output report and returns the padded length, so a
+/// whole 17-byte command comes back as 1025.
+fn report_bytes_sent(report: &[u8], sent: usize) -> usize {
+    sent.min(report.len())
+}
+
 impl Hid for HidDevice {
     fn write(&mut self, report: &[u8]) -> Result<usize> {
-        self.0.write(report).map_err(|e| Error::Io(e.to_string()))
+        let sent = self.0.write(report).map_err(|e| Error::Io(e.to_string()))?;
+        Ok(report_bytes_sent(report, sent))
     }
     fn read(&mut self, timeout_ms: i32) -> Result<Vec<u8>> {
         let mut buffer = [0u8; 65];
@@ -315,12 +337,59 @@ fn updated_rom(digprog: u32) -> String {
     )
 }
 
+/// How the ROM is entered once it holds the recovery set: the official
+/// loader, the authenticated jump, or the WRITE FILE overflow; auto tries
+/// them in that order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EntryPoint {
+    #[default]
+    Auto,
+    Cve20177932,
+    Cve20177936,
+    OfficialLoader,
+}
+
+impl EntryPoint {
+    /// Its name, as the option takes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cve20177932 => "cve-2017-7932",
+            Self::Cve20177936 => "cve-2017-7936",
+            Self::OfficialLoader => "official-loader",
+        }
+    }
+
+    /// Its label, as the window shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cve20177932 => "CVE-2017-7932",
+            Self::Cve20177936 => "CVE-2017-7936",
+            Self::OfficialLoader => "Official loader",
+        }
+    }
+}
+
+impl std::str::FromStr for EntryPoint {
+    type Err = String;
+    fn from_str(name: &str) -> std::result::Result<Self, Self::Err> {
+        match name.trim() {
+            "auto" => Ok(Self::Auto),
+            "cve-2017-7932" => Ok(Self::Cve20177932),
+            "cve-2017-7936" => Ok(Self::Cve20177936),
+            "official-loader" => Ok(Self::OfficialLoader),
+            _ => Err(format!("unknown entry point {name:?}: auto, cve-2017-7932, cve-2017-7936 or official-loader")),
+        }
+    }
+}
+
 /// Brings up DDR with register writes, then loads recovery U-Boot into it and
 /// the bootstrap chain into OCRAM, and enters it — one ROM SDP session, no
 /// intermediate loader. The boot wrapper arms the watchdog; recovery services
 /// it while its console has DTR. Returns the silicon revision the ROM
 /// reported, if it did.
-pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
+pub fn load_recovery(watchdog_seconds: u32, entry_point: EntryPoint) -> Result<Option<String>> {
     let mut api = hidapi::HidApi::new().map_err(|e| Error::Io(e.to_string()))?;
     let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(130))?;
     let rom_id = rom_silicon(&mut rom).inspect_err(|error| {
@@ -328,51 +397,47 @@ pub fn load_recovery(watchdog_seconds: u32) -> Result<Option<String>> {
         sdp::drain(&mut rom, 50);
     }).ok();
     log_unit_diagnostics(&mut rom);
-    for &(address, value) in &DDR_INIT {
-        sdp::write_register(&mut rom, address, value)?;
-        // The MMDC start bit launches the DDR initialization state machine.
-        if address == 0x021b_0000 && value & 0x8000_0000 != 0 {
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-    log::info!("DDR up: {} register writes applied", DDR_INIT.len());
-    let mut nonce = [0u8; 4];
-    getrandom::fill(&mut nonce).map_err(|e| Error::Io(e.to_string()))?;
-    let wcr = ((watchdog_seconds * 2 - 1) << 8) | 0x34;
-    let parameters = [nonce.to_vec(), wcr.to_le_bytes().to_vec()].concat();
-    for (address, data) in [(UBOOT_BASE, assets::RECOVERY), (0x90BF00, parameters.as_slice()),
-                            (0x90B000, assets::BOOT_WRAPPER), (ROM_STAGE_BASE, assets::ROM_STAGE)] {
-        sdp::write_checked(&mut rom, address, data)?;
-        log::info!("Uploaded {} bytes at {address:#x}; read back intact", data.len());
-    }
-    // The ROM answers JUMP with its HAB report, then either drops USB as it
-    // jumps or stays in SDP with an error status; a read error only means
-    // the jump already dropped USB.
-    let replies = sdp::jump(&mut rom, ROM_STAGE_BASE)?;
-    log::info!("JUMP replies: {:02x?}", replies);
-    if let Some(state) = sdp::hab_state(&replies) {
-        log::info!("HAB {state}");
-    }
-    if let Some(refusal) = sdp::jump_refusal(&replies) {
-        if let Ok(word) = <[u8; 4]>::try_from(&refusal[1..5]) {
-            log::info!("HAB refusal: {}", sdp::hab_word_description(word));
-        }
-        if let Some(digprog) = rom_id.as_ref().map(|id| id.digprog)
-            .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
-            return Err(Error::Device(updated_rom(digprog)));
-        }
-        // The certificates were refused, but this ROM still ships
-        // the range-check hole: fall back to entering the stage
-        // through the WRITE FILE overflow. Only the run log
-        // records the fallback; the front end sees the same load
-        // it always sees.
-        log::warn!("JUMP refused; falling back to the WRITE FILE overflow");
-        spray_stack(&mut rom)?;
-        log::info!("Recovery U-Boot started through the overflow fallback; \
+    if entry_point == EntryPoint::OfficialLoader {
+        official_loader(&mut rom)?;
+        log::info!("Recovery U-Boot started through the official loader; \
                     fastboot buffer at {RAM_BASE:#x}");
         return Ok(rom_id.map(|id| id.silicon));
     }
-    log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
+    if entry_point == EntryPoint::Auto {
+        match official_loader(&mut rom) {
+            Ok(()) => {
+                log::info!("Recovery U-Boot started through the official loader; \
+                            fastboot buffer at {RAM_BASE:#x}");
+                return Ok(rom_id.map(|id| id.silicon));
+            }
+            Err(error) => {
+                log::warn!("Official loader failed ({error}); trying the authenticated jump");
+                // The failed attempt leaves the session's state unknown.
+                drop(rom);
+                rom = wait_hid(&mut api, SDP, Duration::from_secs(30))?;
+            }
+        }
+    }
+    load_bootstrap(&mut rom, watchdog_seconds)?;
+    let jumped = entry_point != EntryPoint::Cve20177936 && cve_2017_7932(&mut rom, rom_id.as_ref())?;
+    if jumped {
+        log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
+    } else if entry_point == EntryPoint::Cve20177932 {
+        return Err(Error::Device(
+            "the ROM refused the authenticated jump; set the entry point to auto or cve-2017-7936".into()));
+    } else if entry_point == EntryPoint::Auto {
+        log::warn!("JUMP refused; trying the WRITE FILE overflow");
+        drop(rom);
+        let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(30))?;
+        load_bootstrap(&mut rom, watchdog_seconds)?;
+        cve_2017_7936(&mut rom)?;
+        log::info!("Recovery U-Boot started through the overflow fallback; \
+                    fastboot buffer at {RAM_BASE:#x}");
+    } else {
+        cve_2017_7936(&mut rom)?;
+        log::info!("Recovery U-Boot started through the overflow fallback; \
+                    fastboot buffer at {RAM_BASE:#x}");
+    }
     Ok(rom_id.map(|id| id.silicon))
 }
 
@@ -390,6 +455,56 @@ const OCRAM_TOP: u32 = 0x0092_0000;
 /// of OCRAM, over the stack with the stage's entry address.
 const SPRAY_START: u32 = 0x0091_6000;
 
+/// Brings up DDR and uploads the recovery set (U-Boot, parameters, boot
+/// wrapper, ROM stage) for the jump or spray entry techniques.
+fn load_bootstrap(rom: &mut impl sdp::Hid, watchdog_seconds: u32) -> Result<()> {
+    for &(address, value) in &DDR_INIT {
+        sdp::write_register(rom, address, value)?;
+        if address == 0x021b_0000 && value & 0x8000_0000 != 0 {
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    log::info!("DDR up: {} register writes applied", DDR_INIT.len());
+    let mut nonce = [0u8; 4];
+    getrandom::fill(&mut nonce).map_err(|e| Error::Io(e.to_string()))?;
+    let wcr = ((watchdog_seconds * 2 - 1) << 8) | 0x34;
+    let parameters = [nonce.to_vec(), wcr.to_le_bytes().to_vec()].concat();
+    for (address, data) in [(UBOOT_BASE, assets::RECOVERY), (0x90BF00, parameters.as_slice()),
+                            (0x90B000, assets::BOOT_WRAPPER), (ROM_STAGE_BASE, assets::ROM_STAGE)] {
+        sdp::write_checked(rom, address, data)?;
+        log::info!("Uploaded {} bytes at {address:#x}; read back intact", data.len());
+    }
+    Ok(())
+}
+
+/// Enters the ROM stage through the authenticated JUMP: the CSF appended to
+/// the stage carries the certificate chain and signatures lifted from the
+/// original signed image, so HAB authenticates the entry off that reused
+/// signed metadata — no Nest private key. The ROM answers JUMP with its HAB
+/// report, then either drops USB as it jumps or stays in SDP with an error
+/// status; a read error only means the jump already dropped USB. Returns
+/// whether the ROM took the jump; the one refusal that is fatal instead is
+/// a unit whose fuses enforce secure boot on the updated boot ROM, which
+/// cannot run the unsigned recovery image at all.
+fn cve_2017_7932(rom: &mut impl sdp::Hid, rom_id: Option<&RomId>) -> Result<bool> {
+    let replies = sdp::jump(rom, ROM_STAGE_BASE)?;
+    log::info!("JUMP replies: {:02x?}", replies);
+    if let Some(state) = sdp::hab_state(&replies) {
+        log::info!("HAB {state}");
+    }
+    let Some(refusal) = sdp::jump_refusal(&replies) else {
+        return Ok(true);
+    };
+    if let Ok(word) = <[u8; 4]>::try_from(&refusal[1..5]) {
+        log::info!("HAB refusal: {}", sdp::hab_word_description(word));
+    }
+    if let Some(digprog) = rom_id.map(|id| id.digprog)
+        .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
+        return Err(Error::Device(updated_rom(digprog)));
+    }
+    Ok(false)
+}
+
 /// Overwrites the ROM's stack with the ROM stage's entry address through the
 /// WRITE FILE range-check overflow: the ROM checks only the
 /// first eighth of a write against its window, so a write starting inside
@@ -399,7 +514,7 @@ const SPRAY_START: u32 = 0x0091_6000;
 /// The USB session dying mid-write is expected: the overwrite includes the
 /// ROM's own USB state. A write the ROM answers with anything but the
 /// completion word never overwrote anything, and fails the load.
-fn spray_stack(rom: &mut impl sdp::Hid) -> Result<()> {
+fn cve_2017_7936(rom: &mut impl sdp::Hid) -> Result<()> {
     let spray = vec![ROM_STAGE_ENTRY.to_le_bytes(); ((OCRAM_TOP - SPRAY_START) / 4) as usize].concat();
     log::info!("Spraying {:#x} bytes at {SPRAY_START:#x} past the write window into the stack",
                OCRAM_TOP - SPRAY_START);
@@ -418,5 +533,114 @@ fn spray_stack(rom: &mut impl sdp::Hid) -> Result<()> {
         )),
         Err(error) => Err(Error::Device(format!(
             "the overflow write never reached the ROM: {error}"))),
+    }
+}
+
+/// The official loader's layout inside the HAB image.
+const OFFICIAL_IVT_ADDR: u32 = 0x877F_F400;
+const OFFICIAL_DCD_OFFSET: usize = 44;
+const OFFICIAL_DCD_END: usize = 652;
+const OFFICIAL_DCD_STAGING: u32 = 0x0091_0000;
+/// The official loader uploads only its active extent, not its trailing zeros.
+const OFFICIAL_UPLOAD_LEN: usize = 0x6_0C00;
+/// Where the official loader looks for a legacy image to boot.
+const LEGACY_IMAGE_STAGING: u32 = 0x8300_0000;
+
+/// Wraps `payload` in a U-Boot legacy image header with the given load and
+/// entry addresses. The header's CRC covers itself (with header_crc zeroed)
+/// and the payload's CRC covers the payload alone.
+fn legacy_image(payload: &[u8], load: u32, entry: u32) -> Vec<u8> {
+    let data_crc = crc32fast::hash(payload);
+    let mut header = [0u8; 64];
+    header[0..4].copy_from_slice(&0x2705_1956u32.to_be_bytes());
+    // [4..8] header CRC, filled below
+    // [8..12] timestamp: 0
+    header[12..16].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+    header[16..20].copy_from_slice(&load.to_be_bytes());
+    header[20..24].copy_from_slice(&entry.to_be_bytes());
+    header[24..28].copy_from_slice(&data_crc.to_be_bytes());
+    header[28] = 5; // OS: Linux
+    header[29] = 2; // arch: ARM
+    header[30] = 2; // type: kernel
+    // [31] compression: none (0)
+    header[32..44].copy_from_slice(b"unfr0zen\0\0\0\0");
+    let header_crc = crc32fast::hash(&header);
+    header[4..8].copy_from_slice(&header_crc.to_be_bytes());
+    [header.to_vec(), payload.to_vec()].concat()
+}
+
+/// Boots recovery U-Boot through Google's official SDP loader: the signed
+/// loader is uploaded and jumped to; its manufacturing boot path finds and
+/// executes a legacy image carrying recovery at the staging address.
+fn official_loader(rom: &mut impl sdp::Hid) -> Result<()> {
+    let image = assets::OFFICIAL_LOADER;
+    let dcd = &image[OFFICIAL_DCD_OFFSET..OFFICIAL_DCD_END];
+    sdp::dcd_write(rom, OFFICIAL_DCD_STAGING, dcd)?;
+    log::info!("DCD applied: {} bytes at {OFFICIAL_DCD_STAGING:#x}", dcd.len());
+    let loader = &image[..OFFICIAL_UPLOAD_LEN];
+    sdp::write_checked(rom, OFFICIAL_IVT_ADDR, loader)?;
+    log::info!("Official loader: {} bytes at {OFFICIAL_IVT_ADDR:#x}; read back intact", loader.len());
+    let payload = legacy_image(assets::RECOVERY, UBOOT_BASE, UBOOT_BASE);
+    let padded_len = payload.len().div_ceil(sdp::HID_DATA_SIZE) * sdp::HID_DATA_SIZE;
+    let mut padded = payload.clone();
+    padded.resize(padded_len, 0);
+    sdp::write_checked(rom, LEGACY_IMAGE_STAGING, &padded)?;
+    log::info!("Recovery legacy image: {} bytes at {LEGACY_IMAGE_STAGING:#x}; read back intact",
+               padded.len());
+    // Zero the IVT DCD pointer so the official loader does not re-apply DCD.
+    let mut first_block = loader[..sdp::HID_DATA_SIZE].to_vec();
+    first_block[12..16].copy_from_slice(&[0; 4]);
+    sdp::write_checked(rom, OFFICIAL_IVT_ADDR, &first_block)?;
+    log::info!("IVT DCD pointer zeroed; jumping to official loader");
+    let replies = sdp::jump(rom, OFFICIAL_IVT_ADDR)?;
+    log::info!("JUMP replies: {:02x?}", replies);
+    if let Some(state) = sdp::hab_state(&replies) {
+        log::info!("HAB {state}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod restore_usb_tests {
+    use super::*;
+
+    #[test]
+    fn restore_accepts_stock_and_homebrew_applications() {
+        for id in APP.into_iter().chain([(0x1d6b, 0x0104)]) {
+            assert!(wanted_identity(id, &[Mode::App], &[(0x1d6b, 0x0104)]));
+        }
+        for id in [SDP, RECOVERY, INITRAMFS, (0x1d6b, 0x0002)] {
+            assert!(!wanted_identity(id, &[Mode::App], &[(0x1d6b, 0x0104)]));
+        }
+    }
+
+    #[test]
+    fn stock_operations_do_not_accept_generic_linux_gadgets() {
+        assert!(!wanted_identity((0x1d6b, 0x0104), &[Mode::App], &[]));
+        assert_eq!(mode((0x1d6b, 0x0104)), None);
+    }
+
+    #[test]
+    #[ignore = "requires a booted physical device and UNFR0ZEN_TEST_USB_PORT"]
+    fn restored_application_on_requested_port() {
+        let port = std::env::var("UNFR0ZEN_TEST_USB_PORT").unwrap();
+        let (actual, _) = wait_restored_application(Duration::from_secs(2), &port).unwrap();
+        assert_eq!(actual, port);
+    }
+}
+
+#[cfg(test)]
+mod hid_write_tests {
+    use super::report_bytes_sent;
+
+    #[test]
+    fn a_write_padded_to_the_longest_report_counts_as_the_whole_report() {
+        assert_eq!(report_bytes_sent(&[0; 17], 1025), 17);
+        assert_eq!(report_bytes_sent(&[0; 1025], 1025), 1025);
+    }
+
+    #[test]
+    fn a_short_write_stays_short() {
+        assert_eq!(report_bytes_sent(&[0; 17], 5), 5);
     }
 }

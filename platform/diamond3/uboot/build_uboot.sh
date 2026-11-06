@@ -9,6 +9,7 @@ mkdir -p "$repo_dir/.work" "$repo_dir/build"
 upstream="$dir/upstream"
 git -C "$repo_dir" submodule update --init -- platform/diamond3/uboot/upstream
 test "$(git -C "$upstream" rev-parse HEAD)" = "$revision"
+python3 "$dir/tests/test_nandbcb.py"
 if [ ! -d "$tree/.git" ]; then
     git clone --no-hardlinks "$upstream" "$tree"
     git -C "$tree" checkout --detach "$revision"
@@ -48,3 +49,14 @@ make -C "$tree" CROSS_COMPILE=arm-none-eabi- -j"${JOBS:-8}" \
     NEST_BOOT_LOGO="$repo_dir/.work/boot-logo.bmp.gz" u-boot-dtb.bin
 cp "$tree/u-boot-dtb.bin" "$repo_dir/build/u-boot-recovery.bin"
 python3 "$dir/record_uboot_build.py" "$tree" "$repo_dir/build/u-boot-recovery.bin"
+# Google's official SDP loader, from their open-source repository; the app
+# embeds it for the official-loader entry point.
+official="$repo_dir/build/u-boot-sdp-official.hab"
+official_sha=abbde0ce71d8764067ddc982b8ac4f49d27ad3d2587b44d92c55c8a73a5fe826
+if [ ! -f "$official" ] || [ "$(sha256sum "$official" | cut -d' ' -f1)" != "$official_sha" ]; then
+    echo "Fetching official SDP loader"
+    curl -fsSL 'https://nest-open-source.googlesource.com/nest-learning-thermostat/5.7/u-boot/+/3e6d8487fcc10d400584dce41900e66733cb41a3/bin/diamond3/release/u-boot-sdp-5.2d43.hab?format=TEXT' \
+        | base64 -d > "$official.part"
+    test "$(sha256sum "$official.part" | cut -d' ' -f1)" = "$official_sha"
+    mv "$official.part" "$official"
+fi

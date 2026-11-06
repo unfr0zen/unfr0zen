@@ -17,7 +17,7 @@ use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 use rsa::signature::Verifier;
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use sha2::Sha256;
+use rsa::sha2::Sha256;
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
 use x509_cert::der::asn1::{GeneralizedTime, Ia5String, ObjectIdentifier, OctetString, UtcTime};
 use x509_cert::der::pem::LineEnding;

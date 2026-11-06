@@ -20,13 +20,13 @@ const NTP_LINES: [(&str, &str); 2] = [("etc/ntp.conf", "server "), ("etc/connman
 /// nlclient's backplate simulator: run it as 1H1C with made-up temperature and humidity.
 const BACKPLATE_SIM: [&str; 3] = ["backplatesimulationrun", "backplatesimulationhvactype", "backplatesimulatetempandhum"];
 /// A Heat Link model (Display-3.x, Display-5.x) whose radio nestlocal holds
-/// has no Heat Link any more: nlclient would block on its loss. rcS sets
-/// using_wwn_boiler in nlclient's settings before it starts, so it runs as
-/// heating a Works With Nest boiler through W1 instead: on, every boot the
-/// radio is ours; off, once, if the marker says an earlier run set it.
-/// nlclient keeps every key it read when it writes its settings back, so a
-/// run with the radio back to stock has to take the key out itself; a unit
-/// that never had the block keeps its stock rcS. The block stands before
+/// has no Heat Link any more: nlclient would block on its loss. Asked for,
+/// rcS sets using_wwn_boiler in nlclient's settings before it starts, so it
+/// runs as heating a Works With Nest boiler through W1 instead: on, every
+/// boot; off, once, if the marker says an earlier run set it. nlclient keeps
+/// every key it read when it writes its settings back, so a run without it
+/// has to take the key out itself; a unit that never had the block keeps its
+/// stock rcS. The block stands before
 /// nestlocal's start line when there is one: nestlocal's rcS edit wants its
 /// line right before nestlabs's.
 const WWN_BEGIN: &str = "# unfr0zen: Works With Nest boiler\n";
@@ -262,8 +262,7 @@ pub fn patch_root_rw(tree: &mut Tree, enabled: bool) -> Result<()> {
 }
 
 /// Puts the Works With Nest boiler block in rcS, setting using_wwn_boiler
-/// while nestlocal holds the radio and taking it back when not (WWN_ON,
-/// WWN_OFF).
+/// when asked and taking it back when not (WWN_ON, WWN_OFF).
 pub fn patch_wwn_boiler(tree: &mut Tree, enabled: bool) -> Result<()> {
     let mut content = text(tree, "etc/init.d/rcS")?;
     let Some(start) = content.find(WWN_BEGIN) else {
@@ -430,6 +429,8 @@ fn rootfs(target: Device) -> Result<&'static Rootfs> {
 pub struct Options {
     /// From root_hash.
     pub root_hash: String,
+    /// The app's version, for the UNFR0ZEN screen to show.
+    pub version: String,
     /// An empty name means DEFAULT_NTP_SERVER.
     pub ntp_server: Option<String>,
     pub cloud_url: Option<String>,
@@ -445,6 +446,9 @@ pub struct Options {
     /// nestlocal joins a Zigbee network through the unit's radio, which it
     /// then has: wpantund stays down.
     pub zigbee: bool,
+    /// Run a Heat Link model as heating a Works With Nest boiler through W1,
+    /// for a radio nestlocal holds.
+    pub wwn_boiler: bool,
     /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
     /// An SSH server root logs in to with its password; without it rcS does
@@ -624,7 +628,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
     patch_root_rw(&mut tree, true)?;
-    patch_wwn_boiler(&mut tree, options.zigbee || options.thread.is_some())?;
+    patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
     (rootfs.patch)(&mut tree, options)?;
     if let Some(key) = &public_key {
         patch_authorized_key(&mut tree, key)?;
@@ -681,9 +685,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             } else { current };
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ICON], false, false)?;
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::GLYPH], false, false)?;
+            fetch(volume, &mut tree, &mut originals, &[crate::nlclient::VERSION], false, false)?;
             tree.insert(crate::nlclient::JOURNAL.into(), (journal, 0o600));
             tree.insert(crate::nlclient::ICON.into(), (crate::nlclient::ICON_BYTES.to_vec(), 0o644));
             tree.insert(crate::nlclient::GLYPH.into(), (crate::nlclient::GLYPH_BYTES.to_vec(), 0o644));
+            tree.insert(crate::nlclient::VERSION.into(), (format!("unfr0zen {}\n", options.version).into_bytes(), 0o644));
             if originals.get(crate::nlclient::ORIGINAL).is_some_and(Option::is_none) {
                 tree.insert(crate::nlclient::ORIGINAL.into(), (source, 0o600));
             }
@@ -1445,14 +1451,17 @@ mod tests {
     }
 
     #[test]
-    fn wwn_boiler_is_set_from_rcs_while_the_radio_is_ours_and_taken_back_after() {
+    fn wwn_boiler_is_set_from_rcs_when_asked_and_taken_back_after() {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         // Nest's radio: rcS has no block.
         patch(&mut volume, &Options { mqtt: Some(Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() }), ..options() }, false).unwrap();
         let without = volume.text("etc/init.d/rcS");
         assert!(!without.contains(WWN_BEGIN));
+        // Zigbee alone does not ask for it.
         patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        assert!(!volume.text("etc/init.d/rcS").contains(WWN_BEGIN));
+        patch(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
         let rcs = volume.text("etc/init.d/rcS");
         let block = &rcs[rcs.find(WWN_BEGIN).unwrap()..rcs.find(WWN_END).unwrap() + WWN_END.len()];
         assert_eq!(rcs.replace(block, ""), without);
@@ -1463,11 +1472,12 @@ mod tests {
         // nestlabs's on the next run; the same run changes nothing.
         assert!(rcs.contains(&format!("{WWN_END}${{INITDIR}}/nestlocal start\n${{INITDIR}}/nestlabs start\n")), "{rcs}");
         assert_eq!(volume.files["etc/init.d/rcS"].1, 0o750);
-        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        patch(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
         assert_eq!(volume.text("etc/init.d/rcS"), rcs);
-        // Nest's radio again: the block takes the key back once, then the
-        // marker, and stays the only change around nestlabs's line.
-        patch(&mut volume, &options(), false).unwrap();
+        // Not asked for any more, the radio still ours: the block takes the
+        // key back once, then the marker, and stays the only change around
+        // nestlabs's line.
+        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
         let rcs = volume.text("etc/init.d/rcS");
         assert_eq!(rcs.matches(WWN_BEGIN).count(), 1);
         assert!(rcs.contains("if [ -f /media/user-config/.unfr0zen-wwn-boiler ]; then\n  sed -i '/<s key=\"using_wwn_boiler\" /d' /media/user-config/settings.config\n  rm -f /media/user-config/.unfr0zen-wwn-boiler\nfi\n"));
@@ -1529,6 +1539,16 @@ mod tests {
         on(&volume);
         // SSH does not depend on it: unlocked still says yes.
         assert_eq!(volume.text("usr/sbin/unlocked"), "#!/bin/sh\necho 1\n");
+        // A unit patched before the login shell gets it, on or off.
+        for (plain, line) in [("ttyGS0::respawn:/bin/sh\n", SHELL_LINES.0), ("#ttyGS0::respawn:/bin/sh\n", SHELL_LINES.1)] {
+            let mut earlier = FakeVolume::new(stock());
+            earlier.files.get_mut("etc/inittab").unwrap().2 = format!("::sysinit:/etc/init.d/rcS\n{plain}").into_bytes();
+            patch(&mut earlier, &Options { usb_shell: true, ..options() }, false).unwrap();
+            on(&earlier);
+            patch(&mut earlier, &options(), false).unwrap();
+            off(&earlier);
+            assert!(!earlier.text("etc/inittab").contains(plain.trim_start_matches('#')), "{line}");
+        }
         // A usb-gadget without the ACM line is not one this edit knows.
         let mut odd = FakeVolume::new(stock());
         odd.files.get_mut("etc/init.d/usb-gadget").unwrap().2 = b"USB_GADGET_MOD=g_mass_storage\n".to_vec();
@@ -1787,6 +1807,20 @@ mod tests {
         volume.commands.clear();
         assert!(build.patch(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
+    }
+
+    #[test]
+    fn native_screen_names_the_app_version_and_a_newer_app_rewrites_only_that() {
+        use crate::nlclient::VERSION;
+        let build = FakeBuild::new();
+        build.makes(&[&build.stock()[..], b"UNFR0ZEN screen"].concat());
+        let mut volume = with_nlclient(build.stock());
+        let first = Options { version: "v1.2-3-gabc1234".into(), ..options() };
+        build.patch(&mut volume, &first, false).unwrap();
+        assert_eq!(volume.files[VERSION], ("0:0".into(), 0o644, b"unfr0zen v1.2-3-gabc1234\n".to_vec()));
+        let changes = build.patch(&mut volume, &Options { version: "v1.3".into(), ..first }, false).unwrap();
+        assert_eq!(changes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [VERSION]);
+        assert_eq!(volume.files[VERSION].2, b"unfr0zen v1.3\n");
     }
 
     #[test]

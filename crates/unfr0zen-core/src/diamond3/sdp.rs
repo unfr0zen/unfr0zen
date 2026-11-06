@@ -13,6 +13,7 @@ const REPORT_STATUS: u8 = 4;
 const READ_REGISTER: u16 = 0x0101;
 const WRITE_REGISTER: u16 = 0x0202;
 const WRITE_FILE: u16 = 0x0404;
+const DCD_WRITE: u16 = 0x0A0A;
 const JUMP_ADDRESS: u16 = 0x0B0B;
 const WRITE_COMPLETE: [u8; 4] = [0x88; 4];
 /// WRITE_REGISTER answers with its own completion word, 0x128a8a12, not the
@@ -223,6 +224,36 @@ pub fn write_file(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<Write
         }
     }
     Ok(WriteOutcome::Silent)
+}
+
+/// Applies a DCD block through the ROM's DCD_WRITE command: the ROM parses
+/// the DCD's register writes and executes them itself. The acknowledgement
+/// word is 0x128a8a12, the same as a peripheral register write.
+pub fn dcd_write(dev: &mut impl Hid, address: u32, dcd: &[u8]) -> Result<()> {
+    command(dev, DCD_WRITE, address, dcd.len() as u32)?;
+    for block in dcd.chunks(HID_DATA_SIZE) {
+        let mut packet = vec![0u8; 1 + HID_DATA_SIZE];
+        packet[0] = REPORT_DATA;
+        packet[1..1 + block.len()].copy_from_slice(block);
+        let sent = dev.write(&packet)?;
+        if sent != packet.len() {
+            return Err(Error::Io(format!("Short HID DCD_WRITE: {sent}/{}", packet.len())));
+        }
+    }
+    for _ in 0..5 {
+        let reply = dev.read(2000)?;
+        if reply.first() == Some(&REPORT_HAB) {
+            continue;
+        }
+        if reply.len() >= 5 && reply[0] == REPORT_STATUS {
+            if reply[1..5] != REGISTER_COMPLETE {
+                return Err(Error::Device(format!(
+                    "DCD_WRITE at {address:#x} rejected: {:02x?}", &reply[1..5])));
+            }
+            return Ok(());
+        }
+    }
+    Err(Error::Timeout(format!("No DCD_WRITE acknowledgement for {address:#x}")))
 }
 
 /// The HAB security state of a unit, from the magic word in the ROM's HAB

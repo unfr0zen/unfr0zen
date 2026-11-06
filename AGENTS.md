@@ -35,7 +35,7 @@ cargo test --workspace --locked
 sh utils/make_macos_app.sh
 ```
 
-The firmware build supplies assets embedded by the host crates; build it before workspace tests or application builds. macOS uses Docker for firmware compilation. See `BUILDING.md` for platform dependencies. The packaging command produces `dist/unfr0zen.app`.
+The firmware build supplies assets embedded by the host crates; cargo runs it when `build/` lacks them, except on Windows and in CI. Run it yourself after changing firmware sources. macOS uses Docker for firmware compilation. See `BUILDING.md` for platform dependencies. The packaging command produces `dist/unfr0zen.app`.
 
 ## Coding Style & Naming Conventions
 

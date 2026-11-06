@@ -21,6 +21,12 @@ pub const FIT_ADDR: u32 = 0x8300_0000;
 pub const DIGPROG: u32 = 0x020c_8260;
 /// Powers down the device USB PHY, so stock U-Boot and Linux start it afresh.
 pub const USBPHY1_PWD: u32 = 0x020c_9004;
+/// Goes ahead of USBPHY1_PWD in a handoff, on the same line. While the host
+/// holds DTR, the ACM console's output spins until the host completes it, which
+/// a powered-down PHY never lets happen: the handoff's next print would hang
+/// until the watchdog resets the unit. U-Boot's serial output never waits on
+/// USB.
+const CONSOLE_OFF_USB: &str = "setenv stdout serial; setenv stderr serial";
 const ENV_SIZE: usize = 65536;
 
 fn seconds(n: u64) -> Duration {
@@ -451,7 +457,7 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         self.console.command(&format!("setenv bootargs '{bootargs}'"), seconds(60))?;
         log::info!("Booting {slot} FIT #{model} with initramfs {length:#x} bytes; bootargs {bootargs}");
         // One line: the USB PHY power-down drops the ACM console.
-        self.console.send_last(&format!("mw.l {USBPHY1_PWD:#x} 0x00100000; \
+        self.console.send_last(&format!("{CONSOLE_OFF_USB}; mw.l {USBPHY1_PWD:#x} 0x00100000; \
                                          bootm {FIT_ADDR:#x}#{model} {RAM_BASE:#x}:{length:#x}"))
     }
 
@@ -522,7 +528,7 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         // One line: the USB PHY power-down drops the ACM console. A recovery
         // with its data cache on must write the loaded image out, and drop
         // instructions cached from where recovery first ran, before go.
-        self.console.send_last(&format!("dcache off; icache off; mw.l {USBPHY1_PWD:#x} 0x00100000; go {:#x}",
+        self.console.send_last(&format!("{CONSOLE_OFF_USB}; dcache off; icache off; mw.l {USBPHY1_PWD:#x} 0x00100000; go {:#x}",
                                         image.entry))?;
         Ok(image)
     }
@@ -854,7 +860,8 @@ pub(crate) mod tests {
         let lines = &unit.borrow().lines;
         assert!(lines.contains(&"setenv initrd_high 0xffffffff".to_string()));
         assert!(lines.iter().any(|l| l.starts_with("setenv bootargs 'console=ttymxc0,115200")));
-        assert_eq!(lines.last().unwrap(), "mw.l 0x20c9004 0x00100000; bootm 0x83000000#Display-3.4 0x88000000:0x1234");
+        assert_eq!(lines.last().unwrap(), "setenv stdout serial; setenv stderr serial; mw.l 0x20c9004 0x00100000; \
+                                          bootm 0x83000000#Display-3.4 0x88000000:0x1234");
     }
 
     #[test]
@@ -865,7 +872,7 @@ pub(crate) mod tests {
         let (length, _) = board.stage(&[7u8; 0x1234]).unwrap();
         board.boot_initramfs(Slot::Root0, &installed_environment(), length).unwrap();
         assert_eq!(unit.borrow().loads, 1);
-        assert!(unit.borrow().lines.last().unwrap().starts_with("mw.l 0x20c9004 0x00100000; bootm"));
+        assert!(unit.borrow().lines.last().unwrap().contains("; mw.l 0x20c9004 0x00100000; bootm"));
     }
 
     #[test]
@@ -901,7 +908,8 @@ pub(crate) mod tests {
         let (board, unit) = board(unit);
         assert_eq!(board.boot_vendor().unwrap(),
                    VendorImage { offset: 0x10_0000, load: 0x877f_f000, length: 0x66000, entry: 0x8780_0000 });
-        assert_eq!(unit.borrow().lines.last().unwrap(), "dcache off; icache off; mw.l 0x20c9004 0x00100000; go 0x87800000");
+        assert_eq!(unit.borrow().lines.last().unwrap(), "setenv stdout serial; setenv stderr serial; dcache off; icache off; \
+                                                        mw.l 0x20c9004 0x00100000; go 0x87800000");
         let lines = &unit.borrow().lines;
         let first = |prefix: &str| lines.iter().position(|l| l.starts_with(prefix)).unwrap();
         assert!(first("nand bad") < first("nandbcb"), "nandbcb must not be the first NAND command");

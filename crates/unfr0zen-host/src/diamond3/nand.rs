@@ -24,11 +24,11 @@ pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
 
-use super::usb::{self, Mode};
-use super::{connect_recovery, find_unit, reach_recovery, report_silicon, Board};
+use super::usb;
+use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon, Board};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
-use crate::nand::{checksum_path, file, read_at, Job};
+use crate::nand::{checksum_path, file, read_at, read_checked, recorded_sha256, Job};
 use crate::progress::{stage, stage_with, Progress};
 
 /// Whether a whole-NAND image of `len` bytes is a diamond3's: its
@@ -70,26 +70,24 @@ fn each_chunk(progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
 /// Runs the job from whatever mode the unit is in and boots it normally after.
 /// `confirm` is asked before a restore writes anything. Returns the final
 /// status line.
-pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, progress: &mut dyn Progress,
-                  confirm: &mut dyn FnMut(&str) -> bool, cancel: &device::CancelFlag) -> Result<String> {
-    // Everything that can be checked before the unit is touched.
+pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, entry_point: EntryPoint,
+                  progress: &mut dyn Progress, confirm: &mut dyn FnMut(&str) -> bool,
+                  cancel: &device::CancelFlag) -> Result<String> {
+    let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
+    let (port, id) = find_unit(progress, wait_usb, false, unit, cancel)?;
+    // Checked while the boot ROM waits, before anything is loaded into it.
     let mut copies = Vec::new();
     if let Job::Restore(image) = job {
-        let checksum = checksum_path(image);
-        let Ok(expected) = fs::read_to_string(&checksum) else {
-            return Err(failure(format!("{} is missing; restore only a verified backup", checksum.display())));
-        };
-        let data = stage(progress, "Check the image's SHA-256", || file(image, fs::read(image)))?;
-        if expected.split_whitespace().next() != Some(sha256_hex(&data).as_str()) {
-            return Err(failure(format!("{} does not match {}", image.display(), checksum.display())));
-        }
+        let data = read_checked(progress, image, &recorded)?;
         copies = image_firmware(&data[..BOOT_SIZE as usize])?;
     }
-
-    let (port, id) = find_unit(progress, wait_usb, false, unit, cancel)?;
+    // The run log opens here: nothing has been sent to the unit yet.
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
-    let port = reach_recovery(progress, port, id)?;
+    if let Job::Restore(image) = job {
+        log::info!("{} matches its SHA-256 {recorded}", image.display());
+    }
+    let port = reach_recovery(progress, port, id, entry_point)?;
     let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     let bad = stage(progress, "Check for bad blocks", || board.bad_blocks())?;
@@ -126,7 +124,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     };
     let Unit { board, port, .. } = unit;
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port), &Default::default()))?;
+    stage(progress, "Wait for the application firmware", || usb::wait_restored_application(seconds(120), &port))?;
     Ok(message)
 }
 
@@ -220,6 +218,51 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use unfr0zen_core::Error;
+
+    #[test]
+    fn a_restore_whose_image_fails_its_check_opens_no_log() {
+        #[derive(Default)]
+        struct Seen { steps: Vec<String>, notes: Vec<String> }
+        impl Progress for Seen {
+            fn begin(&mut self, label: &str) { self.steps.push(label.to_string()); }
+            fn end(&mut self, _: &str, _: Duration, _: bool) {}
+            fn status(&mut self, message: &str) { self.notes.push(message.to_string()); }
+            fn waiting(&mut self, _: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("unfr0zen-restore-log-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("nand.bin");
+        fs::write(&image, b"image").unwrap();
+        fs::write(checksum_path(&image), "sum  nand.bin\n").unwrap();
+        let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::SDP };
+        let mut seen = Seen::default();
+        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut seen, &mut |_| false, &Default::default()).is_err());
+        assert_eq!(seen.steps, ["Check the image's SHA-256"]);
+        assert!(!seen.notes.iter().any(|note| note.starts_with("Detailed log")), "{:?}", seen.notes);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_restore_asks_for_download_mode_before_it_hashes_the_image() {
+        struct Steps(Vec<String>);
+        impl Progress for Steps {
+            fn begin(&mut self, label: &str) { self.0.push(label.to_string()); }
+            fn end(&mut self, _: &str, _: Duration, _: bool) {}
+            fn status(&mut self, _: &str) {}
+            fn waiting(&mut self, _: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("unfr0zen-restore-order-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("nand.bin");
+        fs::write(&image, b"image").unwrap();
+        fs::write(checksum_path(&image), "sum  nand.bin\n").unwrap();
+        let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::APP_ACM };
+        let cancel = device::CancelFlag::new(true.into());
+        let mut steps = Steps(Vec::new());
+        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut steps, &mut |_| false, &cancel).is_err());
+        assert_eq!(steps.0, [device::WAIT_USB_BOOT_STAGE]);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[derive(Default)]
     struct ProgressLog {

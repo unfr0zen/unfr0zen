@@ -3,8 +3,9 @@
 //! nestlocal holds with Zigbee or Thread. nlclient skips that check for a
 //! Works With Nest boiler, which it reads at start from using_wwn_boiler in
 //! its settings file: unfr0zen's rcS sets it before nlclient starts on a
-//! Heat Link model whose radio nestlocal holds. With it the unit heats through W1 and keeps its safety
-//! temperature, but reports can_heat false (bridge.rs reports it true).
+//! Heat Link model when the run asked for it (--wwn-boiler). With it the unit
+//! heats through W1 and keeps its safety temperature, but reports can_heat
+//! false (bridge.rs reports it true).
 
 use std::path::Path;
 

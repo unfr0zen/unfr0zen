@@ -14,6 +14,7 @@ use unfr0zen_core::{Error, Result, Slot};
 
 use crate::device::{self, Device};
 use crate::progress::{self, Progress};
+use crate::diamond3::usb::EntryPoint;
 use crate::{assets, diamond3, j49};
 
 pub(crate) fn seconds(n: u64) -> Duration {
@@ -50,6 +51,10 @@ pub struct PatchInputs {
     pub matter_code: Option<String>,
     /// Join a Zigbee network through the unit's radio, as a thermostat.
     pub zigbee: bool,
+    /// Run a Heat Link model as heating a Works With Nest boiler through W1.
+    pub wwn_boiler: bool,
+    /// How the 3rd generation's boot ROM is entered for recovery.
+    pub entry_point: EntryPoint,
     /// Doom, launched from the UNFR0ZEN screen (through nestlocal).
     pub doom: bool,
     /// An SSH server on the unit, root logging in with its password; off by default.
@@ -94,6 +99,8 @@ impl PatchInputs {
             ("matter-code", secret(&self.matter_code)),
             ("matter-thread", on(self.matter_thread)),
             ("zigbee", on(self.zigbee)),
+            ("wwn-boiler", on(self.wwn_boiler)),
+            ("entry-point", (self.entry_point != EntryPoint::Auto).then(|| self.entry_point.name().to_string())),
             ("doom", on(self.doom)),
             ("overlay", file(&self.overlay)),
             ("cloud-url", self.cloud_url.as_deref().map(mask_url)),
@@ -119,6 +126,9 @@ impl PatchInputs {
         let matter = self.matter || code.is_some();
         if self.matter_thread && (!matter || self.zigbee) {
             return Err(failure("Matter over Thread requires Matter and cannot share the radio with Zigbee"));
+        }
+        if self.wwn_boiler && !self.zigbee && !self.matter_thread {
+            return Err(failure("--wwn-boiler is for a radio nestlocal holds: it needs --zigbee or --matter-thread"));
         }
         let nestlocal = self.mqtt.is_some() || matter || self.zigbee || self.doom;
         if nestlocal && self.overlay.is_some() {
@@ -153,6 +163,7 @@ impl PatchInputs {
         let overlay = self.overlay.as_deref().map(|p| patch::overlay_from_tar(&read("--overlay", p)?)).transpose()?;
         Ok(Options {
             root_hash: patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?,
+            version: progress::app_version().to_string(),
             ntp_server: self.ntp_server.clone().or_else(|| self.block_cloud.then(String::new)),
             cloud_url: self.cloud_url.clone(),
             backplate_sim: self.backplate_sim,
@@ -162,6 +173,7 @@ impl PatchInputs {
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
+            wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(assets::doom),
             ssh: self.ssh,
             ssh_public_key,
@@ -181,6 +193,8 @@ pub struct Config {
     pub dry_run: bool,
     /// Read and save the whole volume before patching (slow; off by default).
     pub backup: bool,
+    /// How the 3rd generation's boot ROM is entered for recovery.
+    pub entry_point: EntryPoint,
     /// How long to wait for the unit in its boot ROM's USB download mode.
     pub wait_usb: Duration,
     pub wait_shell: Duration,
@@ -315,6 +329,34 @@ pub fn run(config: &Config, progress: &mut dyn Progress,
 #[cfg(test)]
 mod describe_tests {
     use super::*;
+
+    #[test]
+    fn the_entry_point_names_its_choice() {
+        assert_eq!(PatchInputs::default().entry_point, EntryPoint::Auto);
+        let forced = PatchInputs {
+            entry_point: "cve-2017-7936".parse().unwrap(),
+            ..PatchInputs::default()
+        };
+        assert_eq!(forced.describe(), "--entry-point cve-2017-7936");
+        assert_eq!(PatchInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..PatchInputs::default() }
+            .describe(), "--entry-point cve-2017-7932");
+        let error = "nope".parse::<EntryPoint>().err().unwrap();
+        assert!(error.contains("auto, cve-2017-7932, cve-2017-7936 or official-loader"), "{error}");
+    }
+
+    #[test]
+    fn the_boiler_option_needs_a_radio_nestlocal_holds() {
+        let alone = PatchInputs { wwn_boiler: true, ..PatchInputs::default() };
+        assert!(alone.build().err().unwrap().to_string().contains("--wwn-boiler"));
+        let mqtt = PatchInputs { mqtt: Some("broker".into()), ..alone.clone() };
+        assert!(mqtt.build().is_err(), "MQTT leaves the radio to Nest");
+        let zigbee = PatchInputs { zigbee: true, ..alone.clone() };
+        assert!(zigbee.build().unwrap().wwn_boiler);
+        assert_eq!(zigbee.describe(), "--zigbee --wwn-boiler");
+        let thread = PatchInputs { matter: true, matter_thread: true, ..alone };
+        assert!(thread.build().unwrap().wwn_boiler);
+        assert!(!PatchInputs { zigbee: true, ..PatchInputs::default() }.build().unwrap().wwn_boiler, "off unless asked");
+    }
 
     #[test]
     fn directory_errors_identify_the_requested_path() {

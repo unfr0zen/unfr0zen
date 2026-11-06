@@ -5,10 +5,16 @@ use crate::patch::{check_mode, patch_shell, put, text, Options, Rootfs, Tree, PR
 use crate::{device, Result};
 
 pub(crate) const OLD_GETTY: &str = "null::respawn:/usr/sbin/unlocked-getty -L ttyGS0 115200";
-const NEW_SHELL: &str = "ttyGS0::respawn:/bin/sh";
+/// The root shell: a login shell, so it reads /etc/profile and root's
+/// profile (the prompt and aliases), with HOME set, as init gives it /.
+const NEW_SHELL: &str = "ttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l";
 /// inittab's root shell line, and the same commented out with the USB root
 /// shell off. The newline before each keeps one from matching inside the other.
-pub(crate) const SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/bin/sh\n", "\n#ttyGS0::respawn:/bin/sh\n");
+pub(crate) const SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n",
+                                              "\n#ttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n");
+/// The plain shell earlier releases put there, on and off, replaced by the
+/// login shell.
+const PLAIN_SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/bin/sh\n", "\n#ttyGS0::respawn:/bin/sh\n");
 /// usb-gadget's choice when `unlocked` says yes: ACM, the root shell's port,
 /// with mass storage; with the USB root shell off, mass storage only, as a
 /// locked unit has it.
@@ -56,6 +62,11 @@ fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
         inittab = inittab.replace(OLD_GETTY, NEW_SHELL);
     }
     let (shell, no_shell) = SHELL_LINES;
+    for (plain, line) in [(PLAIN_SHELL_LINES.0, shell), (PLAIN_SHELL_LINES.1, no_shell)] {
+        if inittab.matches(plain).count() == 1 {
+            inittab = inittab.replace(plain, line);
+        }
+    }
     if inittab.matches(no_shell).count() == 1 {
         inittab = inittab.replace(no_shell, shell);
     }

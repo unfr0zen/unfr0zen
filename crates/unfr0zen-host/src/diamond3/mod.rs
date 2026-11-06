@@ -25,6 +25,7 @@ use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stor
 use crate::progress::{stage, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
 use usb::Mode;
+pub(crate) use usb::EntryPoint;
 
 /// The boot wrapper's watchdog while recovery runs.
 pub(crate) const WATCHDOG_SECONDS: u32 = 128;
@@ -38,7 +39,7 @@ pub(crate) fn connect_recovery(progress: &mut dyn Progress, port: &str) -> Resul
     }, || {
         let (_, id) = usb::wait_device(&[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs], seconds(10), Some(port), &Default::default())?;
         if id == usb::SDP {
-            usb::load_recovery(WATCHDOG_SECONDS)?;
+            usb::load_recovery(WATCHDOG_SECONDS, EntryPoint::Auto)?;
             usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default())?;
         } else if id != usb::RECOVERY {
             return Err(failure(format!("the unit restarted in {} mode", usb::mode(id).unwrap().name())));
@@ -76,8 +77,8 @@ pub(crate) fn report_silicon(progress: &mut dyn Progress, board: &mut Board) {
 }
 
 /// SDP to recovery U-Boot on the same port.
-fn load_recovery(progress: &mut dyn Progress, port: &str) -> Result<(String, Id)> {
-    if let Some(chip) = stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS))? {
+fn load_recovery(progress: &mut dyn Progress, port: &str, entry_point: EntryPoint) -> Result<(String, Id)> {
+    if let Some(chip) = stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS, entry_point))? {
         progress.device(&format!("{}: {chip}", Device::Diamond3.description()));
     }
     stage(progress, "Wait for recovery USB", || usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default()))
@@ -110,8 +111,8 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at
 }
 
 /// From what find_unit reached to recovery U-Boot: its port.
-pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id) -> Result<String> {
-    let (port, id) = if id == usb::SDP { load_recovery(progress, &port)? } else { (port, id) };
+pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id, entry_point: EntryPoint) -> Result<String> {
+    let (port, id) = if id == usb::SDP { load_recovery(progress, &port, entry_point)? } else { (port, id) };
     if id != usb::RECOVERY {
         return Err(failure("recovery U-Boot did not enumerate"));
     }
@@ -129,7 +130,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
     let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
-    let port = reach_recovery(progress, port, id)?;
+    let port = reach_recovery(progress, port, id, config.entry_point)?;
     route(progress, config, &port, &run_dir)
 }
 
@@ -211,7 +212,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
 
     let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default()))?;
     if id == usb::SDP {
-        let (port, _) = load_recovery(progress, &port)?;
+        let (port, _) = load_recovery(progress, &port, config.entry_point)?;
         let mut board = connect_recovery(progress, &port)?;
         board.attach_ubi()?;
         stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;

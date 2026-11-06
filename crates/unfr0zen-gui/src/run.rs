@@ -73,7 +73,7 @@ impl Run {
 
     /// A whole-NAND backup or restore.
     pub fn nand(job: Job, wait_usb: Duration) -> Self {
-        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, progress, &mut |question| confirm(&tx, question), &cancel))
+        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, Default::default(), progress, &mut |question| confirm(&tx, question), &cancel))
     }
 
     /// Signals the running flow to cut the USB download wait short.

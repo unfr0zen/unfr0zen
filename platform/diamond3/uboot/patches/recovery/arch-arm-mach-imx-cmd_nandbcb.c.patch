@@ -1,5 +1,5 @@
 diff --git a/arch/arm/mach-imx/cmd_nandbcb.c b/arch/arm/mach-imx/cmd_nandbcb.c
-index d747770c0e3..fb5e61f61f3 100644
+index d747770c0e3..904d1b26944 100644
 --- a/arch/arm/mach-imx/cmd_nandbcb.c
 +++ b/arch/arm/mach-imx/cmd_nandbcb.c
 @@ -411,6 +411,40 @@ static void encode_hamming_13_8(void *_src, void *_ecc, size_t size)
@@ -74,10 +74,59 @@ index d747770c0e3..fb5e61f61f3 100644
  
  fcb_raw_page_err:
  	kfree(fcb_raw_page);
-@@ -1366,12 +1416,13 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+@@ -687,6 +737,12 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
+ 	if (ret)
+ 		return ret;
+ 
++	if (dbbt->fingerprint != DBBT_FINGERPRINT ||
++	    dbbt->version != DBBT_VERSION_1 || dbbt->dbbtpages > 1) {
++		printf("Invalid DBBT header at 0x%llx\n", off);
++		return 1;
++	}
++
+ 	/* dbbtpages == 0 if no bad blocks */
+ 	if (dbbt->dbbtpages > 0) {
+ 		to = off + 4 * mtd->writesize + actual_size - size;
+@@ -697,6 +753,11 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
+ 
+ 		if (ret)
+ 			return ret;
++		if (((u32 *)dbbt_data_page)[1] >
++		    (mtd->writesize - 8) / sizeof(u32)) {
++			printf("Invalid DBBT entry count at 0x%llx\n", off);
++			return 1;
++		}
+ 	}
+ 
+ 	return 0;
+@@ -1239,8 +1300,9 @@ void dump_structure(struct boot_config *boot_cfg, struct fcb_block *fcb,
+ 		P1(dbbtpages);
+ 	#undef P1
+ 
+-	for (i = 0; i < dbbt->dbbtpages; ++i)
+-		printf("%d ", *((u32 *)(dbbt_data_page + i)));
++	if (dbbt->dbbtpages)
++		for (i = 0; i < ((u32 *)dbbt_data_page)[1]; ++i)
++			printf("%u ", ((u32 *)dbbt_data_page)[i + 2]);
+ 
+ 	if (!(plat_config.misc_flags & FIRMWARE_EXTRA_ONE)) {
+ 		printf("Firmware: image #0 @ 0x%x size 0x%x\n",
+@@ -1350,7 +1412,7 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+ 	/* read fcb */
+ 	fcb_not_found = 1;
+ 	off = 0;
+-	for (i = 0; i < g_boot_search_count; ++i) {
++	for (i = 0; i < g_boot_search_count; ++i, off += g_boot_search_stride) {
+ 		if (fcb_not_found) {
+ 			ret = read_fcb(boot_cfg, &fcb, off);
+ 
+@@ -1366,22 +1428,30 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
  
  			if (ret < 0)
  				goto dbbt_page_copy_err;
++			if (ret == 1 ||
++			    !check_fingerprint(&fcb_copy, FCB_FINGERPRINT))
++				continue;
 +			/*
 +			 * The boot ROM boots from the first valid copy, so a
 +			 * differing one is worth a note, not a failed dump.
@@ -91,10 +140,30 @@ index d747770c0e3..fb5e61f61f3 100644
 -			}
  		}
  
- 		/* next read location */
-@@ -1399,18 +1450,12 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+-		/* next read location */
+-		off += g_boot_search_stride;
++	}
++
++	if (fcb_not_found) {
++		printf("No valid FCB found\n");
++		ret = -ENOENT;
++		goto dbbt_page_copy_err;
+ 	}
+ 
+ 	/* read dbbt*/
+ 	dbbt_not_found = 1;
+ 	off = boot_cfg->search_area_size_in_bytes;
+-	for (i = 0; i < g_boot_search_count; ++i) {
++	for (i = 0; i < g_boot_search_count; ++i, off += g_boot_search_stride) {
+ 		if (dbbt_not_found) {
+ 			ret = read_dbbt(boot_cfg, &dbbt, dbbt_data_page, off);
+ 
+@@ -1398,25 +1468,24 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+ 
  			if (ret < 0)
  				goto dbbt_page_copy_err;
++			if (ret == 1)
++				continue;
  			if (memcmp(&dbbt, &dbbt_copy,
 -				   sizeof(struct dbbt_block))) {
 +				   sizeof(struct dbbt_block)))
@@ -112,4 +181,15 @@ index d747770c0e3..fb5e61f61f3 100644
 -			}
  		}
  
- 		/* next read location */
+-		/* next read location */
+-		off += g_boot_search_stride;
+ 	}
+ 
++	if (dbbt_not_found) {
++		printf("No valid DBBT found\n");
++		memset(&dbbt, 0, sizeof(dbbt));
++	}
++	ret = 0;
+ 	dump_structure(boot_cfg, &fcb, &dbbt, dbbt_data_page);
+ 
+ dbbt_page_copy_err:

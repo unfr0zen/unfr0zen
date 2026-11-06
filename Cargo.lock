@@ -6045,7 +6045,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha-crypt",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tar",
  "x509-cert 0.2.5",
 ]
@@ -6083,7 +6083,7 @@ dependencies = [
  "self_update",
  "serde_json",
  "serialport",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tar",
  "tempfile",
  "unfr0zen-core",

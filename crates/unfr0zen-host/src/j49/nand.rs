@@ -30,7 +30,7 @@ use unfr0zen_core::Result;
 use super::{find_unit, load_flasher, read_environment};
 use crate::device::Unit;
 use crate::flow::{failure, start_log, HandBack};
-use crate::nand::{checksum_path, file, read_at, Job};
+use crate::nand::{checksum_path, file, read_at, read_checked, recorded_sha256, Job};
 use crate::progress::{stage, stage_with, Progress};
 use crate::usb::Pipe;
 
@@ -235,16 +235,7 @@ fn restore(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path,
 /// asked before a restore writes anything.
 pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn Progress,
                   confirm: &mut dyn FnMut(&str) -> bool, cancel: &super::CancelFlag) -> Result<String> {
-    if let Job::Restore(image) = job {
-        let checksum = checksum_path(image);
-        let Ok(expected) = fs::read_to_string(&checksum) else {
-            return Err(failure(format!("{} is missing; restore only a verified backup", checksum.display())));
-        };
-        let sha = stage(progress, "Check the image's SHA-256", || file(image, fs::read(image)).map(|data| sha256_hex(&data)))?;
-        if expected.split_whitespace().next() != Some(sha.as_str()) {
-            return Err(failure(format!("{} does not match {}", image.display(), checksum.display())));
-        }
-    }
+    let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
     let usb = unit.device;
     find_unit(progress, wait_usb, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
@@ -276,6 +267,9 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
                 format!("NAND matches {}", image.display())
             }
             Job::Restore(image) => {
+                // Checked once the flasher runs: the boot ROM's USB window
+                // leaves no time for it after the wait.
+                read_checked(progress, image, &recorded)?;
                 let written = restore(&mut flasher, progress, image, confirm)?;
                 format!("NAND restored from {} ({written} blocks written, the rest already matched)", image.display())
             }
