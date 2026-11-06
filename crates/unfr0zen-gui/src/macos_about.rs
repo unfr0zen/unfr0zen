@@ -33,7 +33,7 @@ pub fn install() {
         .expect("winit creates the application menu before the app");
     for item in menu.itemArray() {
         if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
-            item.setTitle(ns_string!("About unfr0zen"));
+            item.setTitle(&NSString::from_str(&crate::tr!("about.native_title", app = "unfr0zen")));
             // The class object lives for the process lifetime and implements
             // this action with AppKit's target/action signature.
             unsafe {

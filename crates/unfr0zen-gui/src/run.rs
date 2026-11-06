@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::{run, CancelFlag, Config, Progress};
 
@@ -72,8 +73,14 @@ impl Run {
     }
 
     /// A whole-NAND backup or restore.
-    pub fn nand(job: Job, wait_usb: Duration) -> Self {
-        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, Default::default(), progress, &mut |question| confirm(&tx, question), &cancel))
+    pub fn nand(job: Job, wait_usb: Duration, entry_point: EntryPoint) -> Self {
+        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, entry_point, progress, &mut |question| confirm(&tx, question), &cancel))
+    }
+
+    /// Any other job that reports through a [`Progress`]: the advanced
+    /// commands.
+    pub fn task(job: impl FnOnce(&mut dyn Progress) -> unfr0zen_host::Result<String> + Send + 'static) -> Self {
+        Self::spawn(move |progress, _, _| job(progress))
     }
 
     /// Signals the running flow to cut the USB download wait short.

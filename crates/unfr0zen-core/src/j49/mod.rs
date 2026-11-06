@@ -4,6 +4,7 @@
 pub mod flasher;
 pub mod jffs2;
 pub mod kernel;
+pub mod mtd;
 pub mod nand;
 pub mod omap;
 pub mod rootfs;

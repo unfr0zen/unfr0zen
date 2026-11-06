@@ -112,16 +112,18 @@ run or log directories include the affected path.
 </details>
 
 ## Usage
-**App:** open it, tick the integrations, fill in their settings (the MQTT
-broker, Matter's pairing code), plug in the thermostat, press **Start** and
-follow the prompts. The arrow beside Start switches to Back up NAND or Restore
-NAND.
+**App:** open it, tick the integrations on the Patch page, fill in their
+settings (the MQTT broker, Matter's pairing code), plug in the thermostat,
+press **Start** and follow the prompts. The sidebar's other pages are Backups
+(the whole-NAND images the app keeps, with back up, restore and delete), Logs
+(every run's steps and log), About and, under Advanced, the 3rd generation's
+application boot and a serial console on a patched unit's USB root shell.
 
-<p align="center"><img src="assets/app.png" width="420" alt="The unfr0zen app on macOS: checkboxes for blocking Nest and Google servers, a custom NTP server, the MQTT broker with its address, user, password and TLS, Matter with its pairing code and Thread support, Zigbee, the SSH server, the USB root shell and the backplate simulator, above the Start button and its mode menu arrow."></p>
+<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="700" alt="The unfr0zen app on macOS, rotating through its Patch, Backups and Logs pages."></a></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
-terminal, over SSH or headless, with a few options the app doesn't have
-(`--doom`, `--dry-run`, `--backup`, `verify`). On macOS it is
+terminal, over SSH or headless, with a few things the app doesn't have
+(`--nand-image`, `verify`, `uboot`, `nlclient`). On macOS it is
 `unfr0zen.app/Contents/MacOS/unfr0zen`. Windows has the app only.
 ```
 unfr0zen [OPTIONS] [COMMAND]
@@ -159,11 +161,11 @@ replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
 commits past a tag, or local changes) never update.
 
 ## Undo it
-- **Before the first run:** the app's Back up NAND (or `unfr0zen backup`) saves
-  the whole NAND to a file, checked with a second read. `unfr0zen verify`
-  compares a backup with the unit.
-- **To go back to stock:** Restore NAND (or `unfr0zen restore`) writes that
-  backup back to the unit.
+- **Before the first run:** the app's Backups page, Back up unit (or
+  `unfr0zen backup`) saves the whole NAND to a file, checked with a second
+  read. `unfr0zen verify` compares a backup with the unit.
+- **To go back to stock:** Restore to unit (or `unfr0zen restore`) writes
+  that backup back to the unit.
 - `--backup` also saves the original root volume before each patch.
 
 ## When something is wrong
@@ -208,9 +210,13 @@ module (GPL-2.0). DOOM1.WAD is id Software's shareware episode, redistributed
 under its shareware terms.
 
 ## Credits
-- [U-Boot (NXP i.MX)](https://github.com/nxp-imx/uboot-imx)
-- [BusyBox](https://busybox.net)
-- [rs-matter](https://github.com/project-chip/rs-matter)
-- [OpenThread](https://github.com/openthread/openthread)
-- [Silicon Labs Gecko SDK / EmberZNet](https://github.com/SiliconLabs/gecko_sdk)
-- [doomgeneric](https://github.com/ozkl/doomgeneric) and id Software's DOOM
+- U-Boot (i.MX) — [NXP](https://github.com/nxp-imx/uboot-imx)
+- BusyBox — [the BusyBox project](https://busybox.net)
+- rs-matter — [Project CHIP](https://github.com/project-chip/rs-matter)
+- OpenThread — [the OpenThread project](https://github.com/openthread/openthread)
+- Gecko SDK / EmberZNet — [Silicon Labs](https://github.com/SiliconLabs/gecko_sdk)
+- doomgeneric — [ozkl](https://github.com/ozkl/doomgeneric)
+- DOOM — [id Software](https://github.com/id-Software/DOOM)
+- CVE-2017-7932 and CVE-2017-7936 — [Quarkslab](https://quarkslab.com)
+- diamond3 official loader — [@evan-hoddinott](https://github.com/evan-hoddinott)
+- cuckoo loader (diamond/j49) — [@ajb142](https://github.com/ajb142)

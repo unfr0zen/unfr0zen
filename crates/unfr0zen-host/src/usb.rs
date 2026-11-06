@@ -82,6 +82,17 @@ impl bulk::Bulk for Pipe {
     }
 }
 
+/// Every USB serial port, with the identity it belongs to.
+pub fn acm_ports() -> Vec<(String, Id)> {
+    serialport::available_ports().unwrap_or_default().into_iter().filter_map(|port| match port.port_type {
+        // macOS lists every ACM twice; the callout device does not wait for carrier.
+        serialport::SerialPortType::UsbPort(usb) if !port.port_name.starts_with("/dev/tty.") => {
+            Some((port.port_name, (usb.vid, usb.pid)))
+        }
+        _ => None,
+    }).collect()
+}
+
 /// The ACM serial port of the unit in the given identity.
 pub fn acm_port(id: Id) -> Option<String> {
     serialport::available_ports().ok()?.into_iter().find_map(|port| match port.port_type {
@@ -136,6 +147,11 @@ type NativePort = serialport::TTYPort;
 pub struct Port(NativePort);
 
 impl Port {
+    /// How long a read waits for bytes before returning none.
+    pub fn set_timeout(&mut self, timeout: Duration) -> Result<()> {
+        self.0.set_timeout(timeout).map_err(|e| Error::Io(e.to_string()))
+    }
+
     pub fn open(name: &str) -> Result<Self> {
         let mut port = serialport::new(name, 115_200).timeout(Duration::from_millis(250)).open_native()
             .map_err(|e| Error::Io(format!("{name}: {e}")))?;
