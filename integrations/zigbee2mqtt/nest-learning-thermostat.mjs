@@ -492,6 +492,12 @@ const definition = {
         },
     },
     configure: async (device, coordinatorEndpoint) => {
+        // The binding table survives firmware updates and can hold genOnOff
+        // entries for the switches, leaving no room for the binds below.
+        // Forced, as Zigbee2MQTT may have no record of them.
+        for (const id of Object.values(SWITCHES)) {
+            await device.getEndpoint(id)?.unbind('genOnOff', coordinatorEndpoint, true).catch(() => {});
+        }
         const report = async (id, cluster, attributes) => {
             const endpoint = device.getEndpoint(id);
             if (!endpoint || !endpoint.supportsInputCluster(cluster)) {
