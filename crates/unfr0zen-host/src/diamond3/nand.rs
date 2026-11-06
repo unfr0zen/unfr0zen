@@ -8,11 +8,12 @@
 //! the same command again resumes an interrupted backup. Bad blocks are kept
 //! in the image as erased, at their own offsets.
 //!
-//! A block with a page the ECC cannot correct does not stop a backup: it is
-//! kept in the image as read, the rest of its pages intact. It reads
-//! differently each time, so a verify leaves it out. The .bad list beside the
-//! image names these blocks and the bad ones. Any other block that reads
-//! uncorrectable fails a verify, as it does a restore's read-back.
+//! A block with a page the ECC cannot correct does not stop a backup or a
+//! verify: it is kept in the image as read, the rest of its pages intact, and
+//! it reads differently each time, so a verify leaves it out. The .bad list
+//! beside the image names these blocks and the bad ones; a backup adds any its
+//! verify finds. A verify reports the ones it finds beyond the list, and a
+//! restore's read-back fails on any.
 //!
 //! A restore writes such a backup back, beside its .sha256. Two areas are not
 //! copied from the image: the FCB blocks, whose ROM encoding a BCH18 read
@@ -34,7 +35,7 @@ use super::usb;
 use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon, Board};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
-use crate::nand::{bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
+use crate::nand::{add_bad_blocks, bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
 use crate::progress::{stage, stage_with, Progress};
 
 /// Whether a whole-NAND image of `len` bytes is a diamond3's: its
@@ -109,7 +110,8 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
             let parts = out.with_extension("parts");
             hand_back.0.push(parts.clone());
             let uncorrectable = backup(&mut unit, progress, out, &parts)?;
-            verify(&mut unit, progress, out)?;
+            let found = verify(&mut unit, progress, out)?;
+            add_bad_blocks(&bad_blocks_path(out), &found)?;
             let checksum = checksum_path(out);
             let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
             let name = out.file_name().unwrap_or_default().to_string_lossy();
@@ -117,15 +119,18 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
             file(&parts, fs::remove_dir_all(&parts))?;
             hand_back.0.pop();
             hand_back.0.extend([out.clone(), checksum, bad_blocks_path(out)]);
-            let kept = match uncorrectable {
+            let kept = match uncorrectable + found.len() {
                 0 => String::new(),
                 count => format!("; {count} blocks with uncorrectable pages kept as read and left out of the check"),
             };
             format!("NAND backup verified: {} ({NAND_SIZE} bytes, SHA-256 {sha}){kept}", out.display())
         }
         Job::Verify(image) => {
-            verify(&mut unit, progress, image)?;
-            format!("NAND matches {}", image.display())
+            let left_out = match verify(&mut unit, progress, image)?.len() {
+                0 => String::new(),
+                count => format!("; {count} blocks not listed beside it read uncorrectable and were left out of the check"),
+            };
+            format!("NAND matches {}{left_out}", image.display())
         }
         Job::Restore(image) => {
             restore(&mut unit, progress, image, &copies, confirm)?;
@@ -185,17 +190,20 @@ fn erase_blocks(data: &mut [u8], offset: u32, blocks: &[u32]) {
     }
 }
 
-fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<()> {
+/// Compares NAND with the image but for the blocks its list names and those
+/// that read uncorrectable now, which it returns.
+fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<Vec<u32>> {
     let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
     let skipped = [unit.bad.as_slice(), listed.as_slice()].concat();
+    let mut found = Vec::new();
     each_chunk(progress, "Verify", &all_chunks(), |_| false, |offset, size| {
         let mut expected = read_at(image, offset.into(), size as usize)?;
         erase_blocks(&mut expected, offset, &listed);
         if offset < BOOT_SIZE {
-            let (actual, uncorrectable) = unit.board.read_nand(offset, size, &skipped)?;
-            if !uncorrectable.is_empty() {
-                return Err(failure(format!("NAND blocks {uncorrectable:#x?} have pages the ECC cannot correct")));
-            }
+            let (mut actual, uncorrectable) = unit.board.read_nand(offset, size, &skipped)?;
+            erase_blocks(&mut actual, offset, &uncorrectable);
+            erase_blocks(&mut expected, offset, &uncorrectable);
+            found.extend(uncorrectable);
             let control = BOOT_CONTROL as usize;
             if actual[control..] != expected[control..] {
                 return Err(failure("the boot partition reads differently a second time outside the boot-control blocks"));
@@ -204,13 +212,20 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
             log::info!("Boot-control blocks: {flips} bits differ between reads");
             return Ok(());
         }
-        let (actual, expected) = (unit.board.nand_crc(offset, size, &skipped)?, crc32fast::hash(&expected));
+        let (actual, uncorrectable) = unit.board.tolerant_nand_crc(offset, size, &skipped)?;
+        erase_blocks(&mut expected, offset, &uncorrectable);
+        found.extend(uncorrectable);
+        let expected = crc32fast::hash(&expected);
         if actual != expected {
             return Err(failure(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
                                         the image has {expected:08x}")));
         }
         Ok(())
-    })
+    })?;
+    if !found.is_empty() {
+        log::warn!("NAND blocks {found:#x?} read uncorrectable in the verify; left out of it");
+    }
+    Ok(found)
 }
 
 fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &[(u32, u32)],
@@ -240,7 +255,7 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
     let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
     let damage = match listed.iter().filter(|block| (start..end).contains(*block) && !unit.bad.contains(*block)).count() {
         0 => String::new(),
-        count => format!(". {count} blocks had uncorrectable pages in this backup; they are written as read, damage included"),
+        count => format!(". {count} blocks had uncorrectable pages when this backup was taken; they are written as read, any damage included"),
     };
     if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}{damage}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));

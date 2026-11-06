@@ -84,6 +84,14 @@ pub fn read_bad_blocks(path: &Path) -> Result<Option<Vec<u32>>> {
     }).collect::<Result<Vec<u32>>>().map(Some)
 }
 
+/// Adds `blocks` to the list at `path`.
+pub(crate) fn add_bad_blocks(path: &Path, blocks: &[u32]) -> Result<()> {
+    let mut listed = read_bad_blocks(path)?.unwrap_or_default();
+    listed.extend(blocks);
+    listed.sort_unstable();
+    write_bad_blocks(path, &listed)
+}
+
 /// The SHA-256 the .sha256 beside a restore's image records.
 pub(crate) fn recorded_sha256(image: &Path) -> Result<String> {
     let checksum = checksum_path(image);
@@ -153,6 +161,8 @@ mod tests {
         write_bad_blocks(&path, &[0x0c00_0000, 0x1c42_0000]).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "0c000000\n1c420000\n");
         assert_eq!(read_bad_blocks(&path).unwrap(), Some(vec![0x0c00_0000, 0x1c42_0000]));
+        add_bad_blocks(&path, &[0x1000_0000]).unwrap();
+        assert_eq!(read_bad_blocks(&path).unwrap(), Some(vec![0x0c00_0000, 0x1000_0000, 0x1c42_0000]));
         for wrong in ["garbled\n", "00000800\n", "20000000\n"] {
             fs::write(&path, wrong).unwrap();
             assert!(read_bad_blocks(&path).is_err(), "{wrong}");

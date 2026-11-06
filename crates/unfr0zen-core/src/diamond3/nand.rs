@@ -168,9 +168,21 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         Ok((self.upload_ram(size as usize)?, uncorrectable))
     }
 
-    /// The CRC32 of NAND as it reads now, computed on the unit. An uncorrectable
-    /// page reads differently each time, so it is an error here.
-    pub fn nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<u32> {
+    /// The CRC32 of NAND as it reads now, computed on the unit, and the blocks in
+    /// it with uncorrectable pages, which count as erased: such a page reads
+    /// differently each time.
+    pub fn tolerant_nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<(u32, Vec<u32>)> {
+        let uncorrectable = self.nand_to_ram(offset, size, bad)?;
+        for &block in &uncorrectable {
+            let (address, length) = (RAM_BASE + (block - offset), BLOCK.min(offset + size - block));
+            self.console.command(&format!("mw.b {address:#x} 0xff {length:#x}"), seconds(10))?;
+        }
+        Ok((self.checked_crc(RAM_BASE, size as usize)?, uncorrectable))
+    }
+
+    /// The CRC32 of NAND as it reads now, computed on the unit, where an
+    /// uncorrectable page is an error.
+    fn nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<u32> {
         let uncorrectable = self.nand_to_ram(offset, size, bad)?;
         if !uncorrectable.is_empty() {
             return device(format!("NAND blocks {uncorrectable:#x?} have pages the ECC cannot correct"));
@@ -360,6 +372,20 @@ mod tests {
         unit.borrow_mut().lines.clear();
         board.nand_crc(BOOT_SIZE, 2 * BLOCK, &[block]).unwrap();
         assert!(!unit.borrow().lines.iter().any(|l| l.starts_with("nand read") && l.contains("0x420000")));
+    }
+
+    #[test]
+    fn a_tolerant_crc_counts_uncorrectable_blocks_as_erased_and_names_them() {
+        let size = BLOCK as usize;
+        let block = BOOT_SIZE + BLOCK;
+        let mut unit = Unit::default();
+        unit.nand.insert(BOOT_SIZE, vec![1u8; size]);
+        unit.nand.insert(block, vec![2u8; size]);
+        unit.uncorrectable.push(block);
+        let (mut board, _) = board(unit);
+        let (crc, uncorrectable) = board.tolerant_nand_crc(BOOT_SIZE, 2 * BLOCK, &[]).unwrap();
+        assert_eq!(uncorrectable, [block]);
+        assert_eq!(crc, crc32fast::hash(&[vec![1u8; size], vec![0xffu8; size]].concat()));
     }
 
     #[test]
