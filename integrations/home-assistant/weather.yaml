@@ -2,8 +2,8 @@ blueprint:
   name: Nest weather (unfr0zen)
   description: >-
     Sends the outdoor temperature and humidity, conditions and forecast to a
-    Nest thermostat running unfr0zen, every 15 minutes. Temperatures must be
-    in °C.
+    Nest thermostat running unfr0zen, every 15 minutes. Temperatures in °F are
+    converted to °C.
   domain: automation
   source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/weather.yaml
   input:
@@ -56,11 +56,16 @@ actions:
         {{ 'daily' if (state_attr(weather, 'supported_features') | int(0)) % 2
            else 'twice_daily' }}
   # A reading that is not a number (unavailable, ...) is ignored and the
-  # last one stays.
+  # last one stays. The thermostat takes °C; Home Assistant gives the sensor's
+  # reading in the sensor's unit and the forecast in the weather entity's.
   - action: mqtt.publish
     data:
       topic: "{{ topic }}outdoor_temperature"
-      payload: "{{ states(temperature) }}"
+      payload: >-
+        {%- set outdoor = states(temperature) | float(none) -%}
+        {{ ((outdoor - 32) * 5 / 9) | round(2)
+           if outdoor is number and state_attr(temperature, 'unit_of_measurement') == '°F'
+           else states(temperature) }}
       retain: true
   - action: mqtt.publish
     data:
@@ -84,8 +89,20 @@ actions:
       topic: "{{ topic }}weather"
       retain: true
       payload: >-
+        {%- set hours = hourly[weather].forecast[:48] -%}
+        {%- set fahrenheit = state_attr(weather, 'temperature_unit') == '°F' -%}
+        {%- set celsius = namespace(forecast=[]) -%}
+        {%- for f in hours + daily[weather].forecast[:14] -%}
+          {%- if fahrenheit and f.temperature is number -%}
+            {%- set f = dict(f, temperature=((f.temperature - 32) * 5 / 9) | round(2)) -%}
+          {%- endif -%}
+          {%- if fahrenheit and f.templow is number -%}
+            {%- set f = dict(f, templow=((f.templow - 32) * 5 / 9) | round(2)) -%}
+          {%- endif -%}
+          {%- set celsius.forecast = celsius.forecast + [f] -%}
+        {%- endfor -%}
         {{ {"condition": states(weather),
             "next_rising": state_attr('sun.sun', 'next_rising'),
             "next_setting": state_attr('sun.sun', 'next_setting'),
-            "hourly": hourly[weather].forecast[:48],
-            "daily": daily[weather].forecast[:14]} | to_json }}
+            "hourly": celsius.forecast[:hours | length],
+            "daily": celsius.forecast[hours | length:]} | to_json }}

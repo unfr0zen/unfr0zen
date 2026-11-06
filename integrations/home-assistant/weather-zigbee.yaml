@@ -3,7 +3,7 @@ blueprint:
   description: >-
     Sends the outdoor temperature and humidity, conditions and forecast to a
     Nest thermostat running unfr0zen on Zigbee2MQTT, every 15 minutes.
-    Temperatures must be in °C. The thermostat sets its clock from
+    Temperatures in °F are converted to °C. The thermostat sets its clock from
     Zigbee2MQTT by itself.
   domain: automation
   source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/weather-zigbee.yaml
@@ -85,15 +85,33 @@ actions:
       type: "{{ daily_type }}"
     response_variable: daily
   # A reading that is not a number (unavailable, ...) leaves the last one
-  # on the thermostat.
+  # on the thermostat. The thermostat takes °C; Home Assistant gives the
+  # sensor's reading in the sensor's unit and the forecast in the weather
+  # entity's.
   - action: mqtt.publish
     data:
       topic: "{{ base_topic }}/{{ address }}/set"
       payload: >-
-        {{ {"outdoor_temperature": states(temperature) | float(none),
+        {%- set outdoor = states(temperature) | float(none) -%}
+        {%- if outdoor is number and state_attr(temperature, 'unit_of_measurement') == '°F' -%}
+          {%- set outdoor = ((outdoor - 32) * 5 / 9) | round(2) -%}
+        {%- endif -%}
+        {%- set hours = hourly[weather].forecast[:24] -%}
+        {%- set fahrenheit = state_attr(weather, 'temperature_unit') == '°F' -%}
+        {%- set celsius = namespace(forecast=[]) -%}
+        {%- for f in hours + daily[weather].forecast[:14] -%}
+          {%- if fahrenheit and f.temperature is number -%}
+            {%- set f = dict(f, temperature=((f.temperature - 32) * 5 / 9) | round(2)) -%}
+          {%- endif -%}
+          {%- if fahrenheit and f.templow is number -%}
+            {%- set f = dict(f, templow=((f.templow - 32) * 5 / 9) | round(2)) -%}
+          {%- endif -%}
+          {%- set celsius.forecast = celsius.forecast + [f] -%}
+        {%- endfor -%}
+        {{ {"outdoor_temperature": outdoor,
             "outdoor_humidity": states(humidity) | float(none),
             "weather": {"condition": states(weather),
                         "next_rising": state_attr('sun.sun', 'next_rising'),
                         "next_setting": state_attr('sun.sun', 'next_setting'),
-                        "hourly": hourly[weather].forecast[:24],
-                        "daily": daily[weather].forecast[:14]}} | to_json }}
+                        "hourly": celsius.forecast[:hours | length],
+                        "daily": celsius.forecast[hours | length:]}} | to_json }}
