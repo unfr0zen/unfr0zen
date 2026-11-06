@@ -6,6 +6,10 @@
 //! Both commands skip bad blocks and carry on in the next good one, which
 //! would shift everything after. So every access is split around the bad
 //! blocks: they read as erased and are never written.
+//!
+//! A block with a page the ECC cannot correct is not bad on the chip: U-Boot
+//! still hands over what it read, and UBI copes with such pages itself. So a
+//! read names those blocks for the caller to record instead of failing.
 
 use std::time::Duration;
 
@@ -121,40 +125,56 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         bad_blocks(&self.console.command("nand bad", seconds(60))?)
     }
 
-    /// Reads NAND into the fastboot buffer, `bad` blocks as erased. ECC errors
-    /// are allowed in the boot-control blocks only, which are not BCH18; they
-    /// are read on their own, as U-Boot names only the start of a read that fails.
-    fn nand_to_ram(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<()> {
+    /// Reads NAND into the fastboot buffer, `bad` blocks as erased, and returns
+    /// the blocks with pages the ECC cannot correct, which stay in RAM as read.
+    /// U-Boot reads to the end of a failing read but names only its start, so
+    /// the blocks of such a read are read again on their own to find them.
+    fn nand_to_ram(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<Vec<u32>> {
+        let mut uncorrectable = Vec::new();
         for (at, size, is_bad) in pieces(offset, size, bad) {
             let address = RAM_BASE + (at - offset);
             if is_bad {
                 self.console.command(&format!("mw.b {address:#x} 0xff {size:#x}"), seconds(10))?;
-            } else {
-                self.nand_to_address(address, at, size)?;
+            } else if !self.nand_to_address(address, at, size)? {
+                for block in (at..at + size).step_by(BLOCK as usize) {
+                    let length = BLOCK.min(at + size - block);
+                    if !self.nand_to_address(address + (block - at), block, length)? {
+                        uncorrectable.push(block);
+                    }
+                }
             }
         }
-        Ok(())
+        Ok(uncorrectable)
     }
 
-    fn nand_to_address(&mut self, address: u32, offset: u32, size: u32) -> Result<()> {
+    /// Whether the read came back free of uncorrectable pages. The boot-control
+    /// blocks are not BCH18, so ECC errors do not count there; they are read on
+    /// their own, as U-Boot names only the start of a read that fails.
+    fn nand_to_address(&mut self, address: u32, offset: u32, size: u32) -> Result<bool> {
         let response = self.console.command_allow_failure(&format!("nand read {address:#x} {offset:#x} {size:#x}"),
                                                           seconds(120))?;
-        let ecc = offset + size <= BOOT_CONTROL
-            && response.contains(&format!("NAND read from offset {offset:x} failed -74"));
-        if !response.contains(&format!("{size} bytes read: OK")) && !ecc {
+        if response.contains(&format!("NAND read from offset {offset:x} failed -74")) {
+            return Ok(offset + size <= BOOT_CONTROL);
+        }
+        if !response.contains(&format!("{size} bytes read: OK")) {
             return device(format!("nand read at {offset:#x} failed: {}", response.trim()));
         }
-        Ok(())
+        Ok(true)
     }
 
-    pub fn read_nand(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<Vec<u8>> {
-        self.nand_to_ram(offset, size, bad)?;
-        self.upload_ram(size as usize)
+    /// NAND as it reads now, and the blocks in it with uncorrectable pages.
+    pub fn read_nand(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<(Vec<u8>, Vec<u32>)> {
+        let uncorrectable = self.nand_to_ram(offset, size, bad)?;
+        Ok((self.upload_ram(size as usize)?, uncorrectable))
     }
 
-    /// The CRC32 of NAND as it reads now, computed on the unit.
+    /// The CRC32 of NAND as it reads now, computed on the unit. An uncorrectable
+    /// page reads differently each time, so it is an error here.
     pub fn nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<u32> {
-        self.nand_to_ram(offset, size, bad)?;
+        let uncorrectable = self.nand_to_ram(offset, size, bad)?;
+        if !uncorrectable.is_empty() {
+            return device(format!("NAND blocks {uncorrectable:#x?} have pages the ECC cannot correct"));
+        }
         self.checked_crc(RAM_BASE, size as usize)
     }
 
@@ -293,23 +313,61 @@ mod tests {
     }
 
     #[test]
-    fn ecc_errors_pass_only_in_the_boot_partition() {
+    fn ecc_errors_do_not_count_in_the_boot_control_blocks() {
         let mut unit = Unit::default();
         unit.ecc_errors = true;
         let (mut board, _) = board(unit);
-        assert_eq!(board.read_nand(0, 0x1000, &[]).unwrap().len(), 0x1000);
-        assert!(board.read_nand(BOOT_SIZE, 0x1000, &[]).is_err());
+        assert!(board.read_nand(0, BOOT_CONTROL, &[]).unwrap().1.is_empty());
+        assert_eq!(board.read_nand(0, BOOT_CONTROL + BLOCK, &[]).unwrap().1, [BOOT_CONTROL]);
     }
 
     #[test]
-    fn ecc_errors_pass_only_in_the_boot_control_blocks() {
+    fn uncorrectable_blocks_are_named_and_kept_as_read() {
+        let block = BOOT_SIZE + 2 * BLOCK;
         let mut unit = Unit::default();
-        unit.ecc_errors = true;
+        unit.nand.insert(BOOT_SIZE, vec![1u8; BLOCK as usize]);
+        unit.nand.insert(BOOT_SIZE + BLOCK, vec![2u8; BLOCK as usize]);
+        unit.nand.insert(block, vec![3u8; BLOCK as usize]);
+        unit.uncorrectable.push(block);
+        let (mut board, unit) = board(unit);
+        let (data, uncorrectable) = board.read_nand(BOOT_SIZE, 4 * BLOCK, &[]).unwrap();
+        assert_eq!(uncorrectable, [block]);
+        let size = BLOCK as usize;
+        assert!(data[..size].iter().all(|&b| b == 1));
+        assert!(data[size..2 * size].iter().all(|&b| b == 2));
+        assert!(data[2 * size..3 * size].iter().all(|&b| b == 3), "kept as read");
+        assert!(data[3 * size..].iter().all(|&b| b == 0xff));
+        let reads = unit.borrow().lines.iter().filter(|l| l.starts_with("nand read")).count();
+        assert_eq!(reads, 1 + 4, "the failing read, then each of its blocks");
+    }
+
+    #[test]
+    fn a_read_that_fails_once_and_then_reads_clean_names_nothing() {
+        let mut unit = Unit::default();
+        unit.flaky_reads = 1;
         let (mut board, _) = board(unit);
-        assert!(board.read_nand(0, BOOT_SIZE, &[]).is_err());
-        assert!(board.read_nand(BOOT_CONTROL, 0x1000, &[]).is_err());
-        assert!(board.read_nand(BOOT_CONTROL - 0x1000, 0x2000, &[]).is_err());
-        assert_eq!(board.read_nand(0, BOOT_CONTROL, &[]).unwrap().len(), BOOT_CONTROL as usize);
+        assert!(board.read_nand(BOOT_SIZE, 2 * BLOCK, &[]).unwrap().1.is_empty());
+    }
+
+    #[test]
+    fn a_crc_of_an_uncorrectable_block_is_an_error_unless_it_is_skipped() {
+        let block = BOOT_SIZE + BLOCK;
+        let mut unit = Unit::default();
+        unit.uncorrectable.push(block);
+        let (mut board, unit) = board(unit);
+        let error = board.nand_crc(BOOT_SIZE, 2 * BLOCK, &[]).unwrap_err().to_string();
+        assert!(error.contains("0x420000"), "{error}");
+        unit.borrow_mut().lines.clear();
+        board.nand_crc(BOOT_SIZE, 2 * BLOCK, &[block]).unwrap();
+        assert!(!unit.borrow().lines.iter().any(|l| l.starts_with("nand read") && l.contains("0x420000")));
+    }
+
+    #[test]
+    fn a_write_that_reads_back_uncorrectable_fails() {
+        let mut unit = Unit::default();
+        unit.uncorrectable.push(BOOT_SIZE);
+        let (mut board, _) = board(unit);
+        assert!(board.write_nand(BOOT_SIZE, &[1u8; 0x1000], &[]).unwrap_err().to_string().contains("cannot correct"));
     }
 
     #[test]
@@ -318,7 +376,7 @@ mod tests {
         unit.nand.insert(0, vec![1u8; BOOT_CONTROL as usize]);
         unit.nand.insert(BOOT_CONTROL, vec![2u8; (BOOT_SIZE - BOOT_CONTROL) as usize]);
         let (mut board, unit) = board(unit);
-        let data = board.read_nand(0, BOOT_SIZE, &[]).unwrap();
+        let (data, _) = board.read_nand(0, BOOT_SIZE, &[]).unwrap();
         assert_eq!(data.len(), BOOT_SIZE as usize);
         assert!(data[..BOOT_CONTROL as usize].iter().all(|&b| b == 1));
         assert!(data[BOOT_CONTROL as usize..].iter().all(|&b| b == 2));
@@ -364,7 +422,7 @@ mod tests {
         let (mut board, unit) = board(unit);
         // RAM holds older data where the bad block lands.
         board.stage(&vec![7u8; 3 * BLOCK as usize]).unwrap();
-        let data = board.read_nand(BOOT_SIZE, 3 * BLOCK, &[BOOT_SIZE + BLOCK]).unwrap();
+        let (data, _) = board.read_nand(BOOT_SIZE, 3 * BLOCK, &[BOOT_SIZE + BLOCK]).unwrap();
         let block = BLOCK as usize;
         assert!(data[..block].iter().all(|&b| b == 1));
         assert!(data[block..2 * block].iter().all(|&b| b == 0xff));

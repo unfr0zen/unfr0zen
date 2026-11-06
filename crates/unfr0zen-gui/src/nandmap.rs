@@ -12,6 +12,7 @@ use std::thread;
 
 use eframe::egui;
 use unfr0zen_core::{diamond3, j49, Device};
+use unfr0zen_host::nand;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -75,8 +76,8 @@ pub struct Map {
     by_volume: bool,
     /// A block's data bytes, without the spare bytes a raw image holds too.
     pub block_size: usize,
-    /// Whether the image can show a bad block. A gen 3 backup stores one as
-    /// erased, with nothing to tell it by.
+    /// Whether the image can show a bad block. A gen 3 image has nothing to
+    /// tell one by but the list beside it, which older backups lack.
     shows_bad: bool,
 }
 
@@ -226,12 +227,18 @@ pub fn read(path: &Path, device: Device) -> std::io::Result<Map> {
         _ => j49::nand::BLOCK_RAW,
     };
     let total = std::fs::metadata(path)?.len() as usize / raw_block;
-    scan(BufReader::with_capacity(raw_block * 8, File::open(path)?), total, device)
+    let listed = (device == Device::Diamond3).then(|| nand::read_bad_blocks(&nand::bad_blocks_path(path)))
+        .transpose().unwrap_or_else(|e| {
+            log::warn!("{e}");
+            None
+        }).flatten();
+    scan(BufReader::with_capacity(raw_block * 8, File::open(path)?), total, device, listed.as_deref())
 }
 
 type BlockTest = fn(&[u8]) -> bool;
 
-fn scan(mut reader: impl Read, total: usize, device: Device) -> std::io::Result<Map> {
+/// `listed`: the offsets of the blocks a gen 3 image's list names as bad.
+fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u32]>) -> std::io::Result<Map> {
     let (raw_block, block_size, bad, erased): (usize, usize, BlockTest, BlockTest) = match device {
         Device::Diamond3 => (diamond3::nand::BLOCK as usize, diamond3::nand::BLOCK as usize, |_| false, |block| block.iter().all(|&b| b == 0xff)),
         // A file system marks a block it erased in the spare bytes, which
@@ -277,6 +284,9 @@ fn scan(mut reader: impl Read, total: usize, device: Device) -> std::io::Result<
                 }
             }
         }
+        if listed.is_some_and(|listed| listed.contains(&((index * block_size) as u32))) {
+            block = Block::Bad;
+        }
         blocks.push(block);
     }
     let (mut partitions, mut owners) = match device {
@@ -295,7 +305,7 @@ fn scan(mut reader: impl Read, total: usize, device: Device) -> std::io::Result<
         Some((first, last)) => {
             let ids: BTreeSet<u32> = table_of_volumes.keys().copied().chain(written.iter().map(|w| w.1)).collect();
             // The partition's own blocks UBI does not know, kept on the grid.
-            let foreign: Vec<usize> = (first..=last).filter(|&block| blocks[block] == Block::Data && !written.iter().any(|w| w.0 == block)).collect();
+            let foreign: Vec<usize> = (first..=last).filter(|&block| blocks[block] != Block::Erased && !written.iter().any(|w| w.0 == block)).collect();
             let mut slots = chip_order(0..first, &owners);
             let start = slots.len();
             for id in ids {
@@ -327,7 +337,7 @@ fn scan(mut reader: impl Read, total: usize, device: Device) -> std::io::Result<
         }
     };
     let by_volume = ubi.is_some();
-    Ok(Map { blocks, partitions, owners, slots, by_volume, block_size, shows_bad: device != Device::Diamond3 })
+    Ok(Map { blocks, partitions, owners, slots, by_volume, block_size, shows_bad: device != Device::Diamond3 || listed.is_some() })
 }
 
 /// Maps read so far, and the ones being read.
@@ -548,7 +558,7 @@ mod tests {
         let block = diamond3::nand::BLOCK as usize;
         let mut image = vec![0xffu8; 4 * block];
         image[2 * block] = 1;
-        let map = scan(std::io::Cursor::new(image), 4, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 4, Device::Diamond3, None).unwrap();
         assert_eq!(map.used(), 1);
         assert_eq!(map.partition_of(2), None);
     }
@@ -575,10 +585,53 @@ mod tests {
 
     #[test]
     fn only_a_gen2_image_counts_bad_blocks() {
-        let gen3 = scan(std::io::Cursor::new(vec![0xffu8; diamond3::nand::BLOCK as usize]), 1, Device::Diamond3).unwrap();
+        let gen3 = scan(std::io::Cursor::new(vec![0xffu8; diamond3::nand::BLOCK as usize]), 1, Device::Diamond3, None).unwrap();
         assert_eq!(gen3.summary(), format!("{} used", crate::backups::size_label(0)));
-        let gen2 = scan(std::io::Cursor::new(vec![0xffu8; j49::nand::BLOCK_RAW]), 1, Device::J49).unwrap();
+        let gen2 = scan(std::io::Cursor::new(vec![0xffu8; j49::nand::BLOCK_RAW]), 1, Device::J49, None).unwrap();
         assert_eq!(gen2.summary(), format!("{} used · 0 bad blocks", crate::backups::size_label(0)));
+    }
+
+    #[test]
+    fn a_gen3_images_list_shows_its_blocks_as_bad_where_they_lie() {
+        let block = diamond3::nand::BLOCK as usize;
+        let mut image = vec![0xffu8; 12 * block];
+        image[0] = 1;
+        let mut put = |index: usize, data: Vec<u8>| image[index * block..(index + 1) * block].copy_from_slice(&data);
+        put(2, leb(0, 0));
+        // Uncorrectable and kept as read, in logical block 1 of env0.
+        put(3, leb(0, 1));
+        // Bad on the chip, so erased in the image, among UBI's blocks.
+        put(5, ubi(Some(UBI_LAYOUT_VOLUME), &reserving(&[("env0", 2)])));
+        // Uncorrectable where the volume's header would be: formatted and free otherwise.
+        put(6, ubi(None, &[]));
+        put(7, ubi(None, &[]));
+        let listed = [3, 4, 6].map(|index| (index * block) as u32);
+        let map = scan(std::io::Cursor::new(image), 12, Device::Diamond3, Some(&listed)).unwrap();
+        assert_eq!(map.bad(), 3);
+        assert_eq!(map.summary(), format!("{} used · 3 bad blocks", crate::backups::size_label(3 * block as u64)));
+        assert_eq!(map.partition_of(3).unwrap().name, "env0", "kept in its volume");
+        let places = |index: usize| map.slots.iter().filter(|slot| slot.block == Some(index)).count();
+        assert_eq!([places(3), places(4), places(6)], [1, 1, 1], "each has a place to show red in");
+        assert_eq!(map.slots.len(), 12, "as many places as the chip has blocks");
+        assert_eq!(map.blocks[7], Block::Erased);
+    }
+
+    #[test]
+    fn the_list_beside_a_gen3_image_reaches_its_map_and_a_gen2_image_ignores_one() {
+        let block = diamond3::nand::BLOCK as usize;
+        let path = temp("listed.bin");
+        std::fs::write(&path, vec![0xffu8; 4 * block]).unwrap();
+        assert!(!read(&path, Device::Diamond3).unwrap().shows_bad, "an older backup has no list");
+        let list = nand::bad_blocks_path(&path);
+        std::fs::write(&list, format!("{:08x}\n", 2 * block)).unwrap();
+        let map = read(&path, Device::Diamond3).unwrap();
+        assert!(map.shows_bad);
+        assert_eq!(map.blocks[2], Block::Bad);
+        assert_eq!(read(&path, Device::J49).unwrap().bad(), 0);
+        std::fs::write(&list, "garbled\n").unwrap();
+        assert!(!read(&path, Device::Diamond3).unwrap().shows_bad, "a broken list is no list");
+        std::fs::remove_file(list).unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -636,7 +689,7 @@ mod tests {
         }
         put(34, ubi(Some(UBI_LAYOUT_VOLUME), &names));
         put(39, ubi(None, &[]));
-        let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3, None).unwrap();
         for (block, name, kind) in [(0, "U-Boot", Kind::Uboot), (32, "root0", Kind::Root0), (33, "env0", Kind::Env),
                                     (35, "system-config", Kind::SystemConfig), (36, "root1", Kind::Root1),
                                     (37, "scratch", Kind::Other), (38, "root0", Kind::Root0)] {
@@ -701,7 +754,7 @@ mod tests {
             put(index, ubi(None, &[]));
         }
         image[19 * block] = 2;
-        let map = scan(std::io::Cursor::new(image), 20, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 20, Device::Diamond3, None).unwrap();
         assert!(map.by_volume);
         let names: Vec<(&str, Option<usize>)> = map.slots.iter().map(|slot| {
             (slot.owner.and_then(|o| map.partitions.get(o)).map_or("-", |p| p.name.as_str()), slot.block)
@@ -723,14 +776,14 @@ mod tests {
         for (index, data) in [(1, leb(0, 0)), (2, leb(0, 0)), (3, ubi(Some(UBI_LAYOUT_VOLUME), &reserving(&[("env0", 1)])))] {
             image[index * block..(index + 1) * block].copy_from_slice(&data);
         }
-        let map = scan(std::io::Cursor::new(image), 6, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 6, Device::Diamond3, None).unwrap();
         let held: Vec<usize> = map.slots.iter().filter_map(|slot| slot.block).filter(|&b| map.blocks[b] == Block::Data).collect();
         assert!(held.contains(&1) && held.contains(&2), "{held:?}");
     }
 
     #[test]
     fn a_gen2_grid_is_the_chip_in_order() {
-        let map = scan(std::io::Cursor::new(vec![0xffu8; 3 * j49::nand::BLOCK_RAW]), 3, Device::J49).unwrap();
+        let map = scan(std::io::Cursor::new(vec![0xffu8; 3 * j49::nand::BLOCK_RAW]), 3, Device::J49, None).unwrap();
         assert!(!map.by_volume);
         assert_eq!(map.slots.iter().map(|slot| slot.block).collect::<Vec<_>>(), [Some(0), Some(1), Some(2)]);
     }
@@ -746,7 +799,7 @@ mod tests {
         for index in 36..39 { put(index, 2, &[]); }
         put(39, 0, &[]);
         put(40, UBI_LAYOUT_VOLUME, &names);
-        let map = scan(std::io::Cursor::new(image), 56, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 56, Device::Diamond3, None).unwrap();
         let cell = |blocks: Range<usize>| blocks.map(|block| Slot { block: Some(block), owner: map.owners[block] }).collect::<Vec<_>>();
         assert_eq!(map.kind_of(map.shown_block(&cell(32..36)).unwrap()), Kind::Root1, "three of root1 to one of root0");
         assert_eq!(map.kind_of(map.shown_block(&cell(36..40)).unwrap()), Kind::Env, "env's one block among root1's");
@@ -763,7 +816,7 @@ mod tests {
             image[index * block..(index + 1) * block].copy_from_slice(&ubi(Some(volume), &[]));
         }
         image[37 * block..38 * block].copy_from_slice(&ubi(Some(UBI_LAYOUT_VOLUME), &names));
-        let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3).unwrap();
+        let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3, None).unwrap();
         let color = egui::Color32::WHITE;
         let colors = Colors { uboot: color, env: color, system_config: color, root0: color, root1: color, other: color, erased: color, bad: color };
         let output = egui::Context::default().run_ui(egui::RawInput {

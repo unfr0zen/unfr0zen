@@ -7,6 +7,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use unfr0zen_core::diamond3::nand::{BLOCK, NAND_SIZE};
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::{Device, Result};
 
@@ -56,6 +57,31 @@ pub fn checksum_path(image: &Path) -> PathBuf {
     let mut name = image.as_os_str().to_owned();
     name.push(".sha256");
     PathBuf::from(name)
+}
+
+/// The .bad written beside a gen 3 image: the offsets of the blocks that hold
+/// no reliable data, one per line, since the image itself cannot mark them.
+pub fn bad_blocks_path(image: &Path) -> PathBuf {
+    let mut name = image.as_os_str().to_owned();
+    name.push(".bad");
+    PathBuf::from(name)
+}
+
+pub(crate) fn write_bad_blocks(path: &Path, blocks: &[u32]) -> Result<()> {
+    let text: String = blocks.iter().map(|block| format!("{block:08x}\n")).collect();
+    file(path, fs::write(path, text))
+}
+
+/// The blocks a list holds, or None without a list.
+pub fn read_bad_blocks(path: &Path) -> Result<Option<Vec<u32>>> {
+    let text = match fs::read_to_string(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        text => file(path, text)?,
+    };
+    text.lines().map(|line| {
+        u32::from_str_radix(line, 16).ok().filter(|block| block % BLOCK == 0 && *block < NAND_SIZE)
+            .ok_or_else(|| failure(format!("{}: {line:?} is not a block offset", path.display())))
+    }).collect::<Result<Vec<u32>>>().map(Some)
 }
 
 /// The SHA-256 the .sha256 beside a restore's image records.
@@ -113,6 +139,25 @@ mod tests {
     #[test]
     fn the_checksum_sits_beside_the_image() {
         assert_eq!(checksum_path(Path::new("dir/nand.bin")), Path::new("dir/nand.bin.sha256"));
+    }
+
+    #[test]
+    fn a_bad_block_list_reads_back_and_refuses_what_is_no_block() {
+        let dir = std::env::temp_dir().join(format!("unfr0zen-nand-bad-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = bad_blocks_path(&dir.join("nand.bin"));
+        assert_eq!(path.file_name().unwrap(), "nand.bin.bad");
+        assert_eq!(read_bad_blocks(&path).unwrap(), None);
+        write_bad_blocks(&path, &[]).unwrap();
+        assert_eq!(read_bad_blocks(&path).unwrap(), Some(Vec::new()));
+        write_bad_blocks(&path, &[0x0c00_0000, 0x1c42_0000]).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "0c000000\n1c420000\n");
+        assert_eq!(read_bad_blocks(&path).unwrap(), Some(vec![0x0c00_0000, 0x1c42_0000]));
+        for wrong in ["garbled\n", "00000800\n", "20000000\n"] {
+            fs::write(&path, wrong).unwrap();
+            assert!(read_bad_blocks(&path).is_err(), "{wrong}");
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

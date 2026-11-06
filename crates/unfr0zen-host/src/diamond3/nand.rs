@@ -8,6 +8,12 @@
 //! the same command again resumes an interrupted backup. Bad blocks are kept
 //! in the image as erased, at their own offsets.
 //!
+//! A block with a page the ECC cannot correct does not stop a backup: it is
+//! kept in the image as read, the rest of its pages intact. It reads
+//! differently each time, so a verify leaves it out. The .bad list beside the
+//! image names these blocks and the bad ones. Any other block that reads
+//! uncorrectable fails a verify, as it does a restore's read-back.
+//!
 //! A restore writes such a backup back, beside its .sha256. Two areas are not
 //! copied from the image: the FCB blocks, whose ROM encoding a BCH18 read
 //! cannot capture, and the last four blocks, which hold this chip's own bad
@@ -28,7 +34,7 @@ use super::usb;
 use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon, Board};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
-use crate::nand::{checksum_path, file, read_at, read_checked, recorded_sha256, Job};
+use crate::nand::{bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
 use crate::progress::{stage, stage_with, Progress};
 
 /// Whether a whole-NAND image of `len` bytes is a diamond3's: its
@@ -102,7 +108,7 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
         Job::Backup(out) => {
             let parts = out.with_extension("parts");
             hand_back.0.push(parts.clone());
-            backup(&mut unit, progress, out, &parts)?;
+            let uncorrectable = backup(&mut unit, progress, out, &parts)?;
             verify(&mut unit, progress, out)?;
             let checksum = checksum_path(out);
             let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
@@ -110,8 +116,12 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
             file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
             file(&parts, fs::remove_dir_all(&parts))?;
             hand_back.0.pop();
-            hand_back.0.extend([out.clone(), checksum]);
-            format!("NAND backup verified: {} ({NAND_SIZE} bytes, SHA-256 {sha})", out.display())
+            hand_back.0.extend([out.clone(), checksum, bad_blocks_path(out)]);
+            let kept = match uncorrectable {
+                0 => String::new(),
+                count => format!("; {count} blocks with uncorrectable pages kept as read and left out of the check"),
+            };
+            format!("NAND backup verified: {} ({NAND_SIZE} bytes, SHA-256 {sha}){kept}", out.display())
         }
         Job::Verify(image) => {
             verify(&mut unit, progress, image)?;
@@ -128,17 +138,30 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     Ok(message)
 }
 
-fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path) -> Result<()> {
+/// Writes the image and its bad block list. Returns how many blocks have
+/// uncorrectable pages.
+fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path) -> Result<usize> {
     file(parts, fs::create_dir_all(parts))?;
     let part = |offset: u32| parts.join(format!("{offset:08x}.bin"));
-    // Parts are renamed into place only once read and checked.
+    // Parts are renamed into place only once read and checked, each after its list.
     each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |offset, size| {
         let part = part(offset);
-        let data = unit.board.read_nand(offset, size, &unit.bad)?;
+        let (data, uncorrectable) = unit.board.read_nand(offset, size, &unit.bad)?;
+        if !uncorrectable.is_empty() {
+            log::warn!("NAND blocks {uncorrectable:#x?} have uncorrectable pages; kept as read");
+        }
+        write_bad_blocks(&part.with_extension("bad"), &uncorrectable)?;
         let partial = part.with_extension("tmp");
         file(&partial, fs::write(&partial, &data))?;
         file(&part, fs::rename(&partial, &part))
     })?;
+    let mut listed = unit.bad.clone();
+    for (offset, _) in all_chunks() {
+        listed.extend(read_bad_blocks(&part(offset).with_extension("bad"))?.unwrap_or_default());
+    }
+    let uncorrectable = listed.len() - unit.bad.len();
+    listed.sort_unstable();
+    write_bad_blocks(&bad_blocks_path(out), &listed)?;
     let partial = out.with_extension("tmp");
     file(&partial, File::create(&partial).and_then(|mut image| {
         for (offset, _) in all_chunks() {
@@ -146,14 +169,33 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
         }
         Ok(())
     }))?;
-    file(out, fs::rename(&partial, out))
+    file(out, fs::rename(&partial, out))?;
+    Ok(uncorrectable)
+}
+
+/// Erases `blocks` in `data`, the part of an image at `offset`, as a read that
+/// skips them leaves the buffer.
+fn erase_blocks(data: &mut [u8], offset: u32, blocks: &[u32]) {
+    for &block in blocks {
+        if block >= offset && ((block - offset) as usize) < data.len() {
+            let start = (block - offset) as usize;
+            let end = data.len().min(start + BLOCK as usize);
+            data[start..end].fill(0xff);
+        }
+    }
 }
 
 fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<()> {
+    let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
+    let skipped = [unit.bad.as_slice(), listed.as_slice()].concat();
     each_chunk(progress, "Verify", &all_chunks(), |_| false, |offset, size| {
-        let expected = read_at(image, offset.into(), size as usize)?;
+        let mut expected = read_at(image, offset.into(), size as usize)?;
+        erase_blocks(&mut expected, offset, &listed);
         if offset < BOOT_SIZE {
-            let actual = unit.board.read_nand(offset, size, &unit.bad)?;
+            let (actual, uncorrectable) = unit.board.read_nand(offset, size, &skipped)?;
+            if !uncorrectable.is_empty() {
+                return Err(failure(format!("NAND blocks {uncorrectable:#x?} have pages the ECC cannot correct")));
+            }
             let control = BOOT_CONTROL as usize;
             if actual[control..] != expected[control..] {
                 return Err(failure("the boot partition reads differently a second time outside the boot-control blocks"));
@@ -162,7 +204,7 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
             log::info!("Boot-control blocks: {flips} bits differ between reads");
             return Ok(());
         }
-        let (actual, expected) = (unit.board.nand_crc(offset, size, &unit.bad)?, crc32fast::hash(&expected));
+        let (actual, expected) = (unit.board.nand_crc(offset, size, &skipped)?, crc32fast::hash(&expected));
         if actual != expected {
             return Err(failure(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
                                         the image has {expected:08x}")));
@@ -195,7 +237,12 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
         return Err(failure(format!("NAND blocks {lost:#x?} are bad on this chip but hold data in {}: \
                                     it is another unit's backup, or they went bad since", image.display())));
     }
-    if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}", image.display())) {
+    let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
+    let damage = match listed.iter().filter(|block| (start..end).contains(*block) && !unit.bad.contains(*block)).count() {
+        0 => String::new(),
+        count => format!(". {count} blocks had uncorrectable pages in this backup; they are written as read, damage included"),
+    };
+    if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}{damage}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
     each_chunk(progress, "Restore", &chunks, |_| false, |offset, size| {
@@ -278,6 +325,16 @@ mod tests {
         fn transfer(&mut self, done: u64, next: u64, total: u64) {
             self.transfers.push((done, next, total));
         }
+    }
+
+    #[test]
+    fn only_the_listed_blocks_of_a_chunk_are_erased() {
+        let block = BLOCK as usize;
+        let mut data = vec![1u8; 3 * block];
+        erase_blocks(&mut data, BOOT_SIZE, &[0, BOOT_SIZE + BLOCK, BOOT_SIZE + 3 * BLOCK]);
+        assert!(data[..block].iter().all(|&b| b == 1));
+        assert!(data[block..2 * block].iter().all(|&b| b == 0xff));
+        assert!(data[2 * block..].iter().all(|&b| b == 1));
     }
 
     #[test]

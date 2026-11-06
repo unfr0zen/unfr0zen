@@ -72,12 +72,14 @@ impl Library {
         self.dir.join(nand::default_backup())
     }
 
-    /// Removes the image and its checksum.
+    /// Removes the image, its checksum and its bad block list.
     pub fn delete(&mut self, path: &Path) -> std::io::Result<()> {
         std::fs::remove_file(path)?;
-        match std::fs::remove_file(nand::checksum_path(path)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-            _ => {}
+        for sidecar in [nand::checksum_path(path), nand::bad_blocks_path(path)] {
+            match std::fs::remove_file(sidecar) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            }
         }
         self.refresh();
         Ok(())
@@ -174,11 +176,12 @@ mod tests {
     }
 
     #[test]
-    fn the_library_keeps_a_selection_while_it_exists_and_deletes_the_checksum_too() {
+    fn the_library_keeps_a_selection_while_it_exists_and_deletes_the_sidecars_too() {
         let dir = temp_dir("library");
         let a = image(&dir, "a.bin", 512 << 20);
         let b = image(&dir, "b.bin", 512 << 20);
         fs::write(nand::checksum_path(&b), "ff  b.bin\n").unwrap();
+        fs::write(nand::bad_blocks_path(&b), "0c000000\n").unwrap();
         let mut library = Library::new(dir.clone());
         library.refresh();
         assert!(library.selected.is_some(), "the newest is selected by default");
@@ -186,7 +189,7 @@ mod tests {
         library.refresh();
         assert_eq!(library.selected().unwrap().path, b);
         library.delete(&b).unwrap();
-        assert!(!b.exists() && !nand::checksum_path(&b).exists());
+        assert!(!b.exists() && !nand::checksum_path(&b).exists() && !nand::bad_blocks_path(&b).exists());
         assert_eq!(library.selected().unwrap().path, a, "the selection moves to what is left");
         assert!(library.fresh_path().starts_with(&dir));
         assert!(library.fresh_path().file_name().unwrap().to_string_lossy().starts_with("nand-"));

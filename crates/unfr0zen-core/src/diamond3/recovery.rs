@@ -582,6 +582,10 @@ pub(crate) mod tests {
         corrupt_uploads: bool,
         /// `nand read` reports an uncorrectable ECC error (and reads anyway).
         pub(crate) ecc_errors: bool,
+        /// Blocks whose reads report an uncorrectable ECC error (and read anyway).
+        pub(crate) uncorrectable: Vec<u32>,
+        /// How many reads report an uncorrectable ECC error before reads come back clean.
+        pub(crate) flaky_reads: usize,
         /// `nand write` flips a bit on its way to NAND.
         pub(crate) corrupt_writes: bool,
         dram: u64,
@@ -652,7 +656,10 @@ pub(crate) mod tests {
                     let mut data = self.nand.get(&offset).cloned().unwrap_or_default();
                     data.resize(length, 0xff);
                     self.ram.push((address, data));
-                    if self.ecc_errors {
+                    let end = offset + length as u32;
+                    let flaky = self.flaky_reads > 0;
+                    self.flaky_reads = self.flaky_reads.saturating_sub(1);
+                    if self.ecc_errors || flaky || self.uncorrectable.iter().any(|&b| b < end && offset < b + 0x2_0000) {
                         return format!("\nNAND read: device 0 offset {offset:#x}, size {length:#x}\n\
                                         NAND read from offset {offset:x} failed -74\n {length} bytes read: ERROR\n");
                     }
