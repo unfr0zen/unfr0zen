@@ -12,7 +12,10 @@ reached it. A release tag runs the release workflow alone, with the image's.
 The build image's tag is the Dockerfile's SHA-256, twelve hex
 digits, as utils/ci/.circleci/config.yml publishes it. The configs are
 rendered on their way: __ZBWAKE_RELEASES__ becomes the list of gen 3 releases
-of platform/diamond3/zbwake/releases, for the zbwake matrix.
+of platform/diamond3/zbwake/releases, for the zbwake matrix. A fork's pull
+request (FORK=true) is rendered without the docker-hub context and the
+executors' Docker Hub credentials, and never publishes the image: the image is
+public, and a fork's code gets no secret.
 
     utils/ci/configs.py setup PARAMETERS CONFIG-LIST
         In the setup job: rewrites the parameters file the path-filtering orb
@@ -24,6 +27,7 @@ of platform/diamond3/zbwake/releases, for the zbwake matrix.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,14 +69,21 @@ def configs_for(parameters):
     return [COMMON] + [CONFIGS[name][0] for name in CONFIGS if name in selected]
 
 
-def render(configs, directory=RENDERED):
-    """Copies of the configs with their placeholders filled, in directory."""
+def render(configs, directory=RENDERED, fork=False):
+    """Copies of the configs with their placeholders filled, in directory;
+    for a fork, without a context or registry credentials."""
     with open(ZBWAKE_RELEASES) as f:
         releases = json.dumps(f.read().split())
     rendered = []
     for config in configs:
         with open(config) as f:
             text = f.read().replace("__ZBWAKE_RELEASES__", releases)
+        if fork:
+            text = re.sub(r"^( *)context: docker-hub$", r"\1context: []", text, flags=re.M)
+            text = re.sub(r"^( *)auth:\n\1  username: \$DOCKERHUB_USER\n\1  password: \$DOCKERHUB_TOKEN\n", "",
+                          text, flags=re.M)
+            if re.search(r"^ *(context: (?!\[\]$)|auth:)", text, flags=re.M):
+                sys.exit(f"{config}: a context or credentials left in a fork's config")
         path = os.path.join(directory, config.replace("/", "-"))
         os.makedirs(directory, exist_ok=True)
         with open(path, "w") as f:
@@ -95,22 +106,29 @@ def setup(parameters_path, config_list_path):
         # The image only when its Dockerfile changed: this one publishes it.
         parameters = {name: True for name in CONFIGS if name not in ("build-image", "release")} \
             | {"build-image": parameters.get("build-image", False)}
+    fork = os.environ.get("FORK") == "true"
+    if fork:
+        parameters["build-image"] = False
     parameters["image"] = image_tag()
     with open(parameters_path, "w") as f:
         json.dump(parameters, f)
     configs = configs_for(parameters)
     with open(config_list_path, "w") as f:
-        f.writelines(config + "\n" for config in render(configs))
+        f.writelines(config + "\n" for config in render(configs, fork=fork))
     print(json.dumps(parameters, indent=1))
     print("configs:", *configs)
 
 
 def validate():
-    selections = [{}] + [{name: True} for name in CONFIGS] + [{name: True for name in CONFIGS}]
+    every = [{}] + [{name: True} for name in CONFIGS] + [{name: True for name in CONFIGS}]
+    # A fork's pull request never publishes the image or releases.
+    forks = [name for name in CONFIGS if name not in ("build-image", "release")]
+    selections = [(parameters, False) for parameters in every] \
+        + [(parameters, True) for parameters in [{name: True} for name in forks] + [dict.fromkeys(forks, True)]]
     failed = False
-    for parameters in selections:
+    for parameters, fork in selections:
         configs = configs_for(parameters)
-        rendered = render(configs, tempfile.mkdtemp())
+        rendered = render(configs, tempfile.mkdtemp(), fork)
         merged = subprocess.run(["yq", "eval-all", "explode(.) | . as $item ireduce ({}; . * $item )", *rendered],
                                 check=True, capture_output=True, text=True).stdout
         with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
@@ -121,7 +139,7 @@ def validate():
         os.unlink(f.name)
         status = "ok" if result.returncode == 0 else "FAILED"
         failed |= result.returncode != 0
-        print(f"{status}: {' '.join(sorted(parameters)) or 'nothing'} -> {len(configs)} configs")
+        print(f"{status}: {' '.join(sorted(parameters)) or 'nothing'}{' (fork)' if fork else ''} -> {len(configs)} configs")
         if result.returncode:
             print(result.stderr or result.stdout)
     sys.exit(1 if failed else 0)

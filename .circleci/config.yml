@@ -17,6 +17,11 @@ orbs:
 
 jobs:
   setup:
+    parameters:
+      fork:
+        description: A fork's pull request, continued without contexts or registry credentials.
+        type: boolean
+        default: false
     docker:
       - image: cimg/python:3.13
     resource_class: small
@@ -38,6 +43,8 @@ jobs:
           output-path: /tmp/pipeline-parameters.json
       - run:
           name: The configs to merge
+          environment:
+            FORK: << parameters.fork >>
           command: python3 utils/ci/configs.py setup /tmp/pipeline-parameters.json /tmp/filtered-config-list
       - path-filtering/generate-config:
           config-list-path: /tmp/filtered-config-list
@@ -57,8 +64,9 @@ workflows:
             tags:
               only: /.*/
   # A pull request from a fork (its branch is pull/N) waits for a member's
-  # approval before anything else runs. CircleCI continues a pipeline only
-  # within six hours of its creation; approved later, it needs a new push.
+  # approval before anything else runs, then builds without secrets.
+  # CircleCI continues a pipeline only within six hours of its creation;
+  # approved later, it needs a new push.
   setup-fork:
     when:
       matches: { pattern: "^pull/[0-9]+$", value: << pipeline.git.branch >> }
@@ -67,3 +75,4 @@ workflows:
           type: approval
       - setup:
           requires: [hold]
+          fork: true
