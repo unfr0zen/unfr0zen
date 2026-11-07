@@ -1,0 +1,53 @@
+blueprint:
+  name: Nest external temperature (unfr0zen)
+  description: >-
+    Sends a thermometer's reading to a Nest thermostat installed with unfr0zen's
+    external temperature option, which then regulates from it. Temperatures in °F are
+    converted to °C. If the thermometer stops reporting, the thermostat goes back
+    to its own sensor by itself.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/external-temperature-mqtt.yaml
+  input:
+    thermostat:
+      name: Thermostat
+      description: The Nest thermostat running unfr0zen's nestlocal.
+      selector:
+        device:
+          filter:
+            - integration: mqtt
+              manufacturer: Google Nest
+    temperature:
+      name: Room temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+
+mode: restart
+variables:
+  thermostat: !input thermostat
+  temperature: !input temperature
+triggers:
+  - trigger: state
+    entity_id: !input temperature
+  # A reading counts for 30 minutes, so an unchanged one is sent again.
+  - trigger: time_pattern
+    minutes: /10
+  - trigger: homeassistant
+    event: start
+conditions:
+  # Nothing is sent for a reading that is not a number (unavailable, ...).
+  - condition: template
+    value_template: "{{ states(temperature) | float(none) is number }}"
+actions:
+  # Not retained: a retained reading would reach a restarted nestlocal as a new
+  # one, however old it is.
+  - action: mqtt.publish
+    data:
+      topic: "nestlocal/{{ device_attr(thermostat, 'serial_number') }}/set/external_temperature"
+      payload: >-
+        {%- set reading = states(temperature) | float -%}
+        {{ ((reading - 32) * 5 / 9) | round(2)
+           if state_attr(temperature, 'unit_of_measurement') == '°F'
+           else reading }}
