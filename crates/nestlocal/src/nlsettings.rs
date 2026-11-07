@@ -58,6 +58,20 @@ pub fn set(b: &[u8], key: &str, value: &str) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// b without the lines of key's entries.
+pub fn remove(b: &[u8], key: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(b.len());
+    let mut at = 0;
+    for (start, end, _) in entries(b, key) {
+        let line = b[..start].iter().rposition(|&c| c == b'\n').map_or(0, |i| i + 1);
+        let next = if b.get(end) == Some(&b'\n') { end + 1 } else { end };
+        out.extend_from_slice(&b[at..line]);
+        at = next;
+    }
+    out.extend_from_slice(&b[at..]);
+    out
+}
+
 /// Replaces the file at path with b, through a sibling and a rename.
 pub fn write(path: &Path, b: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();

@@ -23,6 +23,7 @@ pub static DEVICE: Device = Device {
     },
     ble: Some(Ble {
         uart: "/dev/ttyble0",
+        node: "/dev/ttymxc4",
         reset: "/sys/bus/platform/devices/0.ble0-da14580-gpios/reset",
         firmware: "/usr/share/dialog/data/firmware/nl_ble_peripheral_app_firmware.bin",
     }),

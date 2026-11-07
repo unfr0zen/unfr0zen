@@ -221,6 +221,17 @@ impl Bridge {
                 }
             }
 
+            // Not a bucket: the stand-in sensor's reading (sensor/).
+            "external_temperature" => {
+                let Some(sensor) = self.sensor.get() else {
+                    return Err("this unit runs without -external-temperature".into());
+                };
+                let v = float(arg).ok_or("expected a temperature")?;
+                sensor.set(v)?;
+                logf!("external temperature: reading {v} °C");
+                Ok(None)
+            }
+
             "outdoor_humidity" => match float(arg) {
                 Some(v) if (0.0..=100.0).contains(&v) => {
                     self.outdoor.set(None, Some(v));
@@ -265,6 +276,23 @@ mod tests {
     use crate::fields;
     use crate::json::{canonical, num};
     use serde_json::{json, Value};
+
+    #[test]
+    fn an_external_temperature_needs_the_sensor_and_a_sane_number() {
+        let b = test_bridge();
+        assert!(b.fields("external_temperature", "21.5").is_err(), "no -external-temperature");
+        let dir = std::env::temp_dir().join(format!("nestlocal-commands-sensor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"),
+                                                 std::time::Duration::from_secs(1800)).unwrap();
+        b.attach_sensor(sensor.clone());
+        assert_eq!(b.fields("external_temperature", "21.5"), Ok(None));
+        assert_eq!(sensor.reading(), Some(21.5));
+        for bad in ["unavailable", "", "NaN", "95"] {
+            assert!(b.fields("external_temperature", bad).is_err(), "{bad}");
+        }
+        assert_eq!(sensor.reading(), Some(21.5));
+    }
 
     #[test]
     fn display_wake_requires_a_changed_setting() {

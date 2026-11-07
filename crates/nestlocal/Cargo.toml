@@ -6,7 +6,9 @@ edition.workspace = true
 description = "Nest's service stood in for on the thermostat itself, bridged to Home Assistant over MQTT"
 
 [dependencies]
+aes = "0.9"
 bytes = "1"
+ccm = "0.6"
 png = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 http-body = "1"

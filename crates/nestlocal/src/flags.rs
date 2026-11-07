@@ -17,6 +17,9 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("cert", Kind::Text, "/etc/nestlocal/server.crt", "TLS certificate (signed by the CA added to ca-bundle.pem)"),
     ("discovery", Kind::Text, "homeassistant", "Home Assistant discovery prefix"),
     ("doom", Kind::Bool, "false", "offer Doom on the UNFR0ZEN screen and launch it from there (doom.rs)"),
+    ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 3 only"),
+    ("external-temperature-store", Kind::Text, "/media/data/nestlocal-sensor.json", "where the stand-in sensor's identity is kept"),
+    ("external-temperature-timeout", Kind::Duration, "30m", "how long the last reading counts; nlclient goes back to the backplate about 11.5 minutes after that"),
     ("hold", Kind::Duration, "290s", "how long an idle subscribe is held"),
     ("key", Kind::Text, "/etc/nestlocal/server.key", "TLS key"),
     ("listen", Kind::Text, "127.0.0.1:443", "HTTPS address nlclient's cloudregisterurl points at"),
@@ -49,6 +52,9 @@ pub struct Config {
     pub cert: String,
     pub discovery: String,
     pub doom: bool,
+    pub external_temperature: bool,
+    pub external_temperature_store: String,
+    pub external_temperature_timeout: Duration,
     pub hold: Duration,
     pub key: String,
     pub listen: String,
@@ -189,6 +195,9 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
     if flag("matter-thread") && (flag("zigbee") || get("wake-iface").is_empty()) {
         return Err(Some("-matter-thread requires exclusive radio access (-zigbee=false) and a nonempty -wake-iface".into()));
     }
+    if flag("external-temperature") && get("mqtt").is_empty() && !flag("matter") && !flag("matter-thread") && !flag("zigbee") {
+        return Err(Some("-external-temperature takes its readings over -mqtt, -matter or -zigbee".into()));
+    }
     let matter_passcode = get("matter-passcode").parse::<u32>().ok()
         .filter(|p| crate::matter::check_passcode(*p).is_ok())
         .ok_or_else(|| Some(format!("invalid value {:?} for flag -matter-passcode", get("matter-passcode"))))?;
@@ -198,6 +207,9 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         cert: get("cert"),
         discovery: get("discovery"),
         doom: flag("doom"),
+        external_temperature: flag("external-temperature"),
+        external_temperature_store: get("external-temperature-store"),
+        external_temperature_timeout: duration("external-temperature-timeout"),
         hold: duration("hold"),
         key: get("key"),
         listen: get("listen"),

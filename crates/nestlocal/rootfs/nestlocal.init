@@ -22,7 +22,16 @@ start)
     # firmware 6.4-8 moves a unit with no structure to Nest's newer service
     # (crates/nestlocal/src/structure.rs).
     ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}`
+    rm -f /var/run/unfr0zen/external-temperature.ready
     start-stop-daemon -S -q -b -m -p ${PIDFILE} -x ${DAEMON} -- -syslog `cat ${OPTIONS}`
+    # nlclient opens the BLE chip's UART as it starts: with the stand-in sensor
+    # it must find nestlocal's stand-in there (crates/nestlocal/src/sensor/).
+    if grep -q -- '-external-temperature' "$OPTIONS"; then
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            [ ! -e /var/run/unfr0zen/external-temperature.ready ] || break
+            sleep 1
+        done
+    fi
     ;;
 stop)
     start-stop-daemon -K -q -p ${PIDFILE} -x ${DAEMON}

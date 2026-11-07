@@ -20,6 +20,7 @@ mod matter;
 mod mqtt;
 mod mqtttls;
 mod nlsettings;
+mod sensor;
 mod store;
 mod settings_ui;
 mod structure;
@@ -97,6 +98,12 @@ fn main() {
         return;
     }
 
+    #[cfg(target_os = "linux")]
+    if let (true, Some(ble)) = (config.external_temperature, device::current().ble.as_ref()) {
+        if let Err(e) = sensor::port::start_holder(ble) {
+            logf!("external temperature: {e}");
+        }
+    }
     entropy::seed();
     install_crypto();
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
@@ -112,6 +119,51 @@ fn prepare_settings(config: &flags::Config) {
         Ok(false) => {}
         Err(e) => fatal!("{e}"),
     }
+    let identity = std::path::Path::new(&config.external_temperature_store);
+    if !config.external_temperature {
+        if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
+            logf!("external temperature: {e}");
+        }
+    } else if device::current().ble.is_some() {
+        let store = store::Store::new(&config.state);
+        let where_id = sensor::where_id(&store, &config.serial);
+        if let Err(e) = sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref()) {
+            logf!("external temperature: {e}");
+        }
+    }
+}
+
+/// The stand-in sensor in place of the BLE chip for nlclient, or gone from a
+/// unit that no longer has the option.
+fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc<sensor::Sensor>> {
+    let identity = std::path::Path::new(&config.external_temperature_store);
+    if !config.external_temperature {
+        sensor::withdraw(identity, store, &config.serial);
+        return None;
+    }
+    let Some(ble) = device::current().ble.as_ref() else {
+        logf!("external temperature: this unit has no BLE stack in nlclient to serve");
+        return None;
+    };
+    #[cfg(not(target_os = "linux"))]
+    let _ = ble;
+    let sensor = sensor::Sensor::open(identity, &config.serial, std::path::Path::new(&config.settings), config.external_temperature_timeout);
+    let sensor = match sensor {
+        Ok(sensor) => sensor,
+        Err(e) => {
+            logf!("external temperature: {e}");
+            return None;
+        }
+    };
+    let where_id = sensor::where_id(store, &config.serial);
+    sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
+    sensor::keep_selected(store, &config.serial, &sensor.bucket);
+    #[cfg(target_os = "linux")]
+    if let Err(e) = sensor::port::start(sensor.clone(), ble, config.matter) {
+        logf!("external temperature: {e}");
+        return None;
+    }
+    Some(sensor)
 }
 
 async fn run(config: flags::Config) {
@@ -119,6 +171,7 @@ async fn run(config: flags::Config) {
     let store = store::Store::new(&config.state);
     structure::ensure_structure(&store, &config.serial);
     tokio::spawn(store.clone().save_changes());
+    let sensor = start_sensor(&config, &store);
     if !config.ntp_server.is_empty() {
         tokio::spawn(clock::keep_clock(config.ntp_server.clone()));
     }
@@ -134,6 +187,9 @@ async fn run(config: flags::Config) {
         bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
                             Some(live.clone()), wwn_boiler)
     });
+    if let (Some(bridge), Some(sensor)) = (&bridge, &sensor) {
+        bridge.attach_sensor(sensor.clone());
+    }
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {
         let password = match config.mqtt_password_file.as_str() {
