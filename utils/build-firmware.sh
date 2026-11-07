@@ -51,6 +51,15 @@ step() {  # step NAME COMMAND...: a build step, its output in .work/build-NAME.l
     run "$@" > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
 }
 
+# `utils/build-firmware.sh nestlocal` rebuilds nestlocal alone, carrying the
+# radio images and zbwake.ko already in build/.
+if [ "${1:-}" = nestlocal ]; then
+    export NESTLOCAL_RADIO="$root/build/radio/radio.bin"
+    export NESTLOCAL_RADIO_EM357="$root/build/radio-em357-zigbee/radio.bin"
+    export NESTLOCAL_ZBWAKE="$root/build/zbwake"
+    step nestlocal sh platform/common/radio/thread/nestlocal.sh
+    exit 0
+fi
 run python3 platform/diamond3/bootstrap/build_bootstrap.py
 step recovery sh platform/diamond3/uboot/build_uboot.sh
 step j49 sh platform/j49/build.sh build/j49

@@ -41,7 +41,10 @@ pub struct ChipSelect {
 /// Linux only).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct Ble {
+    /// The name nlclient opens the chip's UART by.
     pub uart: &'static str,
+    /// The UART itself.
+    pub node: &'static str,
     /// Its reset line's sysfs GPIO directory.
     pub reset: &'static str,
     /// Nest's firmware for it, which nestlocal loads into its RAM.

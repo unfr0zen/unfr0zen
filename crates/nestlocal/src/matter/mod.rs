@@ -71,7 +71,7 @@ use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
-use extras::{Backplate, Battery, Display, Fan, FanTimer, Humidity, Labels, Switch, Switches};
+use extras::{Backplate, Battery, Display, ExternalTemperature, Fan, FanTimer, Humidity, Labels, Switch, Switches, TemperatureSource};
 use thermostat::Thermostat;
 
 /// The endpoint the thermostat is on.
@@ -102,6 +102,16 @@ pub struct Nest {
 }
 
 impl Nest {
+    /// The stand-in sensor's reading while it is fresh.
+    pub fn external_reading(&self) -> Option<f64> {
+        self.bridge.sensor.get().and_then(|sensor| sensor.reading())
+    }
+
+    /// The sensor regulating, when the unit has the external one.
+    pub fn temperature_source(&self) -> Option<&'static str> {
+        self.bridge.temperature_source()
+    }
+
     /// The buckets and the computed state, as of now.
     pub fn view(&self) -> View {
         let buckets = self.bridge.buckets();
@@ -272,7 +282,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let crypto = default_crypto(rand::rng(), DAC_PRIVKEY);
     let rand = crypto.rand()?;
     let switches = extras::switches(&nest);
-    let node = node_for_network(view.device_flag("has_fan"), &switches, settings.thread);
+    let node = node_for_network(view.device_flag("has_fan"), &switches, settings.thread, nest.bridge.sensor.get().is_some());
     let im = InteractionModel::new_with_net_ctl(&matter, &crypto, &buffers,
         data_model(node, rand, nest.clone(), switches, &controller, settings.thread), &kv, &controller, &state);
     futures_lite::future::block_on(im.startup())?;
@@ -425,11 +435,11 @@ const THREAD_ROOT: Endpoint<'static> = Endpoint::new(
 /// equipment calls for (a fan, its switches).
 #[cfg(test)]
 fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
-    node_for_network(has_fan, switches, false)
+    node_for_network(has_fan, switches, false, false)
 }
 
-fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool) -> Node<'static> {
-    use extras::{BACKPLATE, BATTERY, FAN, FAN_TIMER};
+fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: bool) -> Node<'static> {
+    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut endpoints = vec![
         if thread { THREAD_ROOT } else { ROOT },
         Endpoint::new(
@@ -461,6 +471,18 @@ fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool) -> Node<'s
             clusters!(desc::DescHandler::CLUSTER, FanTimer::CLUSTER, Labels::CLUSTER),
         ));
     }
+    if external {
+        endpoints.push(Endpoint::new(
+            EXTERNAL_TEMPERATURE,
+            devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, ExternalTemperature::CLUSTER, Labels::CLUSTER),
+        ));
+        endpoints.push(Endpoint::new(
+            TEMPERATURE_SOURCE,
+            devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, TemperatureSource::CLUSTER, Labels::CLUSTER),
+        ));
+    }
     for switch in switches {
         endpoints.push(Endpoint::new(
             switch.endpoint,
@@ -474,9 +496,10 @@ fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool) -> Node<'s
 /// The cluster handlers, by cluster; each serves every endpoint it is on.
 fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mut rand: impl rand::Rng + Copy + 'a, nest: Arc<Nest>, switches: Vec<Switch>, controller: &'a C, thread: bool)
               -> impl DataModel + 'a {
-    use extras::{BACKPLATE, BATTERY, FAN, FAN_TIMER};
+    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut names = vec![(BACKPLATE, "Backplate temperature"), (BATTERY, "Battery"), (FAN, "Fan"),
-                         (FAN_TIMER, "Fan timer duration")];
+                         (FAN_TIMER, "Fan timer duration"), (EXTERNAL_TEMPERATURE, "External temperature"),
+                         (TEMPERATURE_SOURCE, "Temperature source")];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
         node,
@@ -522,6 +545,14 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
             .chain(
                 |e, c| e == FAN_TIMER && c == FanTimer::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(FanTimer { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
+            )
+            .chain(
+                |e, c| e == EXTERNAL_TEMPERATURE && c == ExternalTemperature::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(ExternalTemperature { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
+            )
+            .chain(
+                |e, c| e == TEMPERATURE_SOURCE && c == TemperatureSource::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(TemperatureSource { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
             )
             .chain(
                 |e, c| e >= extras::SWITCHES && c == Switches::CLUSTER.id,

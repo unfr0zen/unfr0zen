@@ -18,7 +18,7 @@ impl Uart {
         let ble = crate::device::current().ble.as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this unit has no BLE peripheral"))?;
         let config = std::fs::read_to_string("/nestlabs/etc/product.config")?;
-        if !config.contains("key=\"ble_disabled\" value=\"1\"") {
+        if !crate::sensor::port::owns_chip() && !config.contains("key=\"ble_disabled\" value=\"1\"") {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "stock BLE owns the radio"));
         }
         let firmware = gtl::firmware(&std::fs::read(ble.firmware)?)?;
@@ -28,7 +28,7 @@ impl Uart {
             return Err(io::Error::last_os_error());
         }
         // Root can bypass TIOCEXCL, so also check nlclient's existing descriptors.
-        let device = std::fs::canonicalize(ble.uart)?;
+        let device = std::fs::canonicalize(ble.node)?;
         for process in std::fs::read_dir("/proc")?.flatten() {
             if let Ok(fds) = std::fs::read_dir(process.path().join("fd")) {
                 for fd in fds.flatten() {
@@ -43,7 +43,7 @@ impl Uart {
             let mut file = OpenOptions::new().create_new(true).write(true).mode(0o600).open(&temporary)?;
             file.write_all(&firmware)?;
             let mut child = std::process::Command::new("/nestlabs/sbin/da-loader")
-                .args([ble.uart, &temporary, "57600", "no-rtscts", ble.reset])
+                .args([ble.node, &temporary, "57600", "no-rtscts", &crate::sensor::port::reset_dir(ble)])
                 .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
             let started = Instant::now();
             loop {
@@ -128,7 +128,7 @@ impl Drop for Uart {
             libc::ioctl(fd, libc::TIOCNXCL);
         }
         if let Some(ble) = &crate::device::current().ble {
-            let _ = std::fs::write(format!("{}/value", ble.reset), b"1");
+            let _ = std::fs::write(format!("{}/value", crate::sensor::port::reset_dir(ble)), b"1");
         }
     }
 }

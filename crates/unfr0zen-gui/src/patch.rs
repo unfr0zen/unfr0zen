@@ -42,6 +42,7 @@ pub struct Form {
     /// The device last known, kept while no unit is on the bus.
     last_device: Option<Device>,
     doom: bool,
+    external_temperature: bool,
     overlay: FilePick,
     cloud_url: Toggle,
     ssh_key: FilePick,
@@ -170,6 +171,7 @@ impl Form {
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
             entry_point: self.entry_point,
             doom: self.doom,
+            external_temperature: self.external_temperature,
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
             usb_shell: self.usb_shell,
@@ -380,6 +382,8 @@ impl Form {
         crate::checkbox(ui, self.holds_radio(), &mut self.wwn_boiler, crate::tr!("patch.wwn_boiler")).on_hover_text(
             crate::tr!("patch.wwn_boiler_hint"));
         crate::checkbox(ui, true, &mut self.doom, crate::tr!("patch.doom")).on_hover_text(crate::tr!("patch.doom_hint"));
+        crate::checkbox(ui, self.mqtt.on || self.matter.on || self.zigbee, &mut self.external_temperature, crate::tr!("patch.external_temperature"))
+            .on_hover_text(crate::tr!("patch.external_temperature_hint"));
         grid("advanced_extras").show(ui, |ui| {
             ui.label(crate::tr!("patch.overlay"));
             ui.add_enabled_ui(!nestlocal, |ui| {

@@ -1,0 +1,52 @@
+blueprint:
+  name: Nest external temperature over Matter (unfr0zen)
+  description: >-
+    Sends a thermometer's reading to a Nest thermostat on Matter installed with
+    unfr0zen's external temperature option, which then regulates from it. Matter
+    takes readings from 5 to 35 °C by 0.5 °C, so each is rounded to the nearest.
+    Temperatures in °F are converted to °C. If the thermometer stops reporting,
+    the thermostat goes back to its own sensor by itself.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/external-temperature-matter.yaml
+  input:
+    external_temperature:
+      name: Thermostat's External temperature
+      description: The select named External temperature on the thermostat's Matter device.
+      selector:
+        entity:
+          filter:
+            - integration: matter
+              domain: select
+    temperature:
+      name: Room temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+
+mode: restart
+variables:
+  temperature: !input temperature
+triggers:
+  - trigger: state
+    entity_id: !input temperature
+  # A reading counts for 30 minutes, so an unchanged one is sent again.
+  - trigger: time_pattern
+    minutes: /10
+  - trigger: homeassistant
+    event: start
+conditions:
+  # Nothing is sent for a reading that is not a number (unavailable, ...).
+  - condition: template
+    value_template: "{{ states(temperature) | float(none) is number }}"
+actions:
+  - action: select.select_option
+    target:
+      entity_id: !input external_temperature
+    data:
+      option: >-
+        {%- set reading = states(temperature) | float -%}
+        {%- set celsius = (reading - 32) * 5 / 9
+            if state_attr(temperature, 'unit_of_measurement') == '°F' else reading -%}
+        {{ '%.1f °C' | format(([[celsius, 5] | max, 35] | min * 2) | round / 2) }}

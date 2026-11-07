@@ -1,0 +1,66 @@
+blueprint:
+  name: Nest external temperature over Zigbee (unfr0zen)
+  description: >-
+    Sends a thermometer's reading to a Nest thermostat on Zigbee2MQTT installed
+    with unfr0zen's external temperature option, which then regulates from it.
+    Temperatures in °F are converted to °C. If the thermometer stops reporting,
+    the thermostat goes back to its own sensor by itself.
+  domain: automation
+  source_url: https://github.com/unfr0zen/unfr0zen/blob/main/integrations/home-assistant/external-temperature-zigbee.yaml
+  input:
+    thermostat:
+      name: Thermostat
+      description: The Nest thermostat, as Zigbee2MQTT shows it to Home Assistant.
+      selector:
+        device:
+          filter:
+            # Zigbee2MQTT's model, in the device's model_id (its model holds the description).
+            - integration: mqtt
+              manufacturer: Google Nest
+              model_id: Nest Learning Thermostat (3rd gen, unfr0zen)
+    base_topic:
+      name: Zigbee2MQTT base topic
+      description: As in Zigbee2MQTT's configuration (mqtt.base_topic).
+      default: zigbee2mqtt
+      selector:
+        text:
+    temperature:
+      name: Room temperature
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+              device_class: temperature
+
+mode: restart
+variables:
+  thermostat: !input thermostat
+  base_topic: !input base_topic
+  temperature: !input temperature
+triggers:
+  - trigger: state
+    entity_id: !input temperature
+  # A reading counts for 30 minutes, so an unchanged one is sent again.
+  - trigger: time_pattern
+    minutes: /10
+  - trigger: homeassistant
+    event: start
+conditions:
+  # Nothing is sent for a reading that is not a number (unavailable, ...).
+  - condition: template
+    value_template: "{{ states(temperature) | float(none) is number }}"
+actions:
+  - variables:
+      # Zigbee2MQTT identifies the device to Home Assistant by its IEEE
+      # address, which its topics take in place of the friendly name.
+      address: >-
+        {{ device_attr(thermostat, 'identifiers') | map(attribute=1)
+           | select('match', 'zigbee2mqtt_') | map('replace', 'zigbee2mqtt_', '') | first }}
+  - action: mqtt.publish
+    data:
+      topic: "{{ base_topic }}/{{ address }}/set"
+      payload: >-
+        {%- set reading = states(temperature) | float -%}
+        {{ {"external_temperature": ((reading - 32) * 5 / 9) | round(2)
+            if state_attr(temperature, 'unit_of_measurement') == '°F'
+            else reading} | to_json }}

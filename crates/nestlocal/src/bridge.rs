@@ -40,6 +40,8 @@ pub struct Bridge {
     /// nlclient runs with using_wwn_boiler: it heats while it reports
     /// can_heat false (heatlink.rs).
     wwn_boiler: bool,
+    /// The stand-in sensor, with -external-temperature (sensor/).
+    pub sensor: OnceLock<Arc<crate::sensor::Sensor>>,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
@@ -59,12 +61,31 @@ impl Bridge {
             outdoor,
             live,
             wwn_boiler,
+            sensor: OnceLock::new(),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
             time_asked: Mutex::new(None),
             time_ok,
             time_ok_rx: Mutex::new(Some(time_ok_rx)),
         })
+    }
+
+    /// What regulates, with the stand-in sensor: it, or the backplate.
+    pub fn temperature_source(&self) -> Option<&'static str> {
+        let sensor = self.sensor.get()?;
+        let active = crate::sensor::selected(&self.store, &self.serial, &sensor.bucket);
+        Some(if active { sensor.source() } else { "backplate" })
+    }
+
+    /// Takes readings for the sensor and shows what it does.
+    pub fn attach_sensor(self: &Arc<Self>, sensor: Arc<crate::sensor::Sensor>) {
+        let bridge = Arc::downgrade(self);
+        sensor.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_state();
+            }
+        });
+        let _ = self.sensor.set(sensor);
     }
 
     /// Connects to the broker, and from then on publishes every change and
@@ -216,7 +237,12 @@ impl Bridge {
             return; // the unit has not reported yet
         };
         self.announce(dev, sh);
-        self.publish(&format!("{}/state", self.base), true, Value::Object(state(dev, sh)).to_string().as_bytes());
+        let mut shown = state(dev, sh);
+        if let Some(sensor) = self.sensor.get() {
+            shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
+            shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
+        }
+        self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
     }
 
     /// Publishes Home Assistant discovery, for what this unit's equipment
@@ -331,6 +357,11 @@ impl Bridge {
         sensor(&mut add, "current_temperature", "Temperature", "°C", "temperature", Fields::new());
         sensor(&mut add, "current_humidity", "Humidity", "%", "humidity", Fields::new());
         sensor(&mut add, "backplate_temperature", "Backplate temperature", "°C", "temperature", diag());
+        if self.sensor.get().is_some() {
+            sensor(&mut add, "external_temperature", "External temperature", "°C", "temperature", diag());
+            add("sensor", "temperature_source", "Temperature source",
+                fields!{"value_template" => tmpl("temperature_source"), "entity_category" => "diagnostic", "icon" => "mdi:thermometer-lines"});
+        }
         sensor(&mut add, "battery_level", "Battery voltage", "V", "voltage", diag());
         sensor(&mut add, "rssi", "WiFi signal", "", "", fields!{"entity_category" => "diagnostic", "icon" => "mdi:wifi"});
         add("sensor", "time_to_target", "Time to temperature",

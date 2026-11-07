@@ -20,6 +20,7 @@
 //!   10+ the unit's switches: Binary Output, see SWITCHES; a coordinator
 //!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
+//!   28  whether the stand-in sensor regulates, with that option: Binary Input
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //!
@@ -59,6 +60,8 @@ pub const TIME: u16 = 0x000A;
 ///   0x0002  condition            string, Home Assistant's condition name
 ///   0x0003  next sunrise         UTCTime, as sun.sun's next_rising
 ///   0x0004  next sunset          UTCTime, as sun.sun's next_setting
+///   0x0005  external temperature int16, 0.01 °C: the stand-in sensor's
+///           reading (sensor/), as MQTT's set/external_temperature
 ///   0x1hhf  hourly forecast, hour hh (0-23): f = 0 its time (UTCTime; none
 ///           leaves the hour out), 1 temperature (int16), 2 humidity (uint8)
 ///   0x2ddf  daily forecast, day dd (0-5): as hourly, and f = 3 the low
@@ -69,6 +72,7 @@ const OUTDOOR_HUMIDITY: u16 = 0x0001;
 const CONDITION: u16 = 0x0002;
 const NEXT_RISING: u16 = 0x0003;
 const NEXT_SETTING: u16 = 0x0004;
+const EXTERNAL_TEMPERATURE: u16 = 0x0005;
 const HOURLY: u16 = 0x1000;
 const DAILY: u16 = 0x2000;
 const HOURLY_SLOTS: u16 = 24;
@@ -80,7 +84,7 @@ const SLOT_HUMIDITY: u16 = 2;
 const SLOT_LOW: u16 = 3;
 /// The weather cluster's attributes, ascending.
 static WEATHER_ATTRIBUTES: LazyLock<Vec<u16>> = LazyLock::new(|| {
-    let mut ids = vec![OUTDOOR_TEMPERATURE, OUTDOOR_HUMIDITY, CONDITION, NEXT_RISING, NEXT_SETTING];
+    let mut ids = vec![OUTDOOR_TEMPERATURE, OUTDOOR_HUMIDITY, CONDITION, NEXT_RISING, NEXT_SETTING, EXTERNAL_TEMPERATURE];
     ids.extend((0..HOURLY_SLOTS).flat_map(|h| (SLOT_TIME..=SLOT_HUMIDITY).map(move |f| HOURLY | h << 4 | f)));
     ids.extend((0..DAILY_SLOTS).flat_map(|d| (SLOT_TIME..=SLOT_LOW).map(move |f| DAILY | d << 4 | f)));
     ids
@@ -96,6 +100,7 @@ const FAN_TIMER_ENDPOINT: u8 = 3;
 const HUMIDITY_TARGET_ENDPOINT: u8 = 4;
 const TIME_TO_TARGET_ENDPOINT: u8 = 5;
 const FILTER_RUNTIME_ENDPOINT: u8 = 6;
+const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 
 /// The switches, by endpoint: their bucket field and description.
 const SWITCHES: &[(u8, &str, &str)] = &[
@@ -253,6 +258,9 @@ impl Nest {
             if equipment.is_empty() || has(equipment) {
                 endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
             }
+        }
+        if bridge.sensor.get().is_some() {
+            endpoints.push(Endpoint { id: TEMPERATURE_SOURCE_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
         }
         Nest { bridge, endpoints, weather: Mutex::new(BTreeMap::new()) }
     }
@@ -466,11 +474,15 @@ impl Nest {
 
     /// A Weather attribute: as written, or none.
     fn weather(&self, attribute: u16) -> Option<Value> {
+        if attribute == EXTERNAL_TEMPERATURE {
+            let reading = self.bridge.sensor.get().and_then(|sensor| sensor.reading());
+            return Some(Value::I16(reading.map_or(NONE, centi)));
+        }
         if let Some(value) = self.weather.lock().unwrap().get(&attribute) {
             return Some(value.clone());
         }
         Some(match (attribute, attribute & 0xF) {
-            (OUTDOOR_TEMPERATURE, _) => Value::I16(NONE),
+            (OUTDOOR_TEMPERATURE | EXTERNAL_TEMPERATURE, _) => Value::I16(NONE),
             (OUTDOOR_HUMIDITY, _) => Value::U8(NO_HUMIDITY),
             (CONDITION, _) => Value::Str(String::new()),
             (NEXT_RISING | NEXT_SETTING, _) => Value::Utc(NO_TIME),
@@ -489,6 +501,10 @@ impl Nest {
             Value::I16(t) if t != NONE && !(-6000..=6000).contains(&t) => return status::INVALID_VALUE,
             Value::U8(h) if h != NO_HUMIDITY && h > 100 => return status::INVALID_VALUE,
             _ => {}
+        }
+        if attribute == EXTERNAL_TEMPERATURE {
+            let Value::I16(t) = value else { return status::INVALID_VALUE };
+            return self.apply("external_temperature", &(f64::from(t) / 100.0).to_string());
         }
         let mut weather = self.weather.lock().unwrap();
         weather.insert(attribute, value);
@@ -615,6 +631,9 @@ impl Clusters for Nest {
             (ANALOG_INPUT, a) => self.analog_input(endpoint, a),
             (BINARY_INPUT | BINARY_OUTPUT, 0x0051) => Some(Value::Bool(false)),
             (BINARY_INPUT | BINARY_OUTPUT, 0x006F) => Some(Value::Bitmap8(0)),
+            (BINARY_INPUT, 0x001C) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => Some(Value::Str("External temperature in use".into())),
+            (BINARY_INPUT, 0x0055) if endpoint == TEMPERATURE_SOURCE_ENDPOINT =>
+                Some(Value::Bool(self.bridge.temperature_source() == Some("external"))),
             (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(_, description)| Value::Str(description.into())),
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
@@ -972,6 +991,48 @@ mod tests {
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
         assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x03, 20]), status::INVALID_FIELD);
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
+    }
+
+    #[test]
+    fn an_external_temperature_written_over_zigbee_is_the_sensors_reading() {
+        let n = nest(fields!{}, fields!{});
+        assert_eq!(n.read(1, WEATHER, EXTERNAL_TEMPERATURE), Some(Value::I16(NONE)));
+        assert_ne!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2150)), status::SUCCESS, "no -external-temperature");
+        let dir = std::env::temp_dir().join(format!("nestlocal-zb-sensor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"),
+                                                 std::time::Duration::from_secs(1800)).unwrap();
+        n.bridge.attach_sensor(sensor.clone());
+        assert_eq!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2150)), status::SUCCESS);
+        assert_eq!(sensor.reading(), Some(21.5));
+        assert_eq!(n.read(1, WEATHER, EXTERNAL_TEMPERATURE), Some(Value::I16(2150)));
+        assert_ne!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(9000)), status::SUCCESS, "out of range");
+    }
+
+    #[test]
+    fn the_external_temperature_has_an_endpoint_saying_whether_it_regulates() {
+        let without = nest(fields!{}, fields!{});
+        assert!(without.attributes(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT).is_none());
+
+        let bridge = crate::bridge::tests::test_bridge();
+        bridge.store.merge(&format!("link.{}", bridge.serial), &fields!{"structure" => "structure.home"}, 0, 0, false);
+        let dir = std::env::temp_dir().join(format!("nestlocal-zb-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), &bridge.serial, &dir.join("none"),
+                                                 std::time::Duration::from_secs(1800)).unwrap();
+        bridge.attach_sensor(sensor.clone());
+        crate::sensor::ensure_buckets(&bridge.store, &bridge.serial, &sensor.bucket, None);
+        let n = Nest::new(bridge);
+        let source = || n.read(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055);
+        assert!(n.reported().contains(&(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, &[0x0055][..])));
+        assert_eq!(source(), Some(Value::Bool(false)), "no reading yet");
+        assert_eq!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2100)), status::SUCCESS);
+        sensor.due().unwrap();
+        assert_eq!(source(), Some(Value::Bool(true)));
+        n.bridge.store.merge(&format!("rcs_settings.{}", n.bridge.serial),
+                             &fields!{"active_rcs_sensors" => Vec::<Json>::new()}, 0, 0, true);
+        assert_eq!(source(), Some(Value::Bool(false)), "the backplate is chosen");
+        assert_eq!(n.write(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
     }
 
     #[test]

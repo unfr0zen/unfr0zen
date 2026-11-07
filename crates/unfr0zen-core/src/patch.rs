@@ -451,6 +451,9 @@ pub struct Options {
     pub wwn_boiler: bool,
     /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
+    /// nestlocal plays a Nest Temperature Sensor whose readings an external
+    /// thermometer gives: nlclient's own BLE runs, against nestlocal's stand-in.
+    pub external_temperature: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
@@ -563,7 +566,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // which also puts Nest's Thread radio set-up back after Zigbee.
     let turn_off = options.overlay.is_none() && options.cloud_url.is_none()
         && volume.inspect(nestlocal::OPTIONS)?.is_some();
-    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || turn_off {
+    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || options.external_temperature || turn_off {
         fetch(volume, &mut tree, &mut originals, &nestlocal::STOCK_FILES, true, true)?;
         fetch(volume, &mut tree, &mut originals, &[nestlocal::UNLOCK_BUNDLE], false, true)?;
         if options.matter.is_some() {
@@ -602,6 +605,14 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             line.extend_from_slice(b" -doom\n");
             overlay.files.extend(doom.files.clone());
             overlay.directories.extend(doom.directories.clone());
+        }
+        if options.external_temperature {
+            let overlay = overlay.as_mut().unwrap();
+            let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
+            line.pop();
+            line.extend_from_slice(b" -external-temperature\n");
+            let (_, _, product) = overlay.files.iter_mut().find(|(name, _, _)| name == "etc/nestlabs/product.config").unwrap();
+            *product = nestlocal::stock_ble_on(&String::from_utf8_lossy(product)).into_bytes();
         }
     }
     let mut directories = Vec::new();
@@ -1162,6 +1173,38 @@ mod tests {
         patch(&mut volume, &Options { thread: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-matter-thread"));
         assert!(!volume.text("etc/monit.d/nestlocal.monitrc").contains("nestlocal-thread-daemon"));
+    }
+
+    #[test]
+    fn the_external_temperature_is_an_option_of_nestlocal_with_nlclients_ble_on() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let options = Options { external_temperature: true, ..options() };
+        patch(&mut volume, &options, false).unwrap();
+        assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -external-temperature"));
+        assert!(!volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"1\""));
+        patch(&mut volume, &Options { external_temperature: false, ..options }, false).unwrap();
+        assert!(!volume.text(nestlocal::OPTIONS).contains("external-temperature"));
+    }
+
+    #[test]
+    fn leaving_the_external_temperature_out_puts_the_units_ble_setting_back() {
+        let config = |value: u8, rest: &str| format!("<a key=\"usephoenix\" value=\"0\"/>\n<a key=\"ble_disabled\" value=\"{value}\"/>\n{rest}");
+        let matter = "\n<!-- unfr0zen owns BLE for Matter; original ble_disabled=0 -->";
+        let mqtt = || Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() };
+        for (installed, original) in [(config(0, ""), config(0, "")), (config(1, ""), config(1, "")), (config(1, matter), config(0, ""))] {
+            for left_on in [None, Some(mqtt())] {
+                let pki = nestlocal::generate_pki().unwrap();
+                let mut volume = nestlocal_unit(Some(&pki));
+                volume.files.get_mut("etc/nestlabs/product.config").unwrap().2 = installed.clone().into_bytes();
+                patch(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
+                assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
+                patch(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
+                assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
+                patch(&mut volume, &Options { mqtt: left_on, ..options() }, false).unwrap();
+                assert_eq!(volume.text("etc/nestlabs/product.config"), original);
+            }
+        }
     }
 
     #[test]

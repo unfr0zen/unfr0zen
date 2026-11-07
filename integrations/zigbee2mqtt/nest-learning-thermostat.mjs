@@ -28,6 +28,7 @@
 //   23  safety shutoff          Binary Input
 //   24  filter replacement      Binary Input (with an air filter)
 //   25  hot water               Binary Input (with hot water control)
+//   28  stand-in sensor in use  Binary Input (with the external temperature option)
 //   26  humidifier running      Binary Input (with a humidifier)
 //   27  dehumidifier running    Binary Input (with a dehumidifier)
 //
@@ -44,6 +45,11 @@
 //   zigbee2mqtt/<thermostat>/set  {"outdoor_temperature": 12.3, "outdoor_humidity": 60,
 //                                  "weather": {"condition": ..., "next_rising": ..., "next_setting": ...,
 //                                              "hourly": [...], "daily": [...]}}
+//
+// A room thermometer's reading goes the same way, on a unit installed with the
+// external temperature option; it regulates from it until readings stop:
+//
+//   zigbee2mqtt/<thermostat>/set  {"external_temperature": 21.5}
 //
 // weather is what Home Assistant's weather blueprint for Zigbee
 // (integrations/home-assistant/weather-zigbee.yaml) sends: a weather entity's
@@ -65,6 +71,7 @@ const THERMOSTAT = 1;
 const BACKPLATE = 2;
 const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
+const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
     auto_schedule: 10,
     home_away_assist: 11,
@@ -123,6 +130,7 @@ const OUTDOOR_HUMIDITY = 0x0001; // uint8, %
 const CONDITION = 0x0002; // string, Home Assistant's condition name
 const NEXT_RISING = 0x0003; // UTCTime
 const NEXT_SETTING = 0x0004; // UTCTime
+const EXTERNAL_TEMPERATURE = 0x0005; // int16, 0.01 °C
 const HOURLY = 0x1000;
 const DAILY = 0x2000;
 const HOURS = 24;
@@ -256,6 +264,9 @@ const nest = {
         cluster: 'genBinaryInput',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg) => {
+            if (msg.endpoint.ID === TEMPERATURE_SOURCE && msg.data.presentValue !== undefined) {
+                return {temperature_source: msg.data.presentValue ? 'external' : 'backplate'};
+            }
             const name = byEndpoint(STATES, msg.endpoint.ID);
             if (name && msg.data.presentValue !== undefined) {
                 return {[name]: Boolean(msg.data.presentValue)};
@@ -333,6 +344,13 @@ const set = {
             await writeWeather(endpoint, forecast(DAILY, DAYS, days(Array.isArray(weather.daily) ? weather.daily : []), true));
         },
     },
+    external_temperature: {
+        key: ['external_temperature'],
+        convertSet: async (entity, key, value, meta) => {
+            await writeWeather(meta.device.getEndpoint(THERMOSTAT), {[EXTERNAL_TEMPERATURE]: int16(value)});
+            return {state: {external_temperature: value}};
+        },
+    },
     switches: {
         key: Object.keys(SWITCHES),
         convertSet: async (entity, key, value, meta) => {
@@ -374,7 +392,7 @@ const definition = {
     toZigbee: [tz.thermostat_occupied_heating_setpoint, tz.thermostat_occupied_cooling_setpoint,
         tz.thermostat_unoccupied_heating_setpoint, tz.thermostat_unoccupied_cooling_setpoint, tz.thermostat_system_mode,
         tz.thermostat_local_temperature, tz.thermostat_running_state, tz.fan_mode, tz.thermostat_temperature_display_mode,
-        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather],
+        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather, set.external_temperature],
     exposes: (device) => {
         // What the unit's wiring can do: cooling only (0), heating only (2), both.
         const sequence = isDummyDevice(device) ? 4 :
@@ -419,6 +437,10 @@ const definition = {
             result.push(e.numeric('unoccupied_cooling_setpoint', ea.ALL).withLabel('Eco cool temperature').withUnit('°C')
                 .withValueMin(24).withValueMax(32).withValueStep(0.5).withCategory('config')
                 .withDescription('Eco cools to this'));
+        }
+        if (has(device, TEMPERATURE_SOURCE)) {
+            result.push(e.enum('temperature_source', ea.STATE, ['backplate', 'external']).withLabel('Temperature source')
+                .withCategory('diagnostic').withDescription('Which sensor regulates'));
         }
         if (has(device, OUTPUTS.fan_timer_duration)) {
             result.push(e.numeric('fan_timer_duration', ea.ALL).withUnit('min').withValueMin(15).withValueMax(1440)
@@ -539,7 +561,7 @@ const definition = {
         for (const id of Object.values(INPUTS)) {
             await read(id, 'genAnalogInput');
         }
-        for (const id of Object.values(STATES)) {
+        for (const id of [...Object.values(STATES), TEMPERATURE_SOURCE]) {
             await read(id, 'genBinaryInput');
         }
     },

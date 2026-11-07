@@ -285,17 +285,36 @@ pub fn edit_product_config(text: &str) -> Result<String> {
     Ok(USEPHOENIX.replace(text, "${1}0${3}").into_owned())
 }
 
+const MATTER_BLE_MARKER: &str = "\n<!-- unfr0zen owns BLE for Matter; original ble_disabled=0 -->";
+const SENSOR_BLE_MARKER: &str = "\n<!-- unfr0zen turned BLE on for the stand-in sensor; original ble_disabled=1 -->";
+
 fn configure_matter_ble(mut text: String, enabled: bool, firmware: Option<&[u8]>) -> String {
-    const MARKER: &str = "\n<!-- unfr0zen owns BLE for Matter; original ble_disabled=0 -->";
-    if !enabled && text.contains(MARKER) {
+    if text.contains(SENSOR_BLE_MARKER) {
+        text = text.replace("key=\"ble_disabled\" value=\"0\"", "key=\"ble_disabled\" value=\"1\"")
+            .replace(SENSOR_BLE_MARKER, "");
+    }
+    if !enabled && text.contains(MATTER_BLE_MARKER) {
         return text.replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
-            .replace(MARKER, "");
+            .replace(MATTER_BLE_MARKER, "");
     }
     let supported = firmware.is_some_and(|data| crate::shell::sha256_hex(data)
         == "f1a8be89252e1fab8d15f8e060ef5d74e7c60944b5ed4100d31f2eb4f4850315");
     if enabled && supported && text.matches("key=\"ble_disabled\" value=\"0\"").count() == 1 {
         text = text.replace("key=\"ble_disabled\" value=\"0\"", "key=\"ble_disabled\" value=\"1\"");
-        text.push_str(MARKER);
+        text.push_str(MATTER_BLE_MARKER);
+    }
+    text
+}
+
+/// nlclient's own BLE on, for nestlocal's stand-in sensor to stand behind.
+/// nestlocal keeps the chip itself, for Matter too, on the chip's own UART.
+/// A unit that had it off gets it back when a run leaves the sensor out.
+pub fn stock_ble_on(text: &str) -> String {
+    let was_off = text.contains("key=\"ble_disabled\" value=\"1\"") && !text.contains(MATTER_BLE_MARKER);
+    let mut text = text.replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
+        .replace(MATTER_BLE_MARKER, "");
+    if was_off {
+        text.push_str(SENSOR_BLE_MARKER);
     }
     text
 }
@@ -566,6 +585,14 @@ mod tests {
         assert!(edit_client_config("<a key=\"cloudregisterurl\" value=\"a\"/><a key=\"cloudregisterurl\" value=\"b\"/>").is_err());
         assert!(edit_product_config("").is_err());
         assert!(edit_monitrc(&format!("{MONIT_LINE}{MONIT_LINE}"), false).is_err());
+    }
+
+    #[test]
+    fn the_external_temperature_runs_nlclients_ble_with_or_without_matters_claim() {
+        let on = "<config><a key=\"ble_disabled\" value=\"0\"/></config>\n";
+        assert_eq!(stock_ble_on(on), on);
+        let claimed = "<config><a key=\"ble_disabled\" value=\"1\"/></config>\n\n<!-- unfr0zen owns BLE for Matter; original ble_disabled=0 -->";
+        assert_eq!(stock_ble_on(claimed), on);
     }
 
     #[test]

@@ -145,13 +145,14 @@ Common options:
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
   --zigbee              Join a Zigbee network as a router (replaces Heat Link)
+  --external-temperature  Regulate from temperatures sent to it; turns off Bluetooth (3rd generation)
   --doom                Install Doom, launched from UNFR0ZEN → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
 ```
 Run `unfr0zen --help` for every option.
 
-Setting up MQTT, Matter, Thread, Zigbee and Doom, with the app's and the CLI's
+Setting up MQTT, Matter, Thread, Zigbee, the external temperature and Doom, with the app's and the CLI's
 options side by side: [unfr0zen.com/integrations](https://unfr0zen.com/integrations/).
 
 ## Updating

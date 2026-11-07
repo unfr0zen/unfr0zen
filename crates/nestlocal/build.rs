@@ -10,6 +10,11 @@
 use std::fmt::Write;
 
 fn main() {
+    // rustc gives musl's linker -nostartfiles, which zig cc reports as unused.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("musl") {
+        println!("cargo:rustc-link-arg=-Wno-unused-command-line-argument");
+    }
+
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     for (variable, name) in [("NESTLOCAL_RADIO", "radio-em3581.bin"), ("NESTLOCAL_RADIO_EM357", "radio-em357.bin")] {
         println!("cargo:rerun-if-env-changed={variable}");

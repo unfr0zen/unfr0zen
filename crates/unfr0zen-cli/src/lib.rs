@@ -108,6 +108,9 @@ struct Args {
     /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
+    /// regulate from temperatures sent to the unit (set/external_temperature, Zigbee or Matter), which hears them as a Nest Temperature Sensor; turns off its own Bluetooth, so real Nest Temperature Sensors stop working; 3rd generation; needs --mqtt, --matter or --zigbee
+    #[arg(long, help_heading = "Root filesystem options")]
+    external_temperature: bool,
     /// tar of root-owned files to add
     #[arg(long, value_name = "TAR", help_heading = "Root filesystem options")]
     overlay: Option<PathBuf>,
@@ -201,6 +204,7 @@ impl Args {
             wwn_boiler: self.wwn_boiler,
             entry_point: self.entry_point.unwrap_or_default(),
             doom: self.doom,
+            external_temperature: self.external_temperature,
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
             usb_shell: self.usb_shell,

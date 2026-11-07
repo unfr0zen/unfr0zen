@@ -57,6 +57,9 @@ pub struct PatchInputs {
     pub entry_point: EntryPoint,
     /// Doom, launched from the UNFR0ZEN screen (through nestlocal).
     pub doom: bool,
+    /// Regulate from an external thermometer's readings: nestlocal plays a Nest
+    /// Temperature Sensor.
+    pub external_temperature: bool,
     /// An SSH server on the unit, root logging in with its password; off by default.
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
@@ -102,6 +105,7 @@ impl PatchInputs {
             ("wwn-boiler", on(self.wwn_boiler)),
             ("entry-point", (self.entry_point != EntryPoint::Auto).then(|| self.entry_point.name().to_string())),
             ("doom", on(self.doom)),
+            ("external-temperature", on(self.external_temperature)),
             ("overlay", file(&self.overlay)),
             ("cloud-url", self.cloud_url.as_deref().map(mask_url)),
             ("backplate-sim", on(self.backplate_sim)),
@@ -129,6 +133,9 @@ impl PatchInputs {
         }
         if self.wwn_boiler && !self.zigbee && !self.matter_thread {
             return Err(failure("--wwn-boiler is for a radio nestlocal holds: it needs --zigbee or --matter-thread"));
+        }
+        if self.external_temperature && self.mqtt.is_none() && !matter && !self.zigbee {
+            return Err(failure("--external-temperature takes its readings over --mqtt, --matter or --zigbee"));
         }
         let nestlocal = self.mqtt.is_some() || matter || self.zigbee || self.doom;
         if nestlocal && self.overlay.is_some() {
@@ -175,6 +182,7 @@ impl PatchInputs {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(assets::doom),
+            external_temperature: self.external_temperature,
             ssh: self.ssh,
             ssh_public_key,
             ssh_server: None,
@@ -321,6 +329,8 @@ pub fn run(config: &Config, progress: &mut dyn Progress,
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
+        Device::Diamond | Device::J49 if config.options.external_temperature =>
+            Err(failure("--external-temperature needs the 3rd generation's BLE: this unit has none")),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
