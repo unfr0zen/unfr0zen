@@ -48,8 +48,22 @@ jobs:
 
 workflows:
   setup:
+    when:
+      not:
+        matches: { pattern: "^pull/[0-9]+$", value: << pipeline.git.branch >> }
     jobs:
       - setup:
           filters:
             tags:
               only: /.*/
+  # A pull request from a fork (its branch is pull/N) waits for a member's
+  # approval before anything else runs. CircleCI continues a pipeline only
+  # within six hours of its creation; approved later, it needs a new push.
+  setup-fork:
+    when:
+      matches: { pattern: "^pull/[0-9]+$", value: << pipeline.git.branch >> }
+    jobs:
+      - hold:
+          type: approval
+      - setup:
+          requires: [hold]

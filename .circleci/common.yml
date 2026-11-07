@@ -166,8 +166,11 @@ jobs:
           command: |
             [ -n "$IMAGE" ] || { echo "no image parameter: the setup workflow sets it"; exit 1; }
             repo=${IMAGE%%:*}; tag=${IMAGE#*:}
+            # The image is public: without the context (a fork's pull request), ask anonymously.
+            set --
+            [ -z "${DOCKERHUB_USER:-}" ] || set -- -u "$DOCKERHUB_USER:$DOCKERHUB_TOKEN"
             for attempt in $(seq 1 100); do
-              curl -fsS -o /tmp/token.json -u "$DOCKERHUB_USER:$DOCKERHUB_TOKEN" \
+              curl -fsS -o /tmp/token.json "$@" \
                 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$repo:pull" \
                 || { echo "Docker Hub refused the docker-hub context's DOCKERHUB_USER and DOCKERHUB_TOKEN"; exit 1; }
               token=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])' < /tmp/token.json)
