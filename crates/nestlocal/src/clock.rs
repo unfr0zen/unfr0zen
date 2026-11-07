@@ -118,7 +118,7 @@ pub fn set_clock(t: SystemTime, from: &str) {
     let since = t.duration_since(UNIX_EPOCH).unwrap_or_default();
     let when = chrono::DateTime::from_timestamp(since.as_secs() as i64, since.subsec_nanos())
         .map_or_else(String::new, |d| d.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-    let tv = libc::timeval { tv_sec: since.as_secs() as libc::time_t, tv_usec: since.subsec_micros() as libc::suseconds_t };
+    let tv = libc::timeval { tv_sec: since.as_secs() as _, tv_usec: since.subsec_micros() as _ };
     // SAFETY: settimeofday reads tv only; no timezone is passed.
     if unsafe { libc::settimeofday(&tv, std::ptr::null()) } != 0 {
         return logf!("clock: setting it to {when} from {from}: {}", std::io::Error::last_os_error());
