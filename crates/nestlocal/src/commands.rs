@@ -227,7 +227,11 @@ impl Bridge {
                     return Err("this unit runs without -external-temperature".into());
                 };
                 let v = float(arg).ok_or("expected a temperature")?;
+                let first = !sensor.has_reading();
                 sensor.set(v)?;
+                if first {
+                    crate::sensor::select(&self.store, &self.serial, &sensor.bucket);
+                }
                 logf!("external temperature: reading {v} °C");
                 Ok(None)
             }
@@ -286,8 +290,10 @@ mod tests {
         let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"),
                                                  std::time::Duration::from_secs(1800)).unwrap();
         b.attach_sensor(sensor.clone());
+        assert!(!crate::sensor::selected(&b.store, "S", &sensor.bucket));
         assert_eq!(b.fields("external_temperature", "21.5"), Ok(None));
         assert_eq!(sensor.reading(), Some(21.5));
+        assert!(crate::sensor::selected(&b.store, &b.serial, &sensor.bucket), "the first reading selects it");
         for bad in ["unavailable", "", "NaN", "95"] {
             assert!(b.fields("external_temperature", bad).is_err(), "{bad}");
         }

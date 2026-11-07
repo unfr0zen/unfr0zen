@@ -145,6 +145,8 @@ struct State {
     reserved: u32,
     /// What the last publish said, to tell Home Assistant only of changes.
     last_shown: (&'static str, bool),
+    /// The one beacon before any reading has gone out.
+    introduced: bool,
 }
 
 /// The sensor nlclient hears.
@@ -158,6 +160,8 @@ pub struct Sensor {
     /// Interrupts the port's wait for a new reading (port.rs).
     notify: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// The temperature of the beacon before any reading, °C.
+    introduction: OnceLock<Box<dyn Fn() -> Option<f64> + Send + Sync>>,
 }
 
 impl Sensor {
@@ -183,15 +187,21 @@ impl Sensor {
                 sequence: identity.sequence.max(taken.map_or(0, |t| t.saturating_add(1))),
                 reserved: 0,
                 last_shown: ("backplate", false),
+                introduced: false,
             }),
             notify: OnceLock::new(),
             on_change: OnceLock::new(),
+            introduction: OnceLock::new(),
         };
         Ok(Arc::new(sensor))
     }
 
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_change.set(Box::new(f));
+    }
+
+    pub fn introduce_with(&self, temperature: impl Fn() -> Option<f64> + Send + Sync + 'static) {
+        let _ = self.introduction.set(Box::new(temperature));
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -220,6 +230,11 @@ impl Sensor {
         }
         self.publish_changes(true);
         Ok(())
+    }
+
+    /// Whether a reading has come since nestlocal started.
+    pub fn has_reading(&self) -> bool {
+        self.state.lock().unwrap().reading.is_some()
     }
 
     /// The reading while it is fresh, °C.
@@ -279,11 +294,35 @@ impl Sensor {
 
     fn next_report(&self, now: Duration) -> Option<[u8; beacon::REPORT_LEN]> {
         let mut state = self.state.lock().unwrap();
-        let tenths = self.fresh(&state, now)?;
+        let Some(tenths) = self.fresh(&state, now) else {
+            return self.introduction_report(&mut state);
+        };
         let quiet = state.last_beacon.is_none_or(|at| now.saturating_sub(at) >= REPEAT);
         if !state.pending && !quiet {
             return None;
         }
+        let sequence = self.next_sequence(&mut state)?;
+        state.pending = false;
+        state.last_beacon = Some(now);
+        Some(beacon::report(self.id, &self.key, sequence, tenths))
+    }
+
+    /// nlclient lists a sensor on its Sensors menu once it has heard it, so it
+    /// hears this one once before any reading. Only once: a sensor chosen on
+    /// that menu falls silent and nlclient goes back to the backplate, where
+    /// repeating the unit's own temperature to it would regulate from an echo.
+    fn introduction_report(&self, state: &mut State) -> Option<[u8; beacon::REPORT_LEN]> {
+        if state.reading.is_some() || state.introduced {
+            return None;
+        }
+        let tenths = self.introduction.get().and_then(|temperature| temperature()).and_then(beacon::tenths)?;
+        let sequence = self.next_sequence(state)?;
+        state.introduced = true;
+        logf!("external temperature: introducing the sensor to nlclient at {} °C", f64::from(tenths) / 10.0);
+        Some(beacon::report(self.id, &self.key, sequence, tenths))
+    }
+
+    fn next_sequence(&self, state: &mut State) -> Option<u32> {
         if state.sequence > beacon::MAX_SEQUENCE {
             return None;
         }
@@ -298,9 +337,7 @@ impl Sensor {
         }
         let sequence = state.sequence;
         state.sequence += 1;
-        state.pending = false;
-        state.last_beacon = Some(now);
-        Some(beacon::report(self.id, &self.key, sequence, tenths))
+        Some(sequence)
     }
 }
 
@@ -396,8 +433,9 @@ fn listed(value: Option<&Value>) -> Vec<Value> {
     value.and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
-/// The buckets of a paired, selected sensor. nlclient reads the sensor's
-/// existence from the structure's swarm and the rcs_settings bucket.
+/// The buckets of a paired sensor, with the backplate chosen until a reading
+/// comes (`select`). nlclient reads the sensor's existence from the structure's
+/// swarm and the rcs_settings bucket.
 pub fn ensure_buckets(store: &Arc<Store>, serial: &str, bucket: &str, where_id: Option<&str>) {
     let Some(structure) = structure_key(store, serial) else {
         logf!("external temperature: unit {serial} has no structure");
@@ -416,17 +454,22 @@ pub fn ensure_buckets(store: &Arc<Store>, serial: &str, bucket: &str, where_id: 
         "structure_id" => structure.split_once('.').map_or("", |(_, id)| id),
         "report_period_in_seconds" => 60,
     }, 0, 0, false);
-    select(store, serial, bucket);
+    choose(store, serial, bucket, false);
 }
 
-fn select(store: &Store, serial: &str, bucket: &str) {
+/// The sensor chosen, for its first reading to regulate.
+pub fn select(store: &Store, serial: &str, bucket: &str) {
+    choose(store, serial, bucket, true);
+}
+
+fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
     let key = format!("rcs_settings.{serial}");
     let mut associated = listed(store.get(&key).as_ref().and_then(|o| o.value.get("associated_rcs_sensors")));
     if !associated.iter().any(|v| v == bucket) {
         associated.push(bucket.into());
     }
     store.merge(&key, &fields!{
-        "active_rcs_sensors" => vec![Value::from(bucket)],
+        "active_rcs_sensors" => if active { vec![Value::from(bucket)] } else { Vec::new() },
         "associated_rcs_sensors" => associated,
         "rcs_control_setting" => "OVERRIDE",
         "multiroom_active" => false,
@@ -435,26 +478,27 @@ fn select(store: &Store, serial: &str, bucket: &str) {
 }
 
 /// nlclient turns sensors OFF while it starts, before it has heard of them:
-/// the sensor is selected again whenever it says so. A selection of the
-/// backplate on its screen stays: that one comes with OVERRIDE.
+/// it is told again whenever it says so, the sensor chosen once a reading has
+/// come. A selection of the backplate on its screen stays: that one comes with
+/// OVERRIDE.
 ///
 /// Not at once: this watch runs inside nlclient's own update, whose answer
 /// would carry the new revision and timestamp without the values, and nlclient
 /// would take itself to be up to date. Later, the change reaches it as a push.
-pub fn keep_selected(store: &Arc<Store>, serial: &str, bucket: &str) {
+pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
     let key = format!("rcs_settings.{serial}");
-    let (again, serial, bucket) = (store.clone(), serial.to_string(), bucket.to_string());
+    let (again, serial, sensor) = (store.clone(), serial.to_string(), sensor.clone());
     let waiting = Arc::new(AtomicBool::new(false));
     store.watch(move |o| {
         if o.key != key || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF")
             || waiting.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (store, serial, bucket, waiting) = (again.clone(), serial.clone(), bucket.clone(), waiting.clone());
+        let (store, serial, sensor, waiting) = (again.clone(), serial.clone(), sensor.clone(), waiting.clone());
         std::thread::spawn(move || {
             std::thread::sleep(SELECT_AFTER);
             waiting.store(false, Ordering::SeqCst);
-            select(&store, &serial, &bucket);
+            choose(&store, &serial, &sensor.bucket, sensor.has_reading());
         });
     });
 }
@@ -612,7 +656,7 @@ mod tests {
     }
 
     #[test]
-    fn the_buckets_register_and_select_the_sensor() {
+    fn the_buckets_register_the_sensor_and_a_reading_selects_it() {
         let store = temp_store();
         store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
         store.merge("structure.home", &fields!{"swarm" => vec![Value::from("kryptonite.REAL")]}, 0, 0, false);
@@ -620,24 +664,62 @@ mod tests {
         let value = |key: &str, field: &str| store.get(key).unwrap().value.get(field).cloned().unwrap();
         assert_eq!(value("structure.home", "swarm"), json!(["kryptonite.REAL", "kryptonite.AB"]));
         assert_eq!(value("kryptonite.AB", "where_id"), json!("room"));
-        assert_eq!(value("rcs_settings.S", "active_rcs_sensors"), json!(["kryptonite.AB"]));
+        assert_eq!(value("rcs_settings.S", "associated_rcs_sensors"), json!(["kryptonite.AB"]));
+        assert_eq!(value("rcs_settings.S", "active_rcs_sensors"), json!([]), "the backplate until a reading");
         assert_eq!(value("rcs_settings.S", "rcs_control_setting"), json!("OVERRIDE"));
+        select(&store, "S", "kryptonite.AB");
+        assert_eq!(value("rcs_settings.S", "active_rcs_sensors"), json!(["kryptonite.AB"]));
     }
 
     #[test]
-    fn nlclient_turning_sensors_off_selects_the_sensor_again_but_the_backplate_stays_chosen() {
+    fn nlclient_turning_sensors_off_is_answered_by_what_the_readings_call_for() {
+        let dir = dir("keep");
+        let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
         let store = temp_store();
         store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
-        ensure_buckets(&store, "S", "kryptonite.AB", None);
-        keep_selected(&store, "S", "kryptonite.AB");
+        ensure_buckets(&store, "S", &sensor.bucket, None);
+        keep_selected(&store, "S", &sensor);
         let setting = || store.get("rcs_settings.S").unwrap().value;
-        store.merge("rcs_settings.S", &fields!{"rcs_control_setting" => "OFF", "active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        let off = || store.merge("rcs_settings.S", &fields!{"rcs_control_setting" => "OFF", "active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        off();
         assert_eq!(setting().get("rcs_control_setting").unwrap(), "OFF", "not within nlclient's update");
         std::thread::sleep(SELECT_AFTER * 20);
         assert_eq!(setting().get("rcs_control_setting").unwrap(), "OVERRIDE");
-        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!(["kryptonite.AB"]));
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "no reading yet");
+        sensor.set(20.0).unwrap();
+        off();
+        std::thread::sleep(SELECT_AFTER * 20);
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([sensor.bucket]));
         store.merge("rcs_settings.S", &fields!{"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
-        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]));
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "the backplate chosen on the screen stays");
+    }
+
+    #[test]
+    fn nlclient_hears_the_sensor_once_before_any_reading() {
+        let dir = dir("introduce");
+        let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
+        let start = boot_time();
+        assert!(sensor.next_report(start).is_none(), "nothing to tell it yet");
+        sensor.introduce_with(|| Some(20.5));
+        assert!(sensor.next_report(start).is_some());
+        assert!(sensor.next_report(start + REPEAT * 10).is_none(), "only once");
+        assert_eq!(sensor.source(), "backplate", "it regulates from nothing");
+        assert_eq!(sensor.reading(), None);
+        sensor.set(21.0).unwrap();
+        assert!(sensor.next_report(start).is_some(), "a reading goes out at once");
+        assert_eq!(sensor.source(), "external");
+    }
+
+    #[test]
+    fn an_unusable_temperature_introduces_nothing_until_a_usable_one() {
+        let dir = dir("introduce-later");
+        let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
+        let known = Arc::new(AtomicBool::new(false));
+        let reported = known.clone();
+        sensor.introduce_with(move || reported.load(Ordering::SeqCst).then_some(20.0));
+        assert!(sensor.next_report(boot_time()).is_none());
+        known.store(true, Ordering::SeqCst);
+        assert!(sensor.next_report(boot_time()).is_some());
     }
 
     #[test]
@@ -646,6 +728,8 @@ mod tests {
         assert!(!selected(&store, "S", "kryptonite.AB"));
         store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
         ensure_buckets(&store, "S", "kryptonite.AB", None);
+        assert!(!selected(&store, "S", "kryptonite.AB"));
+        select(&store, "S", "kryptonite.AB");
         assert!(selected(&store, "S", "kryptonite.AB"));
         store.merge("rcs_settings.S", &fields!{"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
         assert!(!selected(&store, "S", "kryptonite.AB"));

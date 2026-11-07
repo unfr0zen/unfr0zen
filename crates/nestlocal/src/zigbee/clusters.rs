@@ -1025,8 +1025,8 @@ mod tests {
         let n = Nest::new(bridge);
         let source = || n.read(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055);
         assert!(n.reported().contains(&(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, &[0x0055][..])));
-        assert_eq!(source(), Some(Value::Bool(false)), "no beacon yet");
-        sensor.set(21.0).unwrap();
+        assert_eq!(source(), Some(Value::Bool(false)), "no reading yet");
+        assert_eq!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2100)), status::SUCCESS);
         sensor.due().unwrap();
         assert_eq!(source(), Some(Value::Bool(true)));
         n.bridge.store.merge(&format!("rcs_settings.{}", n.bridge.serial),

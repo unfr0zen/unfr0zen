@@ -157,7 +157,9 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     };
     let where_id = sensor::where_id(store, &config.serial);
     sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
-    sensor::keep_selected(store, &config.serial, &sensor.bucket);
+    sensor::keep_selected(store, &config.serial, &sensor);
+    let (known, shared) = (store.clone(), format!("shared.{}", config.serial));
+    sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
     #[cfg(target_os = "linux")]
     if let Err(e) = sensor::port::start(sensor.clone(), ble, config.matter) {
         logf!("external temperature: {e}");
