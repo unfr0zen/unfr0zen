@@ -70,6 +70,13 @@ impl Bridge {
         })
     }
 
+    /// What regulates, with the stand-in sensor: it, or the backplate.
+    pub fn temperature_source(&self) -> Option<&'static str> {
+        let sensor = self.sensor.get()?;
+        let active = crate::sensor::selected(&self.store, &self.serial, &sensor.bucket);
+        Some(if active { sensor.source() } else { "backplate" })
+    }
+
     /// Takes readings for the sensor and shows what it does.
     pub fn attach_sensor(self: &Arc<Self>, sensor: Arc<crate::sensor::Sensor>) {
         let bridge = Arc::downgrade(self);
@@ -233,8 +240,7 @@ impl Bridge {
         let mut shown = state(dev, sh);
         if let Some(sensor) = self.sensor.get() {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
-            let active = crate::sensor::selected(&self.store, &self.serial, &sensor.bucket);
-            shown.insert("temperature_source".into(), if active { sensor.source() } else { "backplate" }.into());
+            shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
         }
         self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
     }

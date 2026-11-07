@@ -20,6 +20,7 @@
 //!   10+ the unit's switches: Binary Output, see SWITCHES; a coordinator
 //!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
+//!   28  whether the stand-in sensor regulates, with that option: Binary Input
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //!
@@ -99,6 +100,7 @@ const FAN_TIMER_ENDPOINT: u8 = 3;
 const HUMIDITY_TARGET_ENDPOINT: u8 = 4;
 const TIME_TO_TARGET_ENDPOINT: u8 = 5;
 const FILTER_RUNTIME_ENDPOINT: u8 = 6;
+const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 
 /// The switches, by endpoint: their bucket field and description.
 const SWITCHES: &[(u8, &str, &str)] = &[
@@ -256,6 +258,9 @@ impl Nest {
             if equipment.is_empty() || has(equipment) {
                 endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
             }
+        }
+        if bridge.sensor.get().is_some() {
+            endpoints.push(Endpoint { id: TEMPERATURE_SOURCE_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
         }
         Nest { bridge, endpoints, weather: Mutex::new(BTreeMap::new()) }
     }
@@ -626,6 +631,9 @@ impl Clusters for Nest {
             (ANALOG_INPUT, a) => self.analog_input(endpoint, a),
             (BINARY_INPUT | BINARY_OUTPUT, 0x0051) => Some(Value::Bool(false)),
             (BINARY_INPUT | BINARY_OUTPUT, 0x006F) => Some(Value::Bitmap8(0)),
+            (BINARY_INPUT, 0x001C) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => Some(Value::Str("External temperature in use".into())),
+            (BINARY_INPUT, 0x0055) if endpoint == TEMPERATURE_SOURCE_ENDPOINT =>
+                Some(Value::Bool(self.bridge.temperature_source() == Some("external"))),
             (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(_, description)| Value::Str(description.into())),
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
@@ -999,6 +1007,32 @@ mod tests {
         assert_eq!(sensor.reading(), Some(21.5));
         assert_eq!(n.read(1, WEATHER, EXTERNAL_TEMPERATURE), Some(Value::I16(2150)));
         assert_ne!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(9000)), status::SUCCESS, "out of range");
+    }
+
+    #[test]
+    fn the_external_temperature_has_an_endpoint_saying_whether_it_regulates() {
+        let without = nest(fields!{}, fields!{});
+        assert!(without.attributes(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT).is_none());
+
+        let bridge = crate::bridge::tests::test_bridge();
+        bridge.store.merge(&format!("link.{}", bridge.serial), &fields!{"structure" => "structure.home"}, 0, 0, false);
+        let dir = std::env::temp_dir().join(format!("nestlocal-zb-source-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), &bridge.serial, &dir.join("none"),
+                                                 std::time::Duration::from_secs(1800)).unwrap();
+        bridge.attach_sensor(sensor.clone());
+        crate::sensor::ensure_buckets(&bridge.store, &bridge.serial, &sensor.bucket, None);
+        let n = Nest::new(bridge);
+        let source = || n.read(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055);
+        assert!(n.reported().contains(&(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, &[0x0055][..])));
+        assert_eq!(source(), Some(Value::Bool(false)), "no beacon yet");
+        sensor.set(21.0).unwrap();
+        sensor.due().unwrap();
+        assert_eq!(source(), Some(Value::Bool(true)));
+        n.bridge.store.merge(&format!("rcs_settings.{}", n.bridge.serial),
+                             &fields!{"active_rcs_sensors" => Vec::<Json>::new()}, 0, 0, true);
+        assert_eq!(source(), Some(Value::Bool(false)), "the backplate is chosen");
+        assert_eq!(n.write(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
     }
 
     #[test]

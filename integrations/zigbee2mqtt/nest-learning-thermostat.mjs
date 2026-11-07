@@ -28,6 +28,7 @@
 //   23  safety shutoff          Binary Input
 //   24  filter replacement      Binary Input (with an air filter)
 //   25  hot water               Binary Input (with hot water control)
+//   28  stand-in sensor in use  Binary Input (with the external temperature option)
 //   26  humidifier running      Binary Input (with a humidifier)
 //   27  dehumidifier running    Binary Input (with a dehumidifier)
 //
@@ -70,6 +71,7 @@ const THERMOSTAT = 1;
 const BACKPLATE = 2;
 const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
+const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
     auto_schedule: 10,
     home_away_assist: 11,
@@ -262,6 +264,9 @@ const nest = {
         cluster: 'genBinaryInput',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg) => {
+            if (msg.endpoint.ID === TEMPERATURE_SOURCE && msg.data.presentValue !== undefined) {
+                return {temperature_source: msg.data.presentValue ? 'external' : 'backplate'};
+            }
             const name = byEndpoint(STATES, msg.endpoint.ID);
             if (name && msg.data.presentValue !== undefined) {
                 return {[name]: Boolean(msg.data.presentValue)};
@@ -433,6 +438,10 @@ const definition = {
                 .withValueMin(24).withValueMax(32).withValueStep(0.5).withCategory('config')
                 .withDescription('Eco cools to this'));
         }
+        if (has(device, TEMPERATURE_SOURCE)) {
+            result.push(e.enum('temperature_source', ea.STATE, ['backplate', 'external']).withLabel('Temperature source')
+                .withCategory('diagnostic').withDescription('Which sensor regulates'));
+        }
         if (has(device, OUTPUTS.fan_timer_duration)) {
             result.push(e.numeric('fan_timer_duration', ea.ALL).withUnit('min').withValueMin(15).withValueMax(1440)
                 .withValueStep(15).withCategory('config').withHomeAssistant({icon: 'mdi:fan-clock'})
@@ -552,7 +561,7 @@ const definition = {
         for (const id of Object.values(INPUTS)) {
             await read(id, 'genAnalogInput');
         }
-        for (const id of Object.values(STATES)) {
+        for (const id of [...Object.values(STATES), TEMPERATURE_SOURCE]) {
             await read(id, 'genBinaryInput');
         }
     },
