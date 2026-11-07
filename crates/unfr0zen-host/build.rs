@@ -8,7 +8,8 @@
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
 //!   .work/initramfs, fetched with curl when absent);
-//! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/;
+//! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/,
+//!   made again (`utils/build-firmware.sh nestlocal`) when its sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way).
 
@@ -43,25 +44,39 @@ fn firmware_missing(root: &Path) -> Vec<&'static str> {
     REQUIRED.into_iter().filter(|name| !root.join("build").join(name).is_file()).collect()
 }
 
-/// Runs the firmware build when build/ lacks anything. Cargo may run this
-/// script several times at once, for several targets, so one builds and the
-/// others wait for it. CI brings build/ along, and Windows cannot build it.
+/// Runs the firmware build when build/ lacks anything, and nestlocal's alone
+/// when its sources are newer than its build. Cargo may run this script
+/// several times at once, for several targets, so one builds and the others
+/// wait for it. CI brings build/ along, and Windows cannot build it.
 fn build_firmware(root: &Path) {
-    let missing = firmware_missing(root);
-    if missing.is_empty() {
+    let nestlocal = [root.join("crates/nestlocal"), root.join("Cargo.lock")];
+    for path in &nestlocal {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    let stale = || nestlocal_stale(root, &nestlocal);
+    if firmware_missing(root).is_empty() && (cfg!(windows) || env::var_os("CI").is_some() || !stale()) {
         return;
     }
+    let missing = firmware_missing(root);
     assert!(!cfg!(windows) && env::var_os("CI").is_none(),
             "build/ lacks {missing:?}: build it first with utils/build-firmware.sh, on macOS or Linux");
     let work = root.join(".work");
     fs::create_dir_all(&work).unwrap();
     let lock = fs::File::create(work.join("firmware.lock")).unwrap();
     lock.lock().unwrap();
-    if firmware_missing(root).is_empty() {
-        return;
+    if !firmware_missing(root).is_empty() {
+        run_firmware_build(root, None);
+        let missing = firmware_missing(root);
+        assert!(missing.is_empty(), "utils/build-firmware.sh left build/ without {missing:?}");
+    } else if stale() {
+        run_firmware_build(root, Some("nestlocal"));
+        assert!(!stale(), "utils/build-firmware.sh nestlocal left build/nestlocal-armv7 older than its sources");
     }
+}
+
+fn run_firmware_build(root: &Path, only: Option<&str>) {
     let mut script = Command::new("sh");
-    script.arg(root.join("utils/build-firmware.sh")).current_dir(root).stdout(Stdio::from(std::io::stderr()));
+    script.arg(root.join("utils/build-firmware.sh")).args(only).current_dir(root).stdout(Stdio::from(std::io::stderr()));
     // What cargo sets for this script is not for the cargo the firmware runs.
     for (name, _) in env::vars_os() {
         let name = name.to_string_lossy();
@@ -72,8 +87,21 @@ fn build_firmware(root: &Path) {
     }
     let status = script.status().expect("sh runs utils/build-firmware.sh");
     assert!(status.success(), "utils/build-firmware.sh failed, as above; step logs are in .work/");
-    let missing = firmware_missing(root);
-    assert!(missing.is_empty(), "utils/build-firmware.sh left build/ without {missing:?}");
+}
+
+/// Whether any of nestlocal's sources changed after build/nestlocal-armv7 was made.
+fn nestlocal_stale(root: &Path, sources: &[PathBuf]) -> bool {
+    fn newest(path: &Path) -> Option<std::time::SystemTime> {
+        let metadata = fs::metadata(path).ok()?;
+        if !metadata.is_dir() {
+            return metadata.modified().ok();
+        }
+        fs::read_dir(path).ok()?.flatten().filter_map(|entry| newest(&entry.path())).max()
+    }
+    let Some(built) = fs::metadata(root.join("build/nestlocal-armv7")).and_then(|m| m.modified()).ok() else {
+        return true;
+    };
+    sources.iter().filter_map(|path| newest(path)).any(|changed| changed > built)
 }
 
 fn sha256(data: &[u8]) -> String {
