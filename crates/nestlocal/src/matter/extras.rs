@@ -24,6 +24,7 @@ pub const BATTERY: u16 = 3;
 pub const FAN: u16 = 4;
 pub const FAN_TIMER: u16 = 5;
 pub const EXTERNAL_TEMPERATURE: u16 = 6;
+pub const TEMPERATURE_SOURCE: u16 = 7;
 /// The first switch's endpoint; the others follow.
 pub const SWITCHES: u16 = 10;
 
@@ -448,6 +449,72 @@ impl mode_select::ClusterHandler for ExternalTemperature {
     }
 }
 
+/// Which sensor regulates, as a choice of two: Home Assistant names a Boolean
+/// State only as a door, a leak or rain, and a choice shows these words. The
+/// unit decides, so choosing the other one is refused.
+pub struct TemperatureSource {
+    pub dataver: Dataver,
+    pub nest: Arc<Nest>,
+}
+
+const TEMPERATURE_SOURCES: [&str; 2] = ["backplate", "external"];
+
+impl TemperatureSource {
+    fn mode(&self) -> u8 {
+        u8::from(self.nest.temperature_source() == Some(TEMPERATURE_SOURCES[1]))
+    }
+}
+
+impl mode_select::ClusterHandler for TemperatureSource {
+    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
+        .with_attrs(with!(required))
+        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+
+    dataver!();
+
+    fn description<P: TLVBuilderParent>(&self, _ctx: impl ReadContext, builder: Utf8StrBuilder<P>) -> Result<P, Error> {
+        builder.set("Temperature source")
+    }
+
+    fn standard_namespace(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::none())
+    }
+
+    fn supported_modes<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        macro_rules! option {
+            ($b:expr, $mode:expr, $label:expr) => {
+                $b.label($label)?.mode($mode as u8)?.semantic_tags()?.end()?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for (mode, label) in TEMPERATURE_SOURCES.iter().enumerate() {
+                    array = option!(array.push()?, mode, label)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => match TEMPERATURE_SOURCES.get(usize::from(i)) {
+                Some(label) => option!(item, i, label),
+                None => Err(ErrorCode::ConstraintError.into()),
+            },
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn current_mode(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        Ok(self.mode())
+    }
+
+    fn handle_change_to_mode(&self, _ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
+        -> Result<(), Error> {
+        if request.new_mode()? == self.mode() { Ok(()) } else { Err(ErrorCode::InvalidAction.into()) }
+    }
+}
+
 /// The unit's on/off settings, a switch each.
 pub struct Switches {
     pub dataver: Dataver,
@@ -689,6 +756,17 @@ mod tests {
         }
         assert_eq!(code(change(FAN_TIMER_MINUTES.len() as u8)), ErrorCode::ConstraintError);
         assert_eq!(timer.current_mode(ctx(5)).unwrap(), 7);
+    }
+
+    #[test]
+    fn temperature_source_shows_the_regulating_sensor_and_refuses_another() {
+        let source = TemperatureSource { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{}) };
+        let change = |mode: u8| source.handle_change_to_mode(ctx(7),
+            mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])));
+        assert_eq!(source.current_mode(ctx(7)).unwrap(), 0);
+        change(0).unwrap();
+        assert_eq!(code(change(1)), ErrorCode::InvalidAction);
+        assert_eq!(source.current_mode(ctx(7)).unwrap(), 0);
     }
 
     #[test]
