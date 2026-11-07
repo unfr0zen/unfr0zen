@@ -17,6 +17,8 @@ blueprint:
               manufacturer: Google Nest
     temperature:
       name: Outdoor temperature
+      description: Optional; defaults to the weather entity's temperature.
+      default:
       selector:
         entity:
           filter:
@@ -24,6 +26,8 @@ blueprint:
               device_class: temperature
     humidity:
       name: Outdoor humidity
+      description: Optional; defaults to the weather entity's humidity.
+      default:
       selector:
         entity:
           filter:
@@ -43,6 +47,11 @@ triggers:
     minutes: /15
   - trigger: homeassistant
     event: start
+  - trigger: state
+    entity_id: !input weather
+    from:
+      - unavailable
+      - unknown
 variables:
   thermostat: !input thermostat
   temperature: !input temperature
@@ -56,53 +65,60 @@ actions:
         {{ 'daily' if (state_attr(weather, 'supported_features') | int(0)) % 2
            else 'twice_daily' }}
   # A reading that is not a number (unavailable, ...) is ignored and the
-  # last one stays. The thermostat takes °C; Home Assistant gives the sensor's
-  # reading in the sensor's unit and the forecast in the weather entity's.
+  # last one stays. The thermostat takes °C; Home Assistant gives a sensor's
+  # reading in the sensor's unit and the weather entity's in temperature_unit.
   - action: mqtt.publish
     data:
       topic: "{{ topic }}outdoor_temperature"
       payload: >-
-        {%- set outdoor = states(temperature) | float(none) -%}
-        {{ ((outdoor - 32) * 5 / 9) | round(2)
-           if outdoor is number and state_attr(temperature, 'unit_of_measurement') == '°F'
-           else states(temperature) }}
+        {%- set raw = states(temperature) if temperature else state_attr(weather, 'temperature') -%}
+        {%- set unit = state_attr(temperature, 'unit_of_measurement') if temperature else state_attr(weather, 'temperature_unit') -%}
+        {%- set outdoor = raw | float(none) -%}
+        {{ (((outdoor - 32) * 5 / 9) | round(2) if unit == '°F' else outdoor)
+           if outdoor is number else 'unavailable' }}
       retain: true
   - action: mqtt.publish
     data:
       topic: "{{ topic }}outdoor_humidity"
-      payload: "{{ states(humidity) }}"
-      retain: true
-  - action: weather.get_forecasts
-    target:
-      entity_id: "{{ weather }}"
-    data:
-      type: hourly
-    response_variable: hourly
-  - action: weather.get_forecasts
-    target:
-      entity_id: "{{ weather }}"
-    data:
-      type: "{{ daily_type }}"
-    response_variable: daily
-  - action: mqtt.publish
-    data:
-      topic: "{{ topic }}weather"
-      retain: true
       payload: >-
-        {%- set hours = hourly[weather].forecast[:48] -%}
-        {%- set fahrenheit = state_attr(weather, 'temperature_unit') == '°F' -%}
-        {%- set celsius = namespace(forecast=[]) -%}
-        {%- for f in hours + daily[weather].forecast[:14] -%}
-          {%- if fahrenheit and f.temperature is number -%}
-            {%- set f = dict(f, temperature=((f.temperature - 32) * 5 / 9) | round(2)) -%}
-          {%- endif -%}
-          {%- if fahrenheit and f.templow is number -%}
-            {%- set f = dict(f, templow=((f.templow - 32) * 5 / 9) | round(2)) -%}
-          {%- endif -%}
-          {%- set celsius.forecast = celsius.forecast + [f] -%}
-        {%- endfor -%}
-        {{ {"condition": states(weather),
-            "next_rising": state_attr('sun.sun', 'next_rising'),
-            "next_setting": state_attr('sun.sun', 'next_setting'),
-            "hourly": celsius.forecast[:hours | length],
-            "daily": celsius.forecast[hours | length:]} | to_json }}
+        {%- set raw = (states(humidity) if humidity else state_attr(weather, 'humidity')) | float(none) -%}
+        {{ raw if raw is number else 'unavailable' }}
+      retain: true
+  - if:
+      - condition: template
+        value_template: "{{ states(weather) != 'unavailable' }}"
+    then:
+      - action: weather.get_forecasts
+        target:
+          entity_id: "{{ weather }}"
+        data:
+          type: hourly
+        response_variable: hourly
+      - action: weather.get_forecasts
+        target:
+          entity_id: "{{ weather }}"
+        data:
+          type: "{{ daily_type }}"
+        response_variable: daily
+      - action: mqtt.publish
+        data:
+          topic: "{{ topic }}weather"
+          retain: true
+          payload: >-
+            {%- set hours = hourly[weather].forecast[:48] -%}
+            {%- set fahrenheit = state_attr(weather, 'temperature_unit') == '°F' -%}
+            {%- set celsius = namespace(forecast=[]) -%}
+            {%- for f in hours + daily[weather].forecast[:14] -%}
+              {%- if fahrenheit and f.temperature is number -%}
+                {%- set f = dict(f, temperature=((f.temperature - 32) * 5 / 9) | round(2)) -%}
+              {%- endif -%}
+              {%- if fahrenheit and f.templow is number -%}
+                {%- set f = dict(f, templow=((f.templow - 32) * 5 / 9) | round(2)) -%}
+              {%- endif -%}
+              {%- set celsius.forecast = celsius.forecast + [f] -%}
+            {%- endfor -%}
+            {{ {"condition": states(weather),
+                "next_rising": state_attr('sun.sun', 'next_rising'),
+                "next_setting": state_attr('sun.sun', 'next_setting'),
+                "hourly": celsius.forecast[:hours | length],
+                "daily": celsius.forecast[hours | length:]} | to_json }}

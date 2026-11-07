@@ -29,6 +29,8 @@ blueprint:
         text:
     temperature:
       name: Outdoor temperature
+      description: Optional; defaults to the weather entity's temperature.
+      default:
       selector:
         entity:
           filter:
@@ -36,6 +38,8 @@ blueprint:
               device_class: temperature
     humidity:
       name: Outdoor humidity
+      description: Optional; defaults to the weather entity's humidity.
+      default:
       selector:
         entity:
           filter:
@@ -55,6 +59,14 @@ triggers:
     minutes: /15
   - trigger: homeassistant
     event: start
+  - trigger: state
+    entity_id: !input weather
+    from:
+      - unavailable
+      - unknown
+conditions:
+  - condition: template
+    value_template: "{{ states(weather) != 'unavailable' }}"
 variables:
   thermostat: !input thermostat
   base_topic: !input base_topic
@@ -85,17 +97,20 @@ actions:
       type: "{{ daily_type }}"
     response_variable: daily
   # A reading that is not a number (unavailable, ...) leaves the last one
-  # on the thermostat. The thermostat takes °C; Home Assistant gives the
-  # sensor's reading in the sensor's unit and the forecast in the weather
-  # entity's.
+  # on the thermostat. The thermostat takes °C; Home Assistant gives a
+  # sensor's reading in the sensor's unit and the weather entity's in
+  # temperature_unit.
   - action: mqtt.publish
     data:
       topic: "{{ base_topic }}/{{ address }}/set"
       payload: >-
-        {%- set outdoor = states(temperature) | float(none) -%}
-        {%- if outdoor is number and state_attr(temperature, 'unit_of_measurement') == '°F' -%}
+        {%- set raw = states(temperature) if temperature else state_attr(weather, 'temperature') -%}
+        {%- set unit = state_attr(temperature, 'unit_of_measurement') if temperature else state_attr(weather, 'temperature_unit') -%}
+        {%- set outdoor = raw | float(none) -%}
+        {%- if outdoor is number and unit == '°F' -%}
           {%- set outdoor = ((outdoor - 32) * 5 / 9) | round(2) -%}
         {%- endif -%}
+        {%- set outdoor_humidity = (states(humidity) if humidity else state_attr(weather, 'humidity')) | float(none) -%}
         {%- set hours = hourly[weather].forecast[:24] -%}
         {%- set fahrenheit = state_attr(weather, 'temperature_unit') == '°F' -%}
         {%- set celsius = namespace(forecast=[]) -%}
@@ -109,7 +124,7 @@ actions:
           {%- set celsius.forecast = celsius.forecast + [f] -%}
         {%- endfor -%}
         {{ {"outdoor_temperature": outdoor,
-            "outdoor_humidity": states(humidity) | float(none),
+            "outdoor_humidity": outdoor_humidity,
             "weather": {"condition": states(weather),
                         "next_rising": state_attr('sun.sun', 'next_rising'),
                         "next_setting": state_attr('sun.sun', 'next_setting'),
