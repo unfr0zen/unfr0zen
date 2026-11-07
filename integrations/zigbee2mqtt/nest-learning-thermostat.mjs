@@ -45,6 +45,11 @@
 //                                  "weather": {"condition": ..., "next_rising": ..., "next_setting": ...,
 //                                              "hourly": [...], "daily": [...]}}
 //
+// A room thermometer's reading goes the same way, on a unit installed with the
+// external temperature option; it regulates from it until readings stop:
+//
+//   zigbee2mqtt/<thermostat>/set  {"external_temperature": 21.5}
+//
 // weather is what Home Assistant's weather blueprint for Zigbee
 // (integrations/home-assistant/weather-zigbee.yaml) sends: a weather entity's
 // condition, sun.sun's next_rising and next_setting, and the lists
@@ -123,6 +128,7 @@ const OUTDOOR_HUMIDITY = 0x0001; // uint8, %
 const CONDITION = 0x0002; // string, Home Assistant's condition name
 const NEXT_RISING = 0x0003; // UTCTime
 const NEXT_SETTING = 0x0004; // UTCTime
+const EXTERNAL_TEMPERATURE = 0x0005; // int16, 0.01 °C
 const HOURLY = 0x1000;
 const DAILY = 0x2000;
 const HOURS = 24;
@@ -333,6 +339,13 @@ const set = {
             await writeWeather(endpoint, forecast(DAILY, DAYS, days(Array.isArray(weather.daily) ? weather.daily : []), true));
         },
     },
+    external_temperature: {
+        key: ['external_temperature'],
+        convertSet: async (entity, key, value, meta) => {
+            await writeWeather(meta.device.getEndpoint(THERMOSTAT), {[EXTERNAL_TEMPERATURE]: int16(value)});
+            return {state: {external_temperature: value}};
+        },
+    },
     switches: {
         key: Object.keys(SWITCHES),
         convertSet: async (entity, key, value, meta) => {
@@ -374,7 +387,7 @@ const definition = {
     toZigbee: [tz.thermostat_occupied_heating_setpoint, tz.thermostat_occupied_cooling_setpoint,
         tz.thermostat_unoccupied_heating_setpoint, tz.thermostat_unoccupied_cooling_setpoint, tz.thermostat_system_mode,
         tz.thermostat_local_temperature, tz.thermostat_running_state, tz.fan_mode, tz.thermostat_temperature_display_mode,
-        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather],
+        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather, set.external_temperature],
     exposes: (device) => {
         // What the unit's wiring can do: cooling only (0), heating only (2), both.
         const sequence = isDummyDevice(device) ? 4 :
