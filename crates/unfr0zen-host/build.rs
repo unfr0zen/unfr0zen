@@ -33,9 +33,9 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 17] = [
+const REQUIRED: [&str; 18] = [
     "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
-    "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o",
+    "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
     "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
     "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl",
 ];
@@ -259,13 +259,15 @@ fn nestlocal(root: &Path, out: &Path) {
 }
 
 fn custom_screen(root: &Path, out: &Path) {
-    let object = root.join("build/custom-screen.o");
-    println!("cargo:rerun-if-changed={}", object.display());
-    let data = fs::read(&object)
-        .unwrap_or_else(|_| panic!("build/custom-screen.o is missing: build it first (utils/build-firmware.sh)"));
-    assert_eq!(&data[..6], b"\x7fELF\x01\x01", "custom-screen.o is not a 32-bit little-endian ELF");
-    assert_eq!((data[16], data[18]), (1, 40), "custom-screen.o is not an ARM relocatable object");
-    fs::write(out.join("custom-screen.o"), data).unwrap();
+    for name in ["custom-screen.o", "j49-rcs-screen.o"] {
+        let object = root.join("build").join(name);
+        println!("cargo:rerun-if-changed={}", object.display());
+        let data = fs::read(&object)
+            .unwrap_or_else(|_| panic!("build/{name} is missing: build it first (utils/build-firmware.sh)"));
+        assert_eq!(&data[..6], b"\x7fELF\x01\x01", "{name} is not a 32-bit little-endian ELF");
+        assert_eq!((data[16], data[18]), (1, 40), "{name} is not an ARM relocatable object");
+        fs::write(out.join(name), data).unwrap();
+    }
 }
 
 fn main() {

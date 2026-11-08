@@ -39,7 +39,8 @@ digest and size of the stock executable with only these edits applied.
 The public test compares the Rust edit table with the golden. The strict test
 also needs the stock j49 sample: it applies the patch to the stock binary and
 compares the whole output's digest, refuses changed sites, and applies the
-patch together with the ordinary settings screen.
+patch together with the ordinary settings screen and the external
+temperature patch.
 
 ```sh
 NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme

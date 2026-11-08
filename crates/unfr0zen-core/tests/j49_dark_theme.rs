@@ -1,6 +1,6 @@
 //! Private firmware checks for the opt-in gen 2 dark theme.
 use std::path::{Path, PathBuf};
-use unfr0zen_core::nlclient::{self, dark_theme, Patch};
+use unfr0zen_core::nlclient::{self, dark_theme, external_temperature, Patch};
 use unfr0zen_core::shell::sha256_hex;
 
 fn word(bytes: &[u8], at: usize) -> u32 {
@@ -64,15 +64,19 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
     changed_stock[0x1000] ^= 1;
     assert!(dark_theme::patch(&changed_stock, &mut stock.clone()).is_err());
 
-    // Over the ordinary settings screen, as patch_on_device composes them,
-    // and reversible through the journal.
+    // Over the ordinary settings screen and the external temperature patch,
+    // as patch_on_device composes them, and reversible through the journal.
     let object = std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/custom-screen.o"));
-    let Ok(object) = std::fs::read(object) else {
-        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the screen object");
+    let rcs_object = std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
+        .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"));
+    let (Ok(object), Ok(rcs_object)) = (std::fs::read(object), std::fs::read(rcs_object)) else {
+        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need both screen objects");
         return;
     };
-    let mut combined = nlclient::builder::build(&stock, &object).unwrap().output;
+    let screen = nlclient::builder::build(&stock, &object).unwrap().output;
+    let mut combined = screen.clone();
+    external_temperature::patch(&stock, &mut combined, &rcs_object).unwrap();
     dark_theme::patch(&stock, &mut combined).unwrap();
     for edit in golden["edits"].as_array().unwrap() {
         assert_eq!(word(&combined, offset(&stock, hex(&edit[0]))), hex(&edit[2]));

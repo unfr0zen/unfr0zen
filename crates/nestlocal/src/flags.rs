@@ -17,7 +17,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("cert", Kind::Text, "/etc/nestlocal/server.crt", "TLS certificate (signed by the CA added to ca-bundle.pem)"),
     ("discovery", Kind::Text, "homeassistant", "Home Assistant discovery prefix"),
     ("doom", Kind::Bool, "false", "offer Doom on the UNFR0ZEN screen and launch it from there (doom.rs)"),
-    ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 3 only"),
+    ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 2 needs the nlclient RCS input patch"),
     ("external-temperature-store", Kind::Text, "/media/data/nestlocal-sensor.json", "where the stand-in sensor's identity is kept"),
     ("external-temperature-timeout", Kind::Duration, "30m", "how long the last reading counts; nlclient goes back to the backplate about 11.5 minutes after that"),
     ("hold", Kind::Duration, "290s", "how long an idle subscribe is held"),

@@ -124,29 +124,28 @@ fn prepare_settings(config: &flags::Config) {
         if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
             logf!("external temperature: {e}");
         }
-    } else if device::current().ble.is_some() {
+    } else if device::current().ble.is_some() || device::current().generation == 2 {
         let store = store::Store::new(&config.state);
-        let where_id = sensor::where_id(&store, &config.serial);
+        let where_id = sensor::where_id(&store, &config.serial, std::path::Path::new(path));
         if let Err(e) = sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref()) {
             logf!("external temperature: {e}");
         }
     }
 }
 
-/// The stand-in sensor in place of the BLE chip for nlclient, or gone from a
-/// unit that no longer has the option.
+/// The stand-in sensor over gen 3 BLE or gen 2's loopback RCS input, or gone
+/// from a unit that no longer has the option.
 fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc<sensor::Sensor>> {
     let identity = std::path::Path::new(&config.external_temperature_store);
     if !config.external_temperature {
         sensor::withdraw(identity, store, &config.serial);
         return None;
     }
-    let Some(ble) = device::current().ble.as_ref() else {
-        logf!("external temperature: this unit has no BLE stack in nlclient to serve");
+    let device = device::current();
+    if device.ble.is_none() && device.generation != 2 {
+        logf!("external temperature: this unit has no supported sensor transport");
         return None;
-    };
-    #[cfg(not(target_os = "linux"))]
-    let _ = ble;
+    }
     let sensor = sensor::Sensor::open(identity, &config.serial, std::path::Path::new(&config.settings), config.external_temperature_timeout);
     let sensor = match sensor {
         Ok(sensor) => sensor,
@@ -155,15 +154,24 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
             return None;
         }
     };
-    let where_id = sensor::where_id(store, &config.serial);
+    let where_id = sensor::where_id(store, &config.serial, std::path::Path::new(&config.settings));
     sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
-    sensor::keep_selected(store, &config.serial, &sensor);
+    sensor::keep_location(store, &config.serial, &sensor.bucket);
+    if device.generation != 2 {
+        sensor::keep_selected(store, &config.serial, &sensor);
+    }
     let (known, shared) = (store.clone(), format!("shared.{}", config.serial));
     sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
     #[cfg(target_os = "linux")]
-    if let Err(e) = sensor::port::start(sensor.clone(), ble, config.matter) {
-        logf!("external temperature: {e}");
-        return None;
+    {
+        let result = match device.ble.as_ref() {
+            Some(ble) => sensor::port::start(sensor.clone(), ble, config.matter),
+            None => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
+        };
+        if let Err(e) = result {
+            logf!("external temperature: {e}");
+            return None;
+        }
     }
     Some(sensor)
 }
