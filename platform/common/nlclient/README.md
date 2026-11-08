@@ -58,6 +58,45 @@ UNFR0ZEN is at settings-menu index 1, after the thermostat/Back entry at 0.
 Its carousel tile displays the glyph above UNFR0ZEN.
 The other items retain their order.
 
+## Gen 2 external temperature input
+
+Selecting external temperature on j49 enables the native RCS input and
+the main menu's Active Sensor chooser. It accepts only the reviewed
+5.9.4-5 stock binary (SHA256
+`67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7`);
+other binaries fail before device writes. Unlike screen discovery, this
+optional patch uses hash-guarded fixed addresses and object offsets.
+
+nestlocal registers one cloud-associated virtual sensor, with the same
+persistent identity and room assignment used on gen 3. The TCP transport
+retries startup, sends fresh readings every 60 seconds, and selects only
+after the native input accepts its sample. The source chooser offers This
+thermostat and the sensor's room, without the firmware's simulated devices.
+A manual backplate choice is respected; a native process restart restores
+the external default once a fresh sample is accepted. Stale readings stop
+being sent, leaving nlclient's own fallback and recovery in control.
+
+The firmware contains its RCS views but omits their registrations. The
+compiled `j49-rcs-screen.o` helper constructs them lazily on the UI thread
+using an initialized native layer's dimensions and event target. The main
+menu's Active Sensor item opens the native source chooser; the Settings
+carousel omits the duplicate sensor-schedule entry. A null
+view cannot be dereferenced by its native configuration method. Temperature
+validity is separate from its numeric value, so 0 °C remains valid.
+
+The input listens only on loopback and dispatches only temperature samples,
+not the other stock test commands. Unassociated samples return Retry rather
+than an acknowledgement. Newline/EOF framing handles split TCP writes;
+commands have bounded size and a 1000 ms idle timeout, with the stop flag
+checked between reads. Client initialization owns the joinable thread, and
+the stock shutdown path stops, joins and frees it. SO_REUSEADDR permits
+immediate restarts with connections in TIME_WAIT.
+
+The code shares the screen's executable segment and undo journal. Deselecting
+the option removes these patches while retaining the settings screen. The
+[RCS golden and acceptance process](tests/external-temperature/README.md)
+cover the additional native bindings and layouts.
+
 ## Runtime and build requirements
 
 Run the packaged app or CLI. No screen-patching tools need to be installed on
@@ -67,8 +106,9 @@ happen in memory, without launching an external process or extracting source
 into a temporary directory.
 
 Developers still need the ordinary firmware/app build toolchain.
-`utils/build-firmware.sh` compiles `build/custom-screen.o` with ARM clang;
-`unfr0zen-host` embeds it into both front ends. Cargo builds the bundled static
+`utils/build-firmware.sh` compiles `build/custom-screen.o` and
+`build/j49-rcs-screen.o` with ARM clang; `unfr0zen-host` embeds them into both
+front ends. Cargo builds the bundled static
 Capstone decoder with a C compiler, as it builds other native dependencies.
 These compilers are build requirements only. There is no runtime compilation.
 The decoder enables only the ARM architecture.

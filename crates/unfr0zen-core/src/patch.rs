@@ -451,9 +451,11 @@ pub struct Options {
     pub wwn_boiler: bool,
     /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
-    /// nestlocal plays a Nest Temperature Sensor whose readings an external
-    /// thermometer gives: nlclient's own BLE runs, against nestlocal's stand-in.
+    /// Regulate from nestlocal's virtual sensor: BLE on gen 3, or the
+    /// reviewed native RCS input and Sensors selector patch on gen 2.
     pub external_temperature: bool,
+    /// The relocatable native Sensors view helper, linked only on j49.
+    pub external_temperature_screen: Vec<u8>,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
@@ -540,11 +542,17 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // upgrades take it back with the screen.
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
-        if !options.block_cloud {
+        let external_temperature = target == Device::J49 && options.external_temperature;
+        if !options.block_cloud && !external_temperature {
             return Ok(journal);
         }
         let mut output = crate::nlclient::Patch::parse(&journal)?.apply(source, false)?;
-        patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
+        if external_temperature {
+            crate::nlclient::external_temperature::patch(source, &mut output, &options.external_temperature_screen)?;
+        }
+        if options.block_cloud {
+            patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
+        }
         crate::nlclient::Patch::journal(source, &output)
     };
     let (mut tree, mut originals) = (Tree::new(), Originals::new());
@@ -611,8 +619,10 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
             line.pop();
             line.extend_from_slice(b" -external-temperature\n");
-            let (_, _, product) = overlay.files.iter_mut().find(|(name, _, _)| name == "etc/nestlabs/product.config").unwrap();
-            *product = nestlocal::stock_ble_on(&String::from_utf8_lossy(product)).into_bytes();
+            if target == Device::Diamond3 {
+                let (_, _, product) = overlay.files.iter_mut().find(|(name, _, _)| name == "etc/nestlabs/product.config").unwrap();
+                *product = nestlocal::stock_ble_on(&String::from_utf8_lossy(product)).into_bytes();
+            }
         }
     }
     let mut directories = Vec::new();
@@ -648,6 +658,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
 
     let screen = volume.inspect(crate::nlclient::BINARY)?;
+    if target == Device::J49 && options.external_temperature && screen.is_none() {
+        return device("j49 external temperature requires nlclient");
+    }
     let mut screen_patch = None;
     if let Some((owner, mode, sha)) = &screen {
         if !owner.starts_with("0:") || mode & 0o111 == 0 {
@@ -679,6 +692,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         if let Some(previous) = &previous {
             if previous.output_sha == *sha { source = previous.apply(&source, true)?; }
             else if previous.stock_sha != *sha { return device("nlclient undo journal does not match the executable"); }
+        }
+        if target == Device::J49 && options.external_temperature && !source.starts_with(b"\x7fELF") {
+            return device("j49 external temperature requires an ARM ELF nlclient");
         }
         if source.starts_with(b"\x7fELF") {
             // Preserve the stock executable once, including on devices patched
@@ -1185,6 +1201,71 @@ mod tests {
         assert!(!volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"1\""));
         patch(&mut volume, &Options { external_temperature: false, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("external-temperature"));
+    }
+
+    #[test]
+    fn j49_external_temperature_requires_nlclient_before_any_writes() {
+        let pki = nestlocal::generate_pki().unwrap();
+        for binary in [None, Some(b"not an ELF".to_vec()), Some(b"\x7fELF unreviewed".to_vec())] {
+            let mut volume = nestlocal_unit(Some(&pki));
+            volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
+            if let Some(binary) = binary {
+                volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, binary));
+            }
+            let before = volume.files.clone();
+            let error = patch_on_device(&mut volume, Device::J49,
+                &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
+                &BTreeSet::new(), false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
+            assert!(error.to_string().contains("j49 external temperature"), "{error}");
+            assert_eq!(volume.files, before);
+            assert!(volume.commands.is_empty());
+        }
+    }
+
+    #[test]
+    fn j49_external_temperature_is_conditional_idempotent_and_reversible() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join(".work/firmware"));
+        let object = std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("build/custom-screen.o"));
+        let (Ok(source), Ok(object)) = (std::fs::read(firmware.join("nlclient-gen2-2019")), std::fs::read(object)) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the j49 sample and screen object");
+            return;
+        };
+        let rcs_object = std::fs::read(std::env::var_os("NLCLIENT_RCS_OBJECT").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"))).expect("build the j49 RCS screen object");
+        let pki = nestlocal::generate_pki().unwrap();
+        for block_cloud in [false, true] {
+            let mut volume = nestlocal_unit(Some(&pki));
+            volume.files.insert("etc/hosts".into(), ("0:0".into(), 0o644, b"127.0.0.1 localhost\n".to_vec()));
+            volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
+            volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source.clone()));
+            let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
+                volume, Device::J49, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+                &|source| crate::nlclient::build(source, &object));
+            let off = Options { block_cloud, external_temperature_screen: rcs_object.clone(),
+                mqtt: Some(Mqtt { url: "broker".into(), ..Mqtt::default() }), ..options() };
+            run(&mut volume, &off, false).unwrap();
+            let screen = volume.files[crate::nlclient::BINARY].2.clone();
+            volume.commands.clear();
+            let on = Options { external_temperature: true, ..off.clone() };
+            let before = volume.files.clone();
+            let planned = run(&mut volume, &on, true).unwrap();
+            assert!(names(&planned).contains(crate::nlclient::BINARY));
+            assert_eq!(volume.files, before);
+            assert!(volume.commands.is_empty());
+            assert_eq!(run(&mut volume, &on, false).unwrap(), planned);
+            assert_ne!(volume.files[crate::nlclient::BINARY].2, screen);
+            assert!(volume.text(nestlocal::OPTIONS).contains("-external-temperature"));
+            volume.commands.clear();
+            assert!(run(&mut volume, &on, false).unwrap().is_empty());
+            assert!(volume.commands.is_empty());
+            run(&mut volume, &off, false).unwrap();
+            assert_eq!(volume.files[crate::nlclient::BINARY].2, screen);
+            assert!(!volume.text(nestlocal::OPTIONS).contains("-external-temperature"));
+            assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, source);
+        }
     }
 
     #[test]

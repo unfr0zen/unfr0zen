@@ -3,10 +3,13 @@
 //! sensor falls silent, so nestlocal gives it one: a sensor registered as a
 //! paired one is, whose beacons come from an external thermometer's readings
 //! (set/external_temperature, or a Zigbee or Matter write) through a stand-in
-//! for the BLE chip (port.rs, chip.rs, beacon.rs).
+//! for the BLE chip (port.rs, chip.rs, beacon.rs) on gen 3, or a patched
+//! loopback RCS input (socket.rs) on gen 2. Both use the same paired identity
+//! and room assignment through nlclient's cloud buckets.
 
 pub mod beacon;
 pub mod chip;
+pub mod socket;
 #[cfg(target_os = "linux")]
 pub mod port;
 
@@ -40,7 +43,8 @@ const RANGE: (f64, f64) = (-30.0, 60.0);
 const SELECT_AFTER: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const SELECT_AFTER: Duration = Duration::from_millis(10);
-const DESCRIPTION: &str = "External";
+// The thermostat's room is the name; a description would add a second label.
+const DESCRIPTION: &str = "";
 const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
 
 /// Who the sensor is, kept between runs: the key only nlclient and nestlocal
@@ -160,6 +164,8 @@ pub struct Sensor {
     /// Interrupts the port's wait for a new reading (port.rs).
     notify: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// Gen 2 selects only after its native manager accepts the first sample.
+    select_after_delivery: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// The temperature of the beacon before any reading, °C.
     introduction: OnceLock<Box<dyn Fn() -> Option<f64> + Send + Sync>>,
 }
@@ -191,6 +197,7 @@ impl Sensor {
             }),
             notify: OnceLock::new(),
             on_change: OnceLock::new(),
+            select_after_delivery: OnceLock::new(),
             introduction: OnceLock::new(),
         };
         Ok(Arc::new(sensor))
@@ -198,6 +205,16 @@ impl Sensor {
 
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         let _ = self.on_change.set(Box::new(f));
+    }
+
+    pub fn select_when_ready(&self, store: &Store, serial: &str) {
+        if let Some(select) = self.select_after_delivery.get() {
+            self.state.lock().unwrap().pending = true;
+            select();
+            if let Some(notify) = self.notify.get() { notify(); }
+        } else {
+            select(store, serial, &self.bucket);
+        }
     }
 
     pub fn introduce_with(&self, temperature: impl Fn() -> Option<f64> + Send + Sync + 'static) {
@@ -451,6 +468,7 @@ pub fn ensure_buckets(store: &Arc<Store>, serial: &str, bucket: &str, where_id: 
         "model" => "KR1",
         "serial_number" => id,
         "where_id" => where_id.unwrap_or(DEFAULT_WHERE),
+        "description" => DESCRIPTION,
         "structure_id" => structure.split_once('.').map_or("", |(_, id)| id),
         "report_period_in_seconds" => 60,
     }, 0, 0, false);
@@ -498,7 +516,11 @@ pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
         std::thread::spawn(move || {
             std::thread::sleep(SELECT_AFTER);
             waiting.store(false, Ordering::SeqCst);
-            choose(&store, &serial, &sensor.bucket, sensor.has_reading());
+            if sensor.has_reading() {
+                sensor.select_when_ready(&store, &serial);
+            } else {
+                choose(&store, &serial, &sensor.bucket, false);
+            }
         });
     });
 }
@@ -535,8 +557,27 @@ pub fn selected(store: &Store, serial: &str, bucket: &str) -> bool {
 }
 
 /// The unit's room, as its device bucket names it.
-pub fn where_id(store: &Store, serial: &str) -> Option<String> {
-    store.get(&format!("device.{serial}"))?.value.get("where_id")?.as_str().map(str::to_string)
+pub fn where_id(store: &Store, serial: &str, settings: &Path) -> Option<String> {
+    std::fs::read(settings).ok().and_then(|bytes| {
+        let value = nlsettings::value(&bytes, "device_where_id")?;
+        std::str::from_utf8(value).ok().filter(|id| !id.is_empty()).map(str::to_string)
+    }).or_else(|| {
+        store.get(&format!("device.{serial}")).and_then(|device| {
+            device.value.get("where_id")?.as_str().filter(|id| !id.is_empty()).map(str::to_string)
+        })
+    })
+}
+
+/// Follow the thermostat's room, including a location change after startup.
+pub fn keep_location(store: &Arc<Store>, serial: &str, bucket: &str) {
+    let (device, bucket, weak) = (format!("device.{serial}"), bucket.to_string(), Arc::downgrade(store));
+    store.watch(move |object| {
+        if object.key != device { return; }
+        let Some(where_id) = object.value.get("where_id").and_then(Value::as_str).filter(|id| !id.is_empty()) else { return; };
+        if let Some(store) = weak.upgrade() {
+            store.merge(&bucket, &fields!{"where_id" => where_id}, 0, 0, false);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -557,6 +598,44 @@ mod tests {
         let path = dir.join("sensor.json");
         let sensor = Sensor::open(&path, "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
         (sensor, path)
+    }
+
+    #[test]
+    fn location_comes_from_the_thermostat_and_tracks_later_changes() {
+        let store = temp_store();
+        let directory = dir("location");
+        let settings = directory.join("settings.config");
+        std::fs::write(&settings, b"<settings><s key=\"device_where_id\" value=\"living-room\"/></settings>").unwrap();
+        store.merge("device.S", &fields!{"where_id" => "old-room"}, 0, 0, true);
+        assert_eq!(where_id(&store, "S", &settings).as_deref(), Some("living-room"));
+        std::fs::remove_file(&settings).unwrap();
+        assert_eq!(where_id(&store, "S", &settings).as_deref(), Some("old-room"));
+        crate::structure::ensure_structure(&store, "S");
+        ensure_buckets(&store, "S", "kryptonite.AB", Some("living-room"));
+        keep_location(&store, "S", "kryptonite.AB");
+        store.merge("device.S", &fields!{"where_id" => "new-room"}, 0, 0, true);
+        let sensor = store.get("kryptonite.AB").unwrap();
+        assert_eq!(sensor.value["where_id"], json!("new-room"));
+        assert_eq!(sensor.value["description"], json!(""));
+        ensure_buckets(&store, "S", "kryptonite.AB", Some("new-room"));
+        assert_eq!(store.get("rcs_settings.S").unwrap().value["associated_rcs_sensors"], json!(["kryptonite.AB"]));
+    }
+
+    #[test]
+    fn selection_can_wait_for_native_sample_acceptance() {
+        let store = temp_store();
+        let (sensor, _) = sensor("deferred-selection");
+        let requested = Arc::new(AtomicBool::new(false));
+        let flag = requested.clone();
+        sensor.select_after_delivery.set(Box::new(move || flag.store(true, Ordering::SeqCst))).ok().unwrap();
+        sensor.set(20.0).unwrap();
+        sensor.select_when_ready(&store, "S");
+        assert!(requested.load(Ordering::SeqCst));
+        assert!(sensor.state.lock().unwrap().pending);
+        assert!(store.get("rcs_settings.S").is_none(), "an unaccepted sample must not be selected");
+        let (ble, _) = self::sensor("immediate-selection");
+        ble.select_when_ready(&store, "S");
+        assert_eq!(store.get("rcs_settings.S").unwrap().value["active_rcs_sensors"], json!([ble.bucket]));
     }
 
     #[test]

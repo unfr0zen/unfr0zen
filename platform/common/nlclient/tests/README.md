@@ -1,5 +1,9 @@
 # Unpatched firmware baselines
 
+The optional j49 external-temperature input has its own
+[golden and firmware-acceptance process](external-temperature/README.md).
+Its fixed RCS bindings are not covered by settings-screen discovery alone.
+
 The goldens were recorded from untouched stock executables extracted from
 NAND dumps, or read from a unit by a run, with Debian clang 19.1.7 and
 `ld.lld -O0`. No stock executable, NAND image, or proprietary payload is

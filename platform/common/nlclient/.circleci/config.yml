@@ -21,12 +21,14 @@ jobs:
           command: sh platform/common/nlclient/build.sh build
       - module-store:
           module: nlclient
-          outputs: build/custom-screen.o
+          outputs: build/custom-screen.o build/j49-rcs-screen.o
       - run:
           name: nlclient navigation
           command: |
             clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/custom_flow_test.c -o /tmp/custom-flow-test
             /tmp/custom-flow-test
+            clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/rcs_screen_test.c -o /tmp/rcs-screen-test
+            /tmp/rcs-screen-test
 
 workflows:
   nlclient:

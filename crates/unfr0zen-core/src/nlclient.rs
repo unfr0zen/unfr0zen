@@ -1,6 +1,7 @@
 //! Build the native account-screen replacement from the unit's own ELF.
 //! Keep hash-guarded byte edits as an undo journal for rollback and upgrades.
 mod branding;
+pub mod external_temperature;
 mod elf;
 mod arm;
 pub mod discovery;

@@ -108,7 +108,7 @@ struct Args {
     /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
-    /// regulate from temperatures sent to the unit (set/external_temperature, Zigbee or Matter), which hears them as a Nest Temperature Sensor; turns off its own Bluetooth, so real Nest Temperature Sensors stop working; 3rd generation; needs --mqtt, --matter or --zigbee
+    /// regulate from temperatures sent over MQTT, Zigbee or Matter, using one sensor named after the thermostat's room; gen 2 needs the reviewed 5.9.4-5 nlclient patch; gen 3 turns off its own Bluetooth, so real Nest Temperature Sensors stop working; needs --mqtt, --matter or --zigbee
     #[arg(long, help_heading = "Root filesystem options")]
     external_temperature: bool,
     /// tar of root-owned files to add
