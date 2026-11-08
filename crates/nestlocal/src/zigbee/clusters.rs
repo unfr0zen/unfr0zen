@@ -21,6 +21,9 @@
 //!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
 //!   28  whether the stand-in sensor regulates, with that option: Binary Input
+//!   30+ the HVAC stages that run, those the wiring has: Binary Input, in
+//!       bridge::HEAT_STAGES then COOL_STAGES order (30 heat stage 1 to 39
+//!       cool stage 3); Thermostat's running state also has the second stages
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //!
@@ -101,6 +104,7 @@ const HUMIDITY_TARGET_ENDPOINT: u8 = 4;
 const TIME_TO_TARGET_ENDPOINT: u8 = 5;
 const FILTER_RUNTIME_ENDPOINT: u8 = 6;
 const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
+const STAGE_ENDPOINTS: u8 = 30;
 
 /// The switches, by endpoint: their bucket field and description.
 const SWITCHES: &[(u8, &str, &str)] = &[
@@ -127,6 +131,11 @@ const STATES: &[(u8, &str, &str, &str)] = &[
     (26, "humidifier_state", "Humidifier", "has_humidifier"),
     (27, "dehumidifier_state", "Dehumidifier", "has_dehumidifier"),
 ];
+
+/// The HVAC stages, by endpoint from STAGE_ENDPOINTS.
+fn stages() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str, &'static str)> {
+    bridge::HEAT_STAGES.iter().chain(bridge::COOL_STAGES)
+}
 
 // Home Automation device types.
 const THERMOSTAT_DEVICE: u16 = 0x0301;
@@ -259,6 +268,12 @@ impl Nest {
                 endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
             }
         }
+        let wired = bridge::wired_stages(&v.dev);
+        for (id, &(key, ..)) in (STAGE_ENDPOINTS..).zip(stages()) {
+            if wired.iter().any(|w| w.0 == key) {
+                endpoints.push(Endpoint { id, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
+            }
+        }
         if bridge.sensor.get().is_some() {
             endpoints.push(Endpoint { id: TEMPERATURE_SOURCE_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
         }
@@ -351,6 +366,12 @@ impl Nest {
                 };
                 if truthy(view.state.get("fan_running")) {
                     running |= 0x0004;
+                }
+                if truthy(view.state.get("heat_stage_2")) {
+                    running |= 0x0008;
+                }
+                if truthy(view.state.get("cool_stage_2")) {
+                    running |= 0x0010;
                 }
                 Value::Bitmap16(running)
             }
@@ -464,8 +485,13 @@ impl Nest {
         })
     }
 
-    fn state(&self, endpoint: u8) -> Option<(&'static str, &'static str)> {
-        STATES.iter().find(|(e, _, _, _)| *e == endpoint).map(|(_, key, description, _)| (*key, *description))
+    /// A state endpoint's description and value.
+    fn state(&self, endpoint: u8) -> Option<(&'static str, bool)> {
+        let v = self.view();
+        if let Some(&(key, _, name, _)) = endpoint.checked_sub(STAGE_ENDPOINTS).and_then(|i| stages().nth(i as usize)) {
+            return Some((name, truthy(v.state.get(key))));
+        }
+        STATES.iter().find(|(e, _, _, _)| *e == endpoint).map(|(_, key, description, _)| (*description, truthy(v.dev.get(*key))))
     }
 
     fn switch(&self, endpoint: u8) -> Option<(&'static str, &'static str)> {
@@ -634,8 +660,8 @@ impl Clusters for Nest {
             (BINARY_INPUT, 0x001C) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => Some(Value::Str("External temperature in use".into())),
             (BINARY_INPUT, 0x0055) if endpoint == TEMPERATURE_SOURCE_ENDPOINT =>
                 Some(Value::Bool(self.bridge.temperature_source() == Some("external"))),
-            (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(_, description)| Value::Str(description.into())),
-            (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(key, _)| Value::Bool(truthy(self.view().dev.get(key)))),
+            (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(description, _)| Value::Str(description.into())),
+            (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(_, on)| Value::Bool(on)),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
             (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(bridge::switch_on(&self.view().dev, key))),
             (WEATHER, a) => self.weather(a),
@@ -752,7 +778,8 @@ mod tests {
     #[test]
     fn every_listed_attribute_reads_and_every_reported_one_is_listed() {
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_dehumidifier" => true,
-                             "has_air_filter" => true, "has_hot_water_control" => true},
+                             "has_air_filter" => true, "has_hot_water_control" => true, "has_x2_heat" => true,
+                             "has_emer_heat" => true, "has_x3_cool" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
         for e in &n.endpoints {
             for &cluster in &e.clusters {
@@ -798,6 +825,24 @@ mod tests {
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x03)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0006)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0002), Some(Value::Bitmap8(0))); // away: unoccupied
+    }
+
+    #[test]
+    fn stages_have_endpoints_as_wired_and_second_ones_running_state_bits() {
+        let n = nest(fields!{"has_x2_heat" => true, "has_aux_heat" => true},
+                     fields!{"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
+                             "hvac_heat_x2_state" => true, "hvac_fan_state" => true});
+        let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|&id| id >= STAGE_ENDPOINTS).collect();
+        assert_eq!(ids, [30, 31, 33], "heat stages 1 and 2, aux; no cool stage of its own");
+        assert_eq!(n.read(31, BINARY_INPUT, 0x001C), Some(Value::Str("Heat stage 2".into())));
+        assert_eq!(n.read(31, BINARY_INPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(33, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x000D)));
+        assert!(nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().all(|e| e.id < STAGE_ENDPOINTS));
+        let cool = nest(fields!{"has_x2_cool" => true},
+                        fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true});
+        assert_eq!(cool.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0012)));
+        assert_eq!(cool.read(38, BINARY_INPUT, 0x001C), Some(Value::Str("Cool stage 2".into())));
     }
 
     #[test]

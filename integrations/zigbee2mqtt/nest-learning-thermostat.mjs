@@ -31,6 +31,19 @@
 //   28  stand-in sensor in use  Binary Input (with the external temperature option)
 //   26  humidifier running      Binary Input (with a humidifier)
 //   27  dehumidifier running    Binary Input (with a dehumidifier)
+//   30  heat stage 1            Binary Input (with any other heat stage below)
+//   31  heat stage 2            Binary Input (W2 wired)
+//   32  heat stage 3            Binary Input (W3 wired)
+//   33  aux heat                Binary Input (aux heat wired)
+//   34  alt heat                Binary Input (alt heat wired)
+//   35  alt heat stage 2        Binary Input (a second alt heat stage wired)
+//   36  emergency heat          Binary Input (emergency heat wired)
+//   37  cool stage 1            Binary Input (with another cool stage)
+//   38  cool stage 2            Binary Input (Y2 wired)
+//   39  cool stage 3            Binary Input (Y3 wired)
+//
+// The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
+// cool stage 2 (0x0010) beside heat or cool.
 //
 // The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //
@@ -104,6 +117,16 @@ const STATES = {
     hot_water: 25,
     humidifier: 26,
     dehumidifier: 27,
+    heat_stage_1: 30,
+    heat_stage_2: 31,
+    heat_stage_3: 32,
+    aux_heat: 33,
+    alt_heat: 34,
+    alt_heat_stage_2: 35,
+    emergency_heat: 36,
+    cool_stage_1: 37,
+    cool_stage_2: 38,
+    cool_stage_3: 39,
 };
 // Label, Home Assistant metadata (a name beside a device class, which
 // Home Assistant would name it after otherwise), description.
@@ -117,6 +140,11 @@ const STATE_LABELS = {
     hot_water: ['Hot water', {deviceClass: 'heat', name: 'Hot water'}, 'Hot water is heating'],
     humidifier: ['Humidifier', {deviceClass: 'running', name: 'Humidifier'}, 'The humidifier runs'],
     dehumidifier: ['Dehumidifier', {deviceClass: 'running', name: 'Dehumidifier'}, 'The dehumidifier runs'],
+    ...Object.fromEntries(Object.entries({
+        heat_stage_1: 'Heat stage 1', heat_stage_2: 'Heat stage 2', heat_stage_3: 'Heat stage 3', aux_heat: 'Aux heat',
+        alt_heat: 'Alt heat', alt_heat_stage_2: 'Alt heat stage 2', emergency_heat: 'Emergency heat',
+        cool_stage_1: 'Cool stage 1', cool_stage_2: 'Cool stage 2', cool_stage_3: 'Cool stage 3',
+    }).map(([name, label]) => [name, [label, {deviceClass: 'running', name: label}, `${label} runs`]])),
 };
 
 // The Weather cluster, manufacturer-specific under Nest Labs' code: the
@@ -215,13 +243,19 @@ const nest = {
             }
         },
     },
-    // What runs, as binary sensors beside the climate's action.
+    // What runs, as binary sensors beside the climate's action. The action
+    // is set here too: fz.thermostat names none for the second stages' bits
+    // in most combinations.
     running: {
         cluster: 'hvacThermostat',
         type: ['attributeReport', 'readResponse'],
         convert: (model, msg) => {
-            if (msg.data.runningState !== undefined) {
-                return Object.fromEntries(Object.entries(RUNNING).map(([name, bit]) => [name, Boolean(msg.data.runningState & bit)]));
+            const state = msg.data.runningState;
+            if (state !== undefined) {
+                const action = state & RUNNING.heating ? 'heat' : state & RUNNING.cooling ? 'cool' :
+                    state & RUNNING.fan_running ? 'fan_only' : 'idle';
+                return {running_state: action,
+                    ...Object.fromEntries(Object.entries(RUNNING).map(([name, bit]) => [name, Boolean(state & bit)]))};
             }
         },
     },

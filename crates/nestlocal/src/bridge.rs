@@ -391,6 +391,9 @@ impl Bridge {
         if has_fan {
             binary("fan_running", "Fan", "running", Fields::new());
         }
+        for (key, name) in wired_stages(dev) {
+            binary(key, name, "running", Fields::new());
+        }
         binary("leaf", "Leaf", "", fields!{"icon" => "mdi:leaf"});
         binary("occupancy", "Occupancy", "occupancy", Fields::new());
         binary("preconditioning_active", "Early-On active", "", fields!{"icon" => "mdi:clock-fast"});
@@ -537,6 +540,37 @@ pub fn switch_on(dev: &Fields, key: &str) -> bool {
     }
 }
 
+/// The HVAC stages, heat's then cool's: the state's key, the shared bucket's
+/// relay field, a name, and the device bucket's flag for its wire. A first
+/// stage has no flag: it shows beside any other of its kind that is wired.
+/// Zigbee numbers its endpoints in this order.
+pub const HEAT_STAGES: &[(&str, &str, &str, &str)] = &[
+    ("heat_stage_1", "hvac_heater_state", "Heat stage 1", ""),
+    ("heat_stage_2", "hvac_heat_x2_state", "Heat stage 2", "has_x2_heat"),
+    ("heat_stage_3", "hvac_heat_x3_state", "Heat stage 3", "has_x3_heat"),
+    ("aux_heat", "hvac_aux_heater_state", "Aux heat", "has_aux_heat"),
+    ("alt_heat", "hvac_alt_heat_state", "Alt heat", "has_alt_heat"),
+    ("alt_heat_stage_2", "hvac_alt_heat_x2_state", "Alt heat stage 2", "has_x2_alt_heat"),
+    ("emergency_heat", "hvac_emer_heat_state", "Emergency heat", "has_emer_heat"),
+];
+pub const COOL_STAGES: &[(&str, &str, &str, &str)] = &[
+    ("cool_stage_1", "hvac_ac_state", "Cool stage 1", ""),
+    ("cool_stage_2", "hvac_cool_x2_state", "Cool stage 2", "has_x2_cool"),
+    ("cool_stage_3", "hvac_cool_x3_state", "Cool stage 3", "has_x3_cool"),
+];
+
+/// The stages the unit's wiring has, as `HEAT_STAGES` and `COOL_STAGES` list
+/// them: the state's key and the name.
+pub fn wired_stages(dev: &Fields) -> Vec<(&'static str, &'static str)> {
+    let mut out = Vec::new();
+    for stages in [HEAT_STAGES, COOL_STAGES] {
+        if stages.iter().any(|s| !s.3.is_empty() && truthy(dev.get(s.3))) {
+            out.extend(stages.iter().filter(|s| s.3.is_empty() || truthy(dev.get(s.3))).map(|s| (s.0, s.2)));
+        }
+    }
+    out
+}
+
 /// A temperature (°C) as the unit's screen shows it: to half degrees in
 /// Celsius, to whole degrees in Fahrenheit (given back in °C, the unit Home
 /// Assistant is told). The unit stores finer values, such as 19.87 or a
@@ -583,13 +617,12 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     s.insert("target_high".into(), shown(sh.get("target_temperature_high"), &scale));
     s.insert("current_temperature".into(), shown(sh.get("current_temperature"), &scale));
 
-    let any = |keys: &[&str]| keys.iter().any(|k| truthy(sh.get(*k)));
+    let any = |stages: &[(&str, &str, &str, &str)]| stages.iter().any(|s| truthy(sh.get(s.1)));
     let action = if mode == "off" {
         "off"
-    } else if any(&["hvac_heater_state", "hvac_heat_x2_state", "hvac_heat_x3_state", "hvac_aux_heater_state",
-                    "hvac_alt_heat_state", "hvac_emer_heat_state"]) {
+    } else if any(HEAT_STAGES) {
         "heating"
-    } else if any(&["hvac_ac_state", "hvac_cool_x2_state", "hvac_cool_x3_state"]) {
+    } else if any(COOL_STAGES) {
         "cooling"
     } else if truthy(sh.get("hvac_fan_state")) {
         "fan"
@@ -597,6 +630,11 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
         "idle"
     };
     s.insert("action".into(), action.into());
+    for (stages, kind) in [(HEAT_STAGES, "heating"), (COOL_STAGES, "cooling")] {
+        for &(key, field, _, _) in stages {
+            s.insert(key.into(), (action == kind && truthy(sh.get(field))).into());
+        }
+    }
     s.insert("heating".into(), (action == "heating").into());
     s.insert("cooling".into(), (action == "cooling").into());
     s.insert("fan_running".into(), truthy(sh.get("hvac_fan_state")).into());
@@ -677,6 +715,27 @@ pub mod tests {
         }
         let off = state(&Fields::new(), &obj(json!({"target_temperature_type": "off", "hvac_heater_state": true})));
         assert_eq!(off["action"], json!("off"));
+    }
+
+    #[test]
+    fn stages_show_what_runs_and_what_is_wired() {
+        let s = state(&Fields::new(), &obj(json!({"target_temperature_type": "heat", "hvac_heat_x2_state": true,
+                                                   "hvac_alt_heat_x2_state": true})));
+        assert_eq!(s["action"], json!("heating"));
+        for (k, want) in [("heat_stage_1", false), ("heat_stage_2", true), ("alt_heat_stage_2", true), ("aux_heat", false),
+                          ("cool_stage_1", false)] {
+            assert_eq!(s[k], json!(want), "{k}");
+        }
+        let alt = state(&Fields::new(), &obj(json!({"target_temperature_type": "heat", "hvac_alt_heat_x2_state": true})));
+        assert_eq!(alt["action"], json!("heating"), "a second alt heat stage alone heats");
+        let off = state(&Fields::new(), &obj(json!({"target_temperature_type": "off", "hvac_heat_x2_state": true})));
+        assert_eq!(off["heat_stage_2"], json!(false), "nothing runs while off");
+
+        assert!(wired_stages(&Fields::new()).is_empty(), "a single stage has none of its own");
+        let heat_pump = obj(json!({"has_heat_pump": true, "has_aux_heat": true, "has_x2_cool": false}));
+        assert_eq!(wired_stages(&heat_pump), [("heat_stage_1", "Heat stage 1"), ("aux_heat", "Aux heat")]);
+        let two_cool = obj(json!({"has_x2_cool": true}));
+        assert_eq!(wired_stages(&two_cool), [("cool_stage_1", "Cool stage 1"), ("cool_stage_2", "Cool stage 2")]);
     }
 
     #[test]
@@ -792,7 +851,9 @@ pub mod tests {
     /// Equipment with everything discovery can announce.
     fn everything() -> (Fields, Fields) {
         (obj(json!({"has_fan": true, "has_air_filter": true, "has_hot_water_control": true, "has_humidifier": true,
-                    "has_dehumidifier": true, "fan_timer_duration": 900, "filter_runtime_sec": 7200,
+                    "has_dehumidifier": true, "has_x2_heat": true, "has_x3_heat": true, "has_aux_heat": true,
+                    "has_alt_heat": true, "has_x2_alt_heat": true, "has_emer_heat": true, "has_x2_cool": true,
+                    "has_x3_cool": true, "fan_timer_duration": 900, "filter_runtime_sec": 7200,
                     "temperature_scale": "C"})),
          obj(json!({"can_heat": true, "can_cool": true, "target_temperature_type": "range"})))
     }

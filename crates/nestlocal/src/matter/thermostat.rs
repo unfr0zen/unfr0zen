@@ -220,6 +220,12 @@ impl ClusterHandler for Thermostat {
         if view.state_flag("fan_running") {
             state |= RelayStateBitmap::FAN;
         }
+        if view.state_flag("heat_stage_2") {
+            state |= RelayStateBitmap::HEAT_STAGE_2;
+        }
+        if view.state_flag("cool_stage_2") {
+            state |= RelayStateBitmap::COOL_STAGE_2;
+        }
         Ok(state)
     }
 
@@ -491,6 +497,17 @@ mod tests {
                    ControlSequenceOfOperationEnum::CoolingAndHeating);
         assert_eq!(t.thermostat_running_state(ctx(1)).unwrap(), RelayStateBitmap::COOL);
         assert_eq!(t.occupancy(ctx(1)).unwrap(), OccupancyBitmap::OCCUPIED);
+    }
+
+    #[test]
+    fn second_stages_run_beside_the_first() {
+        let t = thermostat(fields!{"has_x2_heat" => true},
+                           fields!{"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
+                                   "hvac_heat_x2_state" => true});
+        assert_eq!(t.thermostat_running_state(ctx(1)).unwrap(), RelayStateBitmap::HEAT | RelayStateBitmap::HEAT_STAGE_2);
+        let t = thermostat(fields!{"has_x2_cool" => true},
+                           fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true});
+        assert_eq!(t.thermostat_running_state(ctx(1)).unwrap(), RelayStateBitmap::COOL | RelayStateBitmap::COOL_STAGE_2);
     }
 
     #[test]
