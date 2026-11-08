@@ -58,6 +58,17 @@ thermostat. With MQTT or Matter, the thermostat reaches the broker or the
 controller over Wi-Fi, joined from its own menu (Settings → Network); the
 network doesn't need internet access.
 
+### Tested firmware
+
+| Device | Nest firmware |
+|-|-|
+| Nest Learning Thermostat (3rd generation) | 5.9.4-5, 6.3-5, 6.4-8, 6.5-14 |
+| Nest Learning Thermostat (2nd generation) | 5.9.4-5 |
+
+Other versions aren't blocked: unfr0zen patches them on their structure and
+keeps the stock nlclient beside the run log. Running a version not listed here?
+[Open an issue](https://github.com/unfr0zen/unfr0zen/issues) with the run log.
+
 ## Requirements
 1. **A USB data cable.** Gen 1 uses mini-USB; Gen 2 and 3 use micro-USB. Charge-only cables won't work.
 2. **Windows (x86_64, arm64), macOS 13+ (universal, arm64, x86_64) or Linux (x86_64, arm64, riscv64; glibc 2.28+).**
