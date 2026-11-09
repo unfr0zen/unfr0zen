@@ -1,10 +1,11 @@
 version: 2.1
 
 # The app: every module of what it carries, gathered as one build/ by the
-# firmware job, then the workspace's tests and the app for each target. Its
-# workflow, the only one building the modules outside a release, runs on main,
-# and on a branch when anything built changes; the release workflow
-# (.circleci/release.yml) runs the same jobs for a release tag.
+# firmware job, then the workspace's tests and the app for one target of each
+# operating system. Its workflow, the only one building the modules outside a
+# release, runs on main, and on a branch when anything built changes; the
+# release workflow (.circleci/release.yml) runs the same jobs for a release
+# tag, with the app for every target.
 
 parameters:
   app:
@@ -193,10 +194,12 @@ workflows:
       - test:
           requires: [firmware]
           context: docker-hub
+      # Nothing publishes these builds: they show that the app compiles and
+      # links for each operating system, and a release builds the other targets.
       - app:
           matrix:
             parameters:
-              platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
+              platform: [linux-x86_64, windows-x86_64, macos]
           name: app-<< matrix.platform >>
           requires: [firmware]
           context: docker-hub
