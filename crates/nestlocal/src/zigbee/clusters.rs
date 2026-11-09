@@ -18,10 +18,15 @@
 //!   5   the time to temperature, seconds left: Analog Input
 //!   6   the filter's runtime, hours (with an air filter): Analog Input;
 //!       writing 0 says the filter was changed
+//!   7   the fan schedule's run time, minutes per hour (with a fan): Analog
+//!       Output
+//!   8   the fan schedule's start, hour of the day (with a fan): Analog Output
+//!   9   the fan schedule's end, hour of the day (with a fan): Analog Output
 //!   10+ the unit's switches: Binary Output, see SWITCHES; a coordinator
 //!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
 //!   28  whether the stand-in sensor regulates, with that option: Binary Input
+//!   29  whether the fan follows its schedule (with a fan): Binary Output
 //!   30+ the HVAC stages that run, those the wiring has: Binary Input, in
 //!       bridge::HEAT_STAGES then COOL_STAGES order (30 heat stage 1 to 39
 //!       cool stage 3); Thermostat's running state also has the second stages
@@ -104,6 +109,9 @@ const FAN_TIMER_ENDPOINT: u8 = 3;
 const HUMIDITY_TARGET_ENDPOINT: u8 = 4;
 const TIME_TO_TARGET_ENDPOINT: u8 = 5;
 const FILTER_RUNTIME_ENDPOINT: u8 = 6;
+const FAN_SCHEDULE_MINUTES_ENDPOINT: u8 = 7;
+const FAN_SCHEDULE_START_ENDPOINT: u8 = 8;
+const FAN_SCHEDULE_END_ENDPOINT: u8 = 9;
 const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 const STAGE_ENDPOINTS: u8 = 30;
 
@@ -119,6 +127,7 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (17, "hot_water_boost", "Hot water boost"),
     (18, "hot_water_schedule", "Hot water schedule"),
     (19, "filter_reminder_enabled", "Filter reminder"), // with an air filter
+    (29, "fan_schedule", "Fan schedule"),               // with a fan
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -253,6 +262,11 @@ impl Nest {
         if has("has_air_filter") {
             endpoints.push(Endpoint { id: FILTER_RUNTIME_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![ANALOG_INPUT] });
         }
+        if has_fan {
+            for id in [FAN_SCHEDULE_MINUTES_ENDPOINT, FAN_SCHEDULE_START_ENDPOINT, FAN_SCHEDULE_END_ENDPOINT] {
+                endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
+            }
+        }
         for &(id, key, _) in SWITCHES {
             let present = match key {
                 "away_temperature_low_enabled" => has("can_heat"),
@@ -260,6 +274,7 @@ impl Nest {
                 "target_humidity_enabled" => humidity_control,
                 "hot_water_boost" | "hot_water_schedule" => has("has_hot_water_control"),
                 "filter_reminder_enabled" => has("has_air_filter"),
+                "fan_schedule" => has_fan,
                 _ => true,
             };
             if present {
@@ -435,14 +450,23 @@ impl Nest {
         result
     }
 
-    /// An Analog Output: the fan timer's minutes, or the target humidity.
+    /// An Analog Output: the fan timer's minutes, the fan schedule's, its
+    /// start and end hours, or the target humidity.
     fn analog_output(&self, endpoint: u8, attribute: u16) -> Option<Value> {
+        let dev = self.view().dev;
+        let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
         let (description, units, min, max, value) = match endpoint {
             FAN_TIMER_ENDPOINT => {
-                let minutes = number(self.view().dev.get("fan_timer_duration")).map_or(15.0, |s| s / 60.0);
+                let minutes = number(dev.get("fan_timer_duration")).map_or(15.0, |s| s / 60.0);
                 ("Fan timer duration", MINUTES, 15.0, 1440.0, minutes)
             }
-            _ => ("Target humidity", PERCENT, 10.0, 60.0, number(self.view().dev.get("target_humidity")).unwrap_or(35.0)),
+            FAN_SCHEDULE_MINUTES_ENDPOINT => {
+                let minutes = number(dev.get("fan_duty_cycle")).map_or(60.0, |s| (s / 60.0).round());
+                ("Fan schedule run time", MINUTES, 15.0, 60.0, minutes)
+            }
+            FAN_SCHEDULE_START_ENDPOINT => ("Fan schedule start", HOURS, 0.0, 23.0, hour("fan_duty_start_time")),
+            FAN_SCHEDULE_END_ENDPOINT => ("Fan schedule end", HOURS, 0.0, 23.0, hour("fan_duty_end_time")),
+            _ => ("Target humidity", PERCENT, 10.0, 60.0, number(dev.get("target_humidity")).unwrap_or(35.0)),
         };
         Some(match attribute {
             0x001C => Value::Str(description.into()),
@@ -460,6 +484,13 @@ impl Nest {
         match (attribute, value) {
             (0x0055, Value::F32(v)) if endpoint == FAN_TIMER_ENDPOINT => {
                 self.apply("fan_timer_duration", &(v.round() as i64).to_string())
+            }
+            (0x0055, Value::F32(v)) if endpoint == FAN_SCHEDULE_MINUTES_ENDPOINT => {
+                self.apply("fan_schedule_minutes", &(v.round() as i64).to_string())
+            }
+            (0x0055, Value::F32(v)) if endpoint == FAN_SCHEDULE_START_ENDPOINT || endpoint == FAN_SCHEDULE_END_ENDPOINT => {
+                let name = if endpoint == FAN_SCHEDULE_START_ENDPOINT { "fan_schedule_start" } else { "fan_schedule_end" };
+                self.apply(name, &(v.round() as i64).to_string())
             }
             (0x0055, Value::F32(v)) => self.apply("target_humidity", &format!("{}", v.round())),
             _ => status::READ_ONLY,
@@ -730,7 +761,7 @@ mod tests {
         assert!(!n.has(1, FAN));
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 26]);
+        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 29, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
     }
 
@@ -919,6 +950,35 @@ mod tests {
         assert_eq!(n.write(4, ANALOG_OUTPUT, 0x0055, Value::F32(70.0)), status::INVALID_VALUE);
         assert_eq!(n.read(4, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(PERCENT)));
         assert_eq!(n.write(4, ANALOG_OUTPUT, 0x0041, Value::F32(90.0)), status::READ_ONLY);
+    }
+
+    #[test]
+    fn the_fan_schedule_is_a_switch_and_three_analog_outputs() {
+        let n = nest(fields!{"has_fan" => true, "fan_mode" => "auto", "fan_duty_cycle" => 3600,
+                             "fan_duty_start_time" => 0, "fan_duty_end_time" => 0}, fields!{});
+        assert_eq!(n.read(29, BINARY_OUTPUT, 0x001C), Some(Value::Str("Fan schedule".into())));
+        assert_eq!(n.read(29, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.write(29, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.view().dev["fan_mode"], "duty-cycle");
+        assert_eq!(n.read(29, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        // Run time: 15, 30, 45 or 60 minutes per hour.
+        assert_eq!(n.read(7, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
+        assert_eq!(n.write(7, ANALOG_OUTPUT, 0x0055, Value::F32(30.0)), status::SUCCESS);
+        assert_eq!(n.view().dev["fan_duty_cycle"], 1800);
+        assert_eq!(n.write(7, ANALOG_OUTPUT, 0x0055, Value::F32(20.0)), status::INVALID_VALUE);
+        // Start and end, hours of the day.
+        assert_eq!(n.write(8, ANALOG_OUTPUT, 0x0055, Value::F32(7.0)), status::SUCCESS);
+        assert_eq!(n.write(9, ANALOG_OUTPUT, 0x0055, Value::F32(23.0)), status::SUCCESS);
+        assert_eq!(n.write(9, ANALOG_OUTPUT, 0x0055, Value::F32(24.0)), status::INVALID_VALUE);
+        assert_eq!((n.read(8, ANALOG_OUTPUT, 0x0055), n.read(9, ANALOG_OUTPUT, 0x0055)),
+                   (Some(Value::F32(7.0)), Some(Value::F32(23.0))));
+        assert_eq!((&n.view().dev["fan_duty_start_time"], &n.view().dev["fan_duty_end_time"]),
+                   (&serde_json::json!(25_200), &serde_json::json!(82_800)));
+        assert_eq!(n.read(8, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(HOURS)));
+
+        let without = nest(fields!{}, fields!{});
+        assert!([7, 8, 9].iter().all(|&id| without.attributes(id, ANALOG_OUTPUT).is_none()));
+        assert!(without.attributes(29, BINARY_OUTPUT).is_none());
     }
 
     #[test]

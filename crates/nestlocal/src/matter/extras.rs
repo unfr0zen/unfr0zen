@@ -1,9 +1,9 @@
 //! Everything beside the Thermostat cluster, each on the endpoint Home
 //! Assistant reads it from: humidity and the display's °C/°F on the
 //! thermostat's own; the backplate temperature, the battery, the fan, the fan
-//! timer and the unit's switches on endpoints of their own, each named by a
-//! fixed label (ha_entitylabel, which Home Assistant names the test vendor's
-//! entities by).
+//! timer, the fan schedule and the unit's switches on endpoints of their own,
+//! each named by a fixed label (ha_entitylabel, which Home Assistant names
+//! the test vendor's entities by).
 
 use std::sync::Arc;
 
@@ -18,6 +18,7 @@ use rs_matter::tlv::{Nullable, TLVBuilderParent, ToTLVArrayBuilder, ToTLVBuilder
 use rs_matter::with;
 
 use super::{failed, Nest, THERMOSTAT};
+use crate::bridge;
 
 pub const BACKPLATE: u16 = 2;
 pub const BATTERY: u16 = 3;
@@ -27,6 +28,8 @@ pub const EXTERNAL_TEMPERATURE: u16 = 6;
 pub const TEMPERATURE_SOURCE: u16 = 7;
 /// The first switch's endpoint; the others follow.
 pub const SWITCHES: u16 = 10;
+/// The fan schedule's run time; its start and end follow. Past the switches.
+pub const FAN_SCHEDULE: u16 = 40;
 
 /// The fan timer's choices, minutes, as MQTT's select has them.
 const FAN_TIMER_MINUTES: [u32; 8] = [15, 30, 45, 60, 120, 240, 480, 720];
@@ -65,6 +68,10 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
         all.push(("filter_reminder_enabled", "Filter reminder"));
         // Reads off: turning it on says the filter was changed.
         all.push(("filter_reset", "Filter reset"));
+    }
+    // Last, so the endpoints of the switches before it stay as paired.
+    if view.device_flag("has_fan") {
+        all.push(("fan_schedule", "Fan schedule"));
     }
     all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect()
 }
@@ -520,6 +527,109 @@ impl mode_select::ClusterHandler for TemperatureSource {
     }
 }
 
+/// The fan schedule's run time (minutes per hour), start and end (hours of
+/// the day), on FAN_SCHEDULE and the two endpoints after it, with the choices
+/// MQTT's selects offer.
+pub struct FanSchedule {
+    pub dataver: Dataver,
+    pub nest: Arc<Nest>,
+}
+
+/// One of the fan schedule's settings: its name, the command that sets it,
+/// and its choices, each a label and the argument the command takes.
+struct ScheduleSetting {
+    name: &'static str,
+    command: &'static str,
+    choices: Vec<(String, String)>,
+}
+
+impl FanSchedule {
+    fn setting(endpoint: u16) -> Result<ScheduleSetting, Error> {
+        let hours = |name, command| ScheduleSetting {
+            name, command, choices: (0..24).map(|h| (format!("{h:02}:00"), h.to_string())).collect(),
+        };
+        match endpoint {
+            FAN_SCHEDULE => Ok(ScheduleSetting {
+                name: "Fan schedule run time",
+                command: "fan_schedule_minutes",
+                choices: bridge::FAN_SCHEDULE_MINUTES.iter().map(|m| (format!("{m} min/h"), m.to_string())).collect(),
+            }),
+            e if e == FAN_SCHEDULE + 1 => Ok(hours("Fan schedule start", "fan_schedule_start")),
+            e if e == FAN_SCHEDULE + 2 => Ok(hours("Fan schedule end", "fan_schedule_end")),
+            _ => Err(ErrorCode::NotFound.into()),
+        }
+    }
+
+    fn mode(&self, endpoint: u16) -> Result<u8, Error> {
+        let view = self.nest.view();
+        let hour = |field: &str| view.device_number(field).map_or(0, |s| (s / 3600.0) as u8 % 24);
+        match endpoint {
+            FAN_SCHEDULE => {
+                let minutes = view.device_number("fan_duty_cycle").map_or(60.0, |s| s / 60.0);
+                Ok(bridge::FAN_SCHEDULE_MINUTES.iter().enumerate()
+                    .min_by_key(|(_, m)| ((**m as f64) - minutes).abs() as u64)
+                    .map_or(0, |(i, _)| i as u8))
+            }
+            e if e == FAN_SCHEDULE + 1 => Ok(hour("fan_duty_start_time")),
+            e if e == FAN_SCHEDULE + 2 => Ok(hour("fan_duty_end_time")),
+            _ => Err(ErrorCode::NotFound.into()),
+        }
+    }
+}
+
+impl mode_select::ClusterHandler for FanSchedule {
+    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
+        .with_attrs(with!(required))
+        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+
+    dataver!();
+
+    fn description<P: TLVBuilderParent>(&self, ctx: impl ReadContext, builder: Utf8StrBuilder<P>) -> Result<P, Error> {
+        builder.set(Self::setting(ctx.attr().endpoint_id)?.name)
+    }
+
+    fn standard_namespace(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::none())
+    }
+
+    fn supported_modes<P: TLVBuilderParent>(
+        &self,
+        ctx: impl ReadContext,
+        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        let choices = Self::setting(ctx.attr().endpoint_id)?.choices;
+        macro_rules! option {
+            ($b:expr, $mode:expr, $label:expr) => {
+                $b.label($label)?.mode($mode as u8)?.semantic_tags()?.end()?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for (mode, (label, _)) in choices.iter().enumerate() {
+                    array = option!(array.push()?, mode, label)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => match choices.get(usize::from(i)) {
+                Some((label, _)) => option!(item, i, label),
+                None => Err(ErrorCode::ConstraintError.into()),
+            },
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn current_mode(&self, ctx: impl ReadContext) -> Result<u8, Error> {
+        self.mode(ctx.attr().endpoint_id)
+    }
+
+    fn handle_change_to_mode(&self, ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
+        -> Result<(), Error> {
+        let setting = Self::setting(ctx.cmd().endpoint_id)?;
+        let (_, arg) = setting.choices.get(usize::from(request.new_mode()?)).ok_or(ErrorCode::ConstraintError)?;
+        self.nest.apply(setting.command, arg).map_err(failed)
+    }
+}
+
 /// The unit's on/off settings, a switch each.
 pub struct Switches {
     pub dataver: Dataver,
@@ -633,6 +743,30 @@ mod tests {
                    [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]);
         assert_eq!(keys(fields!{"has_air_filter" => true}, fields!{})[4..],
                    [(14, "filter_reminder_enabled"), (15, "filter_reset")]);
+        // The fan schedule's switch comes last.
+        assert_eq!(keys(fields!{"has_air_filter" => true, "has_fan" => true}, fields!{})[4..],
+                   [(14, "filter_reminder_enabled"), (15, "filter_reset"), (16, "fan_schedule")]);
+    }
+
+    #[test]
+    fn fan_schedule_shows_and_sets_its_run_time_start_and_end() {
+        let schedule = FanSchedule { dataver: Dataver::new(0), nest: nest(fields!{"fan_duty_cycle" => 1800,
+            "fan_duty_start_time" => 25_200, "fan_duty_end_time" => 82_800}, fields!{}) };
+        assert_eq!([40, 41, 42].map(|e| schedule.current_mode(ctx(e)).unwrap()), [1, 7, 23]);
+        let change = |endpoint: u16, mode: u8| schedule.handle_change_to_mode(ctx(endpoint),
+            mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])));
+        change(40, 3).unwrap();
+        change(41, 0).unwrap();
+        change(42, 12).unwrap();
+        assert_eq!(field(&schedule.nest, "device", "fan_duty_cycle").as_f64(), Some(3600.0));
+        assert_eq!(field(&schedule.nest, "device", "fan_duty_start_time").as_f64(), Some(0.0));
+        assert_eq!(field(&schedule.nest, "device", "fan_duty_end_time").as_f64(), Some(43_200.0));
+        assert_eq!(code(change(40, 4)), ErrorCode::ConstraintError);
+        assert_eq!(code(change(42, 24)), ErrorCode::ConstraintError);
+        assert_eq!(code(change(43, 0)), ErrorCode::NotFound);
+        // A unit that has said nothing: always on, all day.
+        let fresh = FanSchedule { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{}) };
+        assert_eq!([40, 41, 42].map(|e| fresh.current_mode(ctx(e)).unwrap()), [3, 0, 0]);
     }
 
     #[test]
