@@ -143,6 +143,10 @@ workflows:
           requires: [firmware]
           context: docker-hub
           filters: *release-tags
+      - clippy:
+          requires: [firmware]
+          context: docker-hub
+          filters: *release-tags
       - app:
           matrix:
             parameters:
@@ -152,6 +156,6 @@ workflows:
           context: docker-hub
           filters: *release-tags
       - release-publish:
-          requires: [test, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]
+          requires: [test, clippy, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]
           context: github
           filters: *release-tags

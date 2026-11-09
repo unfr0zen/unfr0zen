@@ -36,8 +36,8 @@ jobs:
           paths:
             - .work/cache/firmware.tar
 
-  # Every test the build image can run: the workspace's Rust tests and clippy,
-  # the radio's dispatcher and image checks, the radio firmware under ARM
+  # Every test the build image can run: the workspace's Rust tests, the
+  # radio's dispatcher and image checks, the radio firmware under ARM
   # emulation, and the Thread diagnostics producer. The ones needing the stock
   # nlclient or NAND images (not in this repository) skip.
   test:
@@ -56,12 +56,6 @@ jobs:
             cargo nextest run --workspace --locked --profile ci || status=$?
             mkdir -p .work/test-results/rust && cp target/nextest/ci/junit.xml .work/test-results/rust/
             exit $status
-      - run:
-          name: Clippy
-          no_output_timeout: 30m
-          command: |
-            rustup component add clippy
-            cargo clippy --workspace --locked --all-targets -- -D warnings
       - cargo-registry-store
       - run:
           name: radio
@@ -93,6 +87,20 @@ jobs:
             /tmp/test-thread-diag > /dev/null
       - store_test_results:
           path: .work/test-results
+
+  # Clippy over the workspace, beside the tests rather than after them.
+  clippy:
+    executor: build-large
+    steps:
+      - checkout
+      - firmware
+      - cargo-registry-restore
+      - run:
+          name: Clippy
+          no_output_timeout: 30m
+          command: |
+            rustup component add clippy
+            cargo clippy --workspace --locked --all-targets -- -D warnings
 
   # The app for one platform, into dist/. On Linux and macOS the same
   # executable is the command-line tool when given arguments. Linux builds
@@ -192,6 +200,9 @@ workflows:
       - firmware:
           requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
       - test:
+          requires: [firmware]
+          context: docker-hub
+      - clippy:
           requires: [firmware]
           context: docker-hub
       # Nothing publishes these builds: they show that the app compiles and
