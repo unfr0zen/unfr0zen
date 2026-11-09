@@ -8,9 +8,9 @@ jobs:
     executor: build
     steps:
       - checkout
+      - keys
       - module-restore:
           module: nlclient
-          paths: platform/common/nlclient/src
       - module-build:
           module: nlclient
           command: sh platform/common/nlclient/build.sh build

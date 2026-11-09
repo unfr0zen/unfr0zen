@@ -136,15 +136,12 @@ workflows:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
           filters: *release-tags
-      - firmware:
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
-          filters: *release-tags
       - test:
-          requires: [firmware]
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
           filters: *release-tags
       - clippy:
-          requires: [firmware]
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
           filters: *release-tags
       - app:
@@ -152,7 +149,7 @@ workflows:
             parameters:
               platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
           name: app-<< matrix.platform >>
-          requires: [firmware, release-draft]
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal, release-draft]
           context: docker-hub
           filters: *release-tags
       - release-publish:

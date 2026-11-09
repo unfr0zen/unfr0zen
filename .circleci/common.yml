@@ -4,11 +4,12 @@ version: 2.1
 # commands, and the gate that the image is on Docker Hub. Merged into every
 # pipeline by the setup workflow (.circleci/config.yml, utils/ci/configs.py).
 #
-# A module's job restores its outputs from the cache under a key of its inputs
-# (the image, its sources' git trees, the artifacts it embeds), builds only on
-# a miss, and persists them as one tarball to the workspace for the jobs
-# downstream in its workflow. The app and release workflows list every
-# module's job, each defined in its subsystem's .circleci/config.yml.
+# A job has a key of its inputs (the image, its sources' git trees, the keys
+# of the modules it takes: utils/ci/configs.py holds the table). A module's
+# job restores its outputs from the cache under that key, builds only on a
+# miss, and stores them as one tarball; the jobs taking the module restore it
+# from there. A check stores a mark that it passed. The setup workflow renders
+# the cached job in the place of a job with nothing to do.
 
 parameters:
   image:
@@ -20,6 +21,9 @@ parameters:
     type: boolean
     default: false
 
+# Every job sharing a cache works in /tmp/project: the cache restores a file
+# to the absolute path it was saved from, and the modules pass between
+# executors with different home directories.
 executors:
   build:
     docker:
@@ -28,6 +32,7 @@ executors:
           username: $DOCKERHUB_USER
           password: $DOCKERHUB_TOKEN
     resource_class: arm.medium.gen2
+    working_directory: /tmp/project
     environment:
       IMAGE: << pipeline.parameters.image >>
       # The container reports the host's cores; the class has two.
@@ -41,6 +46,7 @@ executors:
           username: $DOCKERHUB_USER
           password: $DOCKERHUB_TOKEN
     resource_class: arm.large.gen2
+    working_directory: /tmp/project
     environment:
       IMAGE: << pipeline.parameters.image >>
       CARGO_BUILD_JOBS: "4"
@@ -50,37 +56,25 @@ executors:
     docker:
       - image: cimg/python:3.13
     resource_class: small
+    working_directory: /tmp/project
 
 commands:
-  # The module's cache key from its inputs, then its tarball from the cache,
-  # unpacked when there.
+  # Every job's key, into .work/keys.
+  keys:
+    steps:
+      - run:
+          name: The keys
+          command: python3 utils/ci/configs.py keys
+
+  # The module's tarball from the cache, unpacked when there.
   module-restore:
     parameters:
       module:
         type: string
-      paths:
-        description: Its sources, as git paths whose tree ids key the cache.
-        type: string
-      files:
-        description: Built files it embeds, keyed by content.
-        type: string
-        default: ""
     steps:
-      - run:
-          name: << parameters.module >>'s key
-          command: |
-            mkdir -p .work/keys .work/cache
-            {
-              echo "<< parameters.module >> $IMAGE"
-              set -- << parameters.paths >>
-              for path in "$@"; do git rev-parse "HEAD:$path"; done
-              set -- << parameters.files >>
-              for file in "$@"; do sha256sum "$file"; done
-            } | sha256sum | cut -d' ' -f1 > .work/keys/<< parameters.module >>
-            echo "<< parameters.module >> $(cat .work/keys/<< parameters.module >>)"
       - restore_cache:
           keys:
-            - module-<< parameters.module >>-v1-{{ checksum ".work/keys/<< parameters.module >>" }}
+            - module-<< parameters.module >>-v2-{{ checksum ".work/keys/<< parameters.module >>" }}
       - run:
           name: Unpack << parameters.module >> if cached
           command: |
@@ -105,17 +99,13 @@ commands:
             [ ! -f .work/cache/<< parameters.module >>.tar ] || { echo "<< parameters.module >> is cached"; exit 0; }
             << parameters.command >>
 
-  # The outputs as one tarball, into the cache and the workspace.
+  # The outputs as one tarball, into the cache.
   module-store:
     parameters:
       module:
         type: string
       outputs:
         type: string
-      persist:
-        description: Off in a job that persists its modules' tarballs in one step of its own.
-        type: boolean
-        default: true
     steps:
       - run:
           name: Pack << parameters.module >>
@@ -123,27 +113,63 @@ commands:
             [ -f .work/cache/<< parameters.module >>.tar ] || tar cf .work/cache/<< parameters.module >>.tar << parameters.outputs >>
             tar tf .work/cache/<< parameters.module >>.tar
       - save_cache:
-          key: module-<< parameters.module >>-v1-{{ checksum ".work/keys/<< parameters.module >>" }}
+          key: module-<< parameters.module >>-v2-{{ checksum ".work/keys/<< parameters.module >>" }}
           paths:
             - .work/cache/<< parameters.module >>.tar
-      - when:
-          condition: << parameters.persist >>
-          steps:
-            - persist_to_workspace:
-                root: .
-                paths:
-                  - .work/cache/<< parameters.module >>.tar
 
-  # What the jobs upstream in the workflow built.
-  modules:
+  # Every module from the cache, as build/: the jobs upstream stored the ones
+  # that were missing.
+  firmware:
     steps:
-      - attach_workspace:
-          at: .
+      - restore_cache:
+          keys:
+            - module-recovery-v2-{{ checksum ".work/keys/recovery" }}
+      - restore_cache:
+          keys:
+            - module-j49-v2-{{ checksum ".work/keys/j49" }}
+      - restore_cache:
+          keys:
+            - module-j49-kernel-v2-{{ checksum ".work/keys/j49-kernel" }}
+      - restore_cache:
+          keys:
+            - module-zbwake-v2-{{ checksum ".work/keys/zbwake" }}
+      - restore_cache:
+          keys:
+            - module-radio-v2-{{ checksum ".work/keys/radio" }}
+      - restore_cache:
+          keys:
+            - module-thread-v2-{{ checksum ".work/keys/thread" }}
+      - restore_cache:
+          keys:
+            - module-doom-v2-{{ checksum ".work/keys/doom" }}
+      - restore_cache:
+          keys:
+            - module-nlclient-v2-{{ checksum ".work/keys/nlclient" }}
+      - restore_cache:
+          keys:
+            - module-nestlocal-v2-{{ checksum ".work/keys/nestlocal" }}
       - run:
-          name: Unpack the modules
+          name: Unpack the firmware
           command: |
-            for tar in .work/cache/*.tar; do tar xf "$tar"; done
+            for module in recovery j49 j49-kernel zbwake radio thread doom nlclient nestlocal; do
+              tar xf .work/cache/$module.tar || { echo "$module is not in the cache"; exit 1; }
+            done
             find build -type f | sort
+
+  # The mark that the check passed with these inputs: the setup workflow
+  # finds it and has the next pipeline with the same ones skip the job.
+  passed:
+    parameters:
+      check:
+        type: string
+    steps:
+      - run:
+          name: Mark << parameters.check >> as passed
+          command: mkdir -p .work/passed && touch .work/passed/<< parameters.check >>
+      - save_cache:
+          key: passed-<< parameters.check >>-v2-{{ checksum ".work/keys/<< parameters.check >>" }}
+          paths:
+            - .work/passed/<< parameters.check >>
 
   cargo-registry-restore:
     steps:
@@ -185,7 +211,7 @@ commands:
             fi > .work/keys/target-<< parameters.cache >>
       - restore_cache:
           keys:
-            - cargo-target-<< parameters.cache >>-v1-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
+            - cargo-target-<< parameters.cache >>-v2-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
   cargo-target-store:
     parameters:
       cache:
@@ -195,11 +221,26 @@ commands:
         default: target
     steps:
       - save_cache:
-          key: cargo-target-<< parameters.cache >>-v1-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
+          key: cargo-target-<< parameters.cache >>-v2-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
           paths:
             - << parameters.path >>
 
 jobs:
+  # In the place of a job with nothing to do, under its name: its module is
+  # in the cache, or it passed with these inputs. What requires the job and
+  # GitHub's required checks see it succeed.
+  cached:
+    parameters:
+      platform:
+        description: Unused, an app entry's parameter.
+        type: string
+        default: ""
+    docker:
+      - image: cimg/base:current
+    resource_class: small
+    steps:
+      - run: echo "nothing to do, its inputs are those of an earlier run"
+
   # The gate: the build image for this Dockerfile is on Docker Hub. When this
   # push changed utils/ci/, the build-image workflow is publishing it in this
   # same pipeline, so wait for it; otherwise a missing image is an error.

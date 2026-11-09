@@ -8,9 +8,9 @@ jobs:
     executor: build
     steps:
       - checkout
+      - keys
       - module-restore:
           module: doom
-          paths: platform/common/doom
       - module-build:
           module: doom
           command: git submodule update --init --depth 1 platform/common/doom/doomgeneric && sh platform/common/doom/build.sh build/doom-armv7

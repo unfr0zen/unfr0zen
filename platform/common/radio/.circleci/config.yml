@@ -8,9 +8,9 @@ jobs:
     executor: build-large
     steps:
       - checkout
+      - keys
       - module-restore:
           module: radio
-          paths: platform/common/radio
       - module-build:
           module: radio
           command: sh platform/common/radio/fetch-sdk.sh .work/zigbee-sdk > /dev/null && sh platform/common/radio/thread/fetch-openthread.sh && sh platform/common/radio/thread/radio.sh
@@ -22,9 +22,9 @@ jobs:
     executor: build-large
     steps:
       - checkout
+      - keys
       - module-restore:
           module: thread
-          paths: platform/common/radio/thread
       - module-build:
           module: thread
           command: sh platform/common/radio/thread/fetch-openthread.sh && sh platform/common/radio/thread/host.sh

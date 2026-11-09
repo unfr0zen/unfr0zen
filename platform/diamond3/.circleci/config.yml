@@ -8,9 +8,9 @@ jobs:
     executor: build
     steps:
       - checkout
+      - keys
       - module-restore:
           module: recovery
-          paths: platform/diamond3/bootstrap platform/diamond3/uboot
       - module-build:
           module: recovery
           command: git submodule update --init --depth 1 platform/diamond3/uboot/upstream && python3 platform/diamond3/bootstrap/build_bootstrap.py && sh platform/diamond3/uboot/build_uboot.sh

@@ -1,19 +1,20 @@
 version: 2.1
 
 # zbwake.ko for each gen 3 release, against Nest's published kernel sources,
-# in one job: each release's module has a cache of its own, and the releases
-# missing from it build together. The setup workflow (utils/ci/configs.py)
-# repeats the module-restore and module-store steps for each release of the
-# releases file.
+# in one job: each release's module has a cache of its own, the releases
+# missing from it build together, and the set is the zbwake module. The setup
+# workflow (utils/ci/configs.py) repeats the module-restore and module-store
+# steps for each release of the releases file.
 
 jobs:
   zbwake:
     executor: build
     steps:
       - checkout
-      # Keyed on the sources alone, not the releases file or this config: a
+      - keys
+      # A release's key has the sources alone, not the releases file: a
       # release added builds its own module and keeps the others'.
-      - module-restore: { module: "zbwake-__ZBWAKE_RELEASE__", paths: platform/diamond3/zbwake/build.sh platform/diamond3/zbwake/zbwake.c platform/diamond3/zbwake/Kbuild }
+      - module-restore: { module: "zbwake-__ZBWAKE_RELEASE__" }
       - run:
           name: Build zbwake for the releases not cached
           no_output_timeout: 30m
@@ -24,8 +25,7 @@ jobs:
             done
             [ $# -gt 0 ] || { echo "every release is cached"; exit 0; }
             ZBWAKE_JOBS=$JOBS sh platform/diamond3/zbwake/build.sh build/zbwake "$@"
-      - module-store: { module: "zbwake-__ZBWAKE_RELEASE__", outputs: "build/zbwake/__ZBWAKE_RELEASE__.ko", persist: false }
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .work/cache/zbwake-*.tar
+      - module-store: { module: "zbwake-__ZBWAKE_RELEASE__", outputs: "build/zbwake/__ZBWAKE_RELEASE__.ko" }
+      - module-store:
+          module: zbwake
+          outputs: build/zbwake
