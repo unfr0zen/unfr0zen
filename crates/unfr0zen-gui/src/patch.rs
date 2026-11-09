@@ -385,8 +385,19 @@ impl Form {
         crate::checkbox(ui, self.holds_radio(), &mut self.wwn_boiler, crate::tr!("patch.wwn_boiler")).on_hover_text(
             crate::tr!("patch.wwn_boiler_hint"));
         crate::checkbox(ui, true, &mut self.doom, crate::tr!("patch.doom")).on_hover_text(crate::tr!("patch.doom_hint"));
-        crate::checkbox(ui, self.mqtt.on || self.matter.on || self.zigbee, &mut self.external_temperature, crate::tr!("patch.external_temperature"))
-            .on_hover_text(crate::tr!("patch.external_temperature_hint"));
+        // Offered for the generations that have it; a gen 3 is told its
+        // Bluetooth goes. The device last seen keeps it while a unit is unplugged.
+        let device = self.device.or(self.last_device);
+        if matches!(device, Some(Device::Diamond3 | Device::J49)) {
+            let enabled = self.mqtt.on || self.matter.on || self.zigbee;
+            if device == Some(Device::Diamond3) {
+                crate::checkbox(ui, enabled, &mut self.external_temperature, crate::tr!("patch.external_temperature_ble"))
+                    .on_hover_text(crate::tr!("patch.external_temperature_ble_hint"));
+            } else {
+                crate::checkbox(ui, enabled, &mut self.external_temperature, crate::tr!("patch.external_temperature"))
+                    .on_hover_text(crate::tr!("patch.external_temperature_hint"));
+            }
+        }
         // Offered only with a gen 2 chosen or on the bus.
         if self.known_device(bus) == Some(Device::J49) {
             crate::checkbox(ui, true, &mut self.dark_theme, crate::tr!("patch.dark_theme"))
