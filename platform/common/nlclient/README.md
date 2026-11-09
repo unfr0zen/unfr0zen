@@ -110,10 +110,16 @@ reviewed 5.9.4-5 stock binary, at fixed, hash-guarded addresses, and fails
 closed on any other build. Each edited word must hold its stock value before
 any is written.
 
+The kernel's boot logo, Nest's cream disc, goes black too: a copy of the
+kernel the unit boots (the stock one, or unfr0zen's with `--usb-shell`) with
+only the logo's palette recoloured goes in the upper half of the slot's boot
+partition, which U-Boot then boots first. The stock kernel stays where it
+is, and U-Boot falls back to it should the copy not load.
+
 The edits share the screen's undo journal, so a run without the option
-restores the light colours while retaining the settings screen. The [dark
-theme golden](tests/dark-theme/README.md) lists every edit and the patched
-digest.
+restores the light colours while retaining the settings screen, and puts
+back an undarkened kernel. The [dark theme
+golden](tests/dark-theme/README.md) lists every edit and the patched digest.
 
 ## Runtime and build requirements
 

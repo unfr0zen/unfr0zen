@@ -45,3 +45,16 @@ temperature patch.
 ```sh
 NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme
 ```
+
+## Boot logo
+
+`crates/unfr0zen-core/tests/j49_logo.rs` recolours the kernel's logo in the
+kernel with the USB serial port from `build/j49/uImage`, and in the stock
+kernel of `J49_NAND`'s boot0 when set: the image keeps its length, only the
+header's CRCs and the gzip stream change, and the logo reads back dark. The
+logo is found by its `linux_logo` structure and accepted only with Nest's
+palette, by its SHA-256.
+
+```sh
+J49_NAND=nand.bin NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked --release -p unfr0zen-core --test j49_logo
+```

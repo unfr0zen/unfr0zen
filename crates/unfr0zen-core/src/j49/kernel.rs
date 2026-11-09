@@ -1,7 +1,8 @@
-//! The j49's kernel with a USB serial port, beside the stock one: in the
-//! unused upper half of the slot's boot partition, booted first through
-//! nandbootNacm, a copy of the stock nandbootN loading from there. Should it
-//! not load, U-Boot goes on to the stock kernel. Port of unfr0zen-gen2.py.
+//! The j49's kernel with a USB serial port, or one with the dark boot logo,
+//! beside the stock one: in the unused upper half of the slot's boot
+//! partition, booted first through nandbootNacm, a copy of the stock
+//! nandbootN loading from there. Should it not load, U-Boot goes on to the
+//! stock kernel. Port of unfr0zen-gen2.py.
 
 use std::sync::LazyLock;
 
@@ -39,6 +40,39 @@ fn holds(have: &[u8], want: &[u8]) -> Result<bool> {
         }
     }
     Ok(true)
+}
+
+/// The U-Boot kernel image at the start of the slot's boot partition, or of
+/// its upper half, as nboot reads it (bad blocks skipped); None when there is
+/// none.
+pub fn read(nand: &mut dyn Nand, slot: Slot, upper: bool) -> Result<Option<Vec<u8>>> {
+    let (start, size) = nand::boot_partition(slot);
+    let (start, size) = if upper { (start + KERNEL_TAIL, size - KERNEL_TAIL) } else { (start, KERNEL_TAIL) };
+    let mut image = Vec::new();
+    let mut length = None;
+    for block in start / BLOCK..(start + size) / BLOCK {
+        let raw = nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?;
+        if nand::factory_bad(&raw) {
+            continue;
+        }
+        for page in raw.chunks(PAGE_RAW) {
+            if nand::erased(page) {
+                image.extend([0xff; nand::PAGE]);
+            } else {
+                image.extend(nand::correct_page(page)?.0);
+            }
+        }
+        let length = *length.get_or_insert_with(|| {
+            let word = |at: usize| u32::from_be_bytes(image[at..at + 4].try_into().unwrap());
+            (word(0) == UIMAGE_MAGIC).then(|| 64 + word(12) as usize)
+        });
+        let Some(length) = length else { return Ok(None) };
+        if image.len() >= length {
+            image.truncate(length);
+            return Ok(Some(image));
+        }
+    }
+    Ok(None)
 }
 
 /// Puts `image`, a U-Boot kernel image, in the upper half of the slot's
@@ -180,6 +214,19 @@ mod tests {
         kernel[100] = 8;
         assert!(install(&mut image, Slot::Root0, &kernel).unwrap(), "a new kernel replaces it");
         assert!(install(&mut image, Slot::Root0, b"not a kernel").is_err());
+    }
+
+    #[test]
+    fn either_half_reads_back_its_kernel() {
+        let mut image = unit();
+        let stock = read(&mut image, Slot::Root0, false).unwrap().unwrap();
+        assert_eq!((stock.len(), &stock[..4]), (64 + 3000, &UIMAGE_MAGIC.to_be_bytes()[..]));
+        assert_eq!(read(&mut image, Slot::Root0, true).unwrap(), None, "nothing in the upper half yet");
+        let mut kernel = vec![7u8; 300_000];
+        kernel[..4].copy_from_slice(&UIMAGE_MAGIC.to_be_bytes());
+        kernel[12..16].copy_from_slice(&(300_000u32 - 64).to_be_bytes());
+        install(&mut image, Slot::Root0, &kernel).unwrap();
+        assert_eq!(read(&mut image, Slot::Root0, true).unwrap(), Some(kernel));
     }
 
     #[test]
