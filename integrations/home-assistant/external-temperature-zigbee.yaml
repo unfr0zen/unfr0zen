@@ -18,6 +18,9 @@ blueprint:
             - integration: mqtt
               manufacturer: Google Nest
               model_id: Nest Learning Thermostat (3rd gen, unfr0zen)
+            - integration: mqtt
+              manufacturer: Google Nest
+              model_id: Nest Learning Thermostat (2nd gen, unfr0zen)
     base_topic:
       name: Zigbee2MQTT base topic
       description: As in Zigbee2MQTT's configuration (mqtt.base_topic).
