@@ -38,7 +38,7 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 ## Supported thermostats
 
 | Device | Codename | SoC | MQTT | Matter | Zigbee | External temperature |
-|-|-|-|-|-|-|-|
+|-|:-:|:-:|:-:|:-:|:-:|:-:|
 | Nest Learning Thermostat (3rd generation) | `diamond3` | i.MX6SoloX | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
 | Nest Learning Thermostat (2nd generation) | `j49` | TI AM3703 | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
 | Nest Learning Thermostat (1st generation) | `diamond` | TI AM3703 | 🧪 | 🧪 Wi-Fi · — Thread | — | — |
