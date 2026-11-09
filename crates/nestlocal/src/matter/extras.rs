@@ -61,6 +61,11 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
         all.push(("hot_water_boost", "Hot water boost"));
         all.push(("hot_water_schedule", "Hot water schedule"));
     }
+    if view.device_flag("has_air_filter") {
+        all.push(("filter_reminder_enabled", "Filter reminder"));
+        // Reads off: turning it on says the filter was changed.
+        all.push(("filter_reset", "Filter reset"));
+    }
     all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect()
 }
 
@@ -626,6 +631,22 @@ mod tests {
                     (16, "target_humidity_enabled")]);
         assert_eq!(keys(fields!{"has_hot_water_control" => true}, fields!{"can_heat" => true})[4..],
                    [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]);
+        assert_eq!(keys(fields!{"has_air_filter" => true}, fields!{})[4..],
+                   [(14, "filter_reminder_enabled"), (15, "filter_reset")]);
+    }
+
+    #[test]
+    fn the_filter_reset_switch_reads_off_and_resets_when_turned_on() {
+        let unit = nest(fields!{"has_air_filter" => true, "filter_changed_date" => 0}, fields!{});
+        let s = Switches { dataver: Dataver::new(0), nest: unit.clone(), all: switches(&unit) };
+        s.handle_off(ctx(15)).unwrap();
+        assert_eq!(field(&unit, "device", "filter_changed_date").as_f64(), Some(0.0));
+        s.handle_on(ctx(15)).unwrap();
+        let changed = field(&unit, "device", "filter_changed_date").as_f64().unwrap() as i64;
+        assert!((chrono::Utc::now().timestamp() - changed).abs() <= 2);
+        assert!(!s.on_off(ctx(15)).unwrap());
+        s.handle_on(ctx(14)).unwrap();
+        assert_eq!(field(&unit, "device", "filter_reminder_enabled"), Value::Bool(true));
     }
 
     #[test]

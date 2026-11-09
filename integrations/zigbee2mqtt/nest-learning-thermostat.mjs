@@ -12,7 +12,7 @@
 //   3   fan timer duration      Analog Output, minutes (with a fan)
 //   4   target humidity         Analog Output, % (with a humidifier or dehumidifier)
 //   5   time to temperature     Analog Input, seconds left (0: none)
-//   6   filter runtime          Analog Input, hours (with an air filter)
+//   6   filter runtime          Analog Input, hours (with an air filter); writing 0 resets it
 //   10  Auto-Schedule           Binary Output
 //   11  Home/Away Assist        Binary Output
 //   12  Sunblock                Binary Output
@@ -22,6 +22,7 @@
 //   16  humidity control        Binary Output (with a humidifier or dehumidifier)
 //   17  hot water boost         Binary Output (with hot water control): on is 30 minutes
 //   18  hot water schedule      Binary Output (with hot water control): off stops it
+//   19  filter reminder         Binary Output (with an air filter)
 //   20  leaf                    Binary Input
 //   21  Early-On active         Binary Input
 //   22  Sunblock active         Binary Input
@@ -95,6 +96,7 @@ const SWITCHES = {
     humidity_control: 16,
     hot_water_boost: 17,
     hot_water_schedule: 18,
+    filter_reminder: 19,
 };
 // Label, icon, description.
 const SWITCH_LABELS = {
@@ -107,6 +109,7 @@ const SWITCH_LABELS = {
     humidity_control: ['Humidity control', 'mdi:water-percent', 'Runs the (de)humidifier'],
     hot_water_boost: ['Hot water boost', 'mdi:water-boiler-alert', 'Heats the hot water for 30 minutes'],
     hot_water_schedule: ['Hot water schedule', 'mdi:water-boiler', 'Hot water follows its schedule; off stops it'],
+    filter_reminder: ['Filter reminder', 'mdi:air-filter', 'The thermostat reminds you to change the air filter'],
 };
 const STATES = {
     leaf: 20,
@@ -346,6 +349,13 @@ const set = {
             await entity.command('hvacThermostat', 'clearWeeklySchedule', {});
         },
     },
+    filter_reset: {
+        key: ['filter_reset'],
+        convertSet: async (entity, key, value, meta) => {
+            await meta.device.getEndpoint(INPUTS.filter_runtime).write('genAnalogInput', {presentValue: 0});
+            return {state: {filter_runtime: 0}};
+        },
+    },
     weather: {
         key: ['outdoor_temperature', 'outdoor_humidity', 'weather'],
         // Zigbee2MQTT calls a converter once a message, for the first of its
@@ -426,7 +436,7 @@ const definition = {
     toZigbee: [tz.thermostat_occupied_heating_setpoint, tz.thermostat_occupied_cooling_setpoint,
         tz.thermostat_unoccupied_heating_setpoint, tz.thermostat_unoccupied_cooling_setpoint, tz.thermostat_system_mode,
         tz.thermostat_local_temperature, tz.thermostat_running_state, tz.fan_mode, tz.thermostat_temperature_display_mode,
-        set.preset, set.outputs, set.clear_schedule, set.switches, set.weather, set.external_temperature],
+        set.preset, set.outputs, set.clear_schedule, set.filter_reset, set.switches, set.weather, set.external_temperature],
     exposes: (device) => {
         // What the unit's wiring can do: cooling only (0), heating only (2), both.
         const sequence = isDummyDevice(device) ? 4 :
@@ -495,6 +505,9 @@ const definition = {
             result.push(e.numeric('filter_runtime', ea.STATE).withUnit('h').withCategory('diagnostic')
                 .withLabel('Filter runtime').withHomeAssistant({deviceClass: 'duration', name: 'Filter runtime'})
                 .withDescription('How long the air filter has run'));
+            result.push(e.enum('filter_reset', ea.SET, ['reset']).withLabel('Reset filter').withCategory('config')
+                .withHomeAssistant({icon: 'mdi:air-filter'})
+                .withDescription('The air filter was changed: zeroes its runtime and clears the reminder'));
         }
         for (const [name, id] of Object.entries(STATES)) {
             if (has(device, id)) {
@@ -586,7 +599,7 @@ const definition = {
             }
         };
         for (const [name, id] of Object.entries(SWITCHES)) {
-            if (name.startsWith('hot_water')) {
+            if (name.startsWith('hot_water') || name === 'filter_reminder') {
                 await read(id, 'genBinaryOutput');
             } else {
                 await report(id, 'genBinaryOutput', ['presentValue']);

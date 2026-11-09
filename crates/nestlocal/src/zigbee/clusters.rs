@@ -16,7 +16,8 @@
 //!   4   the target humidity, % (with a humidifier or dehumidifier): Analog
 //!       Output
 //!   5   the time to temperature, seconds left: Analog Input
-//!   6   the filter's runtime, hours (with an air filter): Analog Input
+//!   6   the filter's runtime, hours (with an air filter): Analog Input;
+//!       writing 0 says the filter was changed
 //!   10+ the unit's switches: Binary Output, see SWITCHES; a coordinator
 //!       names them by its description, which On/Off has none of
 //!   20+ what the unit shows or does: Binary Input, see STATES
@@ -117,6 +118,7 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (16, "target_humidity_enabled", "Humidity control"),
     (17, "hot_water_boost", "Hot water boost"),
     (18, "hot_water_schedule", "Hot water schedule"),
+    (19, "filter_reminder_enabled", "Filter reminder"), // with an air filter
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -257,6 +259,7 @@ impl Nest {
                 "away_temperature_high_enabled" => has("can_cool"),
                 "target_humidity_enabled" => humidity_control,
                 "hot_water_boost" | "hot_water_schedule" => has("has_hot_water_control"),
+                "filter_reminder_enabled" => has("has_air_filter"),
                 _ => true,
             };
             if present {
@@ -683,6 +686,9 @@ impl Clusters for Nest {
                 _ => status::INVALID_VALUE,
             },
             (ANALOG_OUTPUT, a, v) => self.write_analog_output(endpoint, a, v),
+            (ANALOG_INPUT, 0x0055, Value::F32(hours)) if endpoint == FILTER_RUNTIME_ENDPOINT => {
+                if hours == 0.0 { self.apply("filter_reset", "ON") } else { status::INVALID_VALUE }
+            }
             (BINARY_OUTPUT, 0x0055, Value::Bool(on)) => match self.switch(endpoint) {
                 Some((key, _)) => self.apply(key, if on { "ON" } else { "OFF" }),
                 None => status::READ_ONLY,
@@ -724,7 +730,7 @@ mod tests {
         assert!(!n.has(1, FAN));
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 20, 21, 22, 23, 24, 26]);
+        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
     }
 
@@ -769,6 +775,14 @@ mod tests {
         assert!((598.0..=600.0).contains(&left));
         assert_eq!(n.read(5, ANALOG_INPUT, 0x0075), Some(Value::Enum16(SECONDS)));
         assert_eq!(n.read(6, ANALOG_INPUT, 0x0055), Some(Value::F32(10.0)));
+        // Only 0 is written to the filter's runtime: the filter was changed.
+        assert_eq!(n.write(6, ANALOG_INPUT, 0x0055, Value::F32(5.0)), status::INVALID_VALUE);
+        assert_eq!(n.write(5, ANALOG_INPUT, 0x0055, Value::F32(0.0)), status::READ_ONLY);
+        assert_eq!(n.write(6, ANALOG_INPUT, 0x0055, Value::F32(0.0)), status::SUCCESS);
+        let changed = number(n.view().dev.get("filter_changed_date")).unwrap() as i64;
+        assert!((soon - 602..=soon - 598).contains(&changed));
+        assert_eq!(n.write(19, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(19, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::INVALID_VALUE); // no schedule yet
         n.bridge.store.merge(&format!("schedule.{}", n.bridge.serial), &fields!{"ver" => 2}, 0, 0, true);
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::SUCCESS);
