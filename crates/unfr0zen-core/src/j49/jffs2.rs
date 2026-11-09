@@ -534,7 +534,9 @@ impl Slot {
             let start = block * BLOCK + offset;
             for page in start / PAGE..=(start + node.len() - 1) / PAGE {
                 if !pages.contains_key(&page) {
-                    if index < self.erase_after { &mut before } else { &mut after }.push(page);
+                    // A block erased to make room takes its pages after the
+                    // erase, whichever write placed them there.
+                    if index < self.erase_after && !self.erase.contains(block) { &mut before } else { &mut after }.push(page);
                 }
                 let data = pages.entry(page).or_insert_with(|| vec![0xff; PAGE]);
                 let (lo, hi) = (start.max(page * PAGE), (start + node.len()).min((page + 1) * PAGE));
@@ -874,6 +876,39 @@ pub(crate) mod tests {
         }
         let mut cut = Slot::load(cut).unwrap();
         assert_eq!(cut.read(crate::nlclient::BINARY).unwrap(), Some(("0:0".into(), 0o755, original)));
+    }
+
+    #[test]
+    fn both_binaries_replaced_in_place_program_nothing_into_a_block_before_its_erase() {
+        // Blocks 0-5: busybox, the stock copy, nestlocal across three blocks,
+        // nlclient across the next three, etc/b in the last; one block free
+        // beyond the spare ones.
+        let mut slot = empty(SPARE_BLOCKS + 7);
+        slot.write(crate::nlclient::ORIGINAL, &noise(BLOCK / 8, 4), "0:0", 0o600, &BTreeSet::new()).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 9 / 4, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 5), "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        let mut slot = reload(&slot);
+        slot.make_room_in_place();
+        let (nestlocal, nlclient) = (noise(BLOCK * 9 / 5, 2), noise(BLOCK * 9 / 5, 3));
+        slot.write("nestlabs/sbin/nestlocal", &nestlocal, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::BINARY, &nlclient, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        let plan = slot.programmed().unwrap();
+        assert!(plan.erase.len() >= 2, "both old copies' blocks are reclaimed: {:?}", plan.erase);
+        for &page in &plan.before {
+            assert!(!plan.erase.contains(&(page / PAGES_PER_BLOCK)), "page {page} is programmed before its block's erase");
+        }
+        // As the unit programs it: the pages before, the erase, the pages after.
+        let mut nand = slot.raw.clone();
+        let copy = |nand: &mut Vec<u8>, page: usize| nand[page * PAGE_RAW..(page + 1) * PAGE_RAW]
+            .copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
+        for &page in &plan.before { copy(&mut nand, page); }
+        for &block in &plan.erase { nand[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff); }
+        for &page in &plan.after { copy(&mut nand, page); }
+        let mut back = Slot::load(nand).unwrap();
+        assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, nestlocal);
+        assert_eq!(back.read(crate::nlclient::BINARY).unwrap().unwrap().2, nlclient);
+        assert_eq!(back.read("etc/b").unwrap().unwrap().2, b"kept");
     }
 
     #[test]
