@@ -32,6 +32,7 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 | Internet access | required | not needed: the unit only has to join your Wi-Fi |
 | Nest and Google servers | always contacted | blocked with Block cloud (`--block-cloud`) |
 | Integrations | none | MQTT, Matter over Wi-Fi or Thread, Zigbee router |
+| Room temperature | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
 | Extras | none | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore |
 
 ## Supported thermostats
@@ -156,7 +157,7 @@ Common options:
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
   --zigbee              Join a Zigbee network as a router (replaces Heat Link)
-  --external-temperature  Regulate from temperatures sent to it; turns off Bluetooth (3rd generation)
+  --external-temperature  Regulate from temperatures sent to it (2nd and 3rd generation; turns off the 3rd's Bluetooth)
   --doom                Install Doom, launched from UNFR0ZEN → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
