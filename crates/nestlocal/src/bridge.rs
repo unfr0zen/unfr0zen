@@ -485,6 +485,25 @@ impl Bridge {
                 "entity_category" => "config",
                 "icon" => "mdi:fan-clock",
             });
+            sw(&mut add, "fan_schedule", "Fan schedule", "mdi:fan-auto");
+            add("select", "fan_schedule_minutes", "Fan schedule run time", fields!{
+                "value_template" => tmpl("fan_schedule_minutes"),
+                "command_topic" => format!("{set}fan_schedule_minutes"),
+                "options" => FAN_SCHEDULE_MINUTES.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+                "unit_of_measurement" => "min/h",
+                "entity_category" => "config",
+                "icon" => "mdi:fan-clock",
+            });
+            let hours: Vec<String> = (0..24).map(|h| format!("{h:02}:00")).collect();
+            for (key, name) in [("fan_schedule_start", "Fan schedule start"), ("fan_schedule_end", "Fan schedule end")] {
+                add("select", key, name, fields!{
+                    "value_template" => tmpl(key),
+                    "command_topic" => format!("{set}{key}"),
+                    "options" => hours.clone(),
+                    "entity_category" => "config",
+                    "icon" => "mdi:clock-outline",
+                });
+            }
         }
         add("select", "temperature_scale", "Temperature scale", fields!{
             "value_template" => tmpl("temperature_scale"),
@@ -539,11 +558,29 @@ fn hot_water_schedule(dev: &Fields) -> bool {
     sprint(dev.get("hot_water_mode")) != "off"
 }
 
-/// Whether a switch is on: its device field, or what the hot water's fields say.
+/// The fan schedule's run times the Nest app offered, minutes per hour (60:
+/// always on).
+pub const FAN_SCHEDULE_MINUTES: [i64; 4] = [15, 30, 45, 60];
+
+/// Whether the fan follows its schedule: the unit's fan_mode for it.
+fn fan_schedule(dev: &Fields) -> bool {
+    sprint(dev.get("fan_mode")) == "duty-cycle"
+}
+
+/// A fan schedule bound, seconds after midnight, as its select's options
+/// write it ("07:00"). The same start and end run it all day.
+pub fn fan_schedule_time(seconds: f64) -> String {
+    let minutes = (seconds / 60.0).round() as i64;
+    format!("{:02}:{:02}", minutes / 60 % 24, minutes % 60)
+}
+
+/// Whether a switch is on: its device field, or what the hot water's or the
+/// fan schedule's fields say.
 pub fn switch_on(dev: &Fields, key: &str) -> bool {
     match key {
         "hot_water_boost" => hot_water_boost(dev).is_some(),
         "hot_water_schedule" => hot_water_schedule(dev),
+        "fan_schedule" => fan_schedule(dev),
         _ => truthy(dev.get(key)),
     }
 }
@@ -659,6 +696,15 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     }
     if let Some(d) = number(dev.get("fan_timer_duration")) {
         s.insert("fan_timer_duration".into(), ((d / 60.0) as i64).to_string().into());
+    }
+    s.insert("fan_schedule".into(), fan_schedule(dev).into());
+    if let Some(d) = number(dev.get("fan_duty_cycle")) {
+        s.insert("fan_schedule_minutes".into(), ((d / 60.0).round() as i64).to_string().into());
+    }
+    for (key, field) in [("fan_schedule_start", "fan_duty_start_time"), ("fan_schedule_end", "fan_duty_end_time")] {
+        if let Some(t) = number(dev.get(field)) {
+            s.insert(key.into(), fan_schedule_time(t).into());
+        }
     }
     s.insert("hot_water_boost".into(), hot_water_boost(dev).map_or("off".to_string(), |m| m.to_string()).into());
     s.insert("hot_water_schedule".into(), hot_water_schedule(dev).into());
@@ -856,13 +902,28 @@ pub mod tests {
         assert!(switch_on(&obj(json!({"learning_mode": true})), "learning_mode"));
     }
 
+    #[test]
+    fn fan_schedule_reads_the_units_duty_cycle_fields() {
+        let s = state(&obj(json!({"fan_mode": "duty-cycle", "fan_duty_cycle": 1800, "fan_duty_start_time": 0,
+                                  "fan_duty_end_time": 82800})), &Fields::new());
+        assert_eq!((&s["fan_schedule"], &s["fan_schedule_minutes"], &s["fan_schedule_start"], &s["fan_schedule_end"]),
+                   (&json!(true), &json!("30"), &json!("00:00"), &json!("23:00")));
+        assert!(switch_on(&obj(json!({"fan_mode": "duty-cycle"})), "fan_schedule"));
+        // A timer runs with fan_mode auto: no schedule.
+        let s = state(&obj(json!({"fan_mode": "auto"})), &Fields::new());
+        assert_eq!(s["fan_schedule"], json!(false));
+        assert!(s.get("fan_schedule_minutes").is_none() && s.get("fan_schedule_start").is_none());
+        assert_eq!(fan_schedule_time(5400.0), "01:30");
+    }
+
     /// Equipment with everything discovery can announce.
     fn everything() -> (Fields, Fields) {
         (obj(json!({"has_fan": true, "has_air_filter": true, "has_hot_water_control": true, "has_humidifier": true,
                     "has_dehumidifier": true, "has_x2_heat": true, "has_x3_heat": true, "has_aux_heat": true,
                     "has_alt_heat": true, "has_x2_alt_heat": true, "has_emer_heat": true, "has_x2_cool": true,
                     "has_x3_cool": true, "fan_timer_duration": 900, "filter_runtime_sec": 7200,
-                    "temperature_scale": "C"})),
+                    "fan_mode": "duty-cycle", "fan_duty_cycle": 1800, "fan_duty_start_time": 0,
+                    "fan_duty_end_time": 82800, "temperature_scale": "C"})),
          obj(json!({"can_heat": true, "can_cool": true, "target_temperature_type": "range"})))
     }
 
@@ -904,7 +965,8 @@ pub mod tests {
                         "mode" => "heat",
                         "preset" => "eco",
                         "fan_mode" => "auto",
-                        "fan_timer_duration" => "30",
+                        "fan_timer_duration" | "fan_schedule_minutes" => "30",
+                        "fan_schedule_start" | "fan_schedule_end" => "07:00",
                         "temperature_scale" => "F",
                         "target_humidity" => "40",
                         "clear_schedule" => "PRESS",
@@ -917,13 +979,17 @@ pub mod tests {
                 }
             }
         }
-        // Every fan timer option is one the fan_timer_duration command takes,
-        // and the state shows the unit's own the same way.
-        let select: Value = serde_json::from_str(&configs["homeassistant/select/nestlocal_s/fan_timer_duration/config"]).unwrap();
-        for option in select["options"].as_array().unwrap() {
-            assert!(b.fields("fan_timer_duration", option.as_str().unwrap()).is_ok(), "{option}");
+        // Every select's options are ones its command takes, and the state
+        // shows the unit's own value as one of them.
+        for (topic, config) in configs.iter().filter(|(topic, _)| topic.starts_with("homeassistant/select/")) {
+            let select: Value = serde_json::from_str(config).unwrap();
+            let name = select["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
+            let options = select["options"].as_array().unwrap();
+            for option in options {
+                assert!(b.fields(name, option.as_str().unwrap()).is_ok(), "{topic}: {option}");
+            }
+            assert!(options.contains(&s[name]), "{topic}: state {}", s[name]);
         }
-        assert!(select["options"].as_array().unwrap().contains(&s["fan_timer_duration"]));
         assert_eq!(s["filter_runtime_h"], json!(2));
     }
 

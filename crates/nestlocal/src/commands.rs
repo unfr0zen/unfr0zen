@@ -45,6 +45,15 @@ fn temperature(arg: &str, (low, high): (f64, f64)) -> Result<f64, String> {
     }
 }
 
+/// An hour of the day: "7", "07" or "07:00".
+fn hour(arg: &str) -> Result<i64, String> {
+    let h = arg.strip_suffix(":00").unwrap_or(arg);
+    match h.parse::<i64>() {
+        Ok(h) if (0..24).contains(&h) => Ok(h),
+        _ => Err("expected an hour, 00:00-23:00".into()),
+    }
+}
+
 fn shared(fields: Fields) -> Result<Change, String> {
     Ok(Some(("shared".into(), fields)))
 }
@@ -158,6 +167,22 @@ impl Bridge {
                 Ok(m) if (15..=1440).contains(&m) => device(fields!{"fan_timer_duration" => num((m * 60) as f64)}),
                 _ => Err("expected minutes, 15-1440".into()),
             },
+
+            // The fan's daily schedule: it runs fan_duty_cycle seconds of
+            // each hour from its start to its end (the same: all day).
+            "fan_schedule" => device(fields!{"fan_mode" => if on_off(arg)? { "duty-cycle" } else { "auto" }}),
+
+            "fan_schedule_minutes" => match arg.parse::<i64>() {
+                Ok(m) if crate::bridge::FAN_SCHEDULE_MINUTES.contains(&m) => {
+                    device(fields!{"fan_duty_cycle" => num((m * 60) as f64)})
+                }
+                _ => Err("expected 15, 30, 45 or 60".into()),
+            },
+
+            "fan_schedule_start" | "fan_schedule_end" => {
+                let field = if name == "fan_schedule_start" { "fan_duty_start_time" } else { "fan_duty_end_time" };
+                device(fields!{field => num((hour(arg)? * 3600) as f64)})
+            }
 
             // ON is the shortest boost, for On/Off endpoints; the rest are minutes.
             "hot_water_boost" => {
@@ -455,6 +480,17 @@ mod tests {
         }
         for (arg, want) in [("15", Some(900)), ("1440", Some(86_400)), ("14", None), ("1441", None), ("30.0", None), ("-15", None)] {
             assert_eq!(field("fan_timer_duration", arg, "fan_timer_duration").ok(), want.map(Value::from), "fan_timer_duration {arg:?}");
+        }
+        for (arg, want) in [("ON", Some("duty-cycle")), ("OFF", Some("auto")), ("duty-cycle", None)] {
+            assert_eq!(field("fan_schedule", arg, "fan_mode").ok(), want.map(Value::from), "fan_schedule {arg:?}");
+        }
+        for (arg, want) in [("15", Some(900)), ("60", Some(3600)), ("20", None), ("0", None), ("90", None)] {
+            assert_eq!(field("fan_schedule_minutes", arg, "fan_duty_cycle").ok(), want.map(Value::from), "fan_schedule_minutes {arg:?}");
+        }
+        for (arg, want) in [("00:00", Some(0)), ("23:00", Some(82_800)), ("7", Some(25_200)), ("07", Some(25_200)),
+                            ("24:00", None), ("07:30", None), ("-1", None), ("", None)] {
+            assert_eq!(field("fan_schedule_start", arg, "fan_duty_start_time").ok(), want.map(Value::from), "start {arg:?}");
+            assert_eq!(field("fan_schedule_end", arg, "fan_duty_end_time").ok(), want.map(Value::from), "end {arg:?}");
         }
         for (arg, want) in [("10", true), ("60", true), ("42.5", true), ("9.9", false), ("60.5", false)] {
             assert_eq!(b.fields("target_humidity", arg).is_ok(), want, "target_humidity {arg:?}");

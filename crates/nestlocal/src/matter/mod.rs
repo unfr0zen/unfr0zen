@@ -71,7 +71,8 @@ use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
-use extras::{Backplate, Battery, Display, ExternalTemperature, Fan, FanTimer, Humidity, Labels, Switch, Switches, TemperatureSource};
+use extras::{Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, Humidity, Labels, Switch, Switches,
+             TemperatureSource};
 use thermostat::Thermostat;
 
 /// The endpoint the thermostat is on.
@@ -439,7 +440,7 @@ fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
 }
 
 fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: bool) -> Node<'static> {
-    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_TIMER, TEMPERATURE_SOURCE};
+    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut endpoints = vec![
         if thread { THREAD_ROOT } else { ROOT },
         Endpoint::new(
@@ -490,16 +491,26 @@ fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: 
             clusters!(desc::DescHandler::CLUSTER, identify::CLUSTER, Switches::CLUSTER, Labels::CLUSTER),
         ));
     }
+    if has_fan {
+        for id in FAN_SCHEDULE..FAN_SCHEDULE + 3 {
+            endpoints.push(Endpoint::new(
+                id,
+                devices!(DEV_TYPE_MODE_SELECT),
+                clusters!(desc::DescHandler::CLUSTER, FanSchedule::CLUSTER, Labels::CLUSTER),
+            ));
+        }
+    }
     Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
 }
 
 /// The cluster handlers, by cluster; each serves every endpoint it is on.
 fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mut rand: impl rand::Rng + Copy + 'a, nest: Arc<Nest>, switches: Vec<Switch>, controller: &'a C, thread: bool)
               -> impl DataModel + 'a {
-    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_TIMER, TEMPERATURE_SOURCE};
+    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut names = vec![(BACKPLATE, "Backplate temperature"), (BATTERY, "Battery"), (FAN, "Fan"),
                          (FAN_TIMER, "Fan timer duration"), (EXTERNAL_TEMPERATURE, "External temperature"),
-                         (TEMPERATURE_SOURCE, "Temperature source")];
+                         (TEMPERATURE_SOURCE, "Temperature source"), (FAN_SCHEDULE, "Fan schedule run time"),
+                         (FAN_SCHEDULE + 1, "Fan schedule start"), (FAN_SCHEDULE + 2, "Fan schedule end")];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
         node,
@@ -553,6 +564,10 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
             .chain(
                 |e, c| e == TEMPERATURE_SOURCE && c == TemperatureSource::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(TemperatureSource { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
+            )
+            .chain(
+                |e, c| (FAN_SCHEDULE..FAN_SCHEDULE + 3).contains(&e) && c == FanSchedule::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(FanSchedule { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
             )
             .chain(
                 |e, c| e >= extras::SWITCHES && c == Switches::CLUSTER.id,
@@ -850,7 +865,7 @@ mod tests {
         };
         assert_eq!(ids(false, crate::fields!{}, crate::fields!{"can_heat" => true}), [0, 1, 2, 3, 10, 11, 12, 13, 14]);
         assert_eq!(ids(true, crate::fields!{"has_humidifier" => true}, crate::fields!{"can_heat" => true, "can_cool" => true}),
-                   [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16]);
+                   [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]);
     }
 
     #[test]

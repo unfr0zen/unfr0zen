@@ -13,6 +13,9 @@
 //   4   target humidity         Analog Output, % (with a humidifier or dehumidifier)
 //   5   time to temperature     Analog Input, seconds left (0: none)
 //   6   filter runtime          Analog Input, hours (with an air filter); writing 0 resets it
+//   7   fan schedule run time   Analog Output, minutes per hour: 15, 30, 45 or 60 (with a fan)
+//   8   fan schedule start      Analog Output, hour of the day, 0-23 (with a fan)
+//   9   fan schedule end        Analog Output, hour of the day, 0-23 (with a fan); the start's: all day
 //   10  Auto-Schedule           Binary Output
 //   11  Home/Away Assist        Binary Output
 //   12  Sunblock                Binary Output
@@ -30,6 +33,7 @@
 //   24  filter replacement      Binary Input (with an air filter)
 //   25  hot water               Binary Input (with hot water control)
 //   28  stand-in sensor in use  Binary Input (with the external temperature option)
+//   29  fan schedule            Binary Output (with a fan): the fan runs on its schedule
 //   26  humidifier running      Binary Input (with a humidifier)
 //   27  dehumidifier running    Binary Input (with a dehumidifier)
 //   30  heat stage 1            Binary Input (with any other heat stage below)
@@ -83,7 +87,8 @@ const ea = exposes.access;
 
 const THERMOSTAT = 1;
 const BACKPLATE = 2;
-const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4};
+const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4, fan_schedule_minutes: 7, fan_schedule_start: 8,
+    fan_schedule_end: 9};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
@@ -97,6 +102,7 @@ const SWITCHES = {
     hot_water_boost: 17,
     hot_water_schedule: 18,
     filter_reminder: 19,
+    fan_schedule: 29,
 };
 // Label, icon, description.
 const SWITCH_LABELS = {
@@ -110,6 +116,7 @@ const SWITCH_LABELS = {
     hot_water_boost: ['Hot water boost', 'mdi:water-boiler-alert', 'Heats the hot water for 30 minutes'],
     hot_water_schedule: ['Hot water schedule', 'mdi:water-boiler', 'Hot water follows its schedule; off stops it'],
     filter_reminder: ['Filter reminder', 'mdi:air-filter', 'The thermostat reminds you to change the air filter'],
+    fan_schedule: ['Fan schedule', 'mdi:fan-auto', 'The fan runs part of every hour, between the schedule\'s start and end'],
 };
 const STATES = {
     leaf: 20,
@@ -491,6 +498,18 @@ const definition = {
                 .withValueStep(15).withCategory('config').withHomeAssistant({icon: 'mdi:fan-clock'})
                 .withDescription('How long the fan runs when turned on'));
         }
+        if (has(device, OUTPUTS.fan_schedule_minutes)) {
+            result.push(e.numeric('fan_schedule_minutes', ea.ALL).withLabel('Fan schedule run time').withUnit('min/h')
+                .withValueMin(15).withValueMax(60).withValueStep(15).withCategory('config')
+                .withHomeAssistant({icon: 'mdi:fan-clock'})
+                .withDescription('Minutes of each hour the fan runs on its schedule (60: always)'));
+            for (const [name, label, when] of [['fan_schedule_start', 'Fan schedule start', 'starts'],
+                ['fan_schedule_end', 'Fan schedule end', 'stops']]) {
+                result.push(e.numeric(name, ea.ALL).withLabel(label).withUnit('h').withValueMin(0).withValueMax(23)
+                    .withValueStep(1).withCategory('config').withHomeAssistant({icon: 'mdi:clock-outline'})
+                    .withDescription(`Hour of the day the fan schedule ${when}; the same start and end: all day`));
+            }
+        }
         if (has(device, OUTPUTS.target_humidity)) {
             result.push(e.numeric('target_humidity', ea.ALL).withUnit('%').withValueMin(10).withValueMax(60)
                 .withValueStep(5).withCategory('config').withDescription('Humidity the (de)humidifier aims for'));
@@ -588,18 +607,22 @@ const definition = {
         await report(THERMOSTAT, 'msRelativeHumidity', ['measuredValue']);
         await report(THERMOSTAT, 'genPowerCfg', ['batteryVoltage']);
         await report(BACKPLATE, 'msTemperatureMeasurement', ['measuredValue']);
-        for (const id of Object.values(OUTPUTS)) {
-            await report(id, 'genAnalogOutput', ['presentValue']);
-        }
         // The unit reports to the coordinator bound or not, and its binding
-        // table (16 entries) is about full: these are only read.
+        // table (16 entries) is about full: the rest are only read.
         const read = async (id, cluster) => {
             if (device.getEndpoint(id)?.supportsInputCluster(cluster)) {
                 await device.getEndpoint(id).read(cluster, ['presentValue']);
             }
         };
+        for (const [name, id] of Object.entries(OUTPUTS)) {
+            if (name.startsWith('fan_schedule')) {
+                await read(id, 'genAnalogOutput');
+            } else {
+                await report(id, 'genAnalogOutput', ['presentValue']);
+            }
+        }
         for (const [name, id] of Object.entries(SWITCHES)) {
-            if (name.startsWith('hot_water') || name === 'filter_reminder') {
+            if (name.startsWith('hot_water') || name === 'filter_reminder' || name === 'fan_schedule') {
                 await read(id, 'genBinaryOutput');
             } else {
                 await report(id, 'genBinaryOutput', ['presentValue']);
