@@ -454,6 +454,9 @@ pub struct Options {
     /// nestlocal plays a Nest Temperature Sensor whose readings an external
     /// thermometer gives: nlclient's own BLE runs, against nestlocal's stand-in.
     pub external_temperature: bool,
+    /// Gen 2's settings screens in the gen 3's dark palette, through the
+    /// reviewed nlclient 5.9.4-5 patch; other generations ignore it.
+    pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
@@ -540,11 +543,17 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // upgrades take it back with the screen.
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
-        if !options.block_cloud {
+        let dark_theme = target == Device::J49 && options.dark_theme;
+        if !options.block_cloud && !dark_theme {
             return Ok(journal);
         }
         let mut output = crate::nlclient::Patch::parse(&journal)?.apply(source, false)?;
-        patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
+        if dark_theme {
+            crate::nlclient::dark_theme::patch(source, &mut output)?;
+        }
+        if options.block_cloud {
+            patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
+        }
         crate::nlclient::Patch::journal(source, &output)
     };
     let (mut tree, mut originals) = (Tree::new(), Originals::new());
@@ -648,6 +657,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
 
     let screen = volume.inspect(crate::nlclient::BINARY)?;
+    if target == Device::J49 && options.dark_theme && screen.is_none() {
+        return device("j49 dark theme requires nlclient");
+    }
     let mut screen_patch = None;
     if let Some((owner, mode, sha)) = &screen {
         if !owner.starts_with("0:") || mode & 0o111 == 0 {
@@ -679,6 +691,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         if let Some(previous) = &previous {
             if previous.output_sha == *sha { source = previous.apply(&source, true)?; }
             else if previous.stock_sha != *sha { return device("nlclient undo journal does not match the executable"); }
+        }
+        if target == Device::J49 && options.dark_theme && !source.starts_with(b"\x7fELF") {
+            return device("j49 dark theme requires an ARM ELF nlclient");
         }
         if source.starts_with(b"\x7fELF") {
             // Preserve the stock executable once, including on devices patched
