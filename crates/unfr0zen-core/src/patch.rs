@@ -456,6 +456,9 @@ pub struct Options {
     pub external_temperature: bool,
     /// The relocatable native Sensors view helper, linked only on j49.
     pub external_temperature_screen: Vec<u8>,
+    /// Gen 2's settings screens in the gen 3's dark palette, through the
+    /// reviewed nlclient 5.9.4-5 patch; other generations ignore it.
+    pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
     pub ssh: bool,
@@ -543,12 +546,16 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
         let external_temperature = target == Device::J49 && options.external_temperature;
-        if !options.block_cloud && !external_temperature {
+        let dark_theme = target == Device::J49 && options.dark_theme;
+        if !options.block_cloud && !external_temperature && !dark_theme {
             return Ok(journal);
         }
         let mut output = crate::nlclient::Patch::parse(&journal)?.apply(source, false)?;
         if external_temperature {
             crate::nlclient::external_temperature::patch(source, &mut output, &options.external_temperature_screen)?;
+        }
+        if dark_theme {
+            crate::nlclient::dark_theme::patch(source, &mut output)?;
         }
         if options.block_cloud {
             patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
@@ -661,6 +668,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     if target == Device::J49 && options.external_temperature && screen.is_none() {
         return device("j49 external temperature requires nlclient");
     }
+    if target == Device::J49 && options.dark_theme && screen.is_none() {
+        return device("j49 dark theme requires nlclient");
+    }
     let mut screen_patch = None;
     if let Some((owner, mode, sha)) = &screen {
         if !owner.starts_with("0:") || mode & 0o111 == 0 {
@@ -695,6 +705,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         }
         if target == Device::J49 && options.external_temperature && !source.starts_with(b"\x7fELF") {
             return device("j49 external temperature requires an ARM ELF nlclient");
+        }
+        if target == Device::J49 && options.dark_theme && !source.starts_with(b"\x7fELF") {
+            return device("j49 dark theme requires an ARM ELF nlclient");
         }
         if source.starts_with(b"\x7fELF") {
             // Preserve the stock executable once, including on devices patched

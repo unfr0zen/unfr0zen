@@ -43,6 +43,7 @@ pub struct Form {
     last_device: Option<Device>,
     doom: bool,
     external_temperature: bool,
+    dark_theme: bool,
     overlay: FilePick,
     cloud_url: Toggle,
     ssh_key: FilePick,
@@ -172,6 +173,8 @@ impl Form {
             entry_point: self.entry_point,
             doom: self.doom,
             external_temperature: self.external_temperature,
+            // Only for the gen 2 the checkbox was offered for.
+            dark_theme: self.dark_theme && self.device.or(self.last_device) == Some(Device::J49),
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
             usb_shell: self.usb_shell,
@@ -394,6 +397,11 @@ impl Form {
                 crate::checkbox(ui, enabled, &mut self.external_temperature, crate::tr!("patch.external_temperature"))
                     .on_hover_text(crate::tr!("patch.external_temperature_hint"));
             }
+        }
+        // Offered only with a gen 2 chosen or on the bus.
+        if self.known_device(bus) == Some(Device::J49) {
+            crate::checkbox(ui, true, &mut self.dark_theme, crate::tr!("patch.dark_theme"))
+                .on_hover_text(crate::tr!("patch.dark_theme_hint"));
         }
         grid("advanced_extras").show(ui, |ui| {
             ui.label(crate::tr!("patch.overlay"));
@@ -625,6 +633,12 @@ mod tests {
         assert_eq!(form.inputs().entry_point, EntryPoint::Cve20177936);
         assert_eq!(form.config().unwrap().entry_point, EntryPoint::Cve20177936);
         form.entry_point = EntryPoint::Auto;
+        form.dark_theme = true;
+        assert!(form.inputs().dark_theme && form.config().unwrap().options.dark_theme);
+        form.device = Some(Device::Diamond3);
+        assert!(!form.inputs().dark_theme, "only for a gen 2");
+        form.device = Some(Device::J49);
+        form.dark_theme = false;
         assert!(!form.dialog_pending());
         form.cloud_url.on = false;
         form.overlay.path = None;

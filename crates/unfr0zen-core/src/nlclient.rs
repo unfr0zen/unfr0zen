@@ -2,6 +2,7 @@
 //! Keep hash-guarded byte edits as an undo journal for rollback and upgrades.
 mod branding;
 pub mod external_temperature;
+pub mod dark_theme;
 mod elf;
 mod arm;
 pub mod discovery;

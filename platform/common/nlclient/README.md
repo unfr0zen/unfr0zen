@@ -97,6 +97,24 @@ the option removes these patches while retaining the settings screen. The
 [RCS golden and acceptance process](tests/external-temperature/README.md)
 cover the additional native bindings and layouts.
 
+## Gen 2 dark theme
+
+With the dark theme selected (`--dark-theme`, or **Dark theme** under
+Advanced in the app, offered for a gen 2), j49's settings screens take the
+gen 3's colours: black backgrounds, white text, `#00a3d9` selection,
+`#004157` fields being edited, `#666666` unselected rows and `#00a1f2`
+carousel tiles. The UNFR0ZEN screen draws with the stock palette, so it
+follows. Each colour is the one the gen 3's nlclient sets in the same
+function. Like the external temperature input, it applies only to the
+reviewed 5.9.4-5 stock binary, at fixed, hash-guarded addresses, and fails
+closed on any other build. Each edited word must hold its stock value before
+any is written.
+
+The edits share the screen's undo journal, so a run without the option
+restores the light colours while retaining the settings screen. The [dark
+theme golden](tests/dark-theme/README.md) lists every edit and the patched
+digest.
+
 ## Runtime and build requirements
 
 Run the packaged app or CLI. No screen-patching tools need to be installed on

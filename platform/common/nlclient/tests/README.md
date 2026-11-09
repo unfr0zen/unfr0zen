@@ -3,6 +3,7 @@
 The optional j49 external-temperature input has its own
 [golden and firmware-acceptance process](external-temperature/README.md).
 Its fixed RCS bindings are not covered by settings-screen discovery alone.
+The optional j49 dark theme has its own [golden](dark-theme/README.md).
 
 The goldens were recorded from untouched stock executables extracted from
 NAND dumps, or read from a unit by a run, with Debian clang 19.1.7 and

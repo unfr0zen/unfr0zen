@@ -60,6 +60,8 @@ pub struct PatchInputs {
     /// Regulate from an external thermometer's readings: nestlocal plays a Nest
     /// Temperature Sensor.
     pub external_temperature: bool,
+    /// Gen 2's settings screens in the gen 3's dark palette.
+    pub dark_theme: bool,
     /// An SSH server on the unit, root logging in with its password; off by default.
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
@@ -106,6 +108,7 @@ impl PatchInputs {
             ("entry-point", (self.entry_point != EntryPoint::Auto).then(|| self.entry_point.name().to_string())),
             ("doom", on(self.doom)),
             ("external-temperature", on(self.external_temperature)),
+            ("dark-theme", on(self.dark_theme)),
             ("overlay", file(&self.overlay)),
             ("cloud-url", self.cloud_url.as_deref().map(mask_url)),
             ("backplate-sim", on(self.backplate_sim)),
@@ -184,6 +187,7 @@ impl PatchInputs {
             doom: self.doom.then(assets::doom),
             external_temperature: self.external_temperature,
             external_temperature_screen: if self.external_temperature { assets::J49_RCS_SCREEN.to_vec() } else { Vec::new() },
+            dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key,
             ssh_server: None,
@@ -329,6 +333,8 @@ pub fn run(config: &Config, progress: &mut dyn Progress,
            cancel: &device::CancelFlag) -> Result<String> {
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
+        Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
+            Err(failure("--dark-theme is only for the 2nd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
         Device::Diamond if config.options.external_temperature =>
             Err(failure("--external-temperature is not supported on the 1st generation")),
