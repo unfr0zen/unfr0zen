@@ -126,7 +126,8 @@ fn prepare_settings(config: &flags::Config) {
         }
     } else if device::current().ble.is_some() || device::current().generation == 2 {
         let store = store::Store::new(&config.state);
-        let where_id = sensor::where_id(&store, &config.serial, std::path::Path::new(path));
+        let settings = (device::current().generation == 2).then_some(std::path::Path::new(path));
+        let where_id = sensor::where_id(&store, &config.serial, settings);
         if let Err(e) = sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref()) {
             logf!("external temperature: {e}");
         }
@@ -154,10 +155,13 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
             return None;
         }
     };
-    let where_id = sensor::where_id(store, &config.serial, std::path::Path::new(&config.settings));
+    let gen2 = device.generation == 2;
+    let where_id = sensor::where_id(store, &config.serial, gen2.then_some(std::path::Path::new(&config.settings)));
     sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
-    sensor::keep_location(store, &config.serial, &sensor.bucket);
-    if device.generation != 2 {
+    if gen2 {
+        // Its Sensors view lists the sensor under the room, so it follows a move.
+        sensor::keep_location(store, &config.serial, &sensor.bucket);
+    } else {
         sensor::keep_selected(store, &config.serial, &sensor);
     }
     let (known, shared) = (store.clone(), format!("shared.{}", config.serial));
