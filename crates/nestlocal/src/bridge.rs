@@ -468,6 +468,14 @@ impl Bridge {
             number_entity(&mut add, "target_humidity", "Target humidity", 10.0, 60.0, 5.0, "%");
             sw(&mut add, "target_humidity_enabled", "Humidity control", "mdi:water-percent");
         }
+        if truthy(dev.get("has_air_filter")) {
+            sw(&mut add, "filter_reminder_enabled", "Filter reminder", "mdi:air-filter");
+            add("button", "filter_reset", "Reset filter", fields!{
+                "command_topic" => format!("{set}filter_reset"),
+                "entity_category" => "config",
+                "icon" => "mdi:air-filter",
+            });
+        }
         if has_fan {
             add("select", "fan_timer_duration", "Fan timer duration", fields!{
                 "value_template" => tmpl("fan_timer_duration"),
@@ -670,7 +678,7 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
               "filter_replacement_needed", "hvac_safety_shutoff_active", "humidifier_state",
               "dehumidifier_state", "learning_mode", "auto_away_enable", "sunlight_correction_enabled",
               "preconditioning_enabled", "away_temperature_low_enabled", "away_temperature_high_enabled",
-              "target_humidity_enabled", "hot_water_boiling_state", "heatpump_ready"] {
+              "target_humidity_enabled", "filter_reminder_enabled", "hot_water_boiling_state", "heatpump_ready"] {
         s.insert(k.into(), truthy(dev.get(k)).into());
     }
     s.insert("occupancy".into(), (!truthy(sh.get("auto_away"))).into());

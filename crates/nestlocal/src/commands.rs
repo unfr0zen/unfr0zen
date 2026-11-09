@@ -192,7 +192,8 @@ impl Bridge {
             }
 
             "learning_mode" | "auto_away_enable" | "sunlight_correction_enabled" | "preconditioning_enabled"
-            | "away_temperature_low_enabled" | "away_temperature_high_enabled" | "target_humidity_enabled" => {
+            | "away_temperature_low_enabled" | "away_temperature_high_enabled" | "target_humidity_enabled"
+            | "filter_reminder_enabled" => {
                 device(fields!{name => on_off(arg)?})
             }
 
@@ -258,6 +259,15 @@ impl Bridge {
             // Not a bucket: the unit's clock (clock.rs).
             "time" => self.time_answer(arg).map(|()| None),
 
+            // The filter was changed now: nlclient zeroes its runtime and
+            // clears the reminder. OFF does nothing, for On/Off endpoints.
+            "filter_reset" => {
+                if arg.eq_ignore_ascii_case("OFF") {
+                    return Ok(None);
+                }
+                device(fields!{"filter_changed_date" => num(now as f64)})
+            }
+
             "clear_schedule" => {
                 // Every day empty: the unit keeps whatever setpoint it has
                 // until told otherwise, so Home Assistant does the scheduling.
@@ -298,6 +308,16 @@ mod tests {
             assert!(b.fields("external_temperature", bad).is_err(), "{bad}");
         }
         assert_eq!(sensor.reading(), Some(21.5));
+    }
+
+    #[test]
+    fn a_filter_reset_dates_the_change_now_and_off_does_nothing() {
+        let b = test_bridge();
+        assert_eq!(b.fields("filter_reset", "off"), Ok(None));
+        let (bucket, fields) = b.fields("filter_reset", "PRESS").unwrap().unwrap();
+        let changed = fields["filter_changed_date"].as_f64().unwrap() as i64;
+        assert_eq!(bucket, "device");
+        assert!((chrono::Utc::now().timestamp() - changed).abs() <= 2);
     }
 
     #[test]
