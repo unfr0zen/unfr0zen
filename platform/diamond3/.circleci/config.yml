@@ -1,13 +1,7 @@
 version: 2.1
 
 # The gen 3's boot chain: the ROM bootstrap and boot wrapper, and the recovery
-# U-Boot from the pinned submodule and its patches. Its workflow runs when
-# platform/diamond3/{bootstrap,uboot} change.
-
-parameters:
-  recovery:
-    type: boolean
-    default: false
+# U-Boot from the pinned submodule and its patches.
 
 jobs:
   recovery:
@@ -23,13 +17,3 @@ jobs:
       - module-store:
           module: recovery
           outputs: build/u-boot-sdp-official.hab build/rom-stage.imx build/boot-wrapper.bin build/u-boot-recovery.bin build/u-boot-recovery.json
-
-workflows:
-  recovery:
-    when: << pipeline.parameters.recovery >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - recovery:
-          requires: [image-ready]
-          context: docker-hub

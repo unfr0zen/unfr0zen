@@ -7,8 +7,8 @@ version: 2.1
 # A module's job restores its outputs from the cache under a key of its inputs
 # (the image, its sources' git trees, the artifacts it embeds), builds only on
 # a miss, and persists them as one tarball to the workspace for the jobs
-# downstream in its workflow. A workflow needing a module lists the module's
-# job as its own, so it stands on its own; the cache keeps the repeats short.
+# downstream in its workflow. The app and release workflows list every
+# module's job, each defined in its subsystem's .circleci/config.yml.
 
 parameters:
   image:

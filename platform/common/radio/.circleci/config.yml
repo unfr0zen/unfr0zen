@@ -2,12 +2,6 @@ version: 2.1
 
 # The radio: its firmware for the gen 3's EM3581 and the gen 2's EM357 Zigbee
 # and Thread personalities, and OpenThread's host side for the thermostat.
-# Its workflow runs when platform/common/radio changes.
-
-parameters:
-  radio:
-    type: boolean
-    default: false
 
 jobs:
   radio:
@@ -37,16 +31,3 @@ jobs:
       - module-store:
           module: thread
           outputs: build/thread/ot-daemon build/thread/ot-ctl
-
-workflows:
-  radio:
-    when: << pipeline.parameters.radio >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - radio:
-          requires: [image-ready]
-          context: docker-hub
-      - thread:
-          requires: [image-ready]
-          context: docker-hub

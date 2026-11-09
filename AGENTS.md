@@ -16,7 +16,7 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 - `utils/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app. `ci/` holds the build image's Dockerfile and the CircleCI config that publishes it, run only when `utils/ci/` changes.
 - `assets/`: app icons, the Linux `.desktop` entry, and the README's app screenshot and overview diagram (light and dark).
 - `integrations/`: files users install on their side: Home Assistant blueprints (`home-assistant/`) and the Zigbee2MQTT converter (`zigbee2mqtt/`).
-- `.circleci/`: `config.yml` is the setup workflow, choosing the configs to merge by the paths a push changed (`utils/ci/configs.py` holds the table and validates every selection); `common.yml` the executors and module commands they share; `release.yml` the release workflow. Each subsystem has a `.circleci/config.yml` of its own with its workflow, run when its files change: `utils/ci` (the build image), `platform/diamond3` (recovery), `platform/diamond3/zbwake`, `platform/j49`, `platform/common/radio`, `platform/common/doom`, `platform/common/nlclient`, `crates/nestlocal`, and `crates` (the app: every module, the tests and each target).
+- `.circleci/`: `config.yml` is the setup workflow, choosing the configs to merge by the paths a push changed (`utils/ci/configs.py` holds the table and validates every selection); `common.yml` the executors and module commands they share; `release.yml` the release workflow. Each subsystem has a `.circleci/config.yml` of its own with its jobs: `platform/diamond3` (recovery), `platform/diamond3/zbwake`, `platform/j49`, `platform/common/radio`, `platform/common/doom`, `platform/common/nlclient` and `crates/nestlocal` each define a module's; `utils/ci` holds the build image's workflow, run when its files change, and `crates` the app's, run when anything built changes: every module, the tests and each target.
 
 Generated outputs belong in ignored `build/`, `target/`, `dist/`, or `.work/` directories.
 
@@ -84,7 +84,7 @@ Body is optional — omit it for self-explanatory changes. When present, wrap at
 
 - A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it must follow the `subsys: lowercase summary` format above.
 - PR body is short — one or two sentences describing the change. No padding.
-- CI (`.circleci/`) runs the workflow of each subsystem a PR changes and the app's, and all of them on a push to `main`, which builds each module of the firmware (cached by its inputs), every app target and the tests above; a PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, publishing the apps as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
+- CI (`.circleci/`) runs the app's workflow for a PR changing anything built and for a push to `main`: it builds each module of the firmware (cached by its inputs), every app target and the tests above; a PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, publishing the apps as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
 - Never describe an undisclosed vulnerability in a public issue, PR or commit.
 
 ## Security & Device Configuration

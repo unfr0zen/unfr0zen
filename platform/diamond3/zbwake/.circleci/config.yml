@@ -2,13 +2,7 @@ version: 2.1
 
 # zbwake.ko for each gen 3 release, against Nest's published kernel sources:
 # one job per release of the releases file, then the set as one module. The
-# setup workflow (utils/ci/configs.py) fills the matrix from that file. Its
-# workflow runs when platform/diamond3/zbwake changes.
-
-parameters:
-  zbwake:
-    type: boolean
-    default: false
+# setup workflow (utils/ci/configs.py) fills the matrix from that file.
 
 jobs:
   zbwake-release:
@@ -50,19 +44,3 @@ jobs:
       - module-store:
           module: zbwake
           outputs: build/zbwake
-
-workflows:
-  zbwake:
-    when: << pipeline.parameters.zbwake >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]

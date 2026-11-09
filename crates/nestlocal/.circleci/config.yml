@@ -1,14 +1,8 @@
 version: 2.1
 
 # nestlocal and thread-rcp for the thermostat, carrying the radio images and
-# every zbwake.ko: the radio, zbwake and j49 modules are its inputs, so its
-# workflow builds them (from the cache when unchanged) before it. Runs when
-# crates/nestlocal changes.
-
-parameters:
-  nestlocal:
-    type: boolean
-    default: false
+# every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
+# from the jobs upstream in the workflow.
 
 jobs:
   nestlocal:
@@ -31,26 +25,3 @@ jobs:
       - module-store:
           module: nestlocal
           outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7
-
-workflows:
-  nestlocal:
-    when: << pipeline.parameters.nestlocal >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - radio:
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]
-      - j49-kernel
-      - nestlocal:
-          requires: [radio, zbwake, j49-kernel]
-          context: docker-hub

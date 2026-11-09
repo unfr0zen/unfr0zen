@@ -1,12 +1,7 @@
 version: 2.1
 
 # The UNFR0ZEN screen's object for the unit's nlclient, and the screen's host
-# test. Its workflow runs when platform/common/nlclient changes.
-
-parameters:
-  nlclient:
-    type: boolean
-    default: false
+# test.
 
 jobs:
   nlclient:
@@ -29,13 +24,3 @@ jobs:
             /tmp/custom-flow-test
             clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/rcs_screen_test.c -o /tmp/rcs-screen-test
             /tmp/rcs-screen-test
-
-workflows:
-  nlclient:
-    when: << pipeline.parameters.nlclient >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - nlclient:
-          requires: [image-ready]
-          context: docker-hub

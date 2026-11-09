@@ -1,14 +1,15 @@
 version: 2.1
 
-# The setup half of every pipeline: which subsystems' configs run, from the
-# files the push changed against main. Each mapping names a path pattern and
-# the subsystem whose parameter it sets; utils/ci/configs.py then picks the
-# configs to merge (each subsystem's, those its workflow depends on, and the
-# shared .circleci/common.yml), adds the build image's tag for the Dockerfile
-# at this commit, makes a push to main run every workflow, and a release tag
-# run the release workflow alone. The
-# pipeline continues with the merged config and the parameters. With nothing
-# matched it continues with .circleci/none.yml.
+# The setup half of every pipeline: which workflows run, from the files the
+# push changed against main. Each mapping names a path pattern and the
+# workflow whose parameter it sets: the build image's, and the app's, which
+# builds every module and so runs for anything built. utils/ci/configs.py then
+# picks the configs to merge (each workflow's, those defining the jobs it
+# lists, and the shared .circleci/common.yml), adds the build image's tag for
+# the Dockerfile at this commit, makes a push to main run the app workflow,
+# and a release tag run the release workflow alone. The pipeline continues
+# with the merged config and the parameters. With nothing matched it continues
+# with .circleci/none.yml.
 setup: true
 
 orbs:
@@ -31,13 +32,6 @@ jobs:
           base-revision: main
           mapping: |
             utils/ci/.* build-image true
-            platform/diamond3/(bootstrap|uboot)/.* recovery true
-            platform/diamond3/zbwake/.* zbwake true
-            platform/j49/.* j49 true
-            platform/common/radio/.* radio true
-            platform/common/doom/.* doom true
-            platform/common/nlclient/.* nlclient true
-            crates/nestlocal/.* nestlocal true
             (crates|platform|utils|\.circleci)/.* app true
             Cargo\.(toml|lock) app true
           output-path: /tmp/pipeline-parameters.json
