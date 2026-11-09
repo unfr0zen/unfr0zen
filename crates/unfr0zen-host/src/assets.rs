@@ -10,6 +10,8 @@ const BUSYBOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/busybox.gz"));
 const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"));
 /// The UNFR0ZEN screen, compiled once, for linking into the unit's nlclient.
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
+/// The j49 Sensors views' registration helper, compiled for in-memory linking.
+pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
 
 fn gunzip(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();

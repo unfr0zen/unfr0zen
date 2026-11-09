@@ -230,7 +230,7 @@ impl Bridge {
                 let first = !sensor.has_reading();
                 sensor.set(v)?;
                 if first {
-                    crate::sensor::select(&self.store, &self.serial, &sensor.bucket);
+                    sensor.select_when_ready(&self.store, &self.serial);
                 }
                 logf!("external temperature: reading {v} °C");
                 Ok(None)

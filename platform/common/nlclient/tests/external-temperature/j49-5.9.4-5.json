@@ -1,0 +1,148 @@
+{
+  "stock_sha256": "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
+  "screen_sha256": "c9f48ab9c05fe6b956bab139d9c4f1c68f21496026c1d5a2b6a687b72859ff04",
+  "screen_size": 5193009,
+  "entry": 5324084,
+  "read_entry": 5324200,
+  "socket_entry": 5324224,
+  "temperature_entry": 5324292,
+  "result_entry": 5324368,
+  "guard_entry": 5324380,
+  "reply_entry": 5324396,
+  "payload_offset": 5193012,
+  "payload_size": 1050,
+  "payload_sha256": "a657d7a0a6baadcfdad80f6b484d84173d162376d23a63b8c9509c0d05a458f9",
+  "machine_payload_size": 364,
+  "machine_payload_sha256": "801195a150c78f329de86643fdbd880ec6b553726c884dc0bada0e24d2a54b4d",
+  "ui_address": 5324448,
+  "ui_size": 686,
+  "ui_sha256": "22c12e3cab25a948e8961cb8f100f8e0589c5d2092ca6600f440b75874fd435d",
+  "ui_bindings": {
+    "rcs_add_layer": 334184,
+    "rcs_add_screen": 334312,
+    "rcs_associated": 616968,
+    "rcs_interval": 177004,
+    "rcs_layer_lookup": 334240,
+    "rcs_layer_new": 1672748,
+    "rcs_native_post": 442752,
+    "rcs_native_read": 182140,
+    "rcs_poll": 175456,
+    "rcs_screen.c": 0,
+    "rcs_screen_lookup": 334364,
+    "rcs_screen_new": 1681144,
+    "rcs_string_clear": 183880,
+    "rcs_string_find": 174112,
+    "strcmp": 179908
+  },
+  "ui_symbols": {
+    "custom_factory": 5324448,
+    "rcs_post_reading": 5324704,
+    "rcs_read_command": 5324832
+  },
+  "output_size": 5194062,
+  "output_sha256": "68f6148e7a77da04ae9075a2fc38328dc449adb01a18c316c26ae5a43f330516",
+  "journal_sha256": "f1963e4fb776feba989cee1711c9e28d60f1ce3446063000cd89062454c31410",
+  "sites": [
+    {
+      "address": 294536,
+      "offset": 261768,
+      "before": "401105e3",
+      "after": "a92f13ea"
+    },
+    {
+      "address": 294548,
+      "offset": 261780,
+      "before": "2488ffeb",
+      "after": "0000a0e3"
+    },
+    {
+      "address": 1317828,
+      "offset": 1285060,
+      "before": "680056e3",
+      "after": "010056e3"
+    },
+    {
+      "address": 1318004,
+      "offset": 1285236,
+      "before": "002088e5",
+      "after": "0000a0e1"
+    },
+    {
+      "address": 1318012,
+      "offset": 1285244,
+      "before": "6ea0fbeb",
+      "after": "4f480feb"
+    },
+    {
+      "address": 1318208,
+      "offset": 1285440,
+      "before": "8daafbeb",
+      "after": "18480feb"
+    },
+    {
+      "address": 1321004,
+      "offset": 1288236,
+      "before": "7a3cfceb",
+      "after": "9b450feb"
+    },
+    {
+      "address": 1681000,
+      "offset": 1648232,
+      "before": "ec0090e5",
+      "after": "fbe50dea"
+    },
+    {
+      "address": 1316952,
+      "offset": 1284184,
+      "before": "48aafceb",
+      "after": "d0490feb"
+    },
+    {
+      "address": 1316956,
+      "offset": 1284188,
+      "before": "1c1a0fe3",
+      "after": "82490fea"
+    },
+    {
+      "address": 1132364,
+      "offset": 1099596,
+      "before": "b0ffff0a",
+      "after": "beffffea"
+    },
+    {
+      "address": 2325236,
+      "offset": 2292468,
+      "before": "fcfdfdeb",
+      "after": "c2700beb"
+    },
+    {
+      "address": 2325244,
+      "offset": 2292476,
+      "before": "e0ffffea",
+      "after": "d3700bea"
+    },
+    {
+      "address": 5175584,
+      "offset": 5110048,
+      "before": "6c373a00",
+      "after": "883e5100"
+    },
+    {
+      "address": 5175588,
+      "offset": 5110052,
+      "before": "0cd01300",
+      "after": "3c171400"
+    },
+    {
+      "offset": 292,
+      "before": "313d0000",
+      "after": "4e410000"
+    },
+    {
+      "offset": 296,
+      "before": "313d0000",
+      "after": "4e410000"
+    }
+  ],
+  "reference": "Debian clang 19.1.7 + GNU arm-none-eabi-ld; independent assembly, native bindings, full-file construction and UFP1 journal"
+}

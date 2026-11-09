@@ -186,6 +186,7 @@ impl PatchInputs {
             wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(assets::doom),
             external_temperature: self.external_temperature,
+            external_temperature_screen: if self.external_temperature { assets::J49_RCS_SCREEN.to_vec() } else { Vec::new() },
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key,
@@ -335,8 +336,8 @@ pub fn run(config: &Config, progress: &mut dyn Progress,
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
             Err(failure("--dark-theme is only for the 2nd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
-        Device::Diamond | Device::J49 if config.options.external_temperature =>
-            Err(failure("--external-temperature needs the 3rd generation's BLE: this unit has none")),
+        Device::Diamond if config.options.external_temperature =>
+            Err(failure("--external-temperature is not supported on the 1st generation")),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
