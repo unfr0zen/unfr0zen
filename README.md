@@ -63,6 +63,14 @@ thermostat. With MQTT or Matter, the thermostat reaches the broker or the
 controller over Wi-Fi, joined from its own menu (Settings → Network); the
 network doesn't need internet access.
 
+The Matter thermostat exposes Eco heat and cool temperatures through the
+standard writable `UnoccupiedHeatingSetpoint` and
+`UnoccupiedCoolingSetpoint` attributes. These and MQTT's Eco temperature
+settings update the same Nest values; the Eco heat/cool limit switches remain
+independent. Home Assistant's Matter climate entity currently writes only the
+occupied setpoints, so changing Eco temperatures from Home Assistant requires
+a controller that can write Matter attributes directly.
+
 ### Tested firmware
 
 | Device | Nest firmware |

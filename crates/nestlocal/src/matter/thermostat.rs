@@ -5,7 +5,7 @@
 //! cluster advertises heating, cooling and auto on every unit; which of them
 //! the unit's equipment can do goes in ControlSequenceOfOperation, which is
 //! what controllers read the modes from. Eco is the one preset (PRES), and
-//! the eco temperatures are also the unoccupied setpoints (OCC).
+//! the eco temperatures are also the writable unoccupied setpoints (OCC).
 
 use std::sync::Arc;
 
@@ -565,6 +565,43 @@ mod tests {
         t.set_unoccupied_cooling_setpoint(ctx(1), 2900).unwrap();
         assert_eq!(field(&t.nest, "device", "away_temperature_low").as_f64(), Some(12.0));
         assert_eq!(field(&t.nest, "device", "away_temperature_high").as_f64(), Some(29.0));
+    }
+
+    #[test]
+    fn matter_and_mqtt_eco_setpoint_writes_share_settings_and_keep_switches_independent() {
+        let bridge = crate::bridge::tests::test_bridge();
+        bridge.store.merge("device.S", &fields!{
+            "temperature_scale" => "C",
+            "away_temperature_low" => 15.0,
+            "away_temperature_high" => 28.0,
+            "away_temperature_low_enabled" => true,
+            "away_temperature_high_enabled" => true,
+        }, 0, 0, true);
+        bridge.store.merge("shared.S", &fields!{
+            "can_heat" => true,
+            "can_cool" => true,
+            "target_temperature_type" => "range",
+            "target_temperature_low" => 19.0,
+            "target_temperature_high" => 24.0,
+        }, 0, 0, true);
+        let nest = Arc::new(Nest { bridge: bridge.clone() });
+        let t = Thermostat::new(Dataver::new(0), nest.clone());
+
+        t.set_unoccupied_heating_setpoint(ctx(1), 2000).unwrap();
+        t.set_unoccupied_cooling_setpoint(ctx(1), 2800).unwrap();
+        assert_eq!((t.unoccupied_heating_setpoint(ctx(1)).unwrap(),
+                    t.unoccupied_cooling_setpoint(ctx(1)).unwrap()), (2000, 2800));
+
+        bridge.apply("mqtt", "away_temperature_low", "18.5").unwrap();
+        bridge.apply("mqtt", "away_temperature_high", "26.5").unwrap();
+        assert_eq!((t.unoccupied_heating_setpoint(ctx(1)).unwrap(),
+                    t.unoccupied_cooling_setpoint(ctx(1)).unwrap()), (1850, 2650));
+
+        bridge.apply("mqtt", "away_temperature_low_enabled", "OFF").unwrap();
+        t.set_unoccupied_heating_setpoint(ctx(1), 1900).unwrap();
+        assert_eq!(t.unoccupied_heating_setpoint(ctx(1)).unwrap(), 1900);
+        assert!(!nest.view().switch_on("away_temperature_low_enabled"));
+        assert!(nest.view().switch_on("away_temperature_high_enabled"));
     }
 
     #[test]
