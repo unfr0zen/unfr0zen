@@ -222,12 +222,12 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
                                                                  &mut || stored_pki(&pki_dir), &BTreeSet::new(),
                                                                  config.dry_run, &screen_builder(run_dir));
     let changes = stage(progress, &label, || match patch(&mut volume) {
-        // Too little room beside the old nestlocal: again, from the same
-        // read, with the old one's blocks erased for the new.
+        // Too little room beside the old nestlocal or nlclient: again, from
+        // the same read, with the old ones' blocks erased for the new.
         Err(error) if volume.out_of_room() => {
-            log::info!("{slot}: {error}; patching again with the old nestlocal's blocks erased to make room");
+            log::info!("{slot}: {error}; patching again with the old nestlocal's and nlclient's blocks erased to make room");
             volume = jffs2::Slot::load(raw.clone())?;
-            volume.make_room_for_nestlocal();
+            volume.make_room_in_place();
             patch(&mut volume)
         }
         other => other,
@@ -247,7 +247,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
         let pages = plan.before.len() + plan.after.len();
         let reclaimed = match plan.erase.len() {
             0 => String::new(),
-            n => format!(" and {n} the old nestlocal's, erased to make room"),
+            n => format!(" and {n} of old copies, erased to make room"),
         };
         progress.status(&format!("{} changes: {pages} pages in {used} blocks, of {free} erased{reclaimed}", changes.len()));
         stage_with(progress, &format!("Write and verify {slot} in NAND"), |progress| write_slot(nand, progress, slot, &plan))?;
