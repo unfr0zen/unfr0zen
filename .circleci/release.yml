@@ -112,16 +112,9 @@ workflows:
           filters: *release-tags
       - j49-kernel:
           filters: *release-tags
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
+      - zbwake:
           requires: [image-ready]
           context: docker-hub
-          filters: *release-tags
-      - zbwake:
-          requires: [zbwake-release]
           filters: *release-tags
       - radio:
           requires: [image-ready]

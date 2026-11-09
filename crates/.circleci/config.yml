@@ -170,15 +170,9 @@ workflows:
           requires: [image-ready]
           context: docker-hub
       - j49-kernel
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
+      - zbwake:
           requires: [image-ready]
           context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]
       - radio:
           requires: [image-ready]
           context: docker-hub

@@ -112,6 +112,10 @@ commands:
         type: string
       outputs:
         type: string
+      persist:
+        description: Off in a job that persists its modules' tarballs in one step of its own.
+        type: boolean
+        default: true
     steps:
       - run:
           name: Pack << parameters.module >>
@@ -122,10 +126,13 @@ commands:
           key: module-<< parameters.module >>-v1-{{ checksum ".work/keys/<< parameters.module >>" }}
           paths:
             - .work/cache/<< parameters.module >>.tar
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .work/cache/<< parameters.module >>.tar
+      - when:
+          condition: << parameters.persist >>
+          steps:
+            - persist_to_workspace:
+                root: .
+                paths:
+                  - .work/cache/<< parameters.module >>.tar
 
   # What the jobs upstream in the workflow built.
   modules:

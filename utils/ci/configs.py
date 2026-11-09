@@ -11,8 +11,9 @@ main has no base to compare with: what it changed says nothing about what
 reached it. A release tag runs the release workflow alone, with the image's.
 The build image's tag is the Dockerfile's SHA-256, twelve hex
 digits, as utils/ci/.circleci/config.yml publishes it. The configs are
-rendered on their way: __ZBWAKE_RELEASES__ becomes the list of gen 3 releases
-of platform/diamond3/zbwake/releases, for the zbwake matrix. A fork's pull
+rendered on their way: a line naming __ZBWAKE_RELEASE__ is repeated for each
+gen 3 release of platform/diamond3/zbwake/releases, as the zbwake job's step
+for that release. A fork's pull
 request (FORK=true) is rendered without the docker-hub context and the
 executors' Docker Hub credentials, and never publishes the image: the image is
 public, and a fork's code gets no secret.
@@ -72,11 +73,12 @@ def render(configs, directory=RENDERED, fork=False):
     """Copies of the configs with their placeholders filled, in directory;
     for a fork, without a context or registry credentials."""
     with open(ZBWAKE_RELEASES) as f:
-        releases = json.dumps(f.read().split())
+        releases = f.read().split()
     rendered = []
     for config in configs:
         with open(config) as f:
-            text = f.read().replace("__ZBWAKE_RELEASES__", releases)
+            text = "".join(line.replace("__ZBWAKE_RELEASE__", release)
+                           for line in f for release in (releases if "__ZBWAKE_RELEASE__" in line else [""]))
         if fork:
             text = re.sub(r"^( *)context: docker-hub$", r"\1context: []", text, flags=re.M)
             text = re.sub(r"^( *)auth:\n\1  username: \$DOCKERHUB_USER\n\1  password: \$DOCKERHUB_TOKEN\n", "",
