@@ -194,6 +194,13 @@ Link base. On Windows, the 1st and 2nd generation need the WinUSB driver bound
 to `0451:d00e` with [Zadig](https://zadig.akeo.ie). On Linux, add the
 [udev rule](#install) and reconnect the unit.
 
+**Windows stops with `ACM interface for 18d1:4ee0 did not appear` (3rd generation).**
+An Android driver installed earlier has claimed the recovery device, so its
+console gets no COM port. While the thermostat is in recovery, open Device
+Manager, find **Android Bootloader Interface**, choose Update driver → Browse
+my computer → Let me pick → Universal Serial Bus devices → **USB Composite
+Device**. The choice persists; run again.
+
 **macOS won't open the app.** It is signed ad hoc, not notarized: run
 `xattr -dr com.apple.quarantine unfr0zen.app`, or allow it under System
 Settings → Privacy & Security.
