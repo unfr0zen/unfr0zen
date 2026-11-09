@@ -17,6 +17,17 @@ caches its outputs under its key and a check (the tests, clippy, an app) a
 mark that it passed; the setup job restores them all, and a job found there
 is rendered as the cached job under its name, as is a module nothing left to
 run takes. A release tag runs every job.
+
+The pipeline parameter force names jobs to run whatever the cache holds, or all
+of them, for a pipeline started by hand:
+
+    curl -X POST https://circleci.com/api/v2/project/gh/unfr0zen/unfr0zen/pipeline \
+        -H "Circle-Token: $CIRCLE_TOKEN" -H 'Content-Type: application/json' \
+        -d '{"branch": "main", "parameters": {"force": "radio test"}}'
+
+It reaches the keys as FORCE, with the pipeline's number as SALT: a job named
+gets a key of this pipeline alone, and so does everything taking it, which
+builds and passes again on what the job made. Nothing later finds those keys.
 The build image's tag is the Dockerfile's SHA-256, twelve hex
 digits, as utils/ci/.circleci/config.yml publishes it. The configs are
 rendered on their way: a line naming __ZBWAKE_RELEASE__ is repeated for each
@@ -111,24 +122,31 @@ def releases():
 def inputs():
     """INPUTS: every key's inputs, the modules', the checks' and each zbwake
     release's, which the zbwake job caches one by one."""
-    return MODULES | CHECKS | {"zbwake-" + release: {"paths": ZBWAKE_SOURCES} for release in releases()}
+    return MODULES | CHECKS | {"zbwake-" + release: {"paths": ZBWAKE_SOURCES, "of": "zbwake"}
+                               for release in releases()}
 
 
 def key(name, table, keys):
     """The job's key: a hash of its name and image, its sources' git ids and
-    its modules' keys."""
+    its modules' keys, and of SALT for a job FORCE names."""
     if name not in keys:
         job = table[name]
+        force = os.environ.get("FORCE", "").split()
         lines = [f"{name} {image_tag() if job.get('image', True) else ''}"]
         lines += [subprocess.run(["git", "rev-parse", f"HEAD:{path}"], check=True, capture_output=True,
                                  text=True).stdout.strip() for path in job["paths"]]
         lines += [key(need, table, keys) for need in job.get("needs", [])]
+        if "all" in force or name in force or job.get("of") in force:
+            lines.append("force " + os.environ.get("SALT", ""))
         keys[name] = hashlib.sha256("".join(line + "\n" for line in lines).encode()).hexdigest()
     return keys[name]
 
 
 def write_keys():
     table, keys = inputs(), {}
+    unknown = set(os.environ.get("FORCE", "").split()) - set(table) - {"all"}
+    if unknown:
+        sys.exit(f"force names no job: {' '.join(sorted(unknown))}; the jobs are {' '.join(MODULES | CHECKS)}")
     os.makedirs(".work/keys", exist_ok=True)
     os.makedirs(".work/cache", exist_ok=True)
     for name in table:

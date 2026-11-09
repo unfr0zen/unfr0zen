@@ -15,6 +15,15 @@ version: 2.1
 # continues with .circleci/none.yml.
 setup: true
 
+parameters:
+  force:
+    description: >-
+      Jobs to run whatever the cache holds, with everything that takes them:
+      names of modules and checks (utils/ci/configs.py), or all. For a
+      pipeline started by hand.
+    type: string
+    default: ""
+
 orbs:
   path-filtering: circleci/path-filtering@1
   continuation: circleci/continuation@1
@@ -42,6 +51,9 @@ jobs:
           output-path: /tmp/pipeline-parameters.json
       - run:
           name: The keys
+          environment:
+            FORCE: << pipeline.parameters.force >>
+            SALT: << pipeline.number >>
           command: python3 utils/ci/configs.py keys
       - restore_cache:
           keys:

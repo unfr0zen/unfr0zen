@@ -20,6 +20,10 @@ parameters:
     description: utils/ci/ changed, so this pipeline publishes the image and the gate waits for it.
     type: boolean
     default: false
+  force:
+    description: Jobs to run whatever the cache holds, or all, as given to the pipeline (.circleci/config.yml).
+    type: string
+    default: ""
 
 # Every job sharing a cache works in /tmp/project: the cache restores a file
 # to the absolute path it was saved from, and the modules pass between
@@ -64,6 +68,9 @@ commands:
     steps:
       - run:
           name: The keys
+          environment:
+            FORCE: << pipeline.parameters.force >>
+            SALT: << pipeline.number >>
           command: python3 utils/ci/configs.py keys
 
   # The module's tarball from the cache, unpacked when there.
