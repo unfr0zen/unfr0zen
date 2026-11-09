@@ -43,9 +43,13 @@ const RANGE: (f64, f64) = (-30.0, 60.0);
 const SELECT_AFTER: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const SELECT_AFTER: Duration = Duration::from_millis(10);
-// The thermostat's room is the name; a description would add a second label.
-const DESCRIPTION: &str = "";
 const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
+
+/// The sensor's description. Gen 2's Sensors view names it after its room,
+/// where a description would be a second label.
+fn description() -> &'static str {
+    if crate::device::current().generation == 2 { "" } else { "External" }
+}
 
 /// Who the sensor is, kept between runs: the key only nlclient and nestlocal
 /// hold, and the sequence numbers already spoken for.
@@ -367,7 +371,7 @@ pub fn prepare_settings(path: &Path, settings: &Path, serial: &str, where_id: Op
     let original = std::fs::read(settings)?;
     let mut b = original.clone();
     let where_id = where_id.unwrap_or(DEFAULT_WHERE);
-    for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", DESCRIPTION.to_string())] {
+    for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", description().to_string())] {
         b = nlsettings::set(&b, &format!("{bucket}.{name}"), &value)?;
     }
     if b != original {
@@ -468,7 +472,7 @@ pub fn ensure_buckets(store: &Arc<Store>, serial: &str, bucket: &str, where_id: 
         "model" => "KR1",
         "serial_number" => id,
         "where_id" => where_id.unwrap_or(DEFAULT_WHERE),
-        "description" => DESCRIPTION,
+        "description" => description(),
         "structure_id" => structure.split_once('.').map_or("", |(_, id)| id),
         "report_period_in_seconds" => 60,
     }, 0, 0, false);
@@ -556,9 +560,10 @@ pub fn selected(store: &Store, serial: &str, bucket: &str) -> bool {
         .is_some_and(|o| listed(o.value.get("active_rcs_sensors")).iter().any(|v| v == bucket))
 }
 
-/// The unit's room, as its device bucket names it.
-pub fn where_id(store: &Store, serial: &str, settings: &Path) -> Option<String> {
-    std::fs::read(settings).ok().and_then(|bytes| {
+/// The unit's room, as its device bucket names it. With nlclient's settings
+/// (gen 2), their `device_where_id` comes first.
+pub fn where_id(store: &Store, serial: &str, settings: Option<&Path>) -> Option<String> {
+    settings.and_then(|settings| std::fs::read(settings).ok()).and_then(|bytes| {
         let value = nlsettings::value(&bytes, "device_where_id")?;
         std::str::from_utf8(value).ok().filter(|id| !id.is_empty()).map(str::to_string)
     }).or_else(|| {
@@ -607,16 +612,17 @@ mod tests {
         let settings = directory.join("settings.config");
         std::fs::write(&settings, b"<settings><s key=\"device_where_id\" value=\"living-room\"/></settings>").unwrap();
         store.merge("device.S", &fields!{"where_id" => "old-room"}, 0, 0, true);
-        assert_eq!(where_id(&store, "S", &settings).as_deref(), Some("living-room"));
+        assert_eq!(where_id(&store, "S", Some(&settings)).as_deref(), Some("living-room"));
+        assert_eq!(where_id(&store, "S", None).as_deref(), Some("old-room"), "gen 3 keeps to the bucket");
         std::fs::remove_file(&settings).unwrap();
-        assert_eq!(where_id(&store, "S", &settings).as_deref(), Some("old-room"));
+        assert_eq!(where_id(&store, "S", Some(&settings)).as_deref(), Some("old-room"));
         crate::structure::ensure_structure(&store, "S");
         ensure_buckets(&store, "S", "kryptonite.AB", Some("living-room"));
         keep_location(&store, "S", "kryptonite.AB");
         store.merge("device.S", &fields!{"where_id" => "new-room"}, 0, 0, true);
         let sensor = store.get("kryptonite.AB").unwrap();
         assert_eq!(sensor.value["where_id"], json!("new-room"));
-        assert_eq!(sensor.value["description"], json!(""));
+        assert_eq!(sensor.value["description"], json!(description()));
         ensure_buckets(&store, "S", "kryptonite.AB", Some("new-room"));
         assert_eq!(store.get("rcs_settings.S").unwrap().value["associated_rcs_sensors"], json!(["kryptonite.AB"]));
     }
