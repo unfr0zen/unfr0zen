@@ -157,6 +157,48 @@ commands:
           paths:
             - /usr/local/cargo/registry
 
+  # A job's cargo target directory, for the dependencies compiled in it, under
+  # a key of the image (its toolchain) and Cargo.lock. A key is stored once,
+  # so the workspace's own crates in it age and rebuild from the checkout.
+  # Given a module, the key is one of an empty directory when the module's
+  # tarball came from the cache: nothing compiles then.
+  cargo-target-restore:
+    parameters:
+      cache:
+        type: string
+      path:
+        type: string
+        default: target
+      module:
+        type: string
+        default: ""
+    steps:
+      - run:
+          name: << parameters.cache >>'s target key
+          command: |
+            mkdir -p .work/keys << parameters.path >>
+            if [ -f ".work/cache/<< parameters.module >>.tar" ]; then
+              echo unused
+            else
+              echo "$IMAGE"
+              sha256sum Cargo.lock
+            fi > .work/keys/target-<< parameters.cache >>
+      - restore_cache:
+          keys:
+            - cargo-target-<< parameters.cache >>-v1-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
+  cargo-target-store:
+    parameters:
+      cache:
+        type: string
+      path:
+        type: string
+        default: target
+    steps:
+      - save_cache:
+          key: cargo-target-<< parameters.cache >>-v1-{{ checksum ".work/keys/target-<< parameters.cache >>" }}
+          paths:
+            - << parameters.path >>
+
 jobs:
   # The gate: the build image for this Dockerfile is on Docker Hub. When this
   # push changed utils/ci/, the build-image workflow is publishing it in this

@@ -46,6 +46,8 @@ jobs:
       - checkout
       - firmware
       - cargo-registry-restore
+      - cargo-target-restore:
+          cache: test
       # nextest for its JUnit report (.config/nextest.toml); the report goes
       # to CircleCI whether the tests pass or not.
       - run:
@@ -57,6 +59,8 @@ jobs:
             mkdir -p .work/test-results/rust && cp target/nextest/ci/junit.xml .work/test-results/rust/
             exit $status
       - cargo-registry-store
+      - cargo-target-store:
+          cache: test
       - run:
           name: radio
           command: python3 -m pytest platform/common/radio/tests --junitxml=.work/test-results/radio/junit.xml
@@ -95,12 +99,16 @@ jobs:
       - checkout
       - firmware
       - cargo-registry-restore
+      - cargo-target-restore:
+          cache: clippy
       - run:
           name: Clippy
           no_output_timeout: 30m
           command: |
             rustup component add clippy
             cargo clippy --workspace --locked --all-targets -- -D warnings
+      - cargo-target-store:
+          cache: clippy
 
   # The app for one platform, into dist/. On Linux and macOS the same
   # executable is the command-line tool when given arguments. Linux builds

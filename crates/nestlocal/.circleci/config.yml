@@ -18,10 +18,17 @@ jobs:
           paths: crates/nestlocal Cargo.toml Cargo.lock
           files: build/radio/radio.bin build/radio-em357-zigbee/radio.bin build/zbwake/*.ko
       - cargo-registry-restore
+      - cargo-target-restore:
+          cache: nestlocal
+          path: .work/nestlocal-target
+          module: nestlocal
       - module-build:
           module: nestlocal
           command: sh platform/common/radio/thread/nestlocal.sh
       - cargo-registry-store
+      - cargo-target-store:
+          cache: nestlocal
+          path: .work/nestlocal-target
       - module-store:
           module: nestlocal
           outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7
