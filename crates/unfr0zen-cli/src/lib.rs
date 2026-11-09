@@ -111,6 +111,9 @@ struct Args {
     /// regulate from temperatures sent to the unit (set/external_temperature, Zigbee or Matter), which hears them as a Nest Temperature Sensor; turns off its own Bluetooth, so real Nest Temperature Sensors stop working; 3rd generation; needs --mqtt, --matter or --zigbee
     #[arg(long, help_heading = "Root filesystem options")]
     external_temperature: bool,
+    /// gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
+    #[arg(long, help_heading = "Root filesystem options")]
+    dark_theme: bool,
     /// tar of root-owned files to add
     #[arg(long, value_name = "TAR", help_heading = "Root filesystem options")]
     overlay: Option<PathBuf>,
@@ -205,6 +208,7 @@ impl Args {
             entry_point: self.entry_point.unwrap_or_default(),
             doom: self.doom,
             external_temperature: self.external_temperature,
+            dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
             usb_shell: self.usb_shell,

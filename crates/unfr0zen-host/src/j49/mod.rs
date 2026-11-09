@@ -18,7 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use unfr0zen_core::j49::flasher::{self, Flasher, Nand};
-use unfr0zen_core::j49::{jffs2, kernel};
+use unfr0zen_core::j49::{jffs2, kernel, logo::{self, Logo}};
 use unfr0zen_core::j49::nand::{self as layout, Environment, PAGES_PER_BLOCK, PAGE_RAW};
 use unfr0zen_core::j49::omap;
 use unfr0zen_core::patch::{self, changes_text};
@@ -222,21 +222,21 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
                                                                  &mut || stored_pki(&pki_dir), &BTreeSet::new(),
                                                                  config.dry_run, &screen_builder(run_dir));
     let changes = stage(progress, &label, || match patch(&mut volume) {
-        // Too little room beside the old nestlocal: again, from the same
-        // read, with the old one's blocks erased for the new.
+        // Too little room beside the old nestlocal or nlclient: again, from
+        // the same read, with the old ones' blocks erased for the new.
         Err(error) if volume.out_of_room() => {
-            log::info!("{slot}: {error}; patching again with the old nestlocal's blocks erased to make room");
+            log::info!("{slot}: {error}; patching again with the old nestlocal's and nlclient's blocks erased to make room");
             volume = jffs2::Slot::load(raw.clone())?;
-            volume.make_room_for_nestlocal();
+            volume.make_room_in_place();
             patch(&mut volume)
         }
         other => other,
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
+    let upper = stage(progress, "Choose the kernel booted first", || upper_kernel(nand, slot, options))?;
     if config.dry_run {
-        if options.usb_shell {
-            progress.status(&format!("Dry run: the kernel with a USB serial port would go in {slot}'s boot partition, \
-                                      booted first"));
+        if let Some((_, what)) = &upper {
+            progress.status(&format!("Dry run: {what} would go in {slot}'s boot partition, booted first"));
         }
         return Ok(Outcome { device, slot, changed: false });
     }
@@ -247,7 +247,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
         let pages = plan.before.len() + plan.after.len();
         let reclaimed = match plan.erase.len() {
             0 => String::new(),
-            n => format!(" and {n} the old nestlocal's, erased to make room"),
+            n => format!(" and {n} of old copies, erased to make room"),
         };
         progress.status(&format!("{} changes: {pages} pages in {used} blocks, of {free} erased{reclaimed}", changes.len()));
         stage_with(progress, &format!("Write and verify {slot} in NAND"), |progress| write_slot(nand, progress, slot, &plan))?;
@@ -255,14 +255,40 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     }
     // The slot first: whatever stops after it leaves the unit booting the
     // stock kernel, until the environment names the new one.
-    if options.usb_shell {
-        let written = stage(progress, "Install the kernel with the USB serial port", || kernel::install(nand, slot, assets::KERNEL))?;
-        progress.status(if written { "Kernel with the USB serial port installed" } else { "Kernel with the USB serial port already in place" });
+    if let Some((image, what)) = upper {
+        let written = stage(progress, &format!("Install {what}"), || kernel::install(nand, slot, &image))?;
+        let line = format!("{what} {}", if written { "installed" } else { "already in place" });
+        progress.status(&format!("{}{}", line[..1].to_uppercase(), &line[1..]));
         let first = stage(progress, "Have U-Boot boot it first", || kernel::boot_first(nand, slot))?;
         progress.status(if first { "U-Boot environment updated" } else { "U-Boot already boots it first" });
         changed |= written || first;
     }
     Ok(Outcome { device, slot, changed })
+}
+
+/// The kernel for the upper half of the slot's boot partition, booted first,
+/// and what it is: the one with the USB serial port, either kernel with the
+/// dark boot logo for the dark theme, or without either option the stock
+/// kernel in place of a dark one there. None when the upper half stays.
+fn upper_kernel(nand: &mut dyn Nand, slot: Slot, options: &patch::Options) -> Result<Option<(Vec<u8>, String)>> {
+    let usb = "the kernel with the USB serial port";
+    let stock = |nand: &mut dyn Nand| kernel::read(nand, slot, false)?
+        .ok_or_else(|| failure(format!("no stock kernel in {slot}'s boot partition")));
+    if options.dark_theme {
+        let source = if options.usb_shell { assets::KERNEL.to_vec() } else { stock(nand)? };
+        if let Some(dark) = logo::darken(&source)? {
+            let what = if options.usb_shell { format!("{usb} and the dark boot logo") } else { "the kernel with the dark boot logo".into() };
+            return Ok(Some((dark, what)));
+        }
+        log::warn!("{slot}: the kernel's boot logo is not Nest's, or does not fit recoloured; left as it is");
+    }
+    if options.usb_shell {
+        return Ok(Some((assets::KERNEL.to_vec(), usb.into())));
+    }
+    match kernel::read(nand, slot, true)? {
+        Some(upper) if logo::logo(&upper)? == Some(Logo::Dark) => Ok(Some((stock(nand)?, "the stock kernel's boot logo".into()))),
+        _ => Ok(None),
+    }
 }
 
 /// Refuses what a Diamond cannot run: its CC2530 radio uses UART, and it has
@@ -353,4 +379,36 @@ fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome:
         (None, true, Some(_)) => format!("Patched {slot}; the unit booted back to its app"),
         (None, true, None) => format!("Patched {slot} in the image"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unfr0zen_core::j49::flasher::Image;
+
+    /// boot0 with `stock` in its lower half, the upper half erased.
+    fn boot0(stock: &[u8]) -> Image {
+        let (start, size) = layout::boot_partition(Slot::Root0);
+        let mut image = Image::new(vec![0xff; (start + size) / layout::PAGE * PAGE_RAW], "test").unwrap();
+        let pages = layout::encode(stock);
+        image.raw[start / layout::PAGE * PAGE_RAW..][..pages.len()].copy_from_slice(&pages);
+        image
+    }
+
+    #[test]
+    fn the_dark_logo_goes_first_and_without_the_option_comes_back_off() {
+        let Ok(stock) = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/j49/uImage")) else {
+            eprintln!("No build/j49/uImage; skipping");
+            return;
+        };
+        let mut nand = boot0(&stock);
+        let neither = patch::Options::default();
+        let dark = patch::Options { dark_theme: true, ..Default::default() };
+        assert!(upper_kernel(&mut nand, Slot::Root0, &neither).unwrap().is_none(), "nothing to undo");
+        let (image, what) = upper_kernel(&mut nand, Slot::Root0, &dark).unwrap().unwrap();
+        assert_eq!((logo::logo(&image).unwrap(), what.as_str()), (Some(Logo::Dark), "the kernel with the dark boot logo"));
+        kernel::install(&mut nand, Slot::Root0, &image).unwrap();
+        let (image, what) = upper_kernel(&mut nand, Slot::Root0, &neither).unwrap().unwrap();
+        assert_eq!((image, what.as_str()), (stock, "the stock kernel's boot logo"));
+    }
 }

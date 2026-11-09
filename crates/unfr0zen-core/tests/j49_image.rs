@@ -14,6 +14,17 @@ fn image() -> Option<Vec<u8>> {
     Some(std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
 }
 
+/// The file offset of a virtual address in an ELF's loadable segments.
+fn elf_offset(elf: &[u8], address: u32) -> usize {
+    let word = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
+    let headers = word(28) as usize;
+    let count = u16::from_le_bytes(elf[44..46].try_into().unwrap()) as usize;
+    (0..count).map(|i| headers + i * 32)
+        .find(|&h| word(h) == 1 && address >= word(h + 8) && address - word(h + 8) < word(h + 16))
+        .map(|h| (word(h + 4) + address - word(h + 8)) as usize)
+        .unwrap_or_else(|| panic!("unmapped address {address:#x}"))
+}
+
 fn pages(image: &[u8], offset: usize, length: usize) -> &[u8] {
     &image[offset / PAGE * PAGE_RAW..(offset + length) / PAGE * PAGE_RAW]
 }
@@ -179,6 +190,13 @@ fn the_patch_applies_to_both_slots() {
     };
     for which in [Slot::Root1, Slot::Root0] {
         let mut volume = slot(&image, which);
+        // The dark theme where the slot's stock nlclient is the reviewed build.
+        let stock = match volume.read("etc/unfr0zen/nlclient.original").unwrap() {
+            Some(original) => original.2,
+            None => volume.read("nestlabs/sbin/nlclient").unwrap().unwrap().2,
+        };
+        let dark = unfr0zen_core::nlclient::dark_theme::reviewed(&stock);
+        let options = Options { dark_theme: dark, ..options.clone() };
         let changes = patch_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
                                       &Default::default(), false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
         let (free, used) = volume.usage();
@@ -197,6 +215,17 @@ fn the_patch_applies_to_both_slots() {
         let nlclient = back.read("nestlabs/sbin/nlclient").unwrap().unwrap().2;
         assert!(!back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2.is_empty());
         assert_ne!(unfr0zen_core::shell::sha256_hex(&nlclient), "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7");
+        // The settings screens are dark when asked for.
+        let original = back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2;
+        if dark {
+            let golden: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json")).unwrap();
+            let hex = |value: &serde_json::Value| u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+            for edit in golden["edits"].as_array().unwrap() {
+                let at = elf_offset(&original, hex(&edit[0]));
+                assert_eq!(u32::from_le_bytes(nlclient[at..at + 4].try_into().unwrap()), hex(&edit[2]), "{which}: {}", edit[0]);
+            }
+        }
         // A second run finds everything in place.
         let mut again = jffs2::Slot::load(volume.programmed().unwrap().raw).unwrap();
         let second = patch_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),

@@ -8,12 +8,16 @@
 //! the original: until its name lands, the name keeps the old file, which
 //! JFFS2 then drops as unlinked. Port of scripts/patch_root_j49.py.
 //!
-//! nestlocal's binary is the one exception, when its new copy does not fit
-//! beside the old, or when the patch as a whole did not
-//! ([`Slot::make_room_for_nestlocal`]): its name is removed first, the blocks holding nothing but
-//! the old copy are erased (and given back JFFS2's clean marker), and the new
-//! copy goes there. A write cut short in between leaves the slot without
-//! nestlocal until the patch runs again; the rest of it is as it was.
+//! nestlocal's and nlclient's binaries are the exceptions, when the new copy
+//! does not fit beside the old, or when the patch as a whole did not
+//! ([`Slot::make_room_in_place`]): the name leaves the old copy first, the
+//! blocks holding nothing but the old copy are erased (and given back JFFS2's
+//! clean marker), and the new copy goes there. nestlocal's name is removed,
+//! so a write cut short in between leaves the slot without nestlocal until
+//! the patch runs again. nlclient's name is linked to the stock nlclient
+//! saved beside it, made executable for as long as it stands in, so a write
+//! cut short leaves the unit running the stock nlclient. The rest of the slot
+//! is as it was.
 //!
 //! As a [`Volume`], the patch sees the slot as the initramfs shell shows a
 //! mounted one; [`Slot::programmed`] then gives the pages to program.
@@ -35,9 +39,14 @@ const SUMMARY: u16 = 0x2006;
 /// An erased block's first OOB as the unit's JFFS2 leaves it: the clean
 /// marker node (magic, CLEANMARKER, length 8) after the bad-block marker.
 const CLEAN_OOB: (usize, [u8; 8]) = (2, [0x85, 0x19, 0x03, 0x20, 0x08, 0x00, 0x00, 0x00]);
-/// Files whose old copy may be erased to make room for the new: nestlocal's,
-/// which a unit can always do without until the patch runs again.
-const REPLACED_IN_PLACE: [&str; 1] = ["nestlabs/sbin/nestlocal"];
+/// Files whose old copy may be erased to make room for the new, and what
+/// their name stands for meanwhile: nothing for nestlocal's, which a unit can
+/// always do without until the patch runs again, and the saved stock nlclient
+/// for nlclient's, without which it would have no screen.
+const REPLACED_IN_PLACE: [(&str, Option<&str>); 2] = [
+    ("nestlabs/sbin/nestlocal", None),
+    (crate::nlclient::BINARY, Some(crate::nlclient::ORIGINAL)),
+];
 const COMPR_NONE: u8 = 0x00;
 const COMPR_ZERO: u8 = 0x01;
 const COMPR_RTIME: u8 = 0x02;
@@ -176,8 +185,11 @@ pub struct Slot {
     /// Blocks erased to make room, and how many nodes were placed before.
     erase: Vec<usize>,
     erase_after: usize,
-    /// Whether nestlocal's old blocks are erased whatever its new copy needs.
+    /// Whether the old blocks of the files replaced in place are erased
+    /// whatever their new copies need.
     always_make_room: bool,
+    /// A stand-in's inode and mode, put back once the new copy is named.
+    stand_in: Option<(u32, u32)>,
     out_of_room: bool,
 }
 
@@ -191,7 +203,7 @@ impl Slot {
         let mut slot = Slot { raw, bad: BTreeSet::new(), free: Vec::new(), inodes: BTreeMap::new(), dirents: BTreeMap::new(),
                               max_version: BTreeMap::new(), next_ino: 2, blocks: Vec::new(), current: None, nodes: Vec::new(), now,
                               held: BTreeMap::new(), erase: Vec::new(), erase_after: 0, always_make_room: false,
-                              out_of_room: false };
+                              stand_in: None, out_of_room: false };
         for block in 0..slot.raw.len() / BLOCK_RAW {
             let chunk = &slot.raw[block * BLOCK_RAW..(block + 1) * BLOCK_RAW];
             if nand::factory_bad(chunk) {
@@ -393,16 +405,26 @@ impl Slot {
         true
     }
 
-    /// Removes `base` from `parent`, then frees the blocks holding nothing
-    /// but `old`'s nodes, to be erased once what was placed before is
-    /// programmed.
-    fn make_room(&mut self, parent: u32, base: &str, old: u32) -> Result<()> {
+    /// Takes `base` in `parent` off `old`, to `stand_in` (made executable)
+    /// or to nothing, then frees the blocks holding nothing but `old`'s
+    /// nodes, to be erased once what was placed before is programmed.
+    fn make_room(&mut self, parent: u32, base: &str, old: u32, stand_in: Option<u32>) -> Result<()> {
         let dead: Vec<usize> = self.held.iter().filter(|(_, held)| !held.other && held.inodes == BTreeSet::from([old]))
             .map(|(&block, _)| block).filter(|block| !self.erase.contains(block)).collect();
         if dead.is_empty() {
             return Ok(());
         }
-        self.dirent(parent, base, 0, 0)?;
+        match stand_in {
+            Some(ino) => {
+                let node = self.latest(ino).cloned().expect("a regular file");
+                if node.mode & 0o111 != 0o111 {
+                    self.inode(ino, node.mode | 0o755, (node.uid, node.gid), node.isize as usize, 0, &[])?;
+                    self.stand_in = Some((ino, node.mode));
+                }
+                self.dirent(parent, base, ino, DT_REG)?;
+            }
+            None => self.dirent(parent, base, 0, 0)?,
+        }
         self.erase_after = self.nodes.len();
         self.blocks.extend(&dead);
         self.blocks.sort_unstable();
@@ -512,7 +534,9 @@ impl Slot {
             let start = block * BLOCK + offset;
             for page in start / PAGE..=(start + node.len() - 1) / PAGE {
                 if !pages.contains_key(&page) {
-                    if index < self.erase_after { &mut before } else { &mut after }.push(page);
+                    // A block erased to make room takes its pages after the
+                    // erase, whichever write placed them there.
+                    if index < self.erase_after && !self.erase.contains(block) { &mut before } else { &mut after }.push(page);
                 }
                 let data = pages.entry(page).or_insert_with(|| vec![0xff; PAGE]);
                 let (lo, hi) = (start.max(page * PAGE), (start + node.len()).min((page + 1) * PAGE));
@@ -531,9 +555,10 @@ impl Slot {
         Ok(Programming { raw: out, before, erase: self.erase.clone(), after: markers.chain(after).collect() })
     }
 
-    /// Has a nestlocal written to the slot take its old copy's blocks even
-    /// when it fits beside them: for a patch that, as a whole, did not.
-    pub fn make_room_for_nestlocal(&mut self) {
+    /// Has a nestlocal or nlclient written to the slot take its old copy's
+    /// blocks even when it fits beside them: for a patch that, as a whole,
+    /// did not.
+    pub fn make_room_in_place(&mut self) {
         self.always_make_room = true;
     }
 
@@ -618,15 +643,30 @@ impl Volume for Slot {
         for (index, chunk) in data.chunks(DATA_CHUNK).enumerate() {
             nodes.push(self.inode_node(ino, full, ids, data.len(), index * DATA_CHUNK, chunk)?);
         }
-        let old = self.child(parent, base).filter(|&old| self.mode(old).is_some_and(|mode| mode & S_IFMT == S_IFREG));
-        if let Some(old) = old.filter(|_| REPLACED_IN_PLACE.contains(&name.trim_matches('/'))
-                                          && (self.always_make_room || !self.fits(&nodes, base))) {
-            self.make_room(parent, base, old)?;
+        let regular = |slot: &Slot, ino: u32| slot.mode(ino).is_some_and(|mode| mode & S_IFMT == S_IFREG);
+        let old = self.child(parent, base).filter(|&old| regular(self, old));
+        let in_place = REPLACED_IN_PLACE.iter().find(|(path, _)| *path == name.trim_matches('/'));
+        if let (Some(old), Some((_, stand_in))) = (old, in_place) {
+            // nlclient's stock copy, root's, may stand in; without it the old
+            // copy stays.
+            let stand_in = match stand_in {
+                Some(path) => self.lookup(path, false)?
+                    .filter(|&ino| ino != old && regular(self, ino) && self.owner_mode(ino).0 == "0:0").map(Some),
+                None => Some(None),
+            };
+            if let Some(stand_in) = stand_in.filter(|_| self.always_make_room || !self.fits(&nodes, base)) {
+                self.make_room(parent, base, old, stand_in)?;
+            }
         }
         for node in nodes {
             self.place(node)?;
         }
-        self.dirent(parent, base, ino, DT_REG)
+        self.dirent(parent, base, ino, DT_REG)?;
+        if let Some((ino, mode)) = self.stand_in.take() {
+            let node = self.latest(ino).cloned().expect("a regular file");
+            self.inode(ino, mode, (node.uid, node.gid), node.isize as usize, 0, &[])?;
+        }
+        Ok(())
     }
 
     fn make_directory(&mut self, name: &str, mode: u32) -> Result<()> {
@@ -798,6 +838,77 @@ pub(crate) mod tests {
         // Anything else that does not fit still fails.
         let mut slot = reload(&slot);
         assert!(slot.write("etc/big", &noise(3 * BLOCK, 3), "0:0", 0o644, &BTreeSet::new()).is_err());
+    }
+
+    #[test]
+    fn nlclient_takes_its_old_blocks_with_the_stock_copy_standing_in() {
+        // Blocks 0-2: busybox, the stock copy, nlclient across all three, and
+        // etc/b in the last; one block free beyond the spare ones.
+        let original = noise(BLOCK / 8, 4);
+        let build = |with_original: bool| {
+            let mut slot = empty(SPARE_BLOCKS + 4);
+            if with_original {
+                slot.write(crate::nlclient::ORIGINAL, &original, "0:0", 0o600, &BTreeSet::new()).unwrap();
+            }
+            slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
+            slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+            reload(&slot)
+        };
+        let new = noise(BLOCK * 9 / 5, 2);
+        let mut alone = build(false);
+        assert!(alone.write(crate::nlclient::BINARY, &new, "0:0", 0o755, &BTreeSet::new()).is_err(),
+                "without the stock copy, the old nlclient stays");
+        let mut slot = build(true);
+        slot.write(crate::nlclient::BINARY, &new, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        let plan = slot.programmed().unwrap();
+        assert_eq!(plan.erase, [1], "block 1 alone held nothing but the old nlclient");
+        let mut back = Slot::load(plan.raw.clone()).unwrap();
+        assert_eq!(back.read(crate::nlclient::BINARY).unwrap(), Some(("0:0".into(), 0o755, new)));
+        assert_eq!(back.read(crate::nlclient::ORIGINAL).unwrap(), Some(("0:0".into(), 0o600, original.clone())));
+        assert_eq!(back.read("etc/b").unwrap().unwrap().2, b"kept");
+        // Cut short after the erase: nlclient names the stock copy, executable.
+        let mut cut = slot.raw.clone();
+        for &page in &plan.before {
+            cut[page * PAGE_RAW..(page + 1) * PAGE_RAW].copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
+        }
+        for &block in &plan.erase {
+            cut[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff);
+        }
+        let mut cut = Slot::load(cut).unwrap();
+        assert_eq!(cut.read(crate::nlclient::BINARY).unwrap(), Some(("0:0".into(), 0o755, original)));
+    }
+
+    #[test]
+    fn both_binaries_replaced_in_place_program_nothing_into_a_block_before_its_erase() {
+        // Blocks 0-5: busybox, the stock copy, nestlocal across three blocks,
+        // nlclient across the next three, etc/b in the last; one block free
+        // beyond the spare ones.
+        let mut slot = empty(SPARE_BLOCKS + 7);
+        slot.write(crate::nlclient::ORIGINAL, &noise(BLOCK / 8, 4), "0:0", 0o600, &BTreeSet::new()).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 9 / 4, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 5), "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        let mut slot = reload(&slot);
+        slot.make_room_in_place();
+        let (nestlocal, nlclient) = (noise(BLOCK * 9 / 5, 2), noise(BLOCK * 9 / 5, 3));
+        slot.write("nestlabs/sbin/nestlocal", &nestlocal, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::BINARY, &nlclient, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        let plan = slot.programmed().unwrap();
+        assert!(plan.erase.len() >= 2, "both old copies' blocks are reclaimed: {:?}", plan.erase);
+        for &page in &plan.before {
+            assert!(!plan.erase.contains(&(page / PAGES_PER_BLOCK)), "page {page} is programmed before its block's erase");
+        }
+        // As the unit programs it: the pages before, the erase, the pages after.
+        let mut nand = slot.raw.clone();
+        let copy = |nand: &mut Vec<u8>, page: usize| nand[page * PAGE_RAW..(page + 1) * PAGE_RAW]
+            .copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
+        for &page in &plan.before { copy(&mut nand, page); }
+        for &block in &plan.erase { nand[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff); }
+        for &page in &plan.after { copy(&mut nand, page); }
+        let mut back = Slot::load(nand).unwrap();
+        assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, nestlocal);
+        assert_eq!(back.read(crate::nlclient::BINARY).unwrap().unwrap().2, nlclient);
+        assert_eq!(back.read("etc/b").unwrap().unwrap().2, b"kept");
     }
 
     #[test]
