@@ -45,6 +45,10 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 
 ✅ tested on a unit · 🧪 built, not yet tested on a unit · — not available
 
+- **External temperature:** the thermostat regulates from a temperature you send
+  it over MQTT, Matter or Zigbee (any thermometer in Home Assistant). Official
+  Nest Temperature Sensors are not supported: on the 3rd generation the option
+  turns Bluetooth off, and the 2nd generation never had them.
 - **1st generation:** experimental. Patching has not been verified on a physical
   unit or a stock NAND. Its CC2530 radio uses UART, not the 2nd generation's SPI
   protocol, so there is no Zigbee, Matter over Thread or USB shell.
