@@ -17,7 +17,7 @@ parameters:
     type: string
     default: ""
   build-image:
-    description: utils/ci/ changed, so this pipeline publishes the image and the gate waits for it.
+    description: utils/ci/Dockerfile changed, so this pipeline publishes the image and the gate waits for it.
     type: boolean
     default: false
   force:
@@ -249,7 +249,7 @@ jobs:
       - run: echo "nothing to do, its inputs are those of an earlier run"
 
   # The gate: the build image for this Dockerfile is on Docker Hub. When this
-  # push changed utils/ci/, the build-image workflow is publishing it in this
+  # push changed utils/ci/Dockerfile, the build-image workflow is publishing it in this
   # same pipeline, so wait for it; otherwise a missing image is an error.
   image-ready:
     executor: tools
@@ -281,7 +281,7 @@ jobs:
                     echo "$IMAGE is not on Docker Hub yet; the build-image workflow is making it ($attempt)"
                     sleep 30
                   else
-                    echo "$IMAGE is not on Docker Hub. It is built when a push changes utils/ci/; rerun that workflow or push a change there."
+                    echo "$IMAGE is not on Docker Hub. It is built when a push changes utils/ci/Dockerfile; rerun that workflow or push a change there."
                     exit 1
                   fi ;;
                 *) echo "Docker Hub answered $status for $IMAGE"; exit 1 ;;

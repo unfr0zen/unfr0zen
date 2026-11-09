@@ -45,7 +45,7 @@ jobs:
       - path-filtering/set-parameters:
           base-revision: main
           mapping: |
-            utils/ci/.* build-image true
+            utils/ci/Dockerfile build-image true
             (crates|platform|utils|\.circleci)/.* app true
             Cargo\.(toml|lock) app true
           output-path: /tmp/pipeline-parameters.json
