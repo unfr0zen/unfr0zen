@@ -1,22 +1,16 @@
 version: 2.1
 
 # The gen 2: its bare-metal NAND flasher and SSH server, and the OMAP boards'
-# x-loader and the j49's kernel with its zbwake.ko. Its workflow runs when
-# platform/j49 changes.
-
-parameters:
-  j49:
-    type: boolean
-    default: false
+# x-loader and the j49's kernel with its zbwake.ko.
 
 jobs:
   j49:
     executor: build
     steps:
       - checkout
+      - keys
       - module-restore:
           module: j49
-          paths: platform/j49
       - module-build:
           module: j49
           command: sh platform/j49/build.sh build/j49 && sh platform/j49/dropbear.sh build/j49
@@ -31,25 +25,16 @@ jobs:
     machine:
       image: ubuntu-2404:current
     resource_class: medium
+    # Where the build image's jobs find its module (.circleci/common.yml).
+    working_directory: /tmp/project
     steps:
       - checkout
+      - keys
       - module-restore:
           module: j49-kernel
-          paths: platform/j49/kernel.sh platform/j49/xloader.sh platform/j49/zbwake
       - module-build:
           module: j49-kernel
           command: sh platform/j49/xloader.sh build/j49 && sh platform/j49/kernel.sh build/j49
       - module-store:
           module: j49-kernel
           outputs: build/j49/x-load.bin build/j49/uImage build/j49/zbwake.ko
-
-workflows:
-  j49:
-    when: << pipeline.parameters.j49 >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - j49:
-          requires: [image-ready]
-          context: docker-hub
-      - j49-kernel

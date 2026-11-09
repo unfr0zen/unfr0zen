@@ -1,56 +1,36 @@
 version: 2.1
 
 # nestlocal and thread-rcp for the thermostat, carrying the radio images and
-# every zbwake.ko: the radio, zbwake and j49 modules are its inputs, so its
-# workflow builds them (from the cache when unchanged) before it. Runs when
-# crates/nestlocal changes.
-
-parameters:
-  nestlocal:
-    type: boolean
-    default: false
+# every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
+# from the cache, where the jobs upstream in the workflow stored them.
 
 jobs:
   nestlocal:
     executor: build-large
     steps:
       - checkout
-      - modules
-      - run:
-          name: The j49's zbwake.ko beside the gen 3's
-          command: cp build/j49/zbwake.ko build/zbwake/j49.ko
+      - keys
+      - module-restore:
+          module: radio
+      - module-restore:
+          module: zbwake
+      - module-restore:
+          module: j49-kernel
       - module-restore:
           module: nestlocal
-          paths: crates/nestlocal Cargo.toml Cargo.lock
-          files: build/radio/radio.bin build/radio-em357-zigbee/radio.bin build/zbwake/*.ko
       - cargo-registry-restore
+      - cargo-target-restore:
+          cache: nestlocal
+          path: .work/nestlocal-target
+          module: nestlocal
       - module-build:
           module: nestlocal
-          command: sh platform/common/radio/thread/nestlocal.sh
+          # The j49's zbwake.ko beside the gen 3's.
+          command: cp build/j49/zbwake.ko build/zbwake/j49.ko && sh platform/common/radio/thread/nestlocal.sh
       - cargo-registry-store
+      - cargo-target-store:
+          cache: nestlocal
+          path: .work/nestlocal-target
       - module-store:
           module: nestlocal
           outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7
-
-workflows:
-  nestlocal:
-    when: << pipeline.parameters.nestlocal >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - radio:
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]
-      - j49-kernel
-      - nestlocal:
-          requires: [radio, zbwake, j49-kernel]
-          context: docker-hub

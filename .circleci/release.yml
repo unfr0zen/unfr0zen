@@ -112,16 +112,9 @@ workflows:
           filters: *release-tags
       - j49-kernel:
           filters: *release-tags
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
+      - zbwake:
           requires: [image-ready]
           context: docker-hub
-          filters: *release-tags
-      - zbwake:
-          requires: [zbwake-release]
           filters: *release-tags
       - radio:
           requires: [image-ready]
@@ -143,11 +136,12 @@ workflows:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
           filters: *release-tags
-      - firmware:
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
-          filters: *release-tags
       - test:
-          requires: [firmware]
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+          context: docker-hub
+          filters: *release-tags
+      - clippy:
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
           filters: *release-tags
       - app:
@@ -155,10 +149,10 @@ workflows:
             parameters:
               platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
           name: app-<< matrix.platform >>
-          requires: [firmware, release-draft]
+          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal, release-draft]
           context: docker-hub
           filters: *release-tags
       - release-publish:
-          requires: [test, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]
+          requires: [test, clippy, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]
           context: github
           filters: *release-tags

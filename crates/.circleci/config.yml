@@ -1,49 +1,32 @@
 version: 2.1
 
-# The app: every module of what it carries, gathered as one build/ by the
-# firmware job, then the workspace's tests and the app for each target. Its
-# workflow runs on main, and on a branch when anything built changes; the release workflow
-# (.circleci/release.yml) runs the same jobs for a release tag.
+# The app: the workspace's tests, clippy and the app for one target of each
+# operating system, each with every module of what the app carries as build/.
+# Its workflow, the only one building the modules outside a release, runs on
+# main, and on a branch when anything built changes; a job in it runs when its
+# inputs changed since it last passed. The release workflow
+# (.circleci/release.yml) runs the same jobs for a release tag, all of them,
+# with the app for every target.
 
 parameters:
   app:
     type: boolean
     default: false
 
-commands:
-  # The firmware job's build/.
-  firmware:
-    steps:
-      - attach_workspace:
-          at: .
-      - run:
-          name: Unpack the firmware
-          command: tar xf .work/cache/firmware.tar && find build -type f | sort
-
 jobs:
-  # Every module's outputs as one build/, for the tests and the apps.
-  firmware:
-    executor: tools
-    steps:
-      - modules
-      - run:
-          name: Pack the firmware
-          command: tar cf .work/cache/firmware.tar build
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .work/cache/firmware.tar
-
-  # Every test the build image can run: the workspace's Rust tests and clippy,
-  # the radio's dispatcher and image checks, the radio firmware under ARM
+  # Every test the build image can run: the workspace's Rust tests, the
+  # radio's dispatcher and image checks, the radio firmware under ARM
   # emulation, and the Thread diagnostics producer. The ones needing the stock
   # nlclient or NAND images (not in this repository) skip.
   test:
     executor: build-large
     steps:
       - checkout
+      - keys
       - firmware
       - cargo-registry-restore
+      - cargo-target-restore:
+          cache: test
       # nextest for its JUnit report (.config/nextest.toml); the report goes
       # to CircleCI whether the tests pass or not.
       - run:
@@ -54,13 +37,9 @@ jobs:
             cargo nextest run --workspace --locked --profile ci || status=$?
             mkdir -p .work/test-results/rust && cp target/nextest/ci/junit.xml .work/test-results/rust/
             exit $status
-      - run:
-          name: Clippy
-          no_output_timeout: 30m
-          command: |
-            rustup component add clippy
-            cargo clippy --workspace --locked --all-targets -- -D warnings
       - cargo-registry-store
+      - cargo-target-store:
+          cache: test
       - run:
           name: radio
           command: python3 -m pytest platform/common/radio/tests --junitxml=.work/test-results/radio/junit.xml
@@ -89,8 +68,31 @@ jobs:
             c++ -std=c++11 -Wall -Wextra -Werror -I /tmp/openthread/include \
               platform/common/radio/thread/test-diagnostics.cpp -o /tmp/test-thread-diag
             /tmp/test-thread-diag > /dev/null
+      - passed:
+          check: test
       - store_test_results:
           path: .work/test-results
+
+  # Clippy over the workspace, beside the tests rather than after them.
+  clippy:
+    executor: build-large
+    steps:
+      - checkout
+      - keys
+      - firmware
+      - cargo-registry-restore
+      - cargo-target-restore:
+          cache: clippy
+      - run:
+          name: Clippy
+          no_output_timeout: 30m
+          command: |
+            rustup component add clippy
+            cargo clippy --workspace --locked --all-targets -- -D warnings
+      - cargo-target-store:
+          cache: clippy
+      - passed:
+          check: clippy
 
   # The app for one platform, into dist/. On Linux and macOS the same
   # executable is the command-line tool when given arguments. Linux builds
@@ -107,6 +109,7 @@ jobs:
       PLATFORM: << parameters.platform >>
     steps:
       - checkout
+      - keys
       - firmware
       - cargo-registry-restore
       - run:
@@ -151,6 +154,8 @@ jobs:
                 done ;;
             esac
             ls -l dist
+      - passed:
+          check: app-<< parameters.platform >>
       - persist_to_workspace:
           root: .
           paths:
@@ -169,15 +174,9 @@ workflows:
           requires: [image-ready]
           context: docker-hub
       - j49-kernel
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
+      - zbwake:
           requires: [image-ready]
           context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]
       - radio:
           requires: [image-ready]
           context: docker-hub
@@ -193,15 +192,26 @@ workflows:
       - nestlocal:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
-      - firmware:
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
       - test:
-          requires: [firmware]
+          requires: &modules [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+          context: docker-hub
+      - clippy:
+          requires: *modules
+          context: docker-hub
+      # Nothing publishes these builds: they show that the app compiles and
+      # links for each operating system, and a release builds the other targets.
+      - app:
+          name: app-linux-x86_64
+          platform: linux-x86_64
+          requires: *modules
           context: docker-hub
       - app:
-          matrix:
-            parameters:
-              platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
-          name: app-<< matrix.platform >>
-          requires: [firmware]
+          name: app-windows-x86_64
+          platform: windows-x86_64
+          requires: *modules
+          context: docker-hub
+      - app:
+          name: app-macos
+          platform: macos
+          requires: *modules
           context: docker-hub

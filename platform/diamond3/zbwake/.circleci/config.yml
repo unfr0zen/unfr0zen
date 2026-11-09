@@ -1,68 +1,31 @@
 version: 2.1
 
-# zbwake.ko for each gen 3 release, against Nest's published kernel sources:
-# one job per release of the releases file, then the set as one module. The
-# setup workflow (utils/ci/configs.py) fills the matrix from that file. Its
-# workflow runs when platform/diamond3/zbwake changes.
-
-parameters:
-  zbwake:
-    type: boolean
-    default: false
+# zbwake.ko for each gen 3 release, against Nest's published kernel sources,
+# in one job: each release's module has a cache of its own, the releases
+# missing from it build together, and the set is the zbwake module. The setup
+# workflow (utils/ci/configs.py) repeats the module-restore and module-store
+# steps for each release of the releases file.
 
 jobs:
-  zbwake-release:
-    parameters:
-      release:
-        type: string
+  zbwake:
     executor: build
     steps:
       - checkout
-      # Keyed on the sources alone, not the releases file or this config: a
+      - keys
+      # A release's key has the sources alone, not the releases file: a
       # release added builds its own module and keeps the others'.
-      - module-restore:
-          module: zbwake-<< parameters.release >>
-          paths: platform/diamond3/zbwake/build.sh platform/diamond3/zbwake/zbwake.c platform/diamond3/zbwake/Kbuild
-      - module-build:
-          module: zbwake-<< parameters.release >>
-          command: sh platform/diamond3/zbwake/build.sh build/zbwake << parameters.release >>
-      - module-store:
-          module: zbwake-<< parameters.release >>
-          outputs: build/zbwake/<< parameters.release >>.ko
-
-  # Every release's module, checked against the releases file, as the one
-  # module the jobs downstream take.
-  zbwake:
-    executor: tools
-    steps:
-      - checkout
-      - modules
+      - module-restore: { module: "zbwake-__ZBWAKE_RELEASE__" }
       - run:
-          name: One module per release
+          name: Build zbwake for the releases not cached
+          no_output_timeout: 30m
           command: |
+            set --
             for release in $(cat platform/diamond3/zbwake/releases); do
-              [ -f "build/zbwake/$release.ko" ] || { echo "no zbwake.ko for release $release"; exit 1; }
+              [ -f ".work/cache/zbwake-$release.tar" ] || set -- "$@" "$release"
             done
-            [ "$(ls build/zbwake/*.ko | wc -l)" -eq "$(wc -w < platform/diamond3/zbwake/releases)" ] || { echo "modules beyond the releases file:"; ls build/zbwake; exit 1; }
-      - module-restore:
-          module: zbwake
-          paths: platform/diamond3/zbwake
+            [ $# -gt 0 ] || { echo "every release is cached"; exit 0; }
+            ZBWAKE_JOBS=$JOBS sh platform/diamond3/zbwake/build.sh build/zbwake "$@"
+      - module-store: { module: "zbwake-__ZBWAKE_RELEASE__", outputs: "build/zbwake/__ZBWAKE_RELEASE__.ko" }
       - module-store:
           module: zbwake
           outputs: build/zbwake
-
-workflows:
-  zbwake:
-    when: << pipeline.parameters.zbwake >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - zbwake-release:
-          matrix:
-            parameters:
-              release: __ZBWAKE_RELEASES__
-          name: zbwake-<< matrix.release >>
-          requires: [image-ready]
-          context: docker-hub
-      - zbwake:
-          requires: [zbwake-release]

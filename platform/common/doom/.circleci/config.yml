@@ -1,34 +1,19 @@
 version: 2.1
 
 # Doom for the thermostat, from the doomgeneric submodule and this platform
-# layer. Its workflow runs when platform/common/doom changes.
-
-parameters:
-  doom:
-    type: boolean
-    default: false
+# layer.
 
 jobs:
   doom:
     executor: build
     steps:
       - checkout
+      - keys
       - module-restore:
           module: doom
-          paths: platform/common/doom
       - module-build:
           module: doom
           command: git submodule update --init --depth 1 platform/common/doom/doomgeneric && sh platform/common/doom/build.sh build/doom-armv7
       - module-store:
           module: doom
           outputs: build/doom-armv7
-
-workflows:
-  doom:
-    when: << pipeline.parameters.doom >>
-    jobs:
-      - image-ready:
-          context: docker-hub
-      - doom:
-          requires: [image-ready]
-          context: docker-hub

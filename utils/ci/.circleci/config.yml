@@ -8,7 +8,7 @@ version: 2.1
 # own, as <hash>-<uname -m>; the manifest job then joins the two under <hash>.
 #
 # Run by .circleci/config.yml, which sets build-image when a push changes
-# utils/ci/; the build's image gate waits for the manifest meanwhile.
+# utils/ci/Dockerfile; the build's image gate waits for the manifest meanwhile.
 
 parameters:
   build-image:

@@ -1,15 +1,28 @@
 version: 2.1
 
-# The setup half of every pipeline: which subsystems' configs run, from the
-# files the push changed against main. Each mapping names a path pattern and
-# the subsystem whose parameter it sets; utils/ci/configs.py then picks the
-# configs to merge (each subsystem's, those its workflow depends on, and the
-# shared .circleci/common.yml), adds the build image's tag for the Dockerfile
-# at this commit, makes a push to main run every workflow, and a release tag
-# run the release workflow alone. The
-# pipeline continues with the merged config and the parameters. With nothing
-# matched it continues with .circleci/none.yml.
+# The setup half of every pipeline: which workflows run, from the files the
+# push changed against main. Each mapping names a path pattern and the
+# workflow whose parameter it sets: the build image's, and the app's, which
+# builds every module and so runs for anything built. utils/ci/configs.py then
+# picks the configs to merge (each workflow's, those defining the jobs it
+# lists, and the shared .circleci/common.yml), adds the build image's tag for
+# the Dockerfile at this commit, makes a push to main run the app workflow,
+# and a release tag run the release workflow alone. The job restores every
+# module and every check's mark from the cache under the keys of their inputs,
+# and configs.py has the jobs found there, and the modules nothing left to run
+# takes, replaced by the cached job; a release runs them all. The pipeline
+# continues with the merged config and the parameters. With nothing matched it
+# continues with .circleci/none.yml.
 setup: true
+
+parameters:
+  force:
+    description: >-
+      Jobs to run whatever the cache holds, with everything that takes them:
+      names of modules and checks (utils/ci/configs.py), or all. For a
+      pipeline started by hand.
+    type: string
+    default: ""
 
 orbs:
   path-filtering: circleci/path-filtering@1
@@ -25,22 +38,65 @@ jobs:
     docker:
       - image: cimg/python:3.13
     resource_class: small
+    # Where the jobs saved what this one restores (.circleci/common.yml).
+    working_directory: /tmp/project
     steps:
       - checkout
       - path-filtering/set-parameters:
           base-revision: main
           mapping: |
-            utils/ci/.* build-image true
-            platform/diamond3/(bootstrap|uboot)/.* recovery true
-            platform/diamond3/zbwake/.* zbwake true
-            platform/j49/.* j49 true
-            platform/common/radio/.* radio true
-            platform/common/doom/.* doom true
-            platform/common/nlclient/.* nlclient true
-            crates/nestlocal/.* nestlocal true
+            utils/ci/Dockerfile build-image true
             (crates|platform|utils|\.circleci)/.* app true
             Cargo\.(toml|lock) app true
           output-path: /tmp/pipeline-parameters.json
+      - run:
+          name: The keys
+          environment:
+            FORCE: << pipeline.parameters.force >>
+            SALT: << pipeline.number >>
+          command: python3 utils/ci/configs.py keys
+      - restore_cache:
+          keys:
+            - module-recovery-v2-{{ checksum ".work/keys/recovery" }}
+      - restore_cache:
+          keys:
+            - module-j49-v2-{{ checksum ".work/keys/j49" }}
+      - restore_cache:
+          keys:
+            - module-j49-kernel-v2-{{ checksum ".work/keys/j49-kernel" }}
+      - restore_cache:
+          keys:
+            - module-zbwake-v2-{{ checksum ".work/keys/zbwake" }}
+      - restore_cache:
+          keys:
+            - module-radio-v2-{{ checksum ".work/keys/radio" }}
+      - restore_cache:
+          keys:
+            - module-thread-v2-{{ checksum ".work/keys/thread" }}
+      - restore_cache:
+          keys:
+            - module-doom-v2-{{ checksum ".work/keys/doom" }}
+      - restore_cache:
+          keys:
+            - module-nlclient-v2-{{ checksum ".work/keys/nlclient" }}
+      - restore_cache:
+          keys:
+            - module-nestlocal-v2-{{ checksum ".work/keys/nestlocal" }}
+      - restore_cache:
+          keys:
+            - passed-test-v2-{{ checksum ".work/keys/test" }}
+      - restore_cache:
+          keys:
+            - passed-clippy-v2-{{ checksum ".work/keys/clippy" }}
+      - restore_cache:
+          keys:
+            - passed-app-linux-x86_64-v2-{{ checksum ".work/keys/app-linux-x86_64" }}
+      - restore_cache:
+          keys:
+            - passed-app-windows-x86_64-v2-{{ checksum ".work/keys/app-windows-x86_64" }}
+      - restore_cache:
+          keys:
+            - passed-app-macos-v2-{{ checksum ".work/keys/app-macos" }}
       - run:
           name: The configs to merge
           environment:
