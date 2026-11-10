@@ -29,7 +29,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAttributedString", "NSDate", "NSDateFormatter", "NSDictionary", "NSFormatter", "NSObject", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Globalization"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 libc = "0.2"
