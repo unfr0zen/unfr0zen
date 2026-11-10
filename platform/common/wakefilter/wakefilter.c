@@ -1,4 +1,4 @@
-/* Preloaded into nlsleepd, which sets the Wi-Fi chip's wake patterns before
+/* Preloaded into nlsleepd (the gen 2's and the gen 3's alike), which sets the Wi-Fi chip's wake patterns before
  * each sleep (nl80211 SET_WOWLAN) and can only describe one kind: a frame to
  * an address and a port. This adds the patterns nestlocal lists in
  * /var/run/unfr0zen/wake-patterns to the ones nlsleepd sends, one a line:
@@ -8,6 +8,11 @@
  * the packet offset in decimal, then nl80211's mask (a bit a pattern byte,
  * least significant first) and the pattern bytes in hex. The chip takes
  * MAX_PATTERNS: nlsleepd's come first and the list fills what is left.
+ *
+ * Whatever nlsleepd's init script runs on the way to it is preloaded with
+ * this too, and has no libnl: its functions are weak references, used only
+ * where nl_send_auto_complete is called, and once in a process with libnl
+ * the preload is taken out of the environment its children get.
  *
  * Built without libc headers: what it calls is declared here. */
 
@@ -21,17 +26,19 @@ struct nlmsghdr { u32 len; u16 type; u16 flags; u32 seq; u32 pid; };
 struct genlmsghdr { u8 cmd; u8 version; u16 reserved; };
 struct nlattr { u16 len; u16 type; };
 
-extern struct nlmsghdr *nlmsg_hdr(struct nl_msg *);
-extern struct nl_msg *nlmsg_alloc(void);
-extern void nlmsg_free(struct nl_msg *);
-extern void *genlmsg_put(struct nl_msg *, u32 pid, u32 seq, int family, int hdrlen, int flags, u8 cmd, u8 version);
-extern int nla_put(struct nl_msg *, int type, int len, const void *data);
-extern struct nlattr *nla_nest_start(struct nl_msg *, int type);
-extern int nla_nest_end(struct nl_msg *, struct nlattr *);
+#define WEAK __attribute__((weak))
+extern struct nlmsghdr *nlmsg_hdr(struct nl_msg *) WEAK;
+extern struct nl_msg *nlmsg_alloc(void) WEAK;
+extern void nlmsg_free(struct nl_msg *) WEAK;
+extern void *genlmsg_put(struct nl_msg *, u32 pid, u32 seq, int family, int hdrlen, int flags, u8 cmd, u8 version) WEAK;
+extern int nla_put(struct nl_msg *, int type, int len, const void *data) WEAK;
+extern struct nlattr *nla_nest_start(struct nl_msg *, int type) WEAK;
+extern int nla_nest_end(struct nl_msg *, struct nlattr *) WEAK;
 extern void *dlsym(void *, const char *);
 extern int open(const char *, int, ...);
 extern int read(int, void *, unsigned int);
 extern int close(int);
+extern int unsetenv(const char *);
 
 #define RTLD_NEXT ((void *)-1)
 #define NL80211_CMD_SET_WOWLAN 74
@@ -113,7 +120,10 @@ static void add_listed(struct nl_msg *msg, int count)
 			return;
 		nla_put(msg, NL80211_PKTPAT_MASK, mask_len, mask);
 		nla_put(msg, NL80211_PKTPAT_PATTERN, pattern_len, pattern);
-		nla_put(msg, NL80211_PKTPAT_OFFSET, sizeof(offset), &offset);
+		/* The gen 2's cfg80211 predates the attribute: without it the
+		 * pattern is at the frame's start. */
+		if (offset)
+			nla_put(msg, NL80211_PKTPAT_OFFSET, sizeof(offset), &offset);
 		nla_nest_end(msg, entry);
 	}
 }
@@ -167,6 +177,12 @@ static struct nl_msg *with_listed(struct nlmsghdr *hdr)
 failed:
 	nlmsg_free(msg);
 	return 0;
+}
+
+__attribute__((constructor)) static void loaded(void)
+{
+	if (nlmsg_hdr)
+		unsetenv("LD_PRELOAD");
 }
 
 int nl_send_auto_complete(struct nl_sock *sock, struct nl_msg *msg)

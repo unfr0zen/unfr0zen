@@ -8,7 +8,7 @@
 //!   answers ARP itself, and not this.
 //!
 //! nestlocal lists a pattern for each in `LIST`, and the shim in nlsleepd
-//! (platform/diamond3/wakefilter) adds them to nlsleepd's before each sleep:
+//! (platform/common/wakefilter) adds them to nlsleepd's before each sleep:
 //! a line a pattern, `OFFSET MASK PATTERN`, the offset into the frame in
 //! decimal, nl80211's mask (a bit a pattern byte, least significant first)
 //! and the bytes in hex.
