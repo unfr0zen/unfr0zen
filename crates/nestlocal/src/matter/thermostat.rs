@@ -136,8 +136,7 @@ impl ClusterHandler for Thermostat {
     }
 
     fn occupancy(&self, _ctx: impl ReadContext) -> Result<OccupancyBitmap, Error> {
-        let away = self.nest.view().shared_flag("auto_away");
-        Ok(if away { OccupancyBitmap::empty() } else { OccupancyBitmap::OCCUPIED })
+        Ok(if self.nest.bridge.occupancy.occupied() { OccupancyBitmap::OCCUPIED } else { OccupancyBitmap::empty() })
     }
 
     fn abs_min_heat_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
@@ -469,8 +468,7 @@ mod tests {
         let t = thermostat(
             fields!{"temperature_scale" => "C", "away_temperature_low" => 15.2, "away_temperature_high" => 28.0},
             fields!{"target_temperature_type" => "heat", "target_temperature" => 21.38377, "current_temperature" => 18.2,
-                    "can_heat" => true, "can_cool" => false, "hvac_heater_state" => true, "hvac_fan_state" => true,
-                    "auto_away" => 1});
+                    "can_heat" => true, "can_cool" => false, "hvac_heater_state" => true, "hvac_fan_state" => true});
         assert_eq!(t.local_temperature(ctx(1)).unwrap(), Nullable::some(1800));
         // Heating and cooling both show the one target.
         assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 2150);
@@ -489,7 +487,8 @@ mod tests {
             fields!{"temperature_scale" => "C"},
             fields!{"target_temperature_type" => "range", "target_temperature" => 21.0,
                     "target_temperature_low" => 19.0, "target_temperature_high" => 24.2,
-                    "can_heat" => true, "can_cool" => true, "hvac_ac_state" => true, "auto_away" => 0});
+                    "can_heat" => true, "can_cool" => true, "hvac_ac_state" => true});
+        t.nest.bridge.occupancy.detected(chrono::Utc::now().timestamp());
         assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 1900);
         assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2400);
         assert_eq!(t.system_mode(ctx(1)).unwrap(), SystemModeEnum::Auto);

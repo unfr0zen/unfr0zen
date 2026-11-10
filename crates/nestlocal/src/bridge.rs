@@ -25,6 +25,7 @@ use crate::commands::{ECO_HIGH, ECO_LOW};
 use crate::fields;
 use crate::json::{num, number, sprint, truthy, Fields};
 use crate::liveness::Liveness;
+use crate::occupancy::Occupancy;
 use crate::logf;
 use crate::mqtt;
 use crate::store::{Object, Store};
@@ -42,6 +43,8 @@ pub struct Bridge {
     wwn_boiler: bool,
     /// The stand-in sensor, with -external-temperature (sensor/).
     pub sensor: OnceLock<Arc<crate::sensor::Sensor>>,
+    /// Motion seen lately, from nlclient's event log (occupancy.rs).
+    pub occupancy: Arc<Occupancy>,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
@@ -62,6 +65,7 @@ impl Bridge {
             live,
             wwn_boiler,
             sensor: OnceLock::new(),
+            occupancy: Arc::new(Occupancy::default()),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
             time_asked: Mutex::new(None),
@@ -103,6 +107,12 @@ impl Bridge {
         let _ = self.mqtt.set(client);
         let bridge = self.clone();
         self.store.watch(move |o| bridge.changed(o));
+        let bridge = Arc::downgrade(self);
+        self.occupancy.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_state();
+            }
+        });
         if let Some(live) = &self.live {
             let bridge = self.clone();
             live.on_change(move |alive| bridge.publish_availability(alive));
@@ -237,12 +247,19 @@ impl Bridge {
             return; // the unit has not reported yet
         };
         self.announce(dev, sh);
+        let shown = self.shown(dev, sh);
+        self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
+    }
+
+    /// The state, with what no bucket holds: occupancy and the stand-in sensor.
+    fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = state(dev, sh);
+        shown.insert("occupancy".into(), self.occupancy.occupied().into());
         if let Some(sensor) = self.sensor.get() {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
             shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
         }
-        self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
+        shown
     }
 
     /// Publishes Home Assistant discovery, for what this unit's equipment
@@ -727,7 +744,6 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
               "target_humidity_enabled", "filter_reminder_enabled", "hot_water_boiling_state", "heatpump_ready"] {
         s.insert(k.into(), truthy(dev.get(k)).into());
     }
-    s.insert("occupancy".into(), (!truthy(sh.get("auto_away"))).into());
     match number(dev.get("time_to_target")) {
         Some(t) if t > now => s.insert("time_to_target".into(), rfc3339(t)),
         _ => s.insert("time_to_target".into(), Value::Null),
@@ -760,11 +776,10 @@ pub mod tests {
     fn state_from_buckets() {
         let future = chrono::Utc::now().timestamp() + 600;
         let dev = obj(json!({"fan_timer_timeout": future, "fan_timer_duration": 900.0, "eco": {"mode": "manual-eco"}}));
-        let sh = obj(json!({"target_temperature_type": "range", "hvac_heater_state": true, "auto_away": 1.0}));
+        let sh = obj(json!({"target_temperature_type": "range", "hvac_heater_state": true}));
         let s = state(&dev, &sh);
         for (k, want) in [("mode", json!("heat_cool")), ("action", json!("heating")), ("heating", json!(true)),
-                          ("fan_mode", json!("on")), ("fan_timer_duration", json!("15")), ("preset", json!("eco")),
-                          ("occupancy", json!(false))] {
+                          ("fan_mode", json!("on")), ("fan_timer_duration", json!("15")), ("preset", json!("eco"))] {
             assert_eq!(s[k], want, "{k}");
         }
         let off = state(&Fields::new(), &obj(json!({"target_temperature_type": "off", "hvac_heater_state": true})));
@@ -934,7 +949,7 @@ pub mod tests {
         b.store.merge("device.S", &dev, 0, 0, true);
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
-        let s = state(&dev, &sh);
+        let s = b.shown(&dev, &sh);
         let mut ids = std::collections::BTreeSet::new();
         for (topic, config) in &configs {
             let c: Value = serde_json::from_str(config).unwrap();
@@ -1016,7 +1031,7 @@ pub mod tests {
         let s = state(&Fields::new(), &Fields::new());
         for (k, want) in [("mode", json!("off")), ("action", json!("off")), ("target", Value::Null), ("fan_mode", json!("auto")),
                           ("fan_timer_end", Value::Null), ("preset", json!("none")), ("eco_mode", json!("<nil>")),
-                          ("occupancy", json!(true)), ("time_to_target", Value::Null), ("leaf", json!(false))] {
+                          ("time_to_target", Value::Null), ("leaf", json!(false))] {
             assert_eq!(s[k], want, "{k}");
         }
         assert!(s.get("fan_timer_duration").is_none() && s.get("filter_runtime_h").is_none());

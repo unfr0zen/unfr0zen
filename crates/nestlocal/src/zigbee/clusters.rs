@@ -346,7 +346,7 @@ impl Nest {
         Some(match attribute {
             0x0000 => temperature(view.shown("current_temperature")),
             0x0001 => temperature(self.bridge.outdoor.temperature().map(centi)),
-            0x0002 => Value::Bitmap8(u8::from(!truthy(view.sh.get("auto_away")))),
+            0x0002 => Value::Bitmap8(u8::from(self.bridge.occupancy.occupied())),
             0x0003 | 0x0005 | 0x0015 | 0x0017 => Value::I16(MIN),
             0x0004 | 0x0006 | 0x0016 | 0x0018 => Value::I16(MAX),
             0x0011 => {
@@ -865,11 +865,13 @@ mod tests {
     fn cooling_only_and_running_states() {
         let n = nest(fields!{},
                      fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_ac_state" => true,
-                             "hvac_fan_state" => true, "auto_away" => 1});
+                             "hvac_fan_state" => true});
         assert_eq!(n.read(1, THERMOSTAT, 0x001B), Some(Value::Enum8(0x00)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x03)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0006)));
-        assert_eq!(n.read(1, THERMOSTAT, 0x0002), Some(Value::Bitmap8(0))); // away: unoccupied
+        assert_eq!(n.read(1, THERMOSTAT, 0x0002), Some(Value::Bitmap8(0))); // no motion: unoccupied
+        n.bridge.occupancy.detected(chrono::Utc::now().timestamp());
+        assert_eq!(n.read(1, THERMOSTAT, 0x0002), Some(Value::Bitmap8(1)));
     }
 
     #[test]
