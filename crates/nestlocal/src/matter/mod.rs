@@ -633,11 +633,11 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
             // Fabrics come and go without the addresses changing.
             let mut listed = None;
             loop {
-                let list = wake_patterns::list(&on.ipv6, &operational_instances(matter));
-                // The gen 2's chip and nlsleepd are not known to take them.
-                if crate::device::current().generation == 3 && listed.as_ref() != Some(&list) {
+                let budget = wake_patterns::Budget::of(crate::device::current().generation);
+                let list = wake_patterns::list(budget, mac(&on.name), &on.ipv6, &operational_instances(matter));
+                if listed.as_ref() != Some(&list) {
                     if let Err(e) = wake_patterns::write(&list) {
-                        logf!("matter: {}: {e}; lookups will not wake the unit", wake_patterns::LIST);
+                        logf!("matter: {}: {e}; controllers will not wake the unit", wake_patterns::LIST);
                     }
                     listed = Some(list);
                 }
@@ -664,6 +664,16 @@ fn operational_instances(matter: &Matter<'_>) -> Vec<String> {
         let (service, _) = descriptor.service(matter, &mut buffer).ok()?;
         (service.service_protocol == "_matter._tcp").then(|| service.name.to_string())
     }).collect()
+}
+
+/// The interface's Ethernet address, all zeros when it has none.
+fn mac(interface: &str) -> [u8; 6] {
+    let text = std::fs::read_to_string(format!("/sys/class/net/{interface}/address")).unwrap_or_default();
+    let mut mac = [0; 6];
+    for (byte, hex) in mac.iter_mut().zip(text.trim().split(':')) {
+        *byte = u8::from_str_radix(hex, 16).unwrap_or(0);
+    }
+    mac
 }
 
 /// Where the unit is on its network.

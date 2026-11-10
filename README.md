@@ -52,7 +52,10 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 - **1st generation:** experimental. Patching has not been verified on a physical
   unit or a stock NAND. Its CC2530 radio uses UART, not the 2nd generation's SPI
   protocol, so there is no Zigbee, Matter over Thread or USB shell.
-- **2nd generation:** Matter keeps the unit awake.
+- **Matter and sleep:** the thermostat sleeps and wakes for a controller's
+  messages. On the 3rd generation a controller looking it up wakes it too; the
+  2nd generation's Wi-Fi chip lets no lookup through while it sleeps, so it
+  answers them on its own wakes.
 - **Thread and Zigbee** share the 2nd and 3rd generation's 802.15.4 radio (an
   EM357 or EM3581 on SPI), so only one of them can be on, and on European
   models either one replaces the wireless Heat Link connection. Zigbee drives

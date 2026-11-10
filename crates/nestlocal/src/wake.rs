@@ -32,9 +32,12 @@
 //! woke for the broker's messages with that on.
 //!
 //! Matter registers native IPv4 and IPv6 UDP destination-port wake patterns
-//! through RegisterWakeKa. Until both registrations succeed, and while Matter
-//! is starting or commissioning, nestlocal declines sleep. Matter's clock
-//! counts the time asleep (matter/timer.rs).
+//! through RegisterWakeKa; the gen 2's nlsleepd has no such call, and the
+//! library preloaded into it sets them instead. Until they are set, and while
+//! Matter is starting or commissioning, nestlocal declines sleep. A
+//! controller's lookups of the unit wake it through that library too
+//! (matter/wake_patterns.rs), and Matter's clock counts the time asleep
+//! (matter/timer.rs).
 //!
 //! Zigbee wakes the unit itself: the radio keeps routing while the i.MX
 //! sleeps and pulls nHOST_INT low for a message, which zbwake.ko makes a wake
@@ -267,14 +270,32 @@ async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool
     if matter {
         for (name, ipv4) in [("nestlocal_matter_v4", true), ("nestlocal_matter_v6", false)] {
             // No TCP keepalive, any source port, unicast UDP to the Matter socket.
-            if let Err(e) = call(bus, WAKEKA_PATH, WAKEKA, "RegisterWakeKa",
-                &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false)).await {
-                logf!("wake: {name}: {e}; keeping Matter awake");
-                return e != NO_ANSWER;
+            match call(bus, WAKEKA_PATH, WAKEKA, "RegisterWakeKa",
+                       &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false)).await {
+                Ok(()) => {}
+                // The gen 2's nlsleepd has no such call: its library sets the
+                // port's patterns, once nestlocal has listed them
+                // (matter/wake_patterns.rs), which the network comes before.
+                Err(e) if unsupported(&e) && crate::matter::wake_patterns::in_nlsleepd() => {
+                    let (bus, ready) = (bus.clone(), ready.clone());
+                    tokio::spawn(async move {
+                        while !crate::matter::wake_patterns::matter_port_listed() {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                        }
+                        ready.store(true, Ordering::SeqCst);
+                        logf!("wake: Matter's UDP port {} wakes the unit through nlsleepd's library", rs_matter::MATTER_PORT);
+                        release_when_idle(bus, matter, ready);
+                    });
+                    return true;
+                }
+                Err(e) => {
+                    logf!("wake: {name}: {e}; keeping Matter awake");
+                    return e != NO_ANSWER;
+                }
             }
         }
         ready.store(true, Ordering::SeqCst);
-        logf!("wake: registered Matter IPv4/IPv6 UDP port {} wake filters", rs_matter::MATTER_PORT);
+        logf!("wake: Matter's IPv4/IPv6 UDP port {} wakes the unit", rs_matter::MATTER_PORT);
     }
     if matter {
         release_when_idle(bus.clone(), matter, ready.clone());
