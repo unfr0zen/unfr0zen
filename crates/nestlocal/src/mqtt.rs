@@ -1,7 +1,9 @@
 //! A small MQTT 3.1.1 client: what the bridge needs and nothing more. One
 //! connection with a retained will, QoS 0 and 1 publishes, QoS 1
 //! subscriptions, a keepalive ping, and a reconnect every 10 s while the
-//! broker cannot be reached. Publishes made while disconnected are dropped:
+//! broker cannot be reached. The unit sleeps, and the ping timer and TCP's
+//! retransmissions stop with it, so a broker that dropped the connection
+//! while the unit slept is found out on a wake, by the wall clock (woke). Publishes made while disconnected are dropped:
 //! on each connection the bridge publishes its whole state again.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -18,10 +20,14 @@ use crate::logf;
 /// The broker drops the connection after 1.5 times this without a packet.
 /// The unit sleeps (wake.rs) and the ping timer stops with it, so the broker
 /// must wait out a sleep; the unit wakes for every broker message, and
-/// Bridge::woke sends something on a wake when this is half gone.
+/// Client::woke pings on a wake when this is half gone.
 pub const KEEPALIVE: Duration = Duration::from_secs(20 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_secs(10);
+/// A ping sent on a wake and still unanswered this long after, by the wall
+/// clock, means the connection is gone: the answer takes milliseconds and
+/// wakes the unit.
+const PING_ANSWER: Duration = Duration::from_secs(30);
 
 /// What a connection calls back into.
 pub trait Handler: Send + Sync + 'static {
@@ -74,6 +80,9 @@ pub struct Options {
 enum Request {
     Publish { topic: String, payload: Vec<u8>, qos: u8, retain: bool },
     Subscribe { filter: String },
+    Ping,
+    /// End the session and dial again at once.
+    Redial(&'static str),
 }
 
 /// Publishes and subscribes through the connection's task.
@@ -82,6 +91,8 @@ pub struct Client {
     tx: mpsc::Sender<Request>,
     connected: Arc<AtomicBool>,
     sent: Arc<AtomicU64>,
+    heard: Arc<AtomicU64>,
+    pinged: Arc<AtomicU64>,
 }
 
 pub struct Connection {
@@ -92,6 +103,13 @@ pub struct Connection {
     /// When the last packet went to the broker, in Unix seconds: the wall
     /// clock, which keeps counting while the unit sleeps.
     sent: Arc<AtomicU64>,
+    /// When the last packet came from the broker, in Unix seconds.
+    heard: Arc<AtomicU64>,
+    /// When a ping from woke went out, in Unix seconds, until a packet comes
+    /// back; 0 when none is outstanding.
+    pinged: Arc<AtomicU64>,
+    /// The session ended on a Redial: no RETRY wait.
+    redial: bool,
 }
 
 fn unix_now() -> u64 {
@@ -104,7 +122,10 @@ impl Client {
         let (tx, rx) = mpsc::channel(512);
         let connected = Arc::new(AtomicBool::new(false));
         let sent = Arc::new(AtomicU64::new(0));
-        (Client { tx, connected: connected.clone(), sent: sent.clone() }, Connection { broker, options, rx, connected, sent })
+        let heard = Arc::new(AtomicU64::new(0));
+        let pinged = Arc::new(AtomicU64::new(0));
+        (Client { tx, connected: connected.clone(), sent: sent.clone(), heard: heard.clone(), pinged: pinged.clone() },
+         Connection { broker, options, rx, connected, sent, heard, pinged, redial: false })
     }
 
     pub fn is_connected(&self) -> bool {
@@ -124,6 +145,25 @@ impl Client {
 
     pub fn subscribe(&self, filter: &str) {
         let _ = self.tx.try_send(Request::Subscribe { filter: filter.into() });
+    }
+
+    /// The unit woke. Dials again when the broker has surely dropped the
+    /// connection (nothing sent for 1.5 keepalives) or let a ping from an
+    /// earlier wake go unanswered; pings when nothing came from the broker
+    /// for half the keepalive. Packets sent prove nothing: on a connection the
+    /// broker dropped unheard they go nowhere.
+    pub fn woke(&self) {
+        if !self.is_connected() {
+            return;
+        }
+        let pinged = self.pinged.load(Ordering::Relaxed);
+        if self.idle() > KEEPALIVE * 3 / 2 {
+            let _ = self.tx.try_send(Request::Redial("nothing sent for 1.5 keepalives"));
+        } else if pinged != 0 && unix_now().saturating_sub(pinged) >= PING_ANSWER.as_secs() {
+            let _ = self.tx.try_send(Request::Redial("no answer to the ping sent on a wake"));
+        } else if pinged == 0 && unix_now().saturating_sub(self.heard.load(Ordering::Relaxed)) > KEEPALIVE.as_secs() / 2 {
+            let _ = self.tx.try_send(Request::Ping);
+        }
     }
 }
 
@@ -146,8 +186,11 @@ impl Connection {
                 }
             }
             self.connected.store(false, Ordering::Relaxed);
+            self.pinged.store(0, Ordering::Relaxed);
             while self.rx.try_recv().is_ok() {}
-            tokio::time::sleep(RETRY).await;
+            if !std::mem::take(&mut self.redial) {
+                tokio::time::sleep(RETRY).await;
+            }
         }
     }
 
@@ -178,6 +221,7 @@ impl Connection {
             (0x20, body) if body.len() >= 2 => return Err(std::io::Error::other(refused(body[1]))),
             _ => return Err(std::io::Error::other("expected CONNACK")),
         }
+        self.heard.store(unix_now(), Ordering::Relaxed);
         self.connected.store(true, Ordering::Relaxed);
         handler.connected();
 
@@ -187,8 +231,20 @@ impl Connection {
         loop {
             tokio::select! {
                 Some(request) = self.rx.recv() => {
-                    next_id = next_id.wrapping_add(1).max(1);
-                    wr.write_all(&encode(request, next_id)).await?;
+                    match request {
+                        Request::Redial(why) => {
+                            self.redial = true;
+                            return Err(std::io::Error::other(why));
+                        }
+                        Request::Ping => {
+                            wr.write_all(&[0xC0, 0]).await?;
+                            self.pinged.store(unix_now(), Ordering::Relaxed);
+                        }
+                        request => {
+                            next_id = next_id.wrapping_add(1).max(1);
+                            wr.write_all(&encode(request, next_id)).await?;
+                        }
+                    }
                     self.sent.store(unix_now(), Ordering::Relaxed);
                 }
                 read = rd.read_buf(&mut buf) => {
@@ -197,6 +253,8 @@ impl Connection {
                     }
                     while let Some((header, body)) = split_packet(&mut buf)? {
                         awaiting_pong = false;
+                        self.heard.store(unix_now(), Ordering::Relaxed);
+                        self.pinged.store(0, Ordering::Relaxed);
                         if header >> 4 == 3 {
                             let (topic, payload, id) = parse_publish(header, &body)?;
                             if let Some(id) = id {
@@ -293,6 +351,7 @@ fn encode(request: Request, id: u16) -> Vec<u8> {
             body.push(1);
             packet(0x82, body)
         }
+        Request::Ping | Request::Redial(_) => unreachable!("handled by the session"),
     }
 }
 
@@ -502,6 +561,112 @@ pub mod tests {
         drop(broker);
         let e = session.await.unwrap().unwrap_err();
         assert_eq!(e.to_string(), "connection closed by the broker");
+    }
+
+    /// Accepts the next dial and answers its CONNECT.
+    async fn accept(listener: &tokio::net::TcpListener, buf: &mut BytesMut) -> TcpStream {
+        let (mut broker, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await.unwrap().unwrap();
+        assert_eq!(next_packet(&mut broker, buf).await.unwrap().0, 0x10);
+        broker.write_all(&[0x20, 2, 0, 0]).await.unwrap();
+        broker
+    }
+
+    async fn until_connected(client: &Client) {
+        while !client.is_connected() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Shifts the client's wall-clock marks back, as a sleep of `by` would.
+    fn slept(client: &Client, by: Duration) {
+        client.sent.fetch_sub(by.as_secs(), Ordering::Relaxed);
+        client.heard.fetch_sub(by.as_secs(), Ordering::Relaxed);
+        if client.pinged.load(Ordering::Relaxed) != 0 {
+            client.pinged.fetch_sub(by.as_secs(), Ordering::Relaxed);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wake_pings_and_an_answered_ping_keeps_the_session() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let mut broker = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+
+        // Recently sent: a wake sends nothing.
+        client.woke();
+        assert!(tokio::time::timeout(Duration::from_millis(100), next_packet(&mut broker, &mut buf)).await.is_err());
+
+        slept(&client, KEEPALIVE / 2 + Duration::from_secs(1));
+        client.woke();
+        assert_eq!(next_packet(&mut broker, &mut buf).await.unwrap(), (0xC0, vec![]));
+        broker.write_all(&[0xD0, 0]).await.unwrap();
+        while client.pinged.load(Ordering::Relaxed) != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        slept(&client, PING_ANSWER);
+        client.woke();
+        assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "no redial");
+        assert!(client.is_connected());
+    }
+
+    #[tokio::test]
+    async fn a_ping_unanswered_by_the_next_wake_redials_at_once() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        // The broker went away unheard: the socket stays open and silent.
+        let mut gone = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+
+        slept(&client, KEEPALIVE / 2 + Duration::from_secs(1));
+        client.woke();
+        assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap(), (0xC0, vec![]));
+        // A wake soon after waits for the answer.
+        client.woke();
+        assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
+
+        slept(&client, PING_ANSWER);
+        client.woke();
+        let started = Instant::now();
+        let mut buf = BytesMut::new();
+        let _broker = accept(&listener, &mut buf).await;
+        assert!(started.elapsed() < RETRY / 2, "dialled again without the retry wait");
+        until_connected(&client).await;
+    }
+
+    #[tokio::test]
+    async fn a_wake_pings_a_silent_broker_however_much_the_unit_publishes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let mut gone = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+
+        slept(&client, KEEPALIVE / 2 + Duration::from_secs(1));
+        client.publish("nestlocal/S/state", b"{}", 0, true);
+        assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap().0, 0x31);
+        client.woke();
+        assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap(), (0xC0, vec![]));
+    }
+
+    #[tokio::test]
+    async fn a_wake_after_the_broker_surely_dropped_the_session_redials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let _gone = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+
+        slept(&client, KEEPALIVE * 3 / 2 + Duration::from_secs(1));
+        client.woke();
+        let mut buf = BytesMut::new();
+        accept(&listener, &mut buf).await;
     }
 
     #[tokio::test]
