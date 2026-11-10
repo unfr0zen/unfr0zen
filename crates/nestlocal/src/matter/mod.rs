@@ -19,6 +19,7 @@ mod thermostat;
 mod netifs;
 mod thread;
 pub mod timer;
+mod wake_patterns;
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -629,7 +630,16 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
         let announce = responder
             .run(&socket, &socket, &host, (!on.ipv4.is_unspecified()).then_some(ipv4), Some(on.index), matter, crypto);
         let changed = async {
+            // Fabrics come and go without the addresses changing.
+            let mut listed = None;
             loop {
+                let list = wake_patterns::list(&on.ipv6, &operational_instances(matter));
+                if listed.as_ref() != Some(&list) {
+                    if let Err(e) = wake_patterns::write(&list) {
+                        logf!("matter: {}: {e}; lookups will not wake the unit", wake_patterns::LIST);
+                    }
+                    listed = Some(list);
+                }
                 async_io::Timer::after(Duration::from_secs(30)).await;
                 if addresses().as_ref() != Some(&on) {
                     break;
@@ -642,6 +652,17 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
             Either3::Third(_) => logf!("matter: refreshing announcements after pairing replacement"),
         }
     }
+}
+
+/// The names controllers look the unit up by: one for each fabric.
+fn operational_instances(matter: &Matter<'_>) -> Vec<String> {
+    let mut descriptors = Vec::new();
+    let _ = matter.mdns_services(|service| { descriptors.push(service); Ok(()) });
+    descriptors.into_iter().filter_map(|descriptor| {
+        let mut buffer = [0; 1024];
+        let (service, _) = descriptor.service(matter, &mut buffer).ok()?;
+        (service.service_protocol == "_matter._tcp").then(|| service.name.to_string())
+    }).collect()
 }
 
 /// Where the unit is on its network.
