@@ -19,7 +19,7 @@ mod thermostat;
 mod netifs;
 mod thread;
 pub mod timer;
-mod wake_patterns;
+pub mod wake_patterns;
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -634,7 +634,8 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
             let mut listed = None;
             loop {
                 let list = wake_patterns::list(&on.ipv6, &operational_instances(matter));
-                if listed.as_ref() != Some(&list) {
+                // The gen 2's chip and nlsleepd are not known to take them.
+                if crate::device::current().generation == 3 && listed.as_ref() != Some(&list) {
                     if let Err(e) = wake_patterns::write(&list) {
                         logf!("matter: {}: {e}; lookups will not wake the unit", wake_patterns::LIST);
                     }

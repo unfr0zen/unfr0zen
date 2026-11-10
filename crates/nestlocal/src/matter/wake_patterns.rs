@@ -7,11 +7,12 @@
 //! - an IPv6 neighbour solicitation for one of its addresses. The chip
 //!   answers ARP itself, and not this.
 //!
-//! nestlocal lists a pattern for each in `LIST`, and the shim in nlsleepd
-//! (platform/common/wakefilter) adds them to nlsleepd's before each sleep:
-//! a line a pattern, `OFFSET MASK PATTERN`, the offset into the frame in
-//! decimal, nl80211's mask (a bit a pattern byte, least significant first)
-//! and the bytes in hex.
+//! nestlocal lists a pattern for each in `LIST`, and the library preloaded
+//! into nlsleepd (platform/common/wakefilter, which the app installs
+//! and names it in nlsleepd's init script with Matter) adds them to
+//! nlsleepd's before each sleep: a line a pattern, `OFFSET MASK PATTERN`, the
+//! offset into the frame in decimal, nl80211's mask (a bit a pattern byte,
+//! least significant first) and the bytes in hex.
 //!
 //! A pattern is bytes at fixed offsets, so a query wakes the unit when the
 //! instance is its first question. The chip holds `CHIP_PATTERNS` and
@@ -110,7 +111,7 @@ pub fn list(addresses: &[Ipv6Addr], instances: &[String]) -> String {
     patterns.iter().map(Pattern::line).collect()
 }
 
-/// Puts `list` in place whole: the shim may be reading.
+/// Puts `list` in place whole: the library may be reading.
 pub fn write(list: &str) -> std::io::Result<()> {
     let temporary = format!("{LIST}.{}", std::process::id());
     std::fs::write(&temporary, list)?;
