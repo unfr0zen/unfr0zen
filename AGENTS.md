@@ -11,7 +11,7 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 - `crates/nestlocal`: device service implementing MQTT, Matter, and Zigbee; startup scripts live in `rootfs/`.
 - `platform/`: what is built for and installed on the thermostat, by device:
   - `common/`: both generations. `nlclient/` (native settings screen, assets, binary discovery references, C tests), `radio/` (radio firmware, each radio's board, linker and OpenThread files in `em3581/` and `em357/`; OpenThread integration in `thread/`), `doom/` (doomgeneric submodule plus its platform layer).
-  - `diamond3/`: the gen 3. `bootstrap/` (ROM stage and boot wrapper), `uboot/` (recovery U-Boot submodule, patches and build scripts), `initramfs-init`, `zbwake/` (kernel wake module for each gen 3 release).
+  - `diamond3/`: the gen 3. `bootstrap/` (ROM stage and boot wrapper), `uboot/` (recovery U-Boot submodule, patches and build scripts), `initramfs-init`, `zbwake/` (kernel wake module for each gen 3 release), `wakefilter/` (the library preloaded into nlsleepd that adds nestlocal's Wi-Fi wake patterns to its own).
   - `j49/`: the gen 2. x-loader build and bare-metal NAND flasher, loaded through x-loader's USB loader, its USB-serial kernel, `zbwake/` module, and dropbear for `--ssh`.
 - `utils/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app. `ci/` holds the build image's Dockerfile and the CircleCI config that publishes it, run only when `utils/ci/Dockerfile` changes.
 - `assets/`: app icons, the Linux `.desktop` entry, and the README's app screenshot and overview diagram (light and dark).
