@@ -1,6 +1,11 @@
 //! The stand-in on the unit: a PTY where nlclient looks for the BLE chip's
 //! UART, a decoy of the chip's reset line, and the thread behind them.
 //!
+//! With Matter alone there is no sensor, but nlclient still needs the
+//! stand-in: run with ble_disabled, it resets the chip and loads Nest's sleep
+//! firmware into it at each start, which on the real chip breaks an upload
+//! nestlocal has under way and replaces one it has finished.
+//!
 //! nlclient's firmware loader opens /dev/ttyble0 by name and pulses
 //! <reset>/value with no delay, so both are replaced before nlclient starts:
 //! the symlink points at the PTY, and a directory bind-mounted over the GPIO's
@@ -30,8 +35,6 @@ use crate::device::Ble;
 use crate::logf;
 use crate::settings_ui::DIR;
 
-/// What nestlocal.init waits for before it lets nlclient start.
-const READY: &str = "external-temperature.ready";
 const SLEEP_FIRMWARE: &str = "/usr/share/dialog/data/firmware/nl_ble_sleep_firmware.bin";
 const DECOY: &str = "ble-reset";
 /// The PTY's holder, as an abstract socket's name.
@@ -51,6 +54,12 @@ pub fn reset_dir(ble: &Ble) -> String {
 /// Whether nlclient talks to the stand-in, leaving the real chip to nestlocal.
 pub fn owns_chip() -> bool {
     REAL_RESET.get().is_some()
+}
+
+/// Whether nlclient's own BLE is off (ble_disabled), as unfr0zen sets it when
+/// Matter takes the chip. With it on, the chip stays nlclient's.
+pub fn stock_ble_off() -> io::Result<bool> {
+    Ok(fs::read_to_string("/nestlabs/etc/product.config")?.contains("key=\"ble_disabled\" value=\"1\""))
 }
 
 fn check(result: libc::c_int) -> io::Result<libc::c_int> {
@@ -210,7 +219,7 @@ pub fn start_holder(ble: &Ble) -> io::Result<()> {
     match check(unsafe { libc::fork() })? {
         0 => {
             if let Err(e) = hold(Path::new(ble.uart)) {
-                logf!("external temperature: the PTY's holder: {e}");
+                logf!("BLE stand-in: the PTY's holder: {e}");
             }
             // SAFETY: the holder has nothing to tidy.
             unsafe { libc::_exit(1) }
@@ -219,7 +228,7 @@ pub fn start_holder(ble: &Ble) -> io::Result<()> {
             // An nlclient already running holds a PTY that died with the old
             // holder, and only its start finds the new one.
             for pid in crate::pids("nlclient") {
-                logf!("external temperature: restarting nlclient for its new PTY");
+                logf!("BLE stand-in: restarting nlclient for its new PTY");
                 // SAFETY: kill takes any pid and signal.
                 unsafe { libc::kill(pid, libc::SIGTERM) };
             }
@@ -271,7 +280,7 @@ fn write_all(fd: RawFd, mut bytes: &[u8]) {
     }
 }
 
-fn run(sensor: Arc<Sensor>, master: OwnedFd, inotify: OwnedFd, value: PathBuf, wake: OwnedFd) {
+fn run(sensor: Option<Arc<Sensor>>, master: OwnedFd, inotify: OwnedFd, value: PathBuf, wake: OwnedFd) {
     let mut chip = Chip::new();
     let mut buffer = [0u8; 4096];
     let start = Instant::now();
@@ -308,6 +317,7 @@ fn run(sensor: Arc<Sensor>, master: OwnedFd, inotify: OwnedFd, value: PathBuf, w
         let offered = chip.tick(start.elapsed().as_millis() as u64);
         write_all(master.as_raw_fd(), &offered);
 
+        let Some(sensor) = &sensor else { continue };
         let listening = chip.listening(sensor.id());
         if listening != was_listening {
             logf!("external temperature: nlclient {} for the sensor", if listening { "is listening" } else { "stopped listening" });
@@ -324,15 +334,13 @@ fn run(sensor: Arc<Sensor>, master: OwnedFd, inotify: OwnedFd, value: PathBuf, w
 }
 
 /// Puts the stand-in in place, then runs it. Returns once nlclient may start.
-pub fn start(sensor: Arc<Sensor>, ble: &'static Ble, matter: bool) -> io::Result<()> {
+pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool) -> io::Result<()> {
     fs::create_dir_all(DIR)?;
-    let ready = Path::new(DIR).join(READY);
-    let _ = fs::remove_file(&ready);
     let (inotify, value) = cover_reset(ble)?;
     let (master, had_one) = fetch_master()?;
     if had_one {
         write_all(master.as_raw_fd(), &[RESTART_BLE]);
-        logf!("external temperature: asked nlclient to start its BLE over");
+        logf!("BLE stand-in: asked nlclient to start its BLE over");
     }
     let mut ends = [0 as RawFd; 2];
     // SAFETY: ends is writable for two descriptors.
@@ -340,16 +348,17 @@ pub fn start(sensor: Arc<Sensor>, ble: &'static Ble, matter: bool) -> io::Result
     // SAFETY: pipe2 made both, and they are owned from here on.
     let (wake, signal) = unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) };
     let signal = signal.into_raw_fd();
-    sensor.set_notify(move || {
-        // SAFETY: the pipe lives as long as the process; one byte is readable.
-        unsafe { libc::write(signal, b"x".as_ptr().cast(), 1) };
-    });
-    std::thread::Builder::new().name("external-temperature".into())
+    if let Some(sensor) = &sensor {
+        sensor.set_notify(move || {
+            // SAFETY: the pipe lives as long as the process; one byte is readable.
+            unsafe { libc::write(signal, b"x".as_ptr().cast(), 1) };
+        });
+    }
+    std::thread::Builder::new().name("ble-stand-in".into())
         .spawn(move || run(sensor, master, inotify, value, wake))?;
     if !matter {
         std::thread::spawn(move || sleep_real_chip(ble));
     }
-    fs::write(&ready, b"")?;
-    logf!("external temperature: nlclient's BLE goes to {}", ble.uart);
+    logf!("BLE stand-in: nlclient's BLE goes to {}", ble.uart);
     Ok(())
 }

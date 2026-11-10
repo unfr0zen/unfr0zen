@@ -35,6 +35,17 @@ use std::sync::Arc;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
+/// What nestlocal.init waits for before it starts nlclient: the BLE chip's
+/// stand-in is in place, where one is needed.
+const NLCLIENT_MAY_START: &str = "nlclient-may-start";
+
+/// Matter's BLE has the chip and nlclient's own BLE is off: nlclient still
+/// loads firmware into the chip as it starts, so it must find the stand-in.
+#[cfg(target_os = "linux")]
+fn matter_takes_ble(config: &flags::Config) -> bool {
+    config.matter && sensor::port::stock_ble_off().unwrap_or(false)
+}
+
 /// rustls's cryptography: ring, for the server and the broker alike.
 pub fn install_crypto() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -114,9 +125,9 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let (true, Some(ble)) = (config.external_temperature, device::current().ble.as_ref()) {
+    if let (true, Some(ble)) = (config.external_temperature || matter_takes_ble(&config), device::current().ble.as_ref()) {
         if let Err(e) = sensor::port::start_holder(ble) {
-            logf!("external temperature: {e}");
+            logf!("BLE stand-in: {e}");
         }
     }
     entropy::seed();
@@ -184,7 +195,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     #[cfg(target_os = "linux")]
     {
         let result = match device.ble.as_ref() {
-            Some(ble) => sensor::port::start(sensor.clone(), ble, config.matter),
+            Some(ble) => sensor::port::start(Some(sensor.clone()), ble, config.matter),
             None => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
         };
         if let Err(e) = result {
@@ -201,6 +212,15 @@ async fn run(config: flags::Config) {
     structure::ensure_structure(&store, &config.serial);
     tokio::spawn(store.clone().save_changes());
     let sensor = start_sensor(&config, &store);
+    #[cfg(target_os = "linux")]
+    if let (true, false, Some(ble)) = (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref()) {
+        if let Err(e) = sensor::port::start(None, ble, true) {
+            logf!("matter BLE: stand-in: {e}");
+        }
+    }
+    // nestlocal.init holds nlclient back until here.
+    let _ = std::fs::create_dir_all(settings_ui::DIR)
+        .and_then(|()| std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b""));
     if !config.ntp_server.is_empty() {
         tokio::spawn(clock::keep_clock(config.ntp_server.clone()));
     }
