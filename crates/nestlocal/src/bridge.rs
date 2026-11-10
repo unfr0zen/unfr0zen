@@ -189,17 +189,10 @@ impl Bridge {
         }
     }
 
-    /// The unit woke (wake.rs). If nothing went to the broker for half the
-    /// keepalive by the wall clock (the ping timer stopped with the unit),
-    /// publish the availability again at QoS 0: a packet the broker counts,
-    /// with no answer to wake the unit again.
+    /// The unit woke (wake.rs): the connection checks its keepalive.
     pub fn woke(&self) {
-        let Some(c) = self.mqtt.get().filter(|c| c.is_connected()) else {
-            return;
-        };
-        if c.idle() > mqtt::KEEPALIVE / 2 {
-            let alive = self.live.as_ref().is_some_and(|l| l.alive());
-            c.publish(&format!("{}/availability", self.base), if alive { "online" } else { "offline" }.as_bytes(), 0, true);
+        if let Some(c) = self.mqtt.get() {
+            c.woke();
         }
     }
 
