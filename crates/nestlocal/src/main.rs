@@ -108,6 +108,10 @@ fn main() {
         }
         return;
     }
+    // Without Matter, nlsleepd's library must not set its patterns.
+    if !config.matter {
+        let _ = std::fs::remove_file(matter::wake_patterns::LIST);
+    }
 
     #[cfg(target_os = "linux")]
     if let (true, Some(ble)) = (config.external_temperature, device::current().ble.as_ref()) {

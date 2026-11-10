@@ -631,15 +631,20 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
             .run(&socket, &socket, &host, (!on.ipv4.is_unspecified()).then_some(ipv4), Some(on.index), matter, crypto);
         let changed = async {
             // Fabrics come and go without the addresses changing.
-            let mut listed = None;
+            let (mut listed, mut failing) = (None, false);
             loop {
                 let budget = wake_patterns::Budget::of(crate::device::current().generation);
                 let list = wake_patterns::list(budget, mac(&on.name), &on.ipv6, &operational_instances(matter));
                 if listed.as_ref() != Some(&list) {
-                    if let Err(e) = wake_patterns::write(&list) {
-                        logf!("matter: {}: {e}; controllers will not wake the unit", wake_patterns::LIST);
+                    // Again next time when it fails, logged once.
+                    match wake_patterns::write(&list) {
+                        Ok(()) => (listed, failing) = (Some(list), false),
+                        Err(e) if !failing => {
+                            logf!("matter: {}: {e}; controllers will not wake the unit", wake_patterns::LIST);
+                            failing = true;
+                        }
+                        Err(_) => {}
                     }
-                    listed = Some(list);
                 }
                 async_io::Timer::after(Duration::from_secs(30)).await;
                 if addresses().as_ref() != Some(&on) {
