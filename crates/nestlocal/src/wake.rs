@@ -72,6 +72,10 @@ const REPORT_DELAY: Duration = Duration::from_millis(300);
 const WAKE_HOLD: Duration = Duration::from_secs(3);
 /// nlsleepd answers at once; one it drops must not hang the loop.
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long before asking an nlsleepd that did not take a registration again.
+const ENROLL_RETRY: Duration = Duration::from_secs(10);
+/// The error of a call nlsleepd let time out.
+const NO_ANSWER: &str = "no answer";
 
 /// An established TCP connection, as /proc/net/tcp lists it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -241,12 +245,24 @@ async fn run(wake: Option<Arc<Wake>>, matter: bool, zigbee: bool, on_wake: Arc<d
     }
 }
 
-/// Registers the sleep entity and Matter filters before allowing sleep.
+/// Registers the sleep entity and Matter filters before allowing sleep, again
+/// while nlsleepd does not answer: it answers nothing while it starts, and a
+/// unit left unregistered stays awake.
 async fn enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool>) {
+    // True once nlsleepd answered, whatever it said.
+    while !try_enroll(bus, matter, ready).await {
+        tokio::time::sleep(ENROLL_RETRY).await;
+    }
+}
+
+async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool>) -> bool {
     ready.store(!matter, Ordering::SeqCst);
     match call(bus, MANAGER_PATH, MANAGER, "RegisterEntity", &(ENTITY_PATH,)).await {
         Ok(()) => logf!("wake: registered with nlsleepd as a sleep entity"),
-        Err(e) => return logf!("wake: RegisterEntity: {e}"),
+        Err(e) => {
+            logf!("wake: RegisterEntity: {e}");
+            return e != NO_ANSWER;
+        }
     }
     if matter {
         for (name, ipv4) in [("nestlocal_matter_v4", true), ("nestlocal_matter_v6", false)] {
@@ -254,7 +270,7 @@ async fn enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool>) {
             if let Err(e) = call(bus, WAKEKA_PATH, WAKEKA, "RegisterWakeKa",
                 &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false)).await {
                 logf!("wake: {name}: {e}; keeping Matter awake");
-                return;
+                return e != NO_ANSWER;
             }
         }
         ready.store(true, Ordering::SeqCst);
@@ -265,6 +281,7 @@ async fn enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool>) {
     } else {
         release(bus).await;
     }
+    true
 }
 
 fn sleep_blocked(matter: bool, ready: bool, commissioning: bool) -> bool {
@@ -330,7 +347,7 @@ where B: serde::Serialize + zbus::zvariant::DynamicType {
         }
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err("no answer".into()),
+        Err(_) => Err(NO_ANSWER.into()),
     }
 }
 
