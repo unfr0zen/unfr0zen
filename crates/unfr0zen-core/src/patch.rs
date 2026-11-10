@@ -107,6 +107,33 @@ pub(crate) fn check_mode(tree: &Tree, name: &str, mode: u32) -> Result<()> {
     }
 }
 
+/// nlsleepd's init script, the same on the gen 2 and the gen 3.
+pub(crate) const NLSLEEP: &str = "etc/init.d/nlsleep";
+/// Where the start line below preloads the library from.
+const WAKE_FILTER: &str = "nestlabs/lib/libwakefilter.so";
+/// How the script starts nlsleepd, and the same with the library that adds
+/// nestlocal's Wi-Fi wake patterns to nlsleepd's preloaded (nestlocal puts it
+/// there: crates/nestlocal/src/matter/wake_patterns.rs). The loader goes on
+/// without a library that is missing.
+const NLSLEEPD_START: (&str, &str) = (
+    "\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ",
+    "\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ");
+
+/// nlsleepd started with the wake pattern library for a unit with Matter, so
+/// that a controller looking the sleeping unit up wakes it; as stock without.
+fn patch_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
+    let (stock, preloaded) = NLSLEEPD_START;
+    let mut script = text(tree, NLSLEEP)?.replace(preloaded, stock);
+    if enabled {
+        if script.matches(stock).count() != 1 {
+            return device(format!("expected one line starting nlsleepd in {NLSLEEP}"));
+        }
+        script = script.replace(stock, preloaded);
+    }
+    put(tree, NLSLEEP, script);
+    Ok(())
+}
+
 /// SHA-512 crypt of password, as etc/shadow takes it ($6$salt$hash, 5000 rounds).
 pub fn root_hash(password: &str) -> Result<String> {
     const SALT_CHARS: &[u8] = b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -441,6 +468,9 @@ pub struct Options {
     pub overlay: Option<Overlay>,
     pub mqtt: Option<Mqtt>,
     pub matter: Option<Matter>,
+    /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
+    /// installed with Matter on a gen 2 or gen 3, removed without.
+    pub wake_filter: Vec<u8>,
     /// Files for the optional onboard Thread transport.
     pub thread: Option<Overlay>,
     /// nestlocal joins a Zigbee network through the unit's radio, which it
@@ -655,6 +685,17 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         patch_block_cloud(&mut tree, options.block_cloud)?;
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
+    if matches!(target, Device::Diamond3 | Device::J49) {
+        fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
+        fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
+        let wake = options.matter.is_some() && !options.wake_filter.is_empty();
+        if wake {
+            tree.insert(WAKE_FILTER.into(), (options.wake_filter.clone(), 0o755));
+        }
+        if tree.contains_key(NLSLEEP) {
+            patch_wake_patterns(&mut tree, wake)?;
+        }
+    }
     patch_root_rw(&mut tree, true)?;
     patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
     (rootfs.patch)(&mut tree, options)?;
@@ -755,7 +796,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied()
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER])
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -1166,6 +1207,38 @@ mod tests {
         assert!(volume.commands.is_empty());
     }
 
+    /// The lines around nlsleepd's start in the script of every release seen (5.9.4-5 to 6.5-14).
+    const SCRIPT: &str = "start_nlsleepd () {\n log_info \"Service initiation\"\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" \
+                          -a ${NLSLEEPD_APP} -- `${CAT} ${CONFDIR}/${NLSLEEPD_NAME}.options 2> ${NULL}`\n}\n";
+
+    fn script(tree: &Tree) -> String {
+        String::from_utf8(tree[NLSLEEP].0.clone()).unwrap()
+    }
+
+    #[test]
+    fn matter_preloads_the_wake_pattern_library_into_nlsleepd_and_off_again_takes_it_out() {
+        let mut tree = Tree::new();
+        tree.insert(NLSLEEP.into(), (SCRIPT.as_bytes().to_vec(), 0o755));
+        patch_wake_patterns(&mut tree, true).unwrap();
+        let preloaded = script(&tree);
+        assert!(preloaded.contains("\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} -- "));
+        assert_eq!(tree[NLSLEEP].1, 0o755);
+        // Again changes nothing.
+        patch_wake_patterns(&mut tree, true).unwrap();
+        assert_eq!(script(&tree), preloaded);
+        patch_wake_patterns(&mut tree, false).unwrap();
+        assert_eq!(script(&tree), SCRIPT);
+    }
+
+    #[test]
+    fn a_script_that_starts_nlsleepd_another_way_is_refused_for_matter_and_left_alone_without() {
+        let mut tree = Tree::new();
+        tree.insert(NLSLEEP.into(), (b"start_nlsleepd () {\n nlsleepd &\n}\n".to_vec(), 0o755));
+        assert!(patch_wake_patterns(&mut tree, true).unwrap_err().to_string().contains("starting nlsleepd"));
+        patch_wake_patterns(&mut tree, false).unwrap();
+        assert_eq!(script(&tree), "start_nlsleepd () {\n nlsleepd &\n}\n");
+    }
+
     fn options() -> Options {
         Options { root_hash: "$6$salt$hash".into(), ..Options::default() }
     }
@@ -1202,6 +1275,27 @@ mod tests {
         patch(&mut volume, &Options { thread: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-matter-thread"));
         assert!(!volume.text("etc/monit.d/nestlocal.monitrc").contains("nestlocal-thread-daemon"));
+    }
+
+    #[test]
+    fn matter_installs_the_wake_pattern_library_for_nlsleepd_and_off_again_removes_it() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let script = "start_nlsleepd () {\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} -- `${CAT} x`\n}\n";
+        volume.files.insert(NLSLEEP.into(), ("0:0".into(), 0o755, script.as_bytes().to_vec()));
+        let matter = Some(Matter::from_pairing_code(nestlocal::DEFAULT_MATTER_CODE).unwrap());
+        let options = Options { matter, wake_filter: b"\x7fELF library".to_vec(), ..options() };
+        let changes = patch(&mut volume, &options, false).unwrap();
+        assert!(names(&changes).contains(WAKE_FILTER));
+        assert_eq!((volume.files[WAKE_FILTER].1, volume.files[WAKE_FILTER].2.as_slice()), (0o755, &b"\x7fELF library"[..]));
+        assert!(volume.text(NLSLEEP).contains(" LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} "));
+        // Again changes neither.
+        assert!(!names(&patch(&mut volume, &options, false).unwrap()).contains(WAKE_FILTER));
+        let changes = patch(&mut volume, &Options { matter: None, mqtt: Some(Mqtt { url: "tcp://b:1883".into(), user: None,
+            password: None, tls: false, ca: None }), ..options }, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
+        assert!(!volume.files.contains_key(WAKE_FILTER));
+        assert_eq!(volume.text(NLSLEEP), script);
     }
 
     #[test]

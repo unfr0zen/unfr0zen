@@ -98,6 +98,20 @@ fn main() {
         prepare_settings(&config);
         return;
     }
+    // An init script older than the binary passes this alone, and none of
+    // the options: the rest of prepare_settings would take them as off.
+    if !config.seed_structure.is_empty() {
+        match structure::seed_structure_id(&config.seed_structure, &config.serial) {
+            Ok(true) => logf!("nestlocal: seeded structure_id in {}", config.seed_structure),
+            Ok(false) => {}
+            Err(e) => fatal!("{e}"),
+        }
+        return;
+    }
+    // Without Matter, nlsleepd's library must not set its patterns.
+    if !config.matter {
+        let _ = std::fs::remove_file(matter::wake_patterns::LIST);
+    }
 
     #[cfg(target_os = "linux")]
     if let (true, Some(ble)) = (config.external_temperature, device::current().ble.as_ref()) {

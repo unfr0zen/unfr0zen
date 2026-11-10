@@ -16,7 +16,10 @@ mod ble;
 mod pairing;
 mod srp;
 mod thermostat;
+mod netifs;
 mod thread;
+pub mod timer;
+pub mod wake_patterns;
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -46,7 +49,6 @@ use rs_matter::dm::clusters::decl::thermostat_user_interface_configuration::Clus
 use rs_matter::dm::devices::{DEV_TYPE_FAN, DEV_TYPE_MODE_SELECT, DEV_TYPE_POWER_SOURCE, DEV_TYPE_THERMOSTAT};
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::eth::EthNetwork;
-use rs_matter::dm::networks::SysNetifs;
 use rs_matter::dm::{Async, DataModel, Dataver, DeviceType, Endpoint, Node};
 use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter::error::{Error, ErrorCode};
@@ -519,10 +521,10 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
     (
         node,
         endpoints::EthSysHandlerBuilder::new()
-            .netif_diag(&SysNetifs)
+            .netif_diag(&netifs::Netifs)
             .build(rand)
             .chain(if thread { |e, _| e == 0 } else { |_, _| false },
-                endpoints::ThreadSysHandlerBuilder::new(controller, controller).netif_diag(&SysNetifs).build(rand))
+                endpoints::ThreadSysHandlerBuilder::new(controller, controller).netif_diag(&netifs::Netifs).build(rand))
             .chain(
                 |e, c| e != 0 && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
@@ -628,7 +630,22 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
         let announce = responder
             .run(&socket, &socket, &host, (!on.ipv4.is_unspecified()).then_some(ipv4), Some(on.index), matter, crypto);
         let changed = async {
+            // Fabrics come and go without the addresses changing.
+            let (mut listed, mut failing) = (None, false);
             loop {
+                let budget = wake_patterns::Budget::of(crate::device::current().generation);
+                let list = wake_patterns::list(budget, mac(&on.name), &on.ipv6, &operational_instances(matter));
+                if listed.as_ref() != Some(&list) {
+                    // Again next time when it fails, logged once.
+                    match wake_patterns::write(&list) {
+                        Ok(()) => (listed, failing) = (Some(list), false),
+                        Err(e) if !failing => {
+                            logf!("matter: {}: {e}; controllers will not wake the unit", wake_patterns::LIST);
+                            failing = true;
+                        }
+                        Err(_) => {}
+                    }
+                }
                 async_io::Timer::after(Duration::from_secs(30)).await;
                 if addresses().as_ref() != Some(&on) {
                     break;
@@ -641,6 +658,27 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
             Either3::Third(_) => logf!("matter: refreshing announcements after pairing replacement"),
         }
     }
+}
+
+/// The names controllers look the unit up by: one for each fabric.
+fn operational_instances(matter: &Matter<'_>) -> Vec<String> {
+    let mut descriptors = Vec::new();
+    let _ = matter.mdns_services(|service| { descriptors.push(service); Ok(()) });
+    descriptors.into_iter().filter_map(|descriptor| {
+        let mut buffer = [0; 1024];
+        let (service, _) = descriptor.service(matter, &mut buffer).ok()?;
+        (service.service_protocol == "_matter._tcp").then(|| service.name.to_string())
+    }).collect()
+}
+
+/// The interface's Ethernet address, all zeros when it has none.
+fn mac(interface: &str) -> [u8; 6] {
+    let text = std::fs::read_to_string(format!("/sys/class/net/{interface}/address")).unwrap_or_default();
+    let mut mac = [0; 6];
+    for (byte, hex) in mac.iter_mut().zip(text.trim().split(':')) {
+        *byte = u8::from_str_radix(hex, 16).unwrap_or(0);
+    }
+    mac
 }
 
 /// Where the unit is on its network.

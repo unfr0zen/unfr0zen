@@ -98,8 +98,9 @@ MODULES = {
     "doom": {"paths": ["platform/common/doom"]},
     # Its job also runs the screen's host tests.
     "nlclient": {"paths": ["platform/common/nlclient/src", "platform/common/nlclient/tests"]},
-    # The radio module brings nestlocal.sh and the Makefile nestlocal reads.
-    "nestlocal": {"paths": ["crates/nestlocal", "Cargo.toml", "Cargo.lock"],
+    # The radio module brings nestlocal.sh and the Makefile nestlocal reads;
+    # nestlocal.sh also builds the wake pattern library the app installs.
+    "nestlocal": {"paths": ["crates/nestlocal", "platform/common/wakefilter", "Cargo.toml", "Cargo.lock"],
                   "needs": ["radio", "zbwake", "j49-kernel"]},
 }
 

@@ -37,6 +37,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("mqtt-user", Kind::Text, "", "MQTT user name, empty for none"),
     ("ntp-server", Kind::Text, "pool.ntp.org", "NTP server to set the unit's clock from when it is off (clock.rs), empty for none"),
     ("origin", Kind::Text, "https://127.0.0.1", "base URL handed to the device in /entry"),
+    ("seed-structure", Kind::Text, "", "what an older nestlocal.init passes: set structure_id in this settings file, then exit"),
     ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id"),
     ("serial", Kind::Text, "", "the unit's serial (default: the hostname, which the unit sets to it)"),
     ("settings", Kind::Text, "/media/user-config/settings.config", "nlclient's settings file"),
@@ -73,6 +74,8 @@ pub struct Config {
     pub ntp_server: String,
     pub origin: String,
     pub prepare_settings: bool,
+    /// An older nestlocal.init's settings file, structure_id alone to seed.
+    pub seed_structure: String,
     pub serial: String,
     pub settings: String,
     pub stale: Duration,
@@ -228,6 +231,7 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         ntp_server: get("ntp-server"),
         origin: get("origin"),
         prepare_settings: flag("prepare-settings"),
+        seed_structure: get("seed-structure"),
         serial: get("serial"),
         settings: get("settings"),
         stale: duration("stale"),
@@ -284,6 +288,14 @@ mod tests {
         // -- ends the flags; a value that looks like a flag is still a value.
         let c = parse(&args("-serial -v -- -topic t")).ok().unwrap();
         assert_eq!((c.serial.as_str(), c.verbose, c.topic.as_str()), ("-v", false, "nestlocal"));
+    }
+
+    #[test]
+    fn an_older_init_script_s_seed_structure_names_the_settings_file() {
+        let c = parse(&args("-syslog -seed-structure /media/user-config/settings.config")).ok().unwrap();
+        assert_eq!(c.seed_structure, "/media/user-config/settings.config");
+        assert!(!c.prepare_settings);
+        assert_eq!(parse(&args("-syslog")).ok().unwrap().seed_structure, "");
     }
 
     #[test]
