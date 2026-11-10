@@ -17,8 +17,7 @@ impl Uart {
     pub fn open() -> io::Result<Self> {
         let ble = crate::device::current().ble.as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this unit has no BLE peripheral"))?;
-        let config = std::fs::read_to_string("/nestlabs/etc/product.config")?;
-        if !crate::sensor::port::owns_chip() && !config.contains("key=\"ble_disabled\" value=\"1\"") {
+        if !crate::sensor::port::owns_chip() && !crate::sensor::port::stock_ble_off()? {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "stock BLE owns the radio"));
         }
         let firmware = gtl::firmware(&std::fs::read(ble.firmware)?)?;

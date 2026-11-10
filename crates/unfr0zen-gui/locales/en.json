@@ -145,7 +145,7 @@
   "patch.matter.thread": "Thread support (replaces Heat Link)",
   "patch.matter.thread_disabled_hint": "Turn off Zigbee first: Thread and Zigbee cannot share the radio",
   "patch.matter.thread_hint": "Use the onboard radio for Matter over Thread; replaces Heat Link and cannot be combined with Zigbee",
-  "patch.matter_hint": "Install nestlocal to pair the thermostat with a Matter controller; Thread is optional",
+  "patch.matter_hint": "Install nestlocal to pair the thermostat with a Matter controller; Thread is optional. 3rd generation: the thermostat's own Bluetooth is turned off for Matter, so Nest Temperature Sensors stop working",
   "patch.mqtt": "Relay to MQTT broker",
   "patch.mqtt.broker": "Broker",
   "patch.mqtt.broker_hint": "MQTT broker hostname or IP address, optionally followed by :port",

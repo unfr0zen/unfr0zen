@@ -146,8 +146,6 @@ pub fn start(sensor: Arc<Sensor>, store: Arc<crate::store::Store>, serial: Strin
             let _ = receive.recv_timeout(RETRY);
         }
     })?;
-    std::fs::create_dir_all(crate::settings_ui::DIR)?;
-    std::fs::write(std::path::Path::new(crate::settings_ui::DIR).join("external-temperature.ready"), b"")?;
     Ok(())
 }
 

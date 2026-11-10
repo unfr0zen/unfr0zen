@@ -133,7 +133,7 @@ impl Chip {
                         break;
                     }
                     out.push(*xor);
-                    logf!("external temperature: nlclient loaded {need} bytes of BLE firmware");
+                    logf!("BLE stand-in: nlclient loaded {need} bytes of BLE firmware");
                     self.mode = Mode::Firmware;
                 }
                 Mode::Firmware => {
@@ -202,7 +202,7 @@ impl Chip {
             }
             op::SCAN_PARAMETERS => Vec::new(),
             other => {
-                logf!("external temperature: nlclient sent BLE command {other:#04x} ({} bytes), which it does not need here", body.len());
+                logf!("BLE stand-in: nlclient sent BLE command {other:#04x} ({} bytes), which it does not need here", body.len());
                 frame(op::UNRECOGNIZED, &[other as u8])
             }
         }
