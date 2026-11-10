@@ -314,10 +314,14 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         }
     });
 
-    // Changes to the buckets, reported to subscribed controllers.
+    // Changes to the buckets and to occupancy, reported to subscribed controllers.
     let (changed, changes) = async_channel::bounded::<()>(1);
+    let occupancy = changed.clone();
     nest.bridge.store.watch(move |_| {
         let _ = changed.try_send(());
+    });
+    nest.bridge.occupancy.on_change(move || {
+        let _ = occupancy.try_send(());
     });
     let mut report = pin!(async {
         while changes.recv().await.is_ok() {

@@ -89,6 +89,8 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         let changed = Arc::new(AtomicBool::new(true));
         let flag = changed.clone();
         nest.bridge.store.watch(move |_| flag.store(true, Ordering::Relaxed));
+        let flag = changed.clone();
+        nest.bridge.occupancy.on_change(move || flag.store(true, Ordering::Relaxed));
         let mut failed_install = None;
         let mut attempt = PairingAttempt::default();
         loop {

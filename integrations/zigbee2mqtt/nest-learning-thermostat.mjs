@@ -464,7 +464,7 @@ const definition = {
             climate,
             e.humidity(),
             e.battery_voltage().withLabel('Battery voltage').withHomeAssistant({name: 'Battery voltage'}),
-            e.binary('occupancy', ea.STATE, true, false).withDescription('Someone is home, as Home/Away Assist sees it'),
+            e.binary('occupancy', ea.STATE, true, false).withDescription('Motion at the thermostat in the last 15 minutes'),
             e.enum('temperature_display_mode', ea.ALL, ['celsius', 'fahrenheit']).withLabel('Temperature scale')
                 .withCategory('config').withDescription('The screen\'s units'),
             e.numeric('backplate_temperature', ea.STATE).withUnit('°C').withCategory('diagnostic')
