@@ -85,8 +85,10 @@ fn main() -> eframe::Result<()> {
         // The Wayland app_id / X11 WM class: how the compositor maps the window
         // to the installed .desktop entry for its taskbar/dock icon.
         .with_app_id("dev.unfr0zen.gui")
-        // macOS: no title bar band, the dark window fills to the top and the
-        // traffic lights float over the title bar the window draws.
+        // No title bar band, the dark window fills to the top: on macOS the
+        // traffic lights float over the title bar the window draws; elsewhere
+        // that bar has its own buttons and moves the window.
+        .with_decorations(cfg!(target_os = "macos"))
         .with_fullsize_content_view(true)
         .with_title_shown(false)
         .with_titlebar_shown(false)
@@ -166,6 +168,8 @@ fn main() -> eframe::Result<()> {
         });
         #[cfg(target_os = "macos")]
         macos_about::install();
+        #[cfg(windows)]
+        round_corners(cc);
         let mut app = App::new(&cc.egui_ctx, restart);
         app.backdrop = backdrop::Backdrop::new(cc.wgpu_render_state.as_ref());
         Ok(Box::new(app))
@@ -912,6 +916,9 @@ const SIDEBAR_WIDTH: f32 = 176.0;
 const NAV_HEIGHT: f32 = 26.0;
 /// The width macOS's traffic lights take at the title bar's left.
 const TRAFFIC_LIGHTS: f32 = 66.0;
+/// Each caption button's width at the title bar's right, outside macOS.
+const CAPTION_BUTTON: f32 = 46.0;
+const CLOSE_HOVER: egui::Color32 = egui::Color32::from_rgb(0xc4, 0x2b, 0x1c);
 /// The backup detail pane's margin on each side of the map.
 pub(crate) const DETAIL_MARGIN: f32 = 12.0;
 /// The patch page's advanced panel.
@@ -1013,8 +1020,18 @@ impl App {
 
     /// The breadcrumb.
     fn title_bar(&mut self, ui: &mut egui::Ui) {
-        let frame = egui::Frame::new().fill(BAR).inner_margin(egui::Margin::symmetric(14, 0));
+        // Outside macOS the caption buttons sit flush with the window's right edge.
+        let right = if cfg!(target_os = "macos") { 14 } else { 0 };
+        let frame = egui::Frame::new().fill(BAR).inner_margin(egui::Margin { left: 14, right, top: 0, bottom: 0 });
         egui::Panel::top("title").exact_size(TITLE_HEIGHT).show_separator_line(false).frame(frame).show(ui, |ui| {
+            // Undecorated outside macOS: the bar moves the window. Sensed
+            // first, so the buttons drawn on it take their clicks.
+            if !cfg!(target_os = "macos") {
+                let bar = ui.interact(ui.max_rect(), ui.id().with("drag"), egui::Sense::drag());
+                if bar.drag_started_by(egui::PointerButton::Primary) {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+            }
             ui.horizontal_centered(|ui| {
                 if cfg!(target_os = "macos") {
                     ui.add_space(TRAFFIC_LIGHTS);
@@ -1035,6 +1052,9 @@ impl App {
                 ui.ctx().request_repaint_after(glint_wait(time));
                 ui.label(egui::RichText::new("›").color(DIM));
                 ui.label(egui::RichText::new(self.page.title()).font(medium(13.5)));
+                if !cfg!(target_os = "macos") {
+                    caption_buttons(ui);
+                }
             });
         });
     }
@@ -2321,6 +2341,52 @@ fn opener() -> std::process::Command {
     #[cfg(all(unix, not(target_os = "macos")))]
     let program = "xdg-open";
     std::process::Command::new(program)
+}
+
+/// Minimize and close at the title bar's right end, for the windows the OS
+/// draws no frame around. The window is fixed in size, so no maximize.
+fn caption_buttons(ui: &mut egui::Ui) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for close in [true, false] {
+            let size = egui::vec2(CAPTION_BUTTON, TITLE_HEIGHT);
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            let hovered = response.hovered();
+            if hovered {
+                ui.painter().rect_filled(rect, 0.0, if close { CLOSE_HOVER } else { NAV_SELECTED });
+            }
+            let stroke = egui::Stroke::new(1.0, if hovered { egui::Color32::WHITE } else { TEXT });
+            let c = rect.center();
+            let r = 5.0;
+            if close {
+                ui.painter().line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
+                ui.painter().line_segment([c + egui::vec2(-r, r), c + egui::vec2(r, -r)], stroke);
+            } else {
+                ui.painter().hline(c.x - r..=c.x + r, c.y.round() + 0.5, stroke);
+            }
+            if response.clicked() {
+                let command = if close { egui::ViewportCommand::Close } else { egui::ViewportCommand::Minimized(true) };
+                ui.ctx().send_viewport_cmd(command);
+            }
+        }
+    });
+}
+
+/// Windows 11 rounds only framed windows' corners by itself; rounds this
+/// undecorated one's as well. Older Windows ignore the attribute.
+#[cfg(windows)]
+fn round_corners(cc: &eframe::CreationContext<'_>) {
+    use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+    let Ok(handle) = cc.window_handle() else { return };
+    let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
+    let preference = DWMWCP_ROUND;
+    // SAFETY: the handle is the live main window's; the attribute takes a
+    // DWM_WINDOW_CORNER_PREFERENCE, read for its size.
+    unsafe {
+        DwmSetWindowAttribute(window.hwnd.get(), DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                              (&preference as *const i32).cast(), std::mem::size_of::<i32>() as u32);
+    }
 }
 
 #[cfg(test)]
