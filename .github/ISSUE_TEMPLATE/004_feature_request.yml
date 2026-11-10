@@ -1,0 +1,39 @@
+name: Feature
+description: Suggest a new idea, or new functionality
+type: Feature
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **On the matter of artificial intelligence.** You are most welcome to have an AI proofread your report, provided you understand every word of what you submit. The maintainers of unfr0zen have better things to do than decipher AI-generated garbage. Issues that fall short of this rather modest standard will be closed without notice.
+  - type: checkboxes
+    id: ai-statement
+    attributes:
+      label: Statement on artificial intelligence
+      options:
+        - label: I have read the statement above and agree to comply with it.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem? Please describe.
+      description: A clear and concise description of what the problem is.
+      placeholder: e.g., I'm frustrated when I need to do X manually because Y is missing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear and concise description of what you want to happen.
+      placeholder: e.g., It would be great if the thermostat could automatically handle X by doing Y.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: Include any alternative solutions or features

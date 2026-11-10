@@ -1,0 +1,68 @@
+name: Bug Report
+description: File a report for an unexpected problem or behavior (Bug)
+type: "Bug"
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **On the matter of artificial intelligence.** You are most welcome to have an AI proofread your report, provided you understand every word of what you submit. The maintainers of unfr0zen have better things to do than decipher AI-generated garbage. Issues that fall short of this rather modest standard will be closed without notice.
+  - type: checkboxes
+    id: ai-statement
+    attributes:
+      label: Statement on artificial intelligence
+      options:
+        - label: I have read the statement above and agree to comply with it.
+          required: true
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Describe the bug
+      description: |
+        A clear and concise description of what the bug is.
+
+      placeholder: |
+        Please also mention any information which could help others to understand
+        the problem you're facing:
+          - Which part is affected: recovery/flashing, the app, nestlocal (MQTT/Matter/Zigbee) or the thermostat UI?
+          - What have you tried to diagnose or work around this issue?
+          - Is this a regression? If yes, which was the last version that worked?
+    validations:
+      required: true
+  - type: checkboxes
+    id: regression
+    attributes:
+      label: Regression
+      description: |
+        Check this box if this is a regression and name the last version that worked.
+      options:
+        - label: This is a regression.
+          required: false
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Steps to reproduce the behavior.
+
+      placeholder: |
+        Steps to reproduce the behavior:
+          1. Connect the thermostat over USB
+          2. Run unfr0zen with options ...
+          3. See error
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: unfr0zen.log
+      description: |
+        **Strongly recommended.** Attach the `unfr0zen.log` of the failing run (drag and drop the file here). Without it, a bug report is mostly guesswork. Each run writes one to `logs/<timestamp>/unfr0zen.log` in:
+          - macOS: `~/Library/Application Support/unfr0zen`
+          - Linux: `~/.local/share/unfr0zen` (or `$XDG_DATA_HOME/unfr0zen`)
+          - Windows: `%APPDATA%\unfr0zen`
+      placeholder: Drag and drop unfr0zen.log here.

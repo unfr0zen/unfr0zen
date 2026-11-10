@@ -1,0 +1,47 @@
+name: Enhancement
+description: Submit an Enhancement (Changes/Updates/Additions to existing features)
+labels: ["enhancement"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **On the matter of artificial intelligence.** You are most welcome to have an AI proofread your report, provided you understand every word of what you submit. The maintainers of unfr0zen have better things to do than decipher AI-generated garbage. Issues that fall short of this rather modest standard will be closed without notice.
+  - type: checkboxes
+    id: ai-statement
+    attributes:
+      label: Statement on artificial intelligence
+      options:
+        - label: I have read the statement above and agree to comply with it.
+          required: true
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this enhancement proposal.
+  - type: textarea
+    id: description
+    attributes:
+      label: Summary
+      description: |
+        Is your enhancement proposal related to a problem? Please describe.
+      placeholder: |
+        A clear and concise description of what the problem is.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: |
+        Describe the solution you'd like
+      placeholder: |
+        A clear and concise description of what you want to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Describe alternatives you've considered
+      placeholder: |
+        A clear and concise description of any alternative solutions or features you've considered.
