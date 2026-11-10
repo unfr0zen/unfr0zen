@@ -16,7 +16,9 @@ mod ble;
 mod pairing;
 mod srp;
 mod thermostat;
+mod netifs;
 mod thread;
+pub mod timer;
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -46,7 +48,6 @@ use rs_matter::dm::clusters::decl::thermostat_user_interface_configuration::Clus
 use rs_matter::dm::devices::{DEV_TYPE_FAN, DEV_TYPE_MODE_SELECT, DEV_TYPE_POWER_SOURCE, DEV_TYPE_THERMOSTAT};
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::eth::EthNetwork;
-use rs_matter::dm::networks::SysNetifs;
 use rs_matter::dm::{Async, DataModel, Dataver, DeviceType, Endpoint, Node};
 use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter::error::{Error, ErrorCode};
@@ -519,10 +520,10 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
     (
         node,
         endpoints::EthSysHandlerBuilder::new()
-            .netif_diag(&SysNetifs)
+            .netif_diag(&netifs::Netifs)
             .build(rand)
             .chain(if thread { |e, _| e == 0 } else { |_, _| false },
-                endpoints::ThreadSysHandlerBuilder::new(controller, controller).netif_diag(&SysNetifs).build(rand))
+                endpoints::ThreadSysHandlerBuilder::new(controller, controller).netif_diag(&netifs::Netifs).build(rand))
             .chain(
                 |e, c| e != 0 && c == desc::DescHandler::CLUSTER.id,
                 Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),

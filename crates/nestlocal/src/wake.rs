@@ -33,8 +33,8 @@
 //!
 //! Matter registers native IPv4 and IPv6 UDP destination-port wake patterns
 //! through RegisterWakeKa. Until both registrations succeed, and while Matter
-//! is starting or commissioning, nestlocal declines sleep. These unicast
-//! patterns do not provide multicast discovery or scheduled subscription wakes.
+//! is starting or commissioning, nestlocal declines sleep. Matter's clock
+//! counts the time asleep (matter/timer.rs).
 //!
 //! Zigbee wakes the unit itself: the radio keeps routing while the i.MX
 //! sleeps and pulls nHOST_INT low for a message, which zbwake.ko makes a wake
@@ -400,6 +400,7 @@ impl SleepClient {
     #[zbus(name = "WakeUp")]
     async fn wake_up(&self, _reason: i32) -> (String, bool) {
         let (bus, on_wake, matter, ready) = (self.bus.clone(), self.on_wake.clone(), self.matter, self.ready.clone());
+        crate::matter::timer::resumed();
         tokio::spawn(async move {
             on_wake();
             release_when_idle(bus, matter, ready);
