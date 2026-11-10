@@ -33,11 +33,11 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 18] = [
+const REQUIRED: [&str; 19] = [
     "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
     "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
     "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
-    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl",
+    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so",
 ];
 
 fn firmware_missing(root: &Path) -> Vec<&'static str> {
@@ -258,6 +258,16 @@ fn nestlocal(root: &Path, out: &Path) {
     gzip(&data, &out.join("nestlocal.gz"));
 }
 
+/// The library nlsleepd preloads for Matter (platform/common/wakefilter).
+fn wake_filter(root: &Path, out: &Path) {
+    let library = root.join("build/wakefilter/libwakefilter.so");
+    println!("cargo:rerun-if-changed={}", library.display());
+    let data = fs::read(&library)
+        .unwrap_or_else(|_| panic!("build/wakefilter/libwakefilter.so is missing: build it first (utils/build-firmware.sh)"));
+    assert_eq!((&data[..6], data[16], data[18]), (&b"\x7fELF\x01\x01"[..], 3, 40), "libwakefilter.so is not an ARM shared library");
+    fs::write(out.join("libwakefilter.so"), data).unwrap();
+}
+
 fn custom_screen(root: &Path, out: &Path) {
     for name in ["custom-screen.o", "j49-rcs-screen.o"] {
         let object = root.join("build").join(name);
@@ -280,6 +290,7 @@ fn main() {
     nestlocal(&root, &out);
     doom(&root, &out);
     custom_screen(&root, &out);
+    wake_filter(&root, &out);
     // The gen3's radio image serves Thread and Zigbee alike, the gen2's
     // Thread image Thread alone; the Thread host tools beside them.
     for (dir, name, embedded) in [("build/radio", "radio.bin", "radio.bin"), ("build/radio", "radio.identity", "radio.identity"),

@@ -12,6 +12,8 @@ const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
 /// The j49 Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
+/// The library nlsleepd preloads for Matter, either generation's.
+pub const WAKE_FILTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libwakefilter.so"));
 
 fn gunzip(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
