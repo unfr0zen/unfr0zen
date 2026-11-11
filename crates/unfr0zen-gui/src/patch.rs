@@ -172,7 +172,7 @@ impl Form {
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
             entry_point: self.entry_point,
             doom: self.doom,
-            external_temperature: self.external_temperature,
+            external_temperature: self.external_temperature && self.supports_external_temperature(),
             // Only for the gen 2 the checkbox was offered for.
             dark_theme: self.dark_theme && self.device.or(self.last_device) == Some(Device::J49),
             ssh: self.ssh,
@@ -313,6 +313,35 @@ impl Form {
         }
     }
 
+    /// Whether the external temperature option applies: to a gen 2 or 3, and
+    /// to any unit while none is known.
+    fn supports_external_temperature(&self) -> bool {
+        matches!(self.device.or(self.last_device), None | Some(Device::Diamond3 | Device::J49))
+    }
+
+    /// Whether the external temperature checkbox can be ticked: a unit that
+    /// takes it, and an integration to send the temperatures through.
+    fn external_temperature_enabled(&self) -> bool {
+        self.supports_external_temperature() && (self.mqtt.on || self.matter.on || self.zigbee)
+    }
+
+    /// The external temperature checkbox's hint: why it is greyed out, else
+    /// what it does on the unit known. crate::checkbox greys itself out
+    /// without disabling the widget, so one hover text serves both.
+    fn external_temperature_hint(&self) -> &'static str {
+        if !self.supports_external_temperature() {
+            return crate::tr!("patch.external_temperature_unsupported_hint");
+        }
+        if !self.external_temperature_enabled() {
+            return crate::tr!("patch.external_temperature_needs_integration_hint");
+        }
+        match self.device.or(self.last_device) {
+            Some(Device::Diamond3) => crate::tr!("patch.external_temperature_ble_hint"),
+            Some(_) => crate::tr!("patch.external_temperature_hint"),
+            None => crate::tr!("patch.external_temperature_any_hint"),
+        }
+    }
+
     /// The advanced panel: the CLI's options a run rarely needs.
     /// The device a run is for: the one asked for, else the one on the bus.
     fn known_device(&self, bus: &Bus) -> Option<Device> {
@@ -384,20 +413,16 @@ impl Form {
         crate::section(ui, crate::tr!("patch.section.extras"));
         crate::checkbox(ui, self.holds_radio(), &mut self.wwn_boiler, crate::tr!("patch.wwn_boiler")).on_hover_text(
             crate::tr!("patch.wwn_boiler_hint"));
+        // Always shown, greyed out for a unit known to lack it; a gen 3 is told
+        // its Bluetooth goes. The device last seen keeps its wording while a
+        // unit is unplugged.
+        let label = match self.device.or(self.last_device) {
+            Some(Device::Diamond3) => crate::tr!("patch.external_temperature_ble"),
+            _ => crate::tr!("patch.external_temperature"),
+        };
+        crate::checkbox(ui, self.external_temperature_enabled(), &mut self.external_temperature, label)
+            .on_hover_text(self.external_temperature_hint());
         crate::checkbox(ui, true, &mut self.doom, crate::tr!("patch.doom")).on_hover_text(crate::tr!("patch.doom_hint"));
-        // Offered for the generations that have it; a gen 3 is told its
-        // Bluetooth goes. The device last seen keeps it while a unit is unplugged.
-        let device = self.device.or(self.last_device);
-        if matches!(device, Some(Device::Diamond3 | Device::J49)) {
-            let enabled = self.mqtt.on || self.matter.on || self.zigbee;
-            if device == Some(Device::Diamond3) {
-                crate::checkbox(ui, enabled, &mut self.external_temperature, crate::tr!("patch.external_temperature_ble"))
-                    .on_hover_text(crate::tr!("patch.external_temperature_ble_hint"));
-            } else {
-                crate::checkbox(ui, enabled, &mut self.external_temperature, crate::tr!("patch.external_temperature"))
-                    .on_hover_text(crate::tr!("patch.external_temperature_hint"));
-            }
-        }
         // Offered only with a gen 2 chosen or on the bus.
         if self.known_device(bus) == Some(Device::J49) {
             crate::checkbox(ui, true, &mut self.dark_theme, crate::tr!("patch.dark_theme"))
@@ -525,6 +550,59 @@ mod tests {
         form.device = Some(Device::J49);
         form.track_device(&gen3);
         assert_eq!(form.entry_point, EntryPoint::Auto, "another device asked for");
+    }
+
+    /// The texts the advanced panel draws for the form, with nothing on the bus.
+    fn advanced_texts(form: &mut Form) -> Vec<String> {
+        let context = egui::Context::default();
+        crate::install_fonts(&context);
+        let mut texts = Vec::new();
+        for _ in 0..2 {
+            let output = context.run_ui(egui::RawInput::default(), |ui| form.advanced_ui(ui, &Bus::Nothing));
+            texts = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            }).collect();
+        }
+        texts
+    }
+
+    #[test]
+    fn external_temperature_is_always_shown_and_enabled_only_for_a_unit_that_takes_it() {
+        let plain = crate::tr!("patch.external_temperature").to_string();
+        let ble = crate::tr!("patch.external_temperature_ble").to_string();
+        for (device, shown, enabled) in [(None, &plain, true), (Some(Device::J49), &plain, true), (Some(Device::Diamond3), &ble, true),
+                                         (Some(Device::Diamond), &plain, false), (Some(Device::Onyx), &plain, false)] {
+            let mut form = Form { mqtt: Toggle { on: true, value: "tcp://broker:1883".into() }, last_device: device, ..Form::default() };
+            let texts = advanced_texts(&mut form);
+            assert_eq!([&plain, &ble].into_iter().find(|label| texts.contains(label)), Some(shown), "{device:?}");
+            assert_eq!(form.external_temperature_enabled(), enabled, "{device:?}");
+        }
+        // Without an integration to send temperatures through, it waits greyed out.
+        assert!(!Form::default().external_temperature_enabled());
+    }
+
+    #[test]
+    fn external_temperatures_hint_says_why_it_is_greyed_out() {
+        let mqtt = || Toggle { on: true, value: "tcp://broker:1883".into() };
+        let hint = |form: Form| form.external_temperature_hint();
+        assert_eq!(hint(Form { last_device: Some(Device::Diamond3), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_needs_integration_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_unsupported_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond3), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_ble_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::J49), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), ..Form::default() }), crate::tr!("patch.external_temperature_any_hint"));
+    }
+
+    #[test]
+    fn external_temperature_reaches_the_run_only_for_a_unit_that_takes_it() {
+        for (device, sent) in [(None, true), (Some(Device::Diamond3), true), (Some(Device::J49), true), (Some(Device::Diamond), false), (Some(Device::Onyx), false)] {
+            let form = Form { mqtt: Toggle { on: true, value: "tcp://broker:1883".into() }, external_temperature: true, last_device: device, ..Form::default() };
+            assert_eq!(form.inputs().external_temperature, sent, "{device:?}");
+        }
     }
 
     #[test]

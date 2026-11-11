@@ -2194,7 +2194,8 @@ pub(crate) fn checkbox(ui: &mut egui::Ui, enabled: bool, checked: &mut bool, tex
     let font = egui::TextStyle::Body.resolve(ui.style());
     // The label is cut at the room there is, never run past it.
     let room = (ui.available_width() - BOX - 6.0).max(20.0);
-    let galley = truncated(ui, text.to_string(), font, egui::Color32::WHITE, room);
+    // Laid out uncoloured: the paint below picks the enabled or disabled colour.
+    let galley = truncated(ui, text.to_string(), font, egui::Color32::PLACEHOLDER, room);
     let height = ui.spacing().interact_size.y.max(BOX);
     let width = BOX + if text.is_empty() { 0.0 } else { 6.0 + galley.size().x };
     let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
@@ -2685,6 +2686,31 @@ mod tests {
         app.on_event(Event::Confirm("Erase the NAND?".into(), reply));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Restore NAND?"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_disabled_checkboxs_label_is_dimmed() {
+        // The label's colour, and the text colour of the panel it is in.
+        let colour = |enabled| {
+            let context = egui::Context::default();
+            install_fonts(&context);
+            let mut text_colour = egui::Color32::PLACEHOLDER;
+            let output = context.run_ui(egui::RawInput::default(), |ui| {
+                text_colour = ui.visuals().text_color();
+                checkbox(ui, enabled, &mut false, "Option");
+            });
+            let label = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Option" => {
+                    assert_eq!(text.galley.job.sections[0].format.color, egui::Color32::PLACEHOLDER);
+                    Some(text.fallback_color)
+                }
+                _ => None,
+            }).expect("the label is drawn");
+            (label, text_colour)
+        };
+        assert_eq!(colour(false).0, DIM);
+        let (label, text_colour) = colour(true);
+        assert_eq!(label, text_colour);
     }
 
     #[test]
