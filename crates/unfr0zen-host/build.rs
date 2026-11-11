@@ -11,7 +11,8 @@
 //! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/,
 //!   made again (`utils/build-firmware.sh nestlocal`) when its sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
-//!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way).
+//!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way),
+//!   with the title for the UNFR0ZEN screen's Doom page made from it.
 
 use std::env;
 use std::fs;
@@ -214,7 +215,62 @@ fn doom(root: &Path, out: &Path) {
     let deb = deb(root, out, DOOM_WAD_DEB, DOOM_WAD_URL, DOOM_WAD_DEB_SHA256);
     let wad = deb_file(&deb, "./usr/share/games/doom/doom1.wad");
     assert_eq!(sha256(&wad), DOOM_WAD_SHA256, "{DOOM_WAD_DEB} does not hold the v1.9 shareware DOOM1.WAD");
+    fs::write(out.join("doom-logo.png"), doom_logo(&wad)).unwrap();
     gzip(&wad, &out.join("doom1.wad.gz"));
+}
+
+/// Doom's title (the WAD's M_DOOM patch, in PLAYPAL's colours, transparent
+/// around it) at twice its size, 246x120, as an RGBA PNG. The art stays in
+/// the WAD, which is never committed.
+fn doom_logo(wad: &[u8]) -> Vec<u8> {
+    let i32_at = |at: usize| i32::from_le_bytes(wad[at..at + 4].try_into().unwrap()) as usize;
+    let (count, directory) = (i32_at(4), i32_at(8));
+    let lump = |name: &str| {
+        (0..count).map(|i| directory + i * 16).find(|&e| wad[e + 8..e + 16].split(|&b| b == 0).next() == Some(name.as_bytes()))
+            .map(|e| &wad[i32_at(e)..i32_at(e) + i32_at(e + 4)])
+            .unwrap_or_else(|| panic!("the WAD has no {name}"))
+    };
+    let (palette, patch) = (lump("PLAYPAL"), lump("M_DOOM"));
+    let half = |at: usize| u16::from_le_bytes([patch[at], patch[at + 1]]) as usize;
+    let (w, h) = (half(0), half(2));
+    let mut rgba = vec![0u8; w * h * 4];
+    for x in 0..w {
+        let mut at = u32::from_le_bytes(patch[8 + x * 4..12 + x * 4].try_into().unwrap()) as usize;
+        while patch[at] != 0xff {
+            let (top, n) = (patch[at] as usize, patch[at + 1] as usize);
+            for i in 0..n {
+                let c = patch[at + 3 + i] as usize * 3;
+                let o = ((top + i) * w + x) * 4;
+                rgba[o..o + 4].copy_from_slice(&[palette[c], palette[c + 1], palette[c + 2], 0xff]);
+            }
+            at += n + 4;
+        }
+    }
+    let mut raw = Vec::new();
+    for y in 0..h * 2 {
+        raw.push(0);
+        for x in 0..w * 2 {
+            let o = ((y / 2) * w + x / 2) * 4;
+            raw.extend_from_slice(&rgba[o..o + 4]);
+        }
+    }
+    let mut zlib = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+    zlib.write_all(&raw).unwrap();
+    let mut header = Vec::new();
+    header.extend_from_slice(&(w as u32 * 2).to_be_bytes());
+    header.extend_from_slice(&(h as u32 * 2).to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    for (kind, data) in [(&b"IHDR"[..], header), (b"IDAT", zlib.finish().unwrap()), (b"IEND", Vec::new())] {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(&data);
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        png.extend_from_slice(kind);
+        png.extend_from_slice(&data);
+        png.extend_from_slice(&crc.sum().to_be_bytes());
+    }
+    png
 }
 
 fn j49(root: &Path, out: &Path) {

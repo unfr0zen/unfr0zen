@@ -1,6 +1,11 @@
 // Doom on the Nest: doomgeneric's platform layer, one binary for the gen 3
 // and the gen 2, told apart by their panels.
 //
+// While Doom runs nlclient may keep running (nlclient's patch hands its
+// display over to the process in /var/run/unfr0zen/screen.owner): Doom
+// grabs the ring and the button, so nlclient sees none of them, and on the
+// way out puts back the page nlclient showed and pans to it.
+//
 // Display: the gen 3's 480x640 panel (fb0, 32 bpp, two pages) is mounted on
 // its side with the round face in its top 480x480; the gen 2's is the face
 // itself, 320x320 and upright. The 320x200 picture is scaled to the face's
@@ -61,6 +66,7 @@ _Static_assert(sizeof(struct input_event) == 16, "the kernel's input_event is 16
 #define REL_X 0x00 /* the gen 2's ring */
 #define REL_DIAL 0x07 /* the gen 3's */
 #define SND_TONE 0x02
+#define EVIOCGRAB 0x40044590
 #define BUTTON 28 /* evdev's KEY_ENTER, the gen 3's button */
 #define POWER 116 /* evdev's KEY_POWER, the gen 2's */
 
@@ -84,6 +90,9 @@ static int xrgb;
 static int *source;
 // The console's mode before Doom took it, put back on the way out.
 static int tty = -1, tty_mode = KD_TEXT;
+// The page shown before Doom took the display, and where it was.
+static uint8_t *before;
+static uint32_t before_y;
 
 static uint32_t now_ms(void)
 {
@@ -126,10 +135,15 @@ static void light_up(void)
     if (dir) closedir(dir);
 }
 
-static void restore_console(void)
+static void restore_display(void)
 {
     if (tty >= 0)
         ioctl(tty, KDSETMODE, tty_mode);
+    if (before) {
+        memcpy(fb + (size_t)before_y * stride, before, (size_t)var.yres * stride);
+        var.yoffset = before_y;
+        ioctl(fb_fd, FBIOPAN_DISPLAY, &var);
+    }
 }
 
 static void init_display(void)
@@ -164,13 +178,20 @@ static void init_display(void)
     size_t size = (size_t)fix.line_length * var.yres_virtual;
     fb = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
     if (fb == MAP_FAILED) die("fb0 mmap");
+    if (var.yoffset + var.yres <= var.yres_virtual && (before = malloc((size_t)var.yres * stride))) {
+        before_y = var.yoffset;
+        memcpy(before, fb + (size_t)before_y * stride, (size_t)var.yres * stride);
+    }
     memset(fb, 0, size);
     ioctl(fb_fd, FBIOBLANK, FB_BLANK_UNBLANK);
     light_up();
     // The console's text stays off the panel while Doom draws.
     tty = open("/dev/tty0", O_RDWR);
-    if (tty >= 0 && ioctl(tty, KDGETMODE, &tty_mode) == 0 && ioctl(tty, KDSETMODE, KD_GRAPHICS) == 0)
-        atexit(restore_console);
+    if (tty >= 0 && (ioctl(tty, KDGETMODE, &tty_mode) || ioctl(tty, KDSETMODE, KD_GRAPHICS))) {
+        close(tty);
+        tty = -1;
+    }
+    atexit(restore_display);
 
     // 320x200 across the face's width, centred.
     face = gen3 ? 480 : (int)var.xres;
@@ -267,7 +288,9 @@ static void init_input(void)
         char path[300];
         snprintf(path, sizeof path, "/dev/input/%s", e->d_name);
         int fd = open(path, O_RDONLY | O_NONBLOCK);
-        if (fd >= 0) inputs[n_inputs++] = fd;
+        if (fd < 0) continue;
+        ioctl(fd, EVIOCGRAB, 1);
+        inputs[n_inputs++] = fd;
     }
     closedir(dir);
 }
@@ -666,7 +689,7 @@ static void quit(int sig)
 {
     (void)sig;
     silence();
-    restore_console();
+    restore_display();
     _exit(0);
 }
 

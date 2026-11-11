@@ -34,6 +34,17 @@ extern const u8 layout_PRIMARY_SIZE __attribute__((visibility("hidden")));
 #define PRIMARY_SIZE LAYOUT(PRIMARY_SIZE)
 extern const u8 layout_RENAME_SYSCALL __attribute__((visibility("hidden")));
 #define RENAME_SYSCALL LAYOUT(RENAME_SYSCALL)
+/* The screen hand-over: 1 where nlclient presents through eglSwapBuffers
+ * (custom_swap, the keeper thread), 2 where it pans its own fb0 mapping
+ * (custom_flip, with the FB_ fields of its framebuffer object), 0 neither. */
+extern const u8 layout_HANDOVER __attribute__((visibility("hidden")));
+#define HANDOVER LAYOUT(HANDOVER)
+extern const u8 layout_FB_FD_OFFSET __attribute__((visibility("hidden")));
+#define FB_FD_OFFSET LAYOUT(FB_FD_OFFSET)
+extern const u8 layout_FB_MAP_OFFSET __attribute__((visibility("hidden")));
+#define FB_MAP_OFFSET LAYOUT(FB_MAP_OFFSET)
+extern const u8 layout_FB_SIZE_OFFSET __attribute__((visibility("hidden")));
+#define FB_SIZE_OFFSET LAYOUT(FB_SIZE_OFFSET)
 extern const u8 layout_SCREEN_SECOND_VPTR __attribute__((visibility("hidden")));
 #define SCREEN_SECOND_VPTR LAYOUT(SCREEN_SECOND_VPTR)
 extern const u8 layout_SCREEN_THIRD_VPTR __attribute__((visibility("hidden")));
@@ -109,6 +120,8 @@ extern int native_enqueue(void *, const void *, void *);
 #define CUSTOM_IMAGE "/nestlabs/share/images/G_unfr0zen_192px.png"
 #define FALLBACK_IMAGE CUSTOM_IMAGE
 #define MENU_GLYPH "/nestlabs/share/images/G_unfr0zen_glyph_80px.png"
+/* Doom's title, made from the WAD when the app installs Doom (246x120). */
+#define DOOM_IMAGE "/nestlabs/share/images/G_unfr0zen_doom.png"
 struct custom_state {
     struct custom_flow flow;
     int active;
@@ -293,18 +306,140 @@ static void downlink_activity(void *bucket) {
     if (count == sizeof(expires) && expires >= now && expires - now <= 10)
         wake_display(PTR(bucket, BUCKET_GLOBALS_OFFSET));
 }
+/* The screen hand-over. While the process named in SCREEN_OWNER is alive,
+ * nlclient keeps running, drawing and controlling the heating, but presents
+ * nothing: the display is the owner's (Doom). The check is live, so the
+ * owner's exit or death hands it straight back; a stale file does nothing.
+ * KEEPER holds the pid of the nlclient that hands over (and, kind 2, its
+ * globals after a space): the owner's launcher checks it. */
+extern u32 native_egl_swap(void *, void *);
+extern int native_open(const char *, int);
+extern int native_read(int, void *, unsigned int);
+extern int native_close(int);
+extern int native_kill(int, int);
+extern int native_pthread_create(void *, void *, void *(*)(void *), void *);
+extern int native_usleep(unsigned int);
+extern int native_getpid(void);
+#define SCREEN_OWNER "/var/run/unfr0zen/screen.owner"
+#define KEEPER "/var/run/unfr0zen/keeper.pid"
+/* The file's leading number, and the second, after a space, in *second. */
+static u32 read_numbers(const char *path, u32 *second) {
+    char text[32];
+    *second = 0;
+    int fd = native_open(path, 0);
+    if (fd < 0) return 0;
+    int count = native_read(fd, text, sizeof(text) - 1);
+    native_close(fd);
+    u32 first = 0;
+    int i = 0;
+    for (; i < count && text[i] >= '0' && text[i] <= '9'; i++) first = first * 10 + (text[i] - '0');
+    if (i < count && text[i] == ' ')
+        for (i++; i < count && text[i] >= '0' && text[i] <= '9'; i++) *second = *second * 10 + (text[i] - '0');
+    return first;
+}
+static int read_pid(const char *path) {
+    u32 unused;
+    return (int)read_numbers(path, &unused);
+}
+static unsigned int put_number(char *text, u32 value) {
+    unsigned int length = 0;
+    for (u32 rest = value; rest; rest /= 10) length++;
+    if (!length) length = 1;
+    for (unsigned int i = length; i > 0; value /= 10) text[--i] = '0' + value % 10;
+    return length;
+}
+static void write_numbers(const char *path, u32 first, u32 second, int both) {
+    char text[24];
+    unsigned int length = put_number(text, first);
+    if (both) {
+        text[length++] = ' ';
+        length += put_number(text + length, second);
+    }
+    void *file = native_fopen(path, "w");
+    if (!file) return;
+    native_fwrite(text, 1, length, file);
+    native_fclose(file);
+}
+static int screen_owned(void) {
+    int pid = read_pid(SCREEN_OWNER);
+    return pid > 1 && native_kill(pid, 0) == 0;
+}
+u32 custom_swap(void *display, void *surface) {
+    if (screen_owned()) return 1; /* EGL_TRUE: drawn, not shown */
+    return native_egl_swap(display, surface);
+}
+/* While the owner has the display, nlclient sees none of the ring and button
+ * (the owner grabs them), so it would let the display go dark. A thread of
+ * nlclient's own lights it every 2 s as a command from Home Assistant does
+ * (wake_display), and never sends nlclient input. */
+static void *keeper(void *globals) {
+    for (;;) {
+        native_usleep(2000000);
+        if (screen_owned()) wake_display(globals);
+    }
+    return 0;
+}
+/* Once per nlclient, from its first bucket commit or click on this screen
+ * (Doom is launched from it): the payload has no writable data, so the mark
+ * that the thread runs (kind 1), or where the flip finds the globals (kind
+ * 2), is KEEPER. */
+static void keeper_start(void *globals) {
+    if (!HANDOVER) return;
+    int pid = native_getpid();
+    if (read_pid(KEEPER) == pid) return;
+    write_numbers(KEEPER, pid, (u32)globals, HANDOVER == 2);
+    if (HANDOVER != 1) return;
+    unsigned int thread;
+    native_pthread_create(&thread, 0, keeper, globals);
+}
+/* The gen 2's flip. nlclient draws straight into its mapping of fb0's two
+ * pages, so while the display is owned that mapping is replaced, in place,
+ * by private memory: nlclient draws there unseen and nothing is panned.
+ * Each owned frame waits 100 ms, as the vsync it skips would have, so
+ * nlclient doesn't draw flat out. FB_PRIVATE marks the swap and holds when
+ * the display was last lit (every 2 s, as the keeper thread does); once
+ * the owner is gone, fb0 is mapped back. */
+extern int native_fb_flip(void *, void *);
+extern void *native_mmap(void *, unsigned int, int, int, int, int);
+#define FB_PRIVATE "/var/run/unfr0zen/fb.private"
+int custom_flip(void *fb, void *surface) {
+    void *map = PTR(fb, FB_MAP_OFFSET);
+    unsigned int size = WORD(fb, FB_SIZE_OFFSET);
+    if (!screen_owned()) {
+        /* PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED */
+        if (!rename_setting(FB_PRIVATE, "/var/run/unfr0zen/fb.shared"))
+            native_mmap(map, size, 3, 0x11, WORD(fb, FB_FD_OFFSET), 0);
+        return native_fb_flip(fb, surface);
+    }
+    u32 now = native_time(0), unused;
+    u32 lit = read_numbers(FB_PRIVATE, &unused);
+    if (!lit) {
+        /* MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS */
+        native_mmap(map, size, 3, 0x32, -1, 0);
+    }
+    if (!lit || now - lit >= 2) {
+        u32 globals;
+        if ((int)read_numbers(KEEPER, &globals) == native_getpid() && globals) wake_display((void *)globals);
+        write_numbers(FB_PRIVATE, now, 0, 0);
+    }
+    native_usleep(100000);
+    return 0;
+}
 int custom_device_commit(void *bucket) {
     int result = native_device_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
 int custom_shared_commit(void *bucket) {
     int result = native_shared_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
 int custom_schedule_commit(void *bucket) {
     int result = native_schedule_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
@@ -352,12 +487,13 @@ static void load_image(void *raw) {
     int error = 0;
     void *image = 0;
     enum custom_page page = state(raw)->flow.page;
-    const char *path = page == CUSTOM_MATTER_PAIRING ? "/var/run/unfr0zen/matter.png" : CUSTOM_IMAGE;
-    if (page == CUSTOM_HOME || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
+    const char *path = page == CUSTOM_MATTER_PAIRING ? "/var/run/unfr0zen/matter.png" :
+                       page == CUSTOM_DOOM ? DOOM_IMAGE : CUSTOM_IMAGE;
+    if (page == CUSTOM_HOME || page == CUSTOM_DOOM || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
         void *file = native_fopen(path, "rb");
         if (file) { native_fclose(file); image = native_image_load(path, &error); }
     }
-    if (image && (native_image_width(image) > 192 || native_image_height(image) > 192)) {
+    if (image && (native_image_width(image) > (page == CUSTOM_DOOM ? 256 : 192) || native_image_height(image) > 192)) {
         release_image(image); image = 0;
     }
     state(raw)->image_page = page;
@@ -411,7 +547,8 @@ static void show(void *raw, int opening) {
     float old_y = *(float *)((u8 *)raw + 8);
     int old_selection = WORD(common(raw), 0x7c);
     struct custom_state *s = state(raw);
-    if (s->flow.page != CUSTOM_HOME) {
+    int doom = s->flow.page == CUSTOM_DOOM;
+    if (s->flow.page != CUSTOM_HOME && !doom) {
         read_text(custom_matter(s->flow.page) ? "/var/run/unfr0zen/matter.status" :
                   "/var/run/unfr0zen/zigbee.status", s->status, sizeof(s->status), "Not enabled or service unavailable");
         if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
@@ -427,7 +564,7 @@ static void show(void *raw, int opening) {
     s->config.text_count = activity ? 3 : 2;
     /* Image slots scroll with the text. Matter labels its open window above
      * the code; image positions come from the native text-row anchors. */
-    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" :
+    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" : doom ? "\n\n\n\n\n" :
                        matter_pairing ? (s->activity_started ? "Ready to pair\n\n\n\n\n" :
                                          "Opening pairing...\n\n\n\n\n") : "");
     native_string_copy(&s->text[2], "");
@@ -440,6 +577,13 @@ static void show(void *raw, int opening) {
             native_string_copy(&s->choices[i], action == 0 ? "Matter" : action == 1 ? "Zigbee" :
                                action == 2 ? "Done" : action == 3 ? "Doom" : "");
         }
+    } else if (doom) {
+        native_string_copy(&s->text[1], s->flow.action_failed ? "Doom is unavailable. Try again." :
+                           "Doom runs full screen until you hold the button for three seconds.");
+        native_string_copy(&s->choices[0], "Play");
+        native_string_copy(&s->choices[1], "Back");
+        native_string_copy(&s->choices[2], "");
+        native_string_copy(&s->choices[3], "");
     } else {
         read_text("/var/run/unfr0zen/matter.code", s->code, sizeof(s->code), "Code unavailable");
         matter_detail(s);
@@ -497,6 +641,7 @@ static void show(void *raw, int opening) {
 }
 static int click(void *raw) {
     struct custom_state *s = state(raw);
+    keeper_start(PTR(common(raw), 0x8c));
     int selected = (int)WORD(common(raw), 0x7c);
     enum custom_page before = s->flow.page;
     int result;
@@ -518,7 +663,7 @@ static void refresh_status(void *raw) {
         if (s->features != enabled_features()) show(raw, 0);
         return;
     }
-    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM) return;
+    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM) return;
     enum custom_page before = s->flow.page;
     int pending = 0;
     if (s->flow.page == CUSTOM_MATTER_PAIRING) {
@@ -616,12 +761,13 @@ static int draw(void *raw, void *context) {
     void (*set_style)(void *, int, int) = PTR(PTR(base, 0), 0x5c);
     set_style(base, style, 255);
     int y = native_config_y(&s->config, context, WORD(base, 0xc), 0, 0x10000);
-    /* The home image starts at the viewport edge. Pairing headings and
+    /* The home and Doom images start at the viewport edge. Pairing headings and
      * text-only pages retain the circular display's safe inset. */
-    int inset = SCALED(s, s->flow.page == CUSTOM_HOME ? 240 : 120);
+    int pictured = s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_DOOM;
+    int inset = SCALED(s, pictured ? 240 : 120);
     y = (s->at_top ? 0 : (int)*(float *)((u8 *)raw + 8)) - y - inset;
     void *image = PTR(raw, 0xa0);
-    if (image && (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_MATTER_PAIRING)) {
+    if (image && (pictured || s->flow.page == CUSTOM_MATTER_PAIRING)) {
         void (*draw_image)(void *, int, int, void *, int) = PTR(PTR(context, 0), 0x50);
 #ifdef CUSTOM_TRACE
         if (!s->image_traced) {
@@ -635,10 +781,11 @@ static int draw(void *raw, void *context) {
         int text_y = native_config_y(&s->config, context, WORD(base, 0xc), 1, 0x10000);
         int width = native_image_width(image), height = native_image_height(image);
         /* The gen 2's text rows reach 12px further above their anchor. */
-        int top = y + text_y - SCALED(s, 24 + (custom_matter(s->flow.page) ? 10 : 0)) - (s->display >= 480 ? 0 : 12);
-        /* The home image is the gen 3's size, scaled down here; nestlocal
-         * draws the Matter code at the display's own. */
-        if (s->flow.page == CUSTOM_HOME && s->display != 480) {
+        int top = y + text_y - SCALED(s, 24 + (custom_matter(s->flow.page) ? 10 : s->flow.page == CUSTOM_DOOM ? 20 : 0))
+                  - (s->display >= 480 ? 0 : 12);
+        /* The home and Doom images are the gen 3's size, scaled down here;
+         * nestlocal draws the Matter code at the display's own. */
+        if (pictured && s->display != 480) {
             void (*draw_scaled)(void *, int, int, void *, int, int, void *) = PTR(PTR(context, 0), 0x60);
             draw_scaled(context, -SCALED(s, width) / 2, top - SCALED(s, height), image, style,
                         s->display * 0x10000 / 480, (void *)0);
