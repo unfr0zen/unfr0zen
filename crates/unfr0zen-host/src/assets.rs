@@ -31,7 +31,8 @@ pub fn nestlocal() -> Vec<u8> {
     gunzip(NESTLOCAL)
 }
 
-/// Doom for --doom: the game, its launcher and the shareware WAD.
+/// Doom for --doom: the game, its launcher, the shareware WAD and the title
+/// the UNFR0ZEN screen's Doom page shows.
 pub fn doom() -> Overlay {
     Overlay {
         directories: vec![("usr/share/doom".into(), 0o755)],
@@ -39,6 +40,7 @@ pub fn doom() -> Overlay {
             ("nestlabs/sbin/doom".into(), 0o755, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom.gz")))),
             ("nestlabs/sbin/unfr0zen-doom".into(), 0o755, include_bytes!("../../nestlocal/rootfs/doom.sh").to_vec()),
             ("usr/share/doom/doom1.wad".into(), 0o644, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom1.wad.gz")))),
+            ("nestlabs/share/images/G_unfr0zen_doom.png".into(), 0o644, include_bytes!(concat!(env!("OUT_DIR"), "/doom-logo.png")).to_vec()),
         ],
     }
 }

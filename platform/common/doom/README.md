@@ -1,7 +1,7 @@
 # Doom on the thermostat
 
 Doom (the shareware episode) on the gen 3 and the gen 2, in place of their UI: unfr0zen's
-`--doom` installs it, and **UNFR0ZEN → Doom** on the thermostat launches it.
+`--doom` installs it, and **UNFR0ZEN → Doom → Play** on the thermostat launches it.
 Built from [doomgeneric](https://github.com/ozkl/doomgeneric)
 (`platform/common/doom/doomgeneric`, a submodule) with this unit's platform layer,
 `doomgeneric_nest.c`, as one static ARMv7 binary for both (`build.sh`, run by
@@ -12,6 +12,9 @@ On the unit:
 - `/nestlabs/sbin/doom`, the game; `/usr/share/doom/doom1.wad`, the shareware
   WAD (fetched from Debian's `doom-wad-shareware` by the app's build and
   checked by SHA-256; never committed).
+- `/nestlabs/share/images/G_unfr0zen_doom.png`, the title the UNFR0ZEN
+  screen's Doom page shows: the WAD's `M_DOOM` at twice its size (246x120),
+  made by the app's build.
 - `/nestlabs/sbin/unfr0zen-doom` (`crates/nestlocal/rootfs/doom.sh`): takes
   the display from nlclient through its screen hand-over
   (`platform/common/nlclient/README.md`) and plays; with an nlclient patched

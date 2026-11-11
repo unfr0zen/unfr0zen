@@ -120,6 +120,8 @@ extern int native_enqueue(void *, const void *, void *);
 #define CUSTOM_IMAGE "/nestlabs/share/images/G_unfr0zen_192px.png"
 #define FALLBACK_IMAGE CUSTOM_IMAGE
 #define MENU_GLYPH "/nestlabs/share/images/G_unfr0zen_glyph_80px.png"
+/* Doom's title, made from the WAD when the app installs Doom (246x120). */
+#define DOOM_IMAGE "/nestlabs/share/images/G_unfr0zen_doom.png"
 struct custom_state {
     struct custom_flow flow;
     int active;
@@ -485,12 +487,13 @@ static void load_image(void *raw) {
     int error = 0;
     void *image = 0;
     enum custom_page page = state(raw)->flow.page;
-    const char *path = page == CUSTOM_MATTER_PAIRING ? "/var/run/unfr0zen/matter.png" : CUSTOM_IMAGE;
-    if (page == CUSTOM_HOME || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
+    const char *path = page == CUSTOM_MATTER_PAIRING ? "/var/run/unfr0zen/matter.png" :
+                       page == CUSTOM_DOOM ? DOOM_IMAGE : CUSTOM_IMAGE;
+    if (page == CUSTOM_HOME || page == CUSTOM_DOOM || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
         void *file = native_fopen(path, "rb");
         if (file) { native_fclose(file); image = native_image_load(path, &error); }
     }
-    if (image && (native_image_width(image) > 192 || native_image_height(image) > 192)) {
+    if (image && (native_image_width(image) > (page == CUSTOM_DOOM ? 256 : 192) || native_image_height(image) > 192)) {
         release_image(image); image = 0;
     }
     state(raw)->image_page = page;
@@ -544,7 +547,8 @@ static void show(void *raw, int opening) {
     float old_y = *(float *)((u8 *)raw + 8);
     int old_selection = WORD(common(raw), 0x7c);
     struct custom_state *s = state(raw);
-    if (s->flow.page != CUSTOM_HOME) {
+    int doom = s->flow.page == CUSTOM_DOOM;
+    if (s->flow.page != CUSTOM_HOME && !doom) {
         read_text(custom_matter(s->flow.page) ? "/var/run/unfr0zen/matter.status" :
                   "/var/run/unfr0zen/zigbee.status", s->status, sizeof(s->status), "Not enabled or service unavailable");
         if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
@@ -560,7 +564,7 @@ static void show(void *raw, int opening) {
     s->config.text_count = activity ? 3 : 2;
     /* Image slots scroll with the text. Matter labels its open window above
      * the code; image positions come from the native text-row anchors. */
-    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" :
+    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" : doom ? "\n\n\n\n\n" :
                        matter_pairing ? (s->activity_started ? "Ready to pair\n\n\n\n\n" :
                                          "Opening pairing...\n\n\n\n\n") : "");
     native_string_copy(&s->text[2], "");
@@ -573,6 +577,13 @@ static void show(void *raw, int opening) {
             native_string_copy(&s->choices[i], action == 0 ? "Matter" : action == 1 ? "Zigbee" :
                                action == 2 ? "Done" : action == 3 ? "Doom" : "");
         }
+    } else if (doom) {
+        native_string_copy(&s->text[1], s->flow.action_failed ? "Doom is unavailable. Try again." :
+                           "Doom runs full screen until you hold the button for three seconds.");
+        native_string_copy(&s->choices[0], "Play");
+        native_string_copy(&s->choices[1], "Back");
+        native_string_copy(&s->choices[2], "");
+        native_string_copy(&s->choices[3], "");
     } else {
         read_text("/var/run/unfr0zen/matter.code", s->code, sizeof(s->code), "Code unavailable");
         matter_detail(s);
@@ -652,7 +663,7 @@ static void refresh_status(void *raw) {
         if (s->features != enabled_features()) show(raw, 0);
         return;
     }
-    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM) return;
+    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM) return;
     enum custom_page before = s->flow.page;
     int pending = 0;
     if (s->flow.page == CUSTOM_MATTER_PAIRING) {
@@ -750,12 +761,13 @@ static int draw(void *raw, void *context) {
     void (*set_style)(void *, int, int) = PTR(PTR(base, 0), 0x5c);
     set_style(base, style, 255);
     int y = native_config_y(&s->config, context, WORD(base, 0xc), 0, 0x10000);
-    /* The home image starts at the viewport edge. Pairing headings and
+    /* The home and Doom images start at the viewport edge. Pairing headings and
      * text-only pages retain the circular display's safe inset. */
-    int inset = SCALED(s, s->flow.page == CUSTOM_HOME ? 240 : 120);
+    int pictured = s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_DOOM;
+    int inset = SCALED(s, pictured ? 240 : 120);
     y = (s->at_top ? 0 : (int)*(float *)((u8 *)raw + 8)) - y - inset;
     void *image = PTR(raw, 0xa0);
-    if (image && (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_MATTER_PAIRING)) {
+    if (image && (pictured || s->flow.page == CUSTOM_MATTER_PAIRING)) {
         void (*draw_image)(void *, int, int, void *, int) = PTR(PTR(context, 0), 0x50);
 #ifdef CUSTOM_TRACE
         if (!s->image_traced) {
@@ -769,10 +781,11 @@ static int draw(void *raw, void *context) {
         int text_y = native_config_y(&s->config, context, WORD(base, 0xc), 1, 0x10000);
         int width = native_image_width(image), height = native_image_height(image);
         /* The gen 2's text rows reach 12px further above their anchor. */
-        int top = y + text_y - SCALED(s, 24 + (custom_matter(s->flow.page) ? 10 : 0)) - (s->display >= 480 ? 0 : 12);
-        /* The home image is the gen 3's size, scaled down here; nestlocal
-         * draws the Matter code at the display's own. */
-        if (s->flow.page == CUSTOM_HOME && s->display != 480) {
+        int top = y + text_y - SCALED(s, 24 + (custom_matter(s->flow.page) ? 10 : s->flow.page == CUSTOM_DOOM ? 20 : 0))
+                  - (s->display >= 480 ? 0 : 12);
+        /* The home and Doom images are the gen 3's size, scaled down here;
+         * nestlocal draws the Matter code at the display's own. */
+        if (pictured && s->display != 480) {
             void (*draw_scaled)(void *, int, int, void *, int, int, void *) = PTR(PTR(context, 0), 0x60);
             draw_scaled(context, -SCALED(s, width) / 2, top - SCALED(s, height), image, style,
                         s->display * 0x10000 / 480, (void *)0);

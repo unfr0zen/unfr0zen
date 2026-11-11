@@ -3,7 +3,7 @@
 /* Firmware-independent navigation. Actions are acknowledged by nestlocal. */
 enum custom_page {
     CUSTOM_HOME, CUSTOM_MATTER, CUSTOM_ZIGBEE, CUSTOM_ZIGBEE_CONFIRM,
-    CUSTOM_MATTER_PAIRING, CUSTOM_ZIGBEE_PAIRING, CUSTOM_MATTER_CONFIRM
+    CUSTOM_MATTER_PAIRING, CUSTOM_ZIGBEE_PAIRING, CUSTOM_MATTER_CONFIRM, CUSTOM_DOOM
 };
 struct custom_flow { enum custom_page page; int parent_selection; int action_failed; };
 static int custom_activity(enum custom_page page) {
@@ -74,13 +74,16 @@ static int custom_choose(struct custom_flow *flow, int choice, int (*request)(in
     flow->action_failed = 0;
     if (flow->page == CUSTOM_HOME) {
         if (choice == 2) return 2;
-        /* nestlocal takes the screen over for Doom and gives it back after. */
         if (choice == 3) {
-            flow->action_failed = request(2) != 0;
+            flow->page = CUSTOM_DOOM;
             return 1;
         }
         flow->parent_selection = choice;
         flow->page = choice == 0 ? CUSTOM_MATTER : CUSTOM_ZIGBEE;
+    } else if (flow->page == CUSTOM_DOOM) {
+        /* Play: nestlocal gives Doom the screen, which comes back to this page. */
+        if (choice == 0) flow->action_failed = request(2) != 0;
+        else if (choice == 1) custom_back(flow);
     } else if (custom_activity(flow->page)) {
         if (choice == 0) custom_back(flow);
     } else if (flow->page == CUSTOM_MATTER_CONFIRM) {

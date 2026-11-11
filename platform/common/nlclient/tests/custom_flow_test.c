@@ -78,7 +78,11 @@ int main(void) {
     assert(custom_back(&f) && f.page == CUSTOM_ZIGBEE);
     custom_back(&f); assert(f.page == CUSTOM_HOME && f.parent_selection == 1);
     assert(!custom_back(&f)); assert(custom_choose(&f, 2, request) == 2);
-    last = -1; assert(custom_choose(&f, 3, request) == 1 && last == 2 && f.page == CUSTOM_HOME && !f.action_failed);
-    fail = 1; custom_choose(&f, 3, request); assert(f.action_failed && f.page == CUSTOM_HOME);
+    /* Doom opens its page; Play asks for the game and stays, Back goes home. */
+    last = -1; assert(custom_choose(&f, 3, request) == 1 && last == -1 && f.page == CUSTOM_DOOM);
+    assert(custom_choose(&f, 0, request) == 1 && last == 2 && f.page == CUSTOM_DOOM && !f.action_failed);
+    fail = 1; custom_choose(&f, 0, request); assert(f.action_failed && f.page == CUSTOM_DOOM);
+    fail = 0; assert(custom_choose(&f, 1, request) == 1 && f.page == CUSTOM_HOME && !f.action_failed);
+    custom_choose(&f, 3, request); assert(custom_back(&f) && f.page == CUSTOM_HOME);
     return 0;
 }
