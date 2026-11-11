@@ -32,10 +32,14 @@ const CMD_ERASE: &[u8; 4] = b"USBE";
 const CMD_ERROR: &[u8; 4] = b"USBe";
 const CMD_UNLOCK: &[u8; 4] = b"USBU";
 const UNLOCK_MAGIC: &[u8; 4] = b"ALL!";
-/// (NAND ID bytes 0-1, name, size, bus width)
-const CHIPS: [([u8; 2], &str, u64, u32); 2] = [
+/// (NAND ID bytes 0-1, name, size, bus width). Nest's own x-loader (5.9.4,
+/// drivers/mtd/nand/k9f1g08r0a.c) boots from the Micron, Spansion and Hynix
+/// parts; the Samsung is the development boards'.
+const CHIPS: [([u8; 2], &str, u64, u32); 4] = [
     ([0x2c, 0xba], "Micron MT29F2G16", 0x1000_0000, 16),
     ([0xec, 0xdc], "Samsung K9F4G08U0C", 0x2000_0000, 8),
+    ([0x01, 0xba], "Spansion 2 Gbit x16", 0x1000_0000, 16),
+    ([0xad, 0xbc], "Hynix 4 Gbit x16", 0x2000_0000, 16),
 ];
 /// The data sizes of the chips a j49 has.
 pub const CHIP_SIZES: [u64; 2] = [CHIPS[0].2, CHIPS[1].2];
@@ -273,6 +277,12 @@ mod tests {
         assert_eq!(flasher.idcode, Some(0x2b89_102f));
         let wrong = Flasher::connect(Scripted { replies: VecDeque::from([hello([0x2c, 0xba], 2 << 10)]), ..Default::default() });
         assert!(wrong.err().unwrap().to_string().contains("x16 but GPMC CS0 is x8"));
+        for (id, chip, size) in [([0x01, 0xba], "Spansion 2 Gbit x16, 256 MiB", 0x1000_0000), ([0xad, 0xbc], "Hynix 4 Gbit x16, 512 MiB", 0x2000_0000)] {
+            let flasher = Flasher::connect(Scripted { replies: VecDeque::from([hello(id, x16)]), ..Default::default() }).unwrap();
+            assert_eq!((flasher.chip(), flasher.size()), (chip, size));
+        }
+        let unknown = Flasher::connect(Scripted { replies: VecDeque::from([hello([0x98, 0xba], x16)]), ..Default::default() });
+        assert!(unknown.err().unwrap().to_string().contains("unknown NAND ID [98, ba"));
     }
 
     #[test]
