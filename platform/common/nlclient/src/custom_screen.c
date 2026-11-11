@@ -34,6 +34,17 @@ extern const u8 layout_PRIMARY_SIZE __attribute__((visibility("hidden")));
 #define PRIMARY_SIZE LAYOUT(PRIMARY_SIZE)
 extern const u8 layout_RENAME_SYSCALL __attribute__((visibility("hidden")));
 #define RENAME_SYSCALL LAYOUT(RENAME_SYSCALL)
+/* The screen hand-over: 1 where nlclient presents through eglSwapBuffers
+ * (custom_swap, the keeper thread), 2 where it pans its own fb0 mapping
+ * (custom_flip, with the FB_ fields of its framebuffer object), 0 neither. */
+extern const u8 layout_HANDOVER __attribute__((visibility("hidden")));
+#define HANDOVER LAYOUT(HANDOVER)
+extern const u8 layout_FB_FD_OFFSET __attribute__((visibility("hidden")));
+#define FB_FD_OFFSET LAYOUT(FB_FD_OFFSET)
+extern const u8 layout_FB_MAP_OFFSET __attribute__((visibility("hidden")));
+#define FB_MAP_OFFSET LAYOUT(FB_MAP_OFFSET)
+extern const u8 layout_FB_SIZE_OFFSET __attribute__((visibility("hidden")));
+#define FB_SIZE_OFFSET LAYOUT(FB_SIZE_OFFSET)
 extern const u8 layout_SCREEN_SECOND_VPTR __attribute__((visibility("hidden")));
 #define SCREEN_SECOND_VPTR LAYOUT(SCREEN_SECOND_VPTR)
 extern const u8 layout_SCREEN_THIRD_VPTR __attribute__((visibility("hidden")));
@@ -293,18 +304,140 @@ static void downlink_activity(void *bucket) {
     if (count == sizeof(expires) && expires >= now && expires - now <= 10)
         wake_display(PTR(bucket, BUCKET_GLOBALS_OFFSET));
 }
+/* The screen hand-over. While the process named in SCREEN_OWNER is alive,
+ * nlclient keeps running, drawing and controlling the heating, but presents
+ * nothing: the display is the owner's (Doom). The check is live, so the
+ * owner's exit or death hands it straight back; a stale file does nothing.
+ * KEEPER holds the pid of the nlclient that hands over (and, kind 2, its
+ * globals after a space): the owner's launcher checks it. */
+extern u32 native_egl_swap(void *, void *);
+extern int native_open(const char *, int);
+extern int native_read(int, void *, unsigned int);
+extern int native_close(int);
+extern int native_kill(int, int);
+extern int native_pthread_create(void *, void *, void *(*)(void *), void *);
+extern int native_usleep(unsigned int);
+extern int native_getpid(void);
+#define SCREEN_OWNER "/var/run/unfr0zen/screen.owner"
+#define KEEPER "/var/run/unfr0zen/keeper.pid"
+/* The file's leading number, and the second, after a space, in *second. */
+static u32 read_numbers(const char *path, u32 *second) {
+    char text[32];
+    *second = 0;
+    int fd = native_open(path, 0);
+    if (fd < 0) return 0;
+    int count = native_read(fd, text, sizeof(text) - 1);
+    native_close(fd);
+    u32 first = 0;
+    int i = 0;
+    for (; i < count && text[i] >= '0' && text[i] <= '9'; i++) first = first * 10 + (text[i] - '0');
+    if (i < count && text[i] == ' ')
+        for (i++; i < count && text[i] >= '0' && text[i] <= '9'; i++) *second = *second * 10 + (text[i] - '0');
+    return first;
+}
+static int read_pid(const char *path) {
+    u32 unused;
+    return (int)read_numbers(path, &unused);
+}
+static unsigned int put_number(char *text, u32 value) {
+    unsigned int length = 0;
+    for (u32 rest = value; rest; rest /= 10) length++;
+    if (!length) length = 1;
+    for (unsigned int i = length; i > 0; value /= 10) text[--i] = '0' + value % 10;
+    return length;
+}
+static void write_numbers(const char *path, u32 first, u32 second, int both) {
+    char text[24];
+    unsigned int length = put_number(text, first);
+    if (both) {
+        text[length++] = ' ';
+        length += put_number(text + length, second);
+    }
+    void *file = native_fopen(path, "w");
+    if (!file) return;
+    native_fwrite(text, 1, length, file);
+    native_fclose(file);
+}
+static int screen_owned(void) {
+    int pid = read_pid(SCREEN_OWNER);
+    return pid > 1 && native_kill(pid, 0) == 0;
+}
+u32 custom_swap(void *display, void *surface) {
+    if (screen_owned()) return 1; /* EGL_TRUE: drawn, not shown */
+    return native_egl_swap(display, surface);
+}
+/* While the owner has the display, nlclient sees none of the ring and button
+ * (the owner grabs them), so it would let the display go dark. A thread of
+ * nlclient's own lights it every 2 s as a command from Home Assistant does
+ * (wake_display), and never sends nlclient input. */
+static void *keeper(void *globals) {
+    for (;;) {
+        native_usleep(2000000);
+        if (screen_owned()) wake_display(globals);
+    }
+    return 0;
+}
+/* Once per nlclient, from its first bucket commit or click on this screen
+ * (Doom is launched from it): the payload has no writable data, so the mark
+ * that the thread runs (kind 1), or where the flip finds the globals (kind
+ * 2), is KEEPER. */
+static void keeper_start(void *globals) {
+    if (!HANDOVER) return;
+    int pid = native_getpid();
+    if (read_pid(KEEPER) == pid) return;
+    write_numbers(KEEPER, pid, (u32)globals, HANDOVER == 2);
+    if (HANDOVER != 1) return;
+    unsigned int thread;
+    native_pthread_create(&thread, 0, keeper, globals);
+}
+/* The gen 2's flip. nlclient draws straight into its mapping of fb0's two
+ * pages, so while the display is owned that mapping is replaced, in place,
+ * by private memory: nlclient draws there unseen and nothing is panned.
+ * Each owned frame waits 100 ms, as the vsync it skips would have, so
+ * nlclient doesn't draw flat out. FB_PRIVATE marks the swap and holds when
+ * the display was last lit (every 2 s, as the keeper thread does); once
+ * the owner is gone, fb0 is mapped back. */
+extern int native_fb_flip(void *, void *);
+extern void *native_mmap(void *, unsigned int, int, int, int, int);
+#define FB_PRIVATE "/var/run/unfr0zen/fb.private"
+int custom_flip(void *fb, void *surface) {
+    void *map = PTR(fb, FB_MAP_OFFSET);
+    unsigned int size = WORD(fb, FB_SIZE_OFFSET);
+    if (!screen_owned()) {
+        /* PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED */
+        if (!rename_setting(FB_PRIVATE, "/var/run/unfr0zen/fb.shared"))
+            native_mmap(map, size, 3, 0x11, WORD(fb, FB_FD_OFFSET), 0);
+        return native_fb_flip(fb, surface);
+    }
+    u32 now = native_time(0), unused;
+    u32 lit = read_numbers(FB_PRIVATE, &unused);
+    if (!lit) {
+        /* MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS */
+        native_mmap(map, size, 3, 0x32, -1, 0);
+    }
+    if (!lit || now - lit >= 2) {
+        u32 globals;
+        if ((int)read_numbers(KEEPER, &globals) == native_getpid() && globals) wake_display((void *)globals);
+        write_numbers(FB_PRIVATE, now, 0, 0);
+    }
+    native_usleep(100000);
+    return 0;
+}
 int custom_device_commit(void *bucket) {
     int result = native_device_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
 int custom_shared_commit(void *bucket) {
     int result = native_shared_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
 int custom_schedule_commit(void *bucket) {
     int result = native_schedule_commit(bucket);
+    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
     downlink_activity(bucket);
     return result;
 }
@@ -497,6 +630,7 @@ static void show(void *raw, int opening) {
 }
 static int click(void *raw) {
     struct custom_state *s = state(raw);
+    keeper_start(PTR(common(raw), 0x8c));
     int selected = (int)WORD(common(raw), 0x7c);
     enum custom_page before = s->flow.page;
     int result;

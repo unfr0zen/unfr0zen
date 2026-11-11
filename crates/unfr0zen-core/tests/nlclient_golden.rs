@@ -28,6 +28,11 @@ fn goldens() -> Vec<Value> {
         .map(|p| serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap())
         .collect()
 }
+/// The hand-over's symbols, as the builder links them for the golden's build.
+fn handover(golden: &Value) -> BTreeMap<String, u32> {
+    let discovery: nlclient::discovery::Discovery = serde_json::from_value(golden["discovery"].clone()).unwrap();
+    nlclient::discovery::handover_externals(&discovery)
+}
 fn object() -> Option<Vec<u8>> {
     let p = std::env::var_os("NLCLIENT_OBJECT")
         .map(PathBuf::from)
@@ -53,6 +58,7 @@ fn embedded_object_links_to_golden_payloads() {
         let layout: BTreeMap<String, u32> =
             serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
         externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
+        externals.extend(handover(&golden));
         let linked = linker::link(
             &object,
             golden["patch"]["payload_address"].as_u64().unwrap() as u32,
@@ -179,6 +185,7 @@ fn linker_matches_lld_using_the_same_object() {
         let layout: BTreeMap<String, u32> =
             serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
         externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
+        externals.extend(handover(&golden));
         let address = golden["patch"]["payload_address"].as_u64().unwrap() as u32;
         let linked = linker::link(&object, address, &externals).unwrap();
         let script=format!("{}\nSECTIONS {{ . = {address:#x}; .text : {{ *(.text*) }} .rodata : {{ *(.rodata*) }} .data : {{ *(.data*) *(.got*) }} .bss : {{ *(.bss*) *(COMMON) }} /DISCARD/ : {{ *(.comment) *(.ARM.exidx*) *(.ARM.extab*) }} }}",externals.iter().map(|(k,v)|format!("{k} = {v:#x};")).collect::<Vec<_>>().join("\n"));
@@ -353,6 +360,7 @@ fn unsupported_relocations_and_branch_veneers_are_refused() {
     let layout: BTreeMap<String, u32> =
         serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
     externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
+    externals.extend(handover(&golden));
     let mut changed = object.clone();
     let reloc = sections(&object)
         .into_iter()

@@ -20,6 +20,89 @@ const IMPORTS: [(&str, &str); 10] = [
     ("memcpy", "memcpy"),
     ("memset", "memset"),
 ];
+/// The screen hand-over's imports: those both kinds use, then each kind's.
+const HANDOVER_IMPORTS: [(&str, &str); 6] = [
+    ("native_open", "open"),
+    ("native_read", "read"),
+    ("native_close", "close"),
+    ("native_kill", "kill"),
+    ("native_usleep", "usleep"),
+    ("native_getpid", "getpid"),
+];
+const EGL_IMPORTS: [(&str, &str); 2] = [
+    ("native_egl_swap", "eglSwapBuffers"),
+    ("native_pthread_create", "pthread_create"),
+];
+const FRAMEBUFFER_IMPORTS: [(&str, &str); 1] = [("native_mmap", "mmap")];
+/// The screen hand-over this build gets (layout_HANDOVER): 1 where nlclient
+/// presents through eglSwapBuffers (the gen 3), 2 where it pans its own
+/// framebuffer mapping (the gen 2's nlARMFramebuffer), 0 without either.
+pub fn handover(discovery: &Discovery) -> u32 {
+    let has = |list: &[(&str, &str)]| list.iter().all(|(key, _)| discovery.native_api.contains_key(*key));
+    if !has(&HANDOVER_IMPORTS) {
+        0
+    } else if has(&EGL_IMPORTS) && discovery.anchors.contains_key("swap_call_slot") {
+        1
+    } else if has(&FRAMEBUFFER_IMPORTS) && discovery.framebuffer.is_some() {
+        2
+    } else {
+        0
+    }
+}
+
+/// What the screen's hand-over links against, besides the build's natives:
+/// its kind, and the natives and fields of a kind the build hasn't as 0,
+/// never used.
+pub fn handover_externals(discovery: &Discovery) -> BTreeMap<String, u32> {
+    let kind = handover(discovery);
+    let mut externals: BTreeMap<String, u32> = HANDOVER_IMPORTS
+        .iter()
+        .chain(&EGL_IMPORTS)
+        .chain(&FRAMEBUFFER_IMPORTS)
+        .filter(|(key, _)| !discovery.native_api.contains_key(*key))
+        .map(|(key, _)| ((*key).to_owned(), 0))
+        .collect();
+    let fb = discovery.framebuffer.as_ref().filter(|_| kind == 2);
+    externals.insert("native_fb_flip".into(), fb.map_or(0, |f| f.flip));
+    externals.insert("layout_FB_FD_OFFSET".into(), fb.map_or(0, |f| f.fd));
+    externals.insert("layout_FB_MAP_OFFSET".into(), fb.map_or(0, |f| f.map));
+    externals.insert("layout_FB_SIZE_OFFSET".into(), fb.map_or(0, |f| f.size));
+    externals.insert("layout_HANDOVER".into(), kind);
+    externals
+}
+
+/// The gen 2's display, nlARMFramebuffer: nlclient draws into the two pages
+/// of its own mapping of fb0 and pans between them in the vtable's third
+/// method (flip). The patch routes that slot through custom_flip, which
+/// needs the object's fields its init stores: fb0's descriptor, and the
+/// mapping's address and length.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Framebuffer {
+    pub slot: u32,
+    pub flip: u32,
+    pub fd: u32,
+    pub map: u32,
+    pub size: u32,
+}
+
+/// The one call that presents nlclient's frames: a BL to eglSwapBuffers's
+/// PLT stub. More than one, or none, and the hand-over can't be made whole.
+fn swap_call(elf: &Elf, stub: u32) -> Result<u32> {
+    let text = elf.section(".text")?;
+    let mut sites = Vec::new();
+    for off in (text.offset..text.offset + text.size).step_by(4) {
+        let w = word(elf.data, off)?;
+        if w >> 24 != 0xeb {
+            continue;
+        }
+        let pc = text.address + (off - text.offset) as u32;
+        let delta = (((w & 0xff_ffff) << 8) as i32) >> 6;
+        if pc.wrapping_add(8).wrapping_add(delta as u32) == stub {
+            sites.push(pc);
+        }
+    }
+    unique(sites, "eglSwapBuffers calls")
+}
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Discovery {
     pub factory: u32,
@@ -38,6 +121,9 @@ pub struct Discovery {
     pub variant: Option<String>,
     pub stock_sha256: String,
     pub validation: String,
+    /// The gen 2's framebuffer, for its screen hand-over; absent elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framebuffer: Option<Framebuffer>,
 }
 pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<()> {
     if ok {
@@ -243,6 +329,16 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     }
     if let Some(&rename) = imports.get("rename") {
         api.insert("native_rename".into(), rename);
+    }
+    // The screen hand-over: nlclient presents each frame through one call
+    // of eglSwapBuffers, which the payload wraps (custom_swap), and a thread
+    // of its own keeps the display lit. The gen 2's nlclient draws straight
+    // to the framebuffer, with no EGL and no pthread_create: it is patched
+    // without the hand-over (handover()).
+    for (key, name) in HANDOVER_IMPORTS.iter().chain(&EGL_IMPORTS).chain(&FRAMEBUFFER_IMPORTS) {
+        if let Some(&address) = imports.get(*name) {
+            api.insert((*key).to_owned(), address);
+        }
     }
     let table = registry(&elf)?;
     require(
@@ -511,6 +607,12 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     api.insert("native_scroll_target".into(), select[1]);
     layout.insert("GLOBALS_TIMER_OFFSET".into(), timer(&elf, &arm, &imports)?);
     downlink(&elf, &arm, &imports, &mut api, &mut layout, &mut anchors)?;
+    let framebuffer = if EGL_IMPORTS.iter().all(|(key, _)| api.contains_key(*key)) {
+        anchors.insert("swap_call_slot".into(), swap_call(&elf, api["native_egl_swap"])?);
+        None
+    } else {
+        framebuffer(&elf, &arm, &imports).ok()
+    };
     require(
         layout["LAYER_VTABLE_SIZE"].max(layout["SCREEN_VTABLE_SIZE"]) <= 0x400,
         "vtable larger than the payload holds",
@@ -574,6 +676,7 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         variant,
         stock_sha256: sha256_hex(data),
         validation,
+        framebuffer,
     };
     Ok((found, objection))
 }
@@ -630,14 +733,9 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
     }
     Ok(())
 }
-fn downlink(
-    elf: &Elf,
-    arm: &Arm,
-    imports: &BTreeMap<String, u32>,
-    api: &mut BTreeMap<String, u32>,
-    layout: &mut BTreeMap<String, u32>,
-    anchors: &mut BTreeMap<String, u32>,
-) -> Result<()> {
+/// The first virtual slot of the primary vtable of the class whose RTTI
+/// name (as mangled, length first) is `name`.
+fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
     let refs = |value: u32| -> Result<Vec<u32>> {
         let mut result = Vec::new();
         for s in elf
@@ -653,39 +751,108 @@ fn downlink(
         }
         Ok(result)
     };
+    let needle = format!("{name}\0");
+    let off = unique(
+        elf.data
+            .windows(needle.len())
+            .enumerate()
+            .filter(|(_, b)| *b == needle.as_bytes())
+            .map(|(off, _)| off),
+        &format!("{name} RTTI name"),
+    )?;
+    let address = unique(
+        elf.sections
+            .iter()
+            .filter(|s| s.address != 0 && s.offset <= off && off < s.offset + s.size)
+            .map(|s| s.address + (off - s.offset) as u32),
+        &format!("{name} RTTI address"),
+    )?;
+    let mut vtables = Vec::new();
+    for r in refs(address)? {
+        for p in refs(r - 4)? {
+            if elf.read(p - 4)? == 0 {
+                vtables.push(p + 4);
+            }
+        }
+    }
+    unique(vtables, &format!("{name} primary vtable"))
+}
+/// The gen 2's nlARMFramebuffer (Framebuffer). Its init maps fb0 with
+/// `mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)` and stores the
+/// address; its flip pans with FBIOPAN_DISPLAY. Only an EXEC build: a PIE's
+/// vtable slot would need a relocation the patch doesn't write.
+fn framebuffer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<Framebuffer> {
+    require(half(elf.data, 16)? == 2, "framebuffer hand-over needs an EXEC build")?;
+    let (mmap, ioctl) = match (imports.get("mmap"), imports.get("ioctl")) {
+        (Some(&m), Some(&i)) => (m, i),
+        _ => return device("framebuffer hand-over needs mmap and ioctl"),
+    };
+    let vtable = primary_vtable(elf, "16nlARMFramebuffer")?;
+    let (init, slot) = (elf.read(vtable)?, vtable + 8);
+    let flip = elf.read(slot)?;
+    let target = |i: &Ins| i.ops.first().and_then(Op::imm);
+    let code = arm.body(flip)?;
+    let pan = code.iter().position(|i| i.name == "movw" && i.text.ends_with("#0x4606"));
+    require(
+        pan.is_some_and(|p| code[p..].iter().any(|i| matches!(i.name.as_str(), "bl" | "b") && target(i) == Some(ioctl))),
+        "framebuffer flip does not pan",
+    )?;
+    let code = arm.code(init, None)?;
+    let call = unique(
+        code.iter().enumerate().filter(|(_, i)| i.name == "bl" && target(i) == Some(mmap)).map(|(n, _)| n),
+        "framebuffer mmap call",
+    )?;
+    // A store of `reg` into the object (the base register `this` is in).
+    let field = |i: &Ins, reg: &str| -> Option<(String, u32)> {
+        let (base, disp, indexed) = i.ops.get(1)?.mem()?;
+        (i.name == "str" && i.ops.first()?.reg() == Some(reg) && base != "sp" && !indexed && disp > 0)
+            .then(|| (base.to_owned(), disp as u32))
+    };
+    let (this, map) = code[call + 1..code.len().min(call + 5)]
+        .iter()
+        .find_map(|i| field(i, "r0"))
+        .ok_or_else(|| crate::Error::Device("framebuffer mapping not stored".into()))?;
+    let before = &code[call.saturating_sub(12)..call];
+    let size = before
+        .iter()
+        .rev()
+        .find_map(|i| field(i, "r1").filter(|(b, _)| *b == this))
+        .ok_or_else(|| crate::Error::Device("framebuffer mapping length not stored".into()))?
+        .1;
+    // The fifth argument, fb0's descriptor, goes on the stack from a field.
+    let stacked = before
+        .iter()
+        .rev()
+        .find(|i| i.name == "str" && i.ops.get(1).and_then(Op::mem) == Some(("sp", 0, false)))
+        .and_then(|i| i.ops.first()?.reg())
+        .ok_or_else(|| crate::Error::Device("framebuffer descriptor not passed".into()))?;
+    let fd = before
+        .iter()
+        .rev()
+        .find_map(|i| {
+            let (base, disp, indexed) = i.ops.get(1)?.mem()?;
+            (i.name == "ldr" && i.ops.first()?.reg() == Some(stacked) && base == this && !indexed)
+                .then_some(disp as u32)
+        })
+        .ok_or_else(|| crate::Error::Device("framebuffer descriptor field not found".into()))?;
+    Ok(Framebuffer { slot, flip, fd, map, size })
+}
+fn downlink(
+    elf: &Elf,
+    arm: &Arm,
+    imports: &BTreeMap<String, u32>,
+    api: &mut BTreeMap<String, u32>,
+    layout: &mut BTreeMap<String, u32>,
+    anchors: &mut BTreeMap<String, u32>,
+) -> Result<()> {
     for (bucket, name) in [
         ("device", "16nlCZDeviceBucket"),
         ("shared", "16nlCZSharedBucket"),
         ("schedule", "29nlCZTemperatureScheduleBucket"),
         ("view_handler", "12nlClientView"),
     ] {
-        let needle = format!("{name}\0");
-        let off = unique(
-            elf.data
-                .windows(needle.len())
-                .enumerate()
-                .filter(|(_, b)| *b == needle.as_bytes())
-                .map(|(off, _)| off),
-            "bucket RTTI name",
-        )?;
-        let address = unique(
-            elf.sections
-                .iter()
-                .filter(|s| s.address != 0 && s.offset <= off && off < s.offset + s.size)
-                .map(|s| s.address + (off - s.offset) as u32),
-            "bucket RTTI address",
-        )?;
-        let mut vtables = Vec::new();
-        for r in refs(address)? {
-            for p in refs(r - 4)? {
-                if elf.read(p - 4)? == 0 {
-                    vtables.push(p + 4);
-                }
-            }
-        }
         // Bucket finish-parsing and view event-dispatch virtual slots.
-        let slot = unique(vtables, "bucket primary vtable")?
-            + if bucket == "view_handler" { 0x10 } else { 0x48 };
+        let slot = primary_vtable(elf, name)? + if bucket == "view_handler" { 0x10 } else { 0x48 };
         let function = elf.read(slot)?;
         if bucket == "view_handler" {
             let code = arm.code(function, None)?;

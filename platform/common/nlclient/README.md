@@ -58,6 +58,33 @@ UNFR0ZEN is at settings-menu index 1, after the thermostat/Back entry at 0.
 Its carousel tile displays the glyph above UNFR0ZEN.
 The other items retain their order.
 
+## Screen hand-over
+
+While the process whose pid is in `/var/run/unfr0zen/screen.owner` is alive,
+nlclient keeps running (and controlling the heating) but shows nothing, so
+that process owns the display; Doom's launcher uses it. The check is live
+(`kill(pid, 0)` on every frame), so the display returns to nlclient the
+moment the owner exits or dies; a stale file does nothing. Discovery picks
+one of two kinds (`layout_HANDOVER`), or none, which patches without it:
+
+- **1, EGL** (gen 3 from 6.x): nlclient's one `eglSwapBuffers` call (the
+  `swap_call_slot` anchor) goes through `custom_swap`, which skips presenting
+  while the display is owned. A thread of nlclient's own lights the display
+  every 2 s meanwhile, as a command from Home Assistant does, since the
+  owner grabs the ring and the button.
+- **2, framebuffer** (gen 2, and the 2019 gen 3): nlclient draws straight into
+  its own mapping of fb0's two pages (`nlARMFramebuffer`, found by its RTTI)
+  and pans between them in its vtable's third method. That slot goes through
+  `custom_flip`: while the display is owned it maps private memory over that
+  mapping in place (`mmap` `MAP_FIXED`), so nlclient draws unseen, pans
+  nothing, waits 100 ms a frame and lights the display every 2 s; then it
+  maps fb0 back. The mapping's descriptor, address and length are the fields
+  the class's init stores (`discovery.framebuffer`).
+
+nlclient leaves its pid in `/var/run/unfr0zen/keeper.pid` (kind 2: and its
+globals) at its first bucket commit or click on this screen; a launcher
+whose nlclient is not that pid stops nlclient instead.
+
 ## Gen 2 external temperature input
 
 Selecting external temperature on j49 enables the native RCS input and
