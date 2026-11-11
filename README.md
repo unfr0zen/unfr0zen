@@ -224,7 +224,6 @@ for any data loss, a bricked thermostat, damage to your heating or cooling
 system, or anything else that happens to your device. By using unfr0zen you
 accept full responsibility for the result.
 - Modifying the thermostat voids its warranty and may break Google's services for it.
-- Doom takes over the UI: while it runs the thermostat does not control the heating or cooling.
 - Matter uses the test vendor ID (0xFFF1) and test attestation; controllers treat the unit as uncertified.
 - unfr0zen is not affiliated with, endorsed or sponsored by Google LLC or Nest Labs.
   Nest and Nest Learning Thermostat are trademarks of Google LLC.

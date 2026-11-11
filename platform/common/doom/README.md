@@ -12,9 +12,12 @@ On the unit:
 - `/nestlabs/sbin/doom`, the game; `/usr/share/doom/doom1.wad`, the shareware
   WAD (fetched from Debian's `doom-wad-shareware` by the app's build and
   checked by SHA-256; never committed).
-- `/nestlabs/sbin/unfr0zen-doom` (`crates/nestlocal/rootfs/doom.sh`): stops
-  nlclient, plays, starts nlclient again. nestlocal runs it when the screen
-  leaves `/var/run/unfr0zen/doom.request` (`crates/nestlocal/src/doom.rs`).
+- `/nestlabs/sbin/unfr0zen-doom` (`crates/nestlocal/rootfs/doom.sh`): takes
+  the display from nlclient through its screen hand-over
+  (`platform/common/nlclient/README.md`) and plays; with an nlclient patched
+  before the hand-over, it stops nlclient, plays and starts it again.
+  nestlocal runs it when the screen leaves `/var/run/unfr0zen/doom.request`
+  (`crates/nestlocal/src/doom.rs`).
 - `/media/data/doom`: Doom's settings, saves and log.
 
 The game:
@@ -28,5 +31,7 @@ The game:
   seconds quits.
 - Sound: the unit has no audio output but its piezo, one tone at a time.
   Effects are Doom's PC speaker sounds; music is each song's highest note.
-- While Doom runs nlclient is stopped, so the thermostat does not control the
-  heating or cooling.
+- While Doom runs nlclient keeps running and controlling the heating or
+  cooling: Doom grabs the ring and the button, so nlclient sees none of
+  them, and on the way out Doom puts back the page nlclient showed. An
+  nlclient patched before the hand-over is stopped instead.
