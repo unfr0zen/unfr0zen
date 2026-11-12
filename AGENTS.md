@@ -14,13 +14,14 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
   - `diamond3/`: the gen 3. `bootstrap/` (ROM stage and boot wrapper), `uboot/` (recovery U-Boot submodule, patches and build scripts), `initramfs-init`, `zbwake/` (kernel wake module for each gen 3 release).
   - `j49/`: the gen 2. x-loader build and bare-metal NAND flasher, loaded through x-loader's USB loader, its USB-serial kernel, `zbwake/` module, and dropbear for `--ssh`.
 - `utils/`: `build-firmware.sh` builds all of `platform/` into `build/`; `make_macos_app.sh` and `install_linux.sh` package the app. `ci/` holds the build image's Dockerfile and the CircleCI config that publishes it, run only when `utils/ci/Dockerfile` changes.
+- `docs/`: the website, unfr0zen.com: plain HTML served by GitHub Pages from `docs/` on `main`.
 - `assets/`: app icons, the Linux `.desktop` entry, and the README's app screenshot and overview diagram (light and dark).
 - `integrations/`: files users install on their side: Home Assistant blueprints (`home-assistant/`) and the Zigbee2MQTT converter (`zigbee2mqtt/`).
 - `.circleci/`: `config.yml` is the setup workflow, choosing the configs to merge by the paths a push changed and the jobs to run by what the cache holds (`utils/ci/configs.py` holds the tables, each job's inputs among them, and validates every selection); `common.yml` the executors and module commands they share; `release.yml` the release workflow. Each subsystem has a `.circleci/config.yml` of its own with its jobs: `platform/diamond3` (recovery), `platform/diamond3/zbwake`, `platform/j49`, `platform/common/radio`, `platform/common/doom`, `platform/common/nlclient` and `crates/nestlocal` each define a module's; `utils/ci` holds the build image's workflow, run when its files change, and `crates` the app's, run when anything built changes: every module, the tests and the app for one target of each operating system.
 
 Generated outputs belong in ignored `build/`, `target/`, `dist/`, or `.work/` directories.
 
-User documentation for integrations and options (app and CLI) is the website's `integrations/index.html` (repository `unfr0zen/unfr0zen.com`); update it when an option, its app label, or integration behavior changes. The website's `protocols/index.html` documents nestlocal's MQTT topics, commands and state, Zigbee endpoints and clusters, and Matter endpoints for third-party integrations; update it when any of them changes.
+User documentation for integrations and options (app and CLI) is the website's `docs/integrations/index.html`; update it when an option, its app label, or integration behavior changes. The website's `docs/protocols/index.html` documents nestlocal's MQTT topics, commands and state, Zigbee endpoints and clusters, and Matter endpoints for third-party integrations; update it when any of them changes.
 
 ## Build, Test, and Development Commands
 
