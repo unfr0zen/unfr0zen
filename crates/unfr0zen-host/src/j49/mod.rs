@@ -223,7 +223,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     let label = format!("Patch {slot}");
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
-                                                                 &mut || stored_pki(&pki_dir), &BTreeSet::new(),
+                                                                 &mut || stored_pki(&pki_dir),
                                                                  false, &screen_builder(run_dir));
     let changes = stage(progress, &label, || match patch(&mut volume) {
         // Too little room beside the old nestlocal or nlclient: again, from

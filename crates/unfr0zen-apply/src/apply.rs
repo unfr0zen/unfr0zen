@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -109,8 +108,8 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool) ->
         None => nestlocal::generate_pki(),
     };
     let mut volume = LocalVolume::new(root);
-    let changes = patch::patch_on_device(&mut volume, target, &options, &nestlocal_binary, &mut new_pki,
-                                         &BTreeSet::new(), dry_run, &build_screen)?;
+    let changes = patch::patch_on_device(&mut volume, target, &options, &nestlocal_binary, &mut new_pki, dry_run,
+                                         &build_screen)?;
     let result = json!({
         "changes": changes.iter().map(|c| json!({"name": c.name, "action": c.action, "old": c.old, "new": c.new}))
             .collect::<Vec<_>>(),

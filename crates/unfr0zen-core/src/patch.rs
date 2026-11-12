@@ -2,7 +2,7 @@
 //! the files it edits: only the differences reach the unit. Port of
 //! scripts/patch_root0.py's edits and unfr0zen.py's patch_on_device.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
@@ -497,12 +497,12 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 /// the unit and verifies them on flash. The host never parses UBIFS.
 ///
 /// nestlocal: the ARMv7 binary --mqtt and --matter install. new_pki: a key set for a
-/// unit without its own. payload: SHA-256 of contents the initramfs carries.
+/// unit without its own.
 /// build_screen: the settings screen's undo journal for the unit's stock
 /// nlclient, as nlclient::build makes it.
 #[allow(clippy::too_many_arguments)]
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
-                       new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
+                       new_pki: &mut dyn FnMut() -> Result<Pki>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
@@ -800,7 +800,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // Boot originals must reach flash before any artwork or kernel replacement.
     for (name, data, owner, mode) in writes.iter().filter(|(name, _, _, _)| is_boot_backup(name)) {
         check_staging_space(volume, data.len() as u64)?;
-        volume.write(name, data, owner, *mode, payload)?;
+        volume.write(name, data, owner, *mode)?;
         if volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data))) {
             return device(format!("{name}: boot artwork backup did not read back correctly from flash"));
         }
@@ -808,7 +808,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     for (name, data, owner, mode) in &writes {
         if name != crate::nlclient::JOURNAL && !is_boot_backup(name) {
             check_staging_space(volume, data.len() as u64)?;
-            volume.write(name, data, owner, *mode, payload)?;
+            volume.write(name, data, owner, *mode)?;
             // Confirm the full backup reached flash before replacing nlclient.
             if name == crate::nlclient::ORIGINAL && volume.inspect(name)? !=
                 Some((owner.clone(), *mode, sha256_hex(data))) {
@@ -833,7 +833,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     for (name, data, owner, mode) in &writes {
         if name == crate::nlclient::JOURNAL {
             check_staging_space(volume, data.len() as u64)?;
-            volume.write(name, data, owner, *mode, payload)?;
+            volume.write(name, data, owner, *mode)?;
         }
     }
     volume.remount(false)?;
@@ -964,6 +964,7 @@ fn patch_boot_artwork(volume: &mut impl Volume, tree: &mut Tree, originals: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use crate::diamond3::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
     use crate::shell::{Digests, File};
     use std::io::Read;
@@ -1024,9 +1025,8 @@ mod tests {
         fn shell_binary(&mut self) -> Result<String> {
             Ok(self.binary.clone())
         }
-        fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, payload: &BTreeSet<String>) -> Result<()> {
-            let source = if payload.contains(&sha256_hex(data)) { "payload" } else { "shell" };
-            self.commands.push(format!("write {name} from {source}"));
+        fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()> {
+            self.commands.push(format!("write {name} {mode:o}"));
             if self.failing == Some(name) {
                 return device(format!("{name}: no space left on device"));
             }
@@ -1059,7 +1059,7 @@ mod tests {
     fn onyx_is_rejected_before_patching() {
         let mut volume = FakeVolume::new(Vec::new());
         let error = patch_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
-            &mut || panic!("unsupported device must not create keys"), &BTreeSet::new(), false,
+            &mut || panic!("unsupported device must not create keys"), false,
             &|_| panic!("unsupported device must not build a screen")).unwrap_err();
         assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
         assert!(volume.commands.is_empty());
@@ -1118,7 +1118,7 @@ mod tests {
                     ssh_server: Some(Overlay { directories: vec![], files: vec![
                         ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
                 let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
-                    volume, target, options, b"", &mut no_pki, &BTreeSet::new(), dry_run,
+                    volume, target, options, b"", &mut no_pki, dry_run,
                     &|source| crate::nlclient::build(source, b""));
                 let before = volume.files.clone();
                 let before_directories = volume.directories.clone();
@@ -1194,7 +1194,7 @@ mod tests {
     }
 
     fn patch(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run, &|source| {
+        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o")))?;
             crate::nlclient::build(source, &object)
@@ -1269,7 +1269,7 @@ mod tests {
             let before = volume.files.clone();
             let error = patch_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
-                &BTreeSet::new(), false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
+                false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
             assert!(error.to_string().contains("j49 external temperature"), "{error}");
             assert_eq!(volume.files, before);
             assert!(volume.commands.is_empty());
@@ -1296,7 +1296,7 @@ mod tests {
             volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
             volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source.clone()));
             let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
-                volume, Device::J49, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+                volume, Device::J49, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| crate::nlclient::build(source, &object));
             let off = Options { block_cloud, external_temperature_screen: rcs_object.clone(),
                 mqtt: Some(Mqtt { url: "broker".into(), ..Mqtt::default() }), ..options() };
@@ -1538,7 +1538,7 @@ mod tests {
         let mut fresh = nestlocal_unit(None);
         let mut made = 0;
         patch_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
-                        &mut || { made += 1; Ok(pki.clone()) }, &BTreeSet::new(), false,
+                        &mut || { made += 1; Ok(pki.clone()) }, false,
                         &|source| crate::nlclient::build(source, b"")).unwrap();
         assert_eq!(made, 1);
         // As Python's with_ca: the empty bundle's newline, then the CA.
@@ -1868,7 +1868,7 @@ mod tests {
             journal
         }
         fn patch(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| {
                     if source != self.stock() { return device("fake screen builder received different firmware"); }
                     Ok(self.0.borrow().clone())

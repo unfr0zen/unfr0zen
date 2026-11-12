@@ -119,8 +119,8 @@ fn a_file_appended_to_a_real_slot_reads_back() {
     let inittab = volume.read("etc/inittab").unwrap().unwrap();
     let mut text = inittab.2.clone();
     text.extend_from_slice(b"# unfr0zen\n");
-    volume.write("etc/inittab", &text, &inittab.0, inittab.1, &Default::default()).unwrap();
-    volume.write("etc/nestlocal/options", b"-v\n", "0:0", 0o600, &Default::default()).unwrap();
+    volume.write("etc/inittab", &text, &inittab.0, inittab.1).unwrap();
+    volume.write("etc/nestlocal/options", b"-v\n", "0:0", 0o600).unwrap();
     let plan = volume.programmed().unwrap();
     assert!(!plan.after.is_empty() && plan.erase.is_empty());
     let mut back = jffs2::Slot::load(plan.raw).unwrap();
@@ -140,7 +140,7 @@ fn a_new_nestlocal_takes_the_old_ones_blocks_when_it_does_not_fit_beside_them() 
     let inittab = volume.read("etc/inittab").unwrap().unwrap();
     let mut x = 1u32;
     let new: Vec<u8> = (0..7 << 20).map(|_| { x ^= x << 13; x ^= x >> 17; x ^= x << 5; x as u8 }).collect();
-    volume.write("nestlabs/sbin/nestlocal", &new, &old.0, old.1, &Default::default()).unwrap();
+    volume.write("nestlabs/sbin/nestlocal", &new, &old.0, old.1).unwrap();
     let plan = volume.programmed().unwrap();
     eprintln!("root0: {} pages before, {} blocks erased, {} pages after", plan.before.len(), plan.erase.len(), plan.after.len());
     assert!(!plan.erase.is_empty() && !plan.before.is_empty());
@@ -198,7 +198,7 @@ fn the_patch_applies_to_both_slots() {
         let dark = unfr0zen_core::nlclient::dark_theme::reviewed(&stock);
         let options = Options { dark_theme: dark, ..options.clone() };
         let changes = patch_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
-                                      &Default::default(), false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
+                                      false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
         let (free, used) = volume.usage();
         let plan = volume.programmed().unwrap();
         eprintln!("{which}: {} changes, {} pages in {used} of {free} erased blocks", changes.len(), plan.before.len() + plan.after.len());
@@ -229,7 +229,7 @@ fn the_patch_applies_to_both_slots() {
         // A second run finds everything in place.
         let mut again = jffs2::Slot::load(volume.programmed().unwrap().raw).unwrap();
         let second = patch_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
-                                     &Default::default(), false, &build_screen).unwrap();
+                                     false, &build_screen).unwrap();
         let rewritten: Vec<&str> = second.iter().map(|c| c.name.as_str()).collect();
         assert!(rewritten.iter().all(|name| *name == "etc/shadow" || *name == "etc/nestlocal/server.crt" || *name == "etc/nestlocal/server.key"), "{which}: {rewritten:?}");
     }

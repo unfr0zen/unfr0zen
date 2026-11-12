@@ -1,7 +1,6 @@
 //! A root volume mounted on the machine running the patch: unfr0zen-apply's,
 //! on the unit itself. Every name is relative to the mount point.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -114,7 +113,7 @@ impl Volume for LocalVolume {
         Ok(String::new())
     }
 
-    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, _payload: &BTreeSet<String>) -> Result<()> {
+    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()> {
         let (uid, gid) = owner_ids(owner)?;
         let path = self.path(name);
         if let Some(parent) = path.parent() {
@@ -188,7 +187,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut volume = LocalVolume::new(dir.path());
         let owner = owner();
-        volume.write("etc/nestlocal/options", b"-zigbee\n", &owner, 0o640, &BTreeSet::new()).unwrap();
+        volume.write("etc/nestlocal/options", b"-zigbee\n", &owner, 0o640).unwrap();
         assert!(!dir.path().join("etc/nestlocal/options.unfr0zen").exists());
         assert_eq!(volume.read("etc/nestlocal/options").unwrap(), Some((owner.clone(), 0o640, b"-zigbee\n".to_vec())));
         assert_eq!(volume.inspect("etc/nestlocal/options").unwrap(), Some((owner, 0o640, sha256_hex(b"-zigbee\n"))));
