@@ -26,7 +26,7 @@ use unfr0zen_core::{Device, Result, Slot};
 
 use crate::device::{CancelFlag, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
-use crate::progress::{stage, stage_with, Progress};
+use crate::progress::{stage, stage_with, Phase, Progress};
 use crate::usb::{verify_shell, Id, Pipe};
 use usb::Mode;
 
@@ -193,6 +193,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
         ssh_server: config.options.ssh.then(assets::ssh_server),
         ..config.options.clone()
     };
+    progress.phase(Phase::Check);
     progress.status(&format!("NAND: {}", nand.chip()));
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
     let device = generation(config.omap, &env, usb);
@@ -201,26 +202,23 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     unsupported(device, &config.options)?;
     let order = env.boot_order()?;
     progress.status(&format!("Installed boot order: {} then {}", order[0], order[1]));
-    let slot = config.slot.unwrap_or(order[0]);
+    let slot = order[0];
     progress.status(&format!("Application root slot: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
     let raw = stage_with(progress, &format!("Read {slot} over USB"), |progress| read_slot(nand, progress, slot))?;
-    if config.backup {
-        let original = run_dir.join("original.raw");
-        fs::write(&original, &raw)?;
-        progress.status(&format!("Original root slot saved: {} (raw 2112-byte pages)", original.display()));
-    }
     let mut volume = stage(progress, &format!("Scan {slot}'s JFFS2"), || jffs2::Slot::load(raw.clone()))?;
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
         crate::assets::nestlocal()
     } else {
         Vec::new()
     };
-    let label = if config.dry_run { format!("Patch copies of {slot} files (dry run)") } else { format!("Patch {slot}") };
+    // The patched volume is built in memory, then written.
+    progress.phase(Phase::Prepare);
+    let label = format!("Patch {slot}");
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
                                                                  &mut || stored_pki(&pki_dir), &BTreeSet::new(),
-                                                                 config.dry_run, &screen_builder(run_dir));
+                                                                 false, &screen_builder(run_dir));
     let changes = stage(progress, &label, || match patch(&mut volume) {
         // Too little room beside the old nestlocal or nlclient: again, from
         // the same read, with the old ones' blocks erased for the new.
@@ -234,12 +232,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
     let upper = stage(progress, "Choose the kernel booted first", || upper_kernel(nand, slot, options))?;
-    if config.dry_run {
-        if let Some((_, what)) = &upper {
-            progress.status(&format!("Dry run: {what} would go in {slot}'s boot partition, booted first"));
-        }
-        return Ok(Outcome { device, slot, changed: false });
-    }
+    progress.phase(Phase::Patch);
     let mut changed = false;
     if !changes.is_empty() {
         let plan = volume.programmed()?;
@@ -325,8 +318,10 @@ fn check(config: &Config) -> Result<()> {
 
 /// Runs the recovery from whatever mode the unit is in, as the diamond3's
 /// does: run records under `work_dir`, the run log, the final status line.
+/// With `backup`, the whole NAND is backed up there first, through the same
+/// flasher.
 pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
-                  cancel: &CancelFlag) -> Result<String> {
+                  cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
     let usb = unit.device;
     check(config)?;
     unsupported(usb, &config.options)?;
@@ -335,11 +330,25 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
-    let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    progress.phase(Phase::Recovery);
     let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
     let silicon = omap::silicon(&asic, flasher.idcode);
-    let outcome = route(progress, config, usb, &silicon, &mut flasher, &run_dir);
-    // On failure too: whatever was written left the slot bootable.
+    let outcome = match backup {
+        Some(out) => {
+            progress.phase(Phase::Backup);
+            nand::back_up_whole(&mut flasher, progress, out, &mut hand_back).and_then(|line| {
+                progress.status(&line);
+                route(progress, config, usb, &silicon, &mut flasher, &run_dir)
+            })
+        }
+        None => route(progress, config, usb, &silicon, &mut flasher, &run_dir),
+    };
+    // On failure too: whatever was written left the slot bootable. A
+    // failure stays the phase it happened in.
+    if outcome.is_ok() {
+        progress.phase(Phase::Restart);
+    }
     let reset = stage(progress, "Restart the unit", || flasher.reset());
     let outcome = outcome?;
     reset?;
@@ -368,9 +377,6 @@ pub fn run_image(config: &Config, image: &Path, progress: &mut dyn Progress) -> 
 
 fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome: &Outcome, port: Option<&str>) -> Result<String> {
     let slot = outcome.slot;
-    if config.dry_run {
-        return Ok(format!("Dry run done: {slot} left as it was; changes listed in {}", run_dir.join("changes.txt").display()));
-    }
     let shell = match port.filter(|_| config.options.usb_shell) {
         Some(port) => Some(stage(progress, "Wait for USB root shell", || verify_shell(port, app_id(outcome.device), config.wait_shell))?),
         None => None,

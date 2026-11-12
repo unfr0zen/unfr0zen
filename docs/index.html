@@ -70,14 +70,14 @@
             <p class="section-intro">One self-contained executable for Windows, macOS and Linux, recovery firmware included. Connect the thermostat with a USB data cable.</p>
             <div class="shots" role="group" aria-roledescription="carousel" aria-label="The unfr0zen app on macOS">
                 <div class="shot-tabs" hidden>
-                    <button class="shot-tab" type="button" aria-current="true">Patch</button>
+                    <button class="shot-tab" type="button" aria-current="true">Integrations</button>
+                    <button class="shot-tab" type="button">Features</button>
                     <button class="shot-tab" type="button">Backups</button>
-                    <button class="shot-tab" type="button">Logs</button>
                 </div>
                 <div class="shot-stack">
-                    <img class="screenshot is-shown" src="/assets/app1.png" width="1192" height="792" alt="The Patch page: options for blocking Nest and Google servers, NTP, MQTT, Matter, Zigbee, SSH and the USB root shell.">
-                    <img class="screenshot" src="/assets/app2.png" width="1192" height="792" aria-hidden="true" alt="The Backups page: NAND backups of different thermostats, with a map of the selected backup's NAND.">
-                    <img class="screenshot" src="/assets/app3.png" width="1192" height="792" aria-hidden="true" alt="The Logs page: past runs, with the steps and log of the selected one.">
+                    <img class="screenshot is-shown" src="/assets/app1.png" width="1192" height="912" alt="The Patch page's Integrations step: MQTT with its broker, and Matter with its pairing code.">
+                    <img class="screenshot" src="/assets/app2.png" width="1192" height="912" aria-hidden="true" alt="The Patch page's Features step: Nest and Google servers blocked with a time server, SSH, the USB console and Doom.">
+                    <img class="screenshot" src="/assets/app3.png" width="1192" height="912" aria-hidden="true" alt="The Backups page: NAND backups of different thermostats, with a map of the selected backup's NAND.">
                 </div>
             </div>
         </div>
@@ -144,6 +144,7 @@
                 <li><span class="mark mark-untested"></span>Built, not yet tested on a unit</li>
                 <li><span class="mark mark-none"></span>Not available</li>
             </ul>
+            <p><small>No other model is supported: not the Nest Thermostat E, any other Nest thermostat, or another make.</small></p>
             <p>MQTT, Matter and Zigbee install nestlocal on the thermostat, which takes the place of Nest's cloud: the Nest and Google Home apps no longer control the unit. MQTT and Matter use Wi-Fi, joined from Settings → Network; the network doesn't need internet access.</p>
             <p><b>External temperature</b>: the thermostat regulates from a reading sent over MQTT, Matter or Zigbee, any thermometer in Home Assistant for example. Nest Temperature Sensors are not supported: the option turns the 3rd generation's Bluetooth off, and the 2nd generation never had them. See <a href="/integrations/#external-temperature">Integrations</a>.</p>
             <h3>Tested firmware</h3>

@@ -67,7 +67,7 @@
                     <tbody>
                         <tr><td data-label="Connection">Client ID</td><td data-label="Value"><code>nestlocal-&lt;serial&gt;</code></td></tr>
                         <tr><td data-label="Connection">Session</td><td data-label="Value">Clean session</td></tr>
-                        <tr><td data-label="Connection">Keepalive</td><td data-label="Value">1200 s. The unit sleeps, and its pings with it; the broker must wait out a sleep.</td></tr>
+                        <tr><td data-label="Connection">Keepalive</td><td data-label="Value">3600 s, so the broker drops the connection after 90 minutes without a packet. The unit sleeps, and its pings with it; left alone it wakes about every 30 minutes, and a wake pings the broker when nothing went to it for 10 minutes.</td></tr>
                         <tr><td data-label="Connection">Will</td><td data-label="Value"><code>offline</code> on <code>nestlocal/&lt;serial&gt;/availability</code>, retained, QoS 1</td></tr>
                         <tr><td data-label="Connection">Subscriptions</td><td data-label="Value"><code>nestlocal/&lt;serial&gt;/set/#</code> and <code>homeassistant/status</code>, QoS 1</td></tr>
                         <tr><td data-label="Connection">Reconnect</td><td data-label="Value">Every 10 s while the broker cannot be reached. Publishes made while disconnected are dropped; on each connection the whole state is published again.</td></tr>

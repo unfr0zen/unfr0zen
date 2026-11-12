@@ -120,11 +120,12 @@ sudo udevadm control --reload-rules && sudo udevadm trigger</code></pre>
                 <li>For Zigbee: a Zigbee coordinator. Zigbee2MQTT 2.12.1 or later with the <a href="https://github.com/unfr0zen/unfr0zen/tree/main/integrations/zigbee2mqtt" target="_blank" rel="noopener">unfr0zen converter</a> is recommended; ZHA works too.</li>
             </ul>
             <h2>Install</h2>
-            <div class="note">Optional: a NAND backup lets you restore the thermostat as it was, should you want that one day. Choose <b>Back up NAND</b> from the menu beside Start, or run <code>unfr0zen backup</code>; the USB steps are the same as below. See <a href="/integrations/#backup">Backup &amp; restore</a>.</div>
+            <div class="note">Optional: a NAND backup lets you restore the thermostat as it was, should you want that one day. The Patch page offers one just before patching (<b>Back up, then patch</b>, on its Review step), or run <code>unfr0zen backup</code>; the USB steps are the same as below. See <a href="/integrations/#backup">Backup &amp; restore</a>.</div>
             <ol>
-                <li>Open unfr0zen and tick Relay to MQTT broker (<code>host</code> or <code>host:port</code>, with user, password and TLS as needed), Matter, Zigbee, or several. Any of them replaces the thermostat's Nest cloud connection: the Nest and Google Home apps no longer control it. Optionally block Nest's and Google's servers, set an NTP server, and turn on SSH (root password <code>unfr0zen</code> by default).</li>
-                <li>Click Start.</li>
-                <li>Take the display off its base and connect its USB port to the computer. The generation is detected automatically.</li>
+                <li>Open unfr0zen. On <b>Patch</b>, take the display off its base and connect its USB port to the computer. The generation is detected automatically.</li>
+                <li>On Integrations, turn on MQTT (<code>host</code> or <code>host:port</code>, with user, password and TLS as needed), Matter, Zigbee, or several, or skip it. Any of them replaces the thermostat's Nest cloud connection: the Nest and Google Home apps no longer control it.</li>
+                <li>On Features, optionally block Nest's and Google's servers, set a time server, and turn on SSH (root password <code>unfr0zen</code> by default).</li>
+                <li>On Review, choose whether to back up first, then click <b>Back up and patch</b> (or <b>Patch</b>).</li>
                 <li>When the app asks, hold the front button for 10 seconds.</li>
                 <li>Wait a few minutes until it's done, then put the display back on its base.</li>
                 <li>For MQTT or Matter, join the thermostat to Wi-Fi from its own menu (Settings → Network) if it isn't already. The network doesn't need internet access.</li>

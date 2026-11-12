@@ -3,7 +3,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/unfr0zen/unfr0zen?include_prereleases&color=06b6d4)](https://github.com/unfr0zen/unfr0zen/releases)
 [![GitHub License](https://img.shields.io/github/license/unfr0zen/unfr0zen?v=1)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/4YC7Yj3Tx)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-donate-yellow.svg)](https://buymeacoffee.com/willtm)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/willtm)
 
 Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
@@ -44,6 +44,8 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 | Nest Learning Thermostat (1st generation) | `diamond` | 🧪 | 🧪 Wi-Fi · — Thread | — | — |
 
 ✅ tested on a unit · 🧪 built, not yet tested on a unit · — not available
+
+<sub>No other model is supported: not the Nest Thermostat E, any other Nest thermostat, or another make.</sub>
 
 - **External temperature:** the thermostat regulates from a temperature you send
   it over MQTT, Matter or Zigbee (any thermometer in Home Assistant). Official
@@ -139,7 +141,7 @@ press **Start** and follow the prompts. The sidebar's other pages are Backups
 (every run's steps and log), About and, under Advanced, the 3rd generation's
 application boot and a serial console on a patched unit's USB root shell.
 
-<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Patch, Backups and Logs pages."></a></p>
+<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Patch page's Integrations and Features steps and its Backups page."></a></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few things the app doesn't have
@@ -149,7 +151,7 @@ terminal, over SSH or headless, with a few things the app doesn't have
 unfr0zen [OPTIONS] [COMMAND]
 
 Commands:
-  backup    Back up the whole NAND to a file, checked with a second read
+  backup    Back up the whole NAND to a file, with its SHA-256
   verify    Compare a NAND backup with the NAND
   restore   Write a verified NAND backup back to the NAND
   boot      Boot the application firmware (3rd generation)
@@ -158,8 +160,6 @@ Commands:
 
 Common options:
   --device <GEN>         diamond, j49 or diamond3 instead of the USB identity
-  --backup              Save the original root volume before patching
-  --dry-run             List the changes, write nothing
   --mqtt <URL>          Relay to this MQTT broker
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
@@ -182,12 +182,12 @@ replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
 commits past a tag, or local changes) never update.
 
 ## Undo it
-- **Before the first run:** the app's Backups page, Back up unit (or
-  `unfr0zen backup`) saves the whole NAND to a file, checked with a second
-  read. `unfr0zen verify` compares a backup with the unit.
+- **Before the first run:** the app's Patch page offers a backup of the
+  whole NAND just before patching, with the unit in recovery once for both;
+  the Backups page's Back up unit (or `unfr0zen backup`) takes one on its
+  own. `unfr0zen verify` compares a backup with the unit.
 - **To go back to stock:** Restore to unit (or `unfr0zen restore`) writes
   that backup back to the unit.
-- `--backup` also saves the original root volume before each patch.
 
 ## When something is wrong
 **The app doesn't see the thermostat.** Use a USB cable that carries data:

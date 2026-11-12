@@ -46,7 +46,7 @@ pub(crate) static ROOTFS: Rootfs = Rootfs {
 
 fn patch(tree: &mut Tree, options: &Options) -> Result<()> {
     patch_usb_shell(tree, options.usb_shell)?;
-    patch_ssh(tree, options.ssh)?;
+    patch_ssh(tree, options.ssh, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {
         patch_shell(tree, true)?;
     }
@@ -99,10 +99,14 @@ fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
     Ok(())
 }
 
-/// An SSH server at boot, root logins with root's password, and an ECDSA host
-/// key current clients accept. Without the flag rcS does not start sshd, and
-/// sshd_config and its init script are put back as stock.
-pub fn patch_ssh(tree: &mut Tree, enabled: bool) -> Result<()> {
+/// sshd_config's root login with SSH on and root's password refused: keys only.
+const KEY_ONLY_LOGIN: &str = "PermitRootLogin prohibit-password\n";
+
+/// An SSH server at boot, root logins with a key and, with `password_login`,
+/// root's password, and an ECDSA host key current clients accept. Without
+/// the flag rcS does not start sshd, and sshd_config and its init script are
+/// put back as stock.
+pub fn patch_ssh(tree: &mut Tree, enabled: bool, password_login: bool) -> Result<()> {
     let (start, off) = SSHD_START;
     let mut rcs = text(tree, "etc/init.d/rcS")?;
     if rcs.matches(off).count() == 1 {
@@ -115,16 +119,20 @@ pub fn patch_ssh(tree: &mut Tree, enabled: bool) -> Result<()> {
         rcs = rcs.replace(start, off);
     }
     put(tree, "etc/init.d/rcS", rcs);
-    for (name, mode, stock, ssh) in SSH_EDITS {
+    for (i, (name, mode, stock, ssh)) in SSH_EDITS.into_iter().enumerate() {
         let mut content = text(tree, name)?;
-        if content.matches(ssh).count() == 1 {
-            content = content.replace(ssh, stock);
+        // The root login line has two SSH forms: with the password, or keys only.
+        let forms: &[&str] = if i == 0 { &[ssh, KEY_ONLY_LOGIN] } else { &[ssh] };
+        for form in forms {
+            if content.matches(form).count() == 1 {
+                content = content.replace(form, stock);
+            }
         }
         if content.matches(stock).count() != 1 {
             return device(format!("expected one '{}' line in {name}", stock.lines().next().unwrap_or("")));
         }
         if enabled {
-            content = content.replace(stock, ssh);
+            content = content.replace(stock, if i == 0 && !password_login { KEY_ONLY_LOGIN } else { ssh });
         }
         put(tree, name, content);
         check_mode(tree, name, mode)?;

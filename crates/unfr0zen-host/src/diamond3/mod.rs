@@ -22,7 +22,7 @@ use unfr0zen_core::{Error, Result};
 
 use crate::device::{CancelFlag, Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
-use crate::progress::{stage, Progress};
+use crate::progress::{stage, Phase, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
 use usb::Mode;
 pub(crate) use usb::EntryPoint;
@@ -121,56 +121,54 @@ pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id, 
 
 /// Runs the recovery from whatever mode the unit is in to a confirmed root
 /// shell, writing run records under `work_dir` and the timestamped run log.
-/// Returns the final status line.
+/// With `backup`, the whole NAND is backed up there first, from the same
+/// recovery U-Boot. Returns the final status line.
 pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
-                  cancel: &CancelFlag) -> Result<String> {
+                  cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
     let (port, id) = find_unit(progress, config.wait_usb, false, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
-    let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    progress.phase(Phase::Recovery);
     let port = reach_recovery(progress, port, id, config.entry_point)?;
-    route(progress, config, &port, &run_dir)
+    let mut board = connect_recovery(progress, &port)?;
+    report_silicon(progress, &mut board);
+    if let Some(out) = backup {
+        progress.phase(Phase::Backup);
+        let line;
+        (board, line) = nand::back_up_then(board, &port, progress, out, &mut hand_back)?;
+        progress.status(&line);
+    }
+    route(progress, config, board, &port, &run_dir)
 }
 
 /// From recovery U-Boot to the confirmed root shell.
-fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Path) -> Result<String> {
+fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &str, run_dir: &Path) -> Result<String> {
     let options = &patch::Options {
         thread: config.options.thread.as_ref()
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
         ..config.options.clone()
     };
-    let mut board = connect_recovery(progress, port)?;
-    report_silicon(progress, &mut board);
+    progress.phase(Phase::Check);
     let environment = stage(progress, "Read installed boot order from NAND", || {
         board.attach_ubi()?;
         board.read_installed_environment()
     })?;
     progress.status(&format!("Installed boot order: {} then {}", environment.order[0], environment.order[1]));
-    let slot = stage(progress, "Find the application root volume", || board.select_slot(environment.order, config.slot))?;
+    let slot = stage(progress, "Find the application root volume", || board.select_slot(environment.order))?;
     progress.status(&format!("Application root volume: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
-    if config.backup {
-        let original = run_dir.join("original.ubifs");
-        stage(progress, &format!("Read and download {slot} over USB"), || -> Result<()> {
-            let image = board.retrieve(slot)?;
-            fs::write(&original, &image)?;
-            log::info!("Original {slot} saved: {} SHA-256 {}, CRC32 {:08x}", original.display(), sha256_hex(&image),
-                       crc32fast::hash(&image));
-            Ok(())
-        })?;
-        progress.status(&format!("Original root filesystem saved: {}", original.display()));
-    }
 
     // Contents known before boot travel in the initramfs, over fastboot.
+    progress.phase(Phase::Prepare);
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
         crate::assets::nestlocal()
     } else {
         Vec::new()
     };
-    let mut payload: BTreeMap<String, Vec<u8>> = options.overlay.iter()
-        .flat_map(|overlay| overlay.files.iter().map(|(_, _, data)| (sha256_hex(data), data.clone()))).collect();
+    let mut payload: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for bundle in options.thread.iter().chain(&options.doom) {
         for (_, _, data) in &bundle.files { payload.insert(sha256_hex(data), data.clone()); }
     }
@@ -200,14 +198,16 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         let firmware = release.split_once('-').map_or(release, |(_, build)| build);
         log::info!("Firmware {firmware} (kernel release {release})");
     }
-    let label = if config.dry_run { format!("Patch copies of {slot} files (dry run)") } else { format!("Patch {slot} in place") };
+    progress.phase(Phase::Patch);
+    let label = format!("Patch {slot} in place");
     let payload: BTreeSet<String> = payload.into_keys().collect();
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let changes = stage(progress, &label, || {
         patch::patch_on_device(&mut shell, Device::Diamond3, options, &nestlocal_binary, &mut || stored_pki(&pki_dir), &payload,
-                               config.dry_run, &screen_builder(run_dir))
+                               false, &screen_builder(run_dir))
     })?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
+    progress.phase(Phase::Restart);
     shell.restart()?;
 
     let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default()))?;
@@ -216,10 +216,6 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         let mut board = connect_recovery(progress, &port)?;
         board.attach_ubi()?;
         stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    }
-    if config.dry_run {
-        return Ok(format!("Dry run done: {slot} left as it was; changes listed in {}",
-                          run_dir.join("initramfs-changes.txt").display()));
     }
     // Without the USB root shell there is nothing to log in to: the patch's
     // writes were checked on the volume, and the unit coming back as its app

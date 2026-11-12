@@ -16,9 +16,9 @@ pub mod update;
 pub mod usb;
 
 pub use device::{CancelFlag, Device, WAIT_USB_BOOT_STAGE};
-pub use flow::{mask_url, run, Config, PatchInputs};
+pub use flow::{mask_url, run, run_after_backup, Config, PatchInputs};
 pub use unfr0zen_core::nlclient;
-pub use progress::{end_log, init_logging, log_path, set_selection, Progress, Stage};
+pub use progress::{end_log, init_logging, log_path, set_selection, Phase, Progress, Stage};
 /// The icy house icon rendered as braille dots.
 pub const LOGO: &str = include_str!("logo.txt");
 /// RGB colours sampled from the app icon, one per braille cell, with rows
@@ -42,4 +42,4 @@ pub fn logo_color(t: f32) -> [u8; 3] {
 
 pub use unfr0zen_core::nestlocal::DEFAULT_MATTER_CODE;
 pub use unfr0zen_core::patch::DEFAULT_NTP_SERVER;
-pub use unfr0zen_core::{Error, Result, Slot};
+pub use unfr0zen_core::{Error, Result};

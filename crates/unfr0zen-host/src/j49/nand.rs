@@ -150,6 +150,25 @@ fn backup(nand: &mut dyn Nand, progress: &mut dyn Progress, out: &Path, parts: &
     Ok((bad, unstable))
 }
 
+/// Backs the whole NAND up to `out`, with its SHA-256 beside it, each listed
+/// in `kept` once written; the flasher stays loaded for what follows.
+/// Returns the status line.
+pub(crate) fn back_up_whole(nand: &mut dyn Nand, progress: &mut dyn Progress, out: &Path, kept: &mut HandBack)
+                            -> Result<String> {
+    let parts = out.with_extension("parts");
+    kept.0.push(parts.clone());
+    let (bad, unstable) = backup(nand, progress, out, &parts)?;
+    let checksum = checksum_path(out);
+    let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
+    let name = out.file_name().unwrap_or_default().to_string_lossy();
+    file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
+    file(&parts, fs::remove_dir_all(&parts))?;
+    kept.0.pop();
+    kept.0.extend([out.to_path_buf(), checksum]);
+    progress.status(&format!("{bad} factory-bad blocks; {unstable} blocks whose raw reads never agreed"));
+    Ok(format!("NAND backup: {} (raw 2112-byte pages, SHA-256 {sha})", out.display()))
+}
+
 fn verify(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path) -> Result<()> {
     each_chunk(nand, progress, "Verify", |_| false, |nand, progress, first, count| {
         for block in first..first + count {
@@ -248,20 +267,7 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
     progress.status(&format!("NAND: {}", flasher.chip()));
     let result = (|| -> Result<String> {
         Ok(match job {
-            Job::Backup(out) => {
-                let parts = out.with_extension("parts");
-                hand_back.0.push(parts.clone());
-                let (bad, unstable) = backup(&mut flasher, progress, out, &parts)?;
-                let checksum = checksum_path(out);
-                let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
-                let name = out.file_name().unwrap_or_default().to_string_lossy();
-                file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
-                file(&parts, fs::remove_dir_all(&parts))?;
-                hand_back.0.pop();
-                hand_back.0.extend([out.clone(), checksum]);
-                progress.status(&format!("{bad} factory-bad blocks; {unstable} blocks whose raw reads never agreed"));
-                format!("NAND backup: {} (raw 2112-byte pages, SHA-256 {sha})", out.display())
-            }
+            Job::Backup(out) => back_up_whole(&mut flasher, progress, out, &mut hand_back)?,
             Job::Verify(image) => {
                 verify(&mut flasher, progress, image)?;
                 format!("NAND matches {}", image.display())

@@ -3,7 +3,6 @@
 //! scripts/patch_root0.py's edits and unfr0zen.py's patch_on_device.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
@@ -208,11 +207,6 @@ pub fn check_ntp_server(host: &str) -> Result<()> {
     if HOST.is_match(host) { Ok(()) } else { device(format!("not a host name: {host}")) }
 }
 
-pub fn check_cloud_url(url: &str) -> Result<()> {
-    static URL: LazyLock<Regex> = LazyLock::new(|| regex(r#"^https?://[^\s"'<>&]+$"#));
-    if URL.is_match(url) { Ok(()) } else { device(format!("not an http(s) URL: {url}")) }
-}
-
 pub(crate) fn patch_root_password(tree: &mut Tree, password_hash: &str, modes: &[u32]) -> Result<()> {
     let shadow = text(tree, "etc/shadow")?;
     let roots = shadow.split_inclusive('\n').filter(|line| line.starts_with("root:")).count();
@@ -379,57 +373,6 @@ fn patch_check_url(data: &mut [u8], name: &str, block_cloud: bool) -> Result<()>
     Ok(())
 }
 
-/// Points nlclient's cloudregisterurl at url, with usephoenix 0, which the
-/// bucket protocol needs on 6.4-8.
-pub fn patch_cloud_url(tree: &mut Tree, url: &str) -> Result<()> {
-    let setting = regex(r#"<a key="cloudregisterurl" value="[^"]*"/>"#);
-    let content = text(tree, "etc/nestlabs/client.config")?;
-    if setting.find_iter(&content).count() != 1 {
-        return device("expected one cloudregisterurl setting in client.config");
-    }
-    put(tree, "etc/nestlabs/client.config",
-        setting.replace(&content, regex::NoExpand(&format!(r#"<a key="cloudregisterurl" value="{url}"/>"#))).into_owned());
-    let setting = regex(r#"<a key="usephoenix" value="[^"]*"/>"#);
-    let content = text(tree, "etc/nestlabs/product.config")?;
-    if setting.find_iter(&content).count() != 1 {
-        return device("expected one usephoenix setting in product.config");
-    }
-    put(tree, "etc/nestlabs/product.config", setting.replace(&content, r#"<a key="usephoenix" value="0"/>"#).into_owned());
-    Ok(())
-}
-
-/// A tar of root-owned files and directories, as paths inside the volume.
-pub fn overlay_from_tar(data: &[u8]) -> Result<Overlay> {
-    let mut overlay = Overlay::default();
-    let failed = |e: std::io::Error| crate::Error::Device(format!("overlay: {e}"));
-    for entry in tar::Archive::new(data).entries().map_err(failed)? {
-        let mut entry = entry.map_err(failed)?;
-        let raw = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
-        let parts: Vec<&str> = raw.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
-        if raw.starts_with('/') || parts.is_empty() || parts.contains(&"..") {
-            return device(format!("overlay: {raw} is not a path inside the volume"));
-        }
-        // Paths reach the unit's shell: only characters it takes literally.
-        if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b)) {
-            return device(format!("overlay: {raw:?} may only use A-Z, a-z, 0-9, '.', '_', '-' and '/'"));
-        }
-        let header = entry.header();
-        let kind = header.entry_type();
-        if header.uid().map_err(failed)? != 0 || header.gid().map_err(failed)? != 0 || !(kind.is_file() || kind.is_dir()) {
-            return device(format!("overlay: {raw} must be a root-owned file or directory"));
-        }
-        let (name, mode) = (parts.join("/"), header.mode().map_err(failed)? & 0o7777);
-        if kind.is_dir() {
-            overlay.directories.push((name, mode));
-        } else {
-            let mut contents = Vec::new();
-            entry.read_to_end(&mut contents).map_err(failed)?;
-            overlay.files.push((name, mode, contents));
-        }
-    }
-    Ok(overlay)
-}
-
 /// A device's part of the root filesystem patch.
 pub(crate) struct Rootfs {
     /// The files the patch requires.
@@ -460,12 +403,10 @@ pub struct Options {
     pub version: String,
     /// An empty name means DEFAULT_NTP_SERVER.
     pub ntp_server: Option<String>,
-    pub cloud_url: Option<String>,
     pub backplate_sim: bool,
     /// Nest's and Google's names resolve to nowhere, and connmand and
     /// nlclient check for the internet at Cloudflare instead.
     pub block_cloud: bool,
-    pub overlay: Option<Overlay>,
     pub mqtt: Option<Mqtt>,
     pub matter: Option<Matter>,
     /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
@@ -494,6 +435,9 @@ pub struct Options {
     pub ssh: bool,
     /// A validated OpenSSH public key to merge into root's authorized_keys; needs SSH.
     pub ssh_public_key: Option<String>,
+    /// SSH refuses root's password: only a key logs in. Off, root logs in
+    /// with its password too (DEFAULT_ROOT_PASSWORD unless one is given).
+    pub ssh_key_only: bool,
     /// The SSH server's files for a device without one of its own (the j49).
     pub ssh_server: Option<Overlay>,
     /// The USB root shell: an ACM port with a root shell on it. Without it
@@ -562,6 +506,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
     }
+    if options.ssh_key_only && (!options.ssh || options.ssh_public_key.is_none()) {
+        return device("SSH without password login needs SSH and a public key to log in with");
+    }
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
     }
@@ -605,12 +552,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         fetch(volume, &mut tree, &mut originals, &names, false, true)?;
         patch_ntp(&mut tree, if server.is_empty() { DEFAULT_NTP_SERVER } else { server })?;
     }
-    let mut overlay = options.overlay.clone();
+    let mut overlay = None;
     // An installed nestlocal is the unit's cloud, so it stays; a run with no
-    // integration, overlay or cloud URL rewrites its files with them all off,
-    // which also puts Nest's Thread radio set-up back after Zigbee.
-    let turn_off = options.overlay.is_none() && options.cloud_url.is_none()
-        && volume.inspect(nestlocal::OPTIONS)?.is_some();
+    // integration rewrites its files with them all off, which also puts
+    // Nest's Thread radio set-up back after Zigbee.
+    let turn_off = volume.inspect(nestlocal::OPTIONS)?.is_some();
     if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || options.external_temperature || turn_off {
         fetch(volume, &mut tree, &mut originals, &nestlocal::STOCK_FILES, true, true)?;
         fetch(volume, &mut tree, &mut originals, &[nestlocal::UNLOCK_BUNDLE], false, true)?;
@@ -674,10 +620,6 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             tree.insert(name.clone(), (data.clone(), *mode));
         }
         directories = overlay.directories.clone();
-    }
-    if let Some(url) = &options.cloud_url {
-        fetch(volume, &mut tree, &mut originals, &["etc/nestlabs/client.config", "etc/nestlabs/product.config"], true, true)?;
-        patch_cloud_url(&mut tree, url)?;
     }
     patch_backplate_sim(&mut tree, options.backplate_sim)?;
     fetch(volume, &mut tree, &mut originals, &["etc/hosts"], options.block_cloud, true)?;
@@ -1021,6 +963,7 @@ mod tests {
     use super::*;
     use crate::diamond3::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
     use crate::shell::{Digests, File};
+    use std::io::Read;
 
     /// The mounted slot, in memory.
     struct FakeVolume {
@@ -1497,7 +1440,7 @@ mod tests {
             ("etc/inittab", |f| f.2 = b"::sysinit:/etc/init.d/rcS\n".to_vec(), "USB getty"),
             ("etc/shadow", |f| f.1 = 0o644, "mode 640"),
             ("etc/init.d/rcS", |f| f.2.extend_from_slice(b"${MOUNT} -n -o remount,rw /\n"), "somewhere other than"),
-            ("etc/ssh/sshd_config", |f| f.2 = b"PermitRootLogin prohibit-password\n".to_vec(), "PermitRootLogin no"),
+            ("etc/ssh/sshd_config", |f| f.2 = b"PermitRootLogin without-password\n".to_vec(), "PermitRootLogin no"),
             ("etc/hosts", |f| f.2.extend_from_slice(HOSTS_BEGIN.as_bytes()), "without its end line"),
         ];
         for (name, change, error) in cases {
@@ -1558,89 +1501,6 @@ mod tests {
         // A unit without root/.profile keeps its stock shell.
         let mut bare = FakeVolume::new(stock());
         assert!(!names(&patch(&mut bare, &options(), false).unwrap()).contains(PROFILE));
-    }
-
-    #[test]
-    fn cloud_url_sets_client_and_product_config() {
-        let mut files = stock();
-        files[7].2 += "<a key=\"cloudregisterurl\" value=\"https://frontdoor.nest.com/entry\"/>\n";
-        files.push(("etc/nestlabs/product.config", 0o644, "<a key=\"usephoenix\" value=\"1\"/>\n".into()));
-        let mut volume = FakeVolume::new(files);
-        patch(&mut volume, &Options { cloud_url: Some("https://cloud.example/entry".into()), ..options() }, false).unwrap();
-        assert!(volume.text("etc/nestlabs/client.config").contains("value=\"https://cloud.example/entry\""));
-        assert_eq!(volume.text("etc/nestlabs/product.config"), "<a key=\"usephoenix\" value=\"0\"/>\n");
-    }
-
-    /// A tar as ha/build.py writes one; names go in raw, so a test can carry `..`.
-    fn tar(files: &[(&str, u32, &[u8], u64)], directories: &[&str]) -> Vec<u8> {
-        let mut builder = tar::Builder::new(Vec::new());
-        let entry = |name: &str, kind, mode, size, uid| {
-            let mut header = tar::Header::new_ustar();
-            header.as_ustar_mut().unwrap().name[..name.len()].copy_from_slice(name.as_bytes());
-            header.set_entry_type(kind);
-            header.set_mode(mode);
-            header.set_size(size);
-            header.set_uid(uid);
-            header.set_gid(0);
-            header.set_mtime(0);
-            header.set_cksum();
-            header
-        };
-        for name in directories {
-            builder.append(&entry(name, tar::EntryType::Directory, 0o755, 0, 0), &[][..]).unwrap();
-        }
-        for (name, mode, data, uid) in files {
-            builder.append(&entry(name, tar::EntryType::Regular, *mode, data.len() as u64, *uid), *data).unwrap();
-        }
-        builder.into_inner().unwrap()
-    }
-
-    #[test]
-    fn overlay_creates_files_and_directories_and_drops_stale_secrets() {
-        let mut files = stock();
-        files.push(("etc/nestlocal/mqtt.password", 0o600, "old\n".into()));
-        let mut volume = FakeVolume::new(files);
-        let binary = vec![0x5au8; 300_000];
-        let overlay = overlay_from_tar(&tar(&[("etc/nestlocal/options", 0o644, b"-mqtt tcp://b:1883\n", 0),
-                                              ("./nestlabs/sbin/nestlocal", 0o755, &binary, 0)], &["etc/nestlocal"])).unwrap();
-        let payload = BTreeSet::from([sha256_hex(&binary)]);
-        let changes = patch_on_device(&mut volume, Device::Diamond3, &Options { overlay: Some(overlay), ..options() }, b"",
-                                      &mut no_pki, &payload, false, &|source| crate::nlclient::build(source, b"")).unwrap();
-        let action = |name: &str| changes.iter().find(|c| c.name == name).unwrap().action;
-        assert_eq!((action("nestlabs/sbin/nestlocal"), action("etc/nestlocal/mqtt.password"), action("etc/nestlocal/")),
-                   ("create", "remove", "directory"));
-        assert_eq!(volume.files["nestlabs/sbin/nestlocal"], ("0:0".into(), 0o755, binary));
-        assert!(!volume.files.contains_key("etc/nestlocal/mqtt.password"));
-        assert!(volume.commands.contains(&"write nestlabs/sbin/nestlocal from payload".to_string()));
-        assert!(volume.commands.contains(&"write etc/nestlocal/options from shell".to_string()));
-        assert_eq!(volume.directories["etc/nestlocal"], "0:0 755");
-    }
-
-    #[test]
-    fn an_overlay_that_brings_a_secret_back_keeps_it() {
-        let mut files = stock();
-        files.push(("etc/nestlocal/mqtt.password", 0o600, "same\n".into()));
-        let mut volume = FakeVolume::new(files);
-        let overlay = overlay_from_tar(&tar(&[("etc/nestlocal/mqtt.password", 0o600, b"same\n", 0)], &[])).unwrap();
-        let changes = patch(&mut volume, &Options { overlay: Some(overlay), ..options() }, false).unwrap();
-        assert!(!names(&changes).contains("etc/nestlocal/mqtt.password"));
-        assert_eq!(volume.text("etc/nestlocal/mqtt.password"), "same\n");
-    }
-
-    #[test]
-    fn overlay_must_stay_inside_the_volume_and_be_root_owned() {
-        assert!(overlay_from_tar(&tar(&[("../etc/x", 0o644, b"x", 0)], &[])).unwrap_err().to_string().contains("inside the volume"));
-        assert!(overlay_from_tar(&tar(&[("etc/x", 0o644, b"x", 1000)], &[])).unwrap_err().to_string().contains("root-owned"));
-    }
-
-    #[test]
-    fn overlay_paths_must_be_plain_names_the_shell_takes_literally() {
-        for name in ["etc/a;reboot", "etc/$(x)", "etc/*", "etc/a b", "etc/it's", "etc/a\nb"] {
-            let error = overlay_from_tar(&tar(&[(name, 0o644, b"x", 0)], &[])).unwrap_err().to_string();
-            assert!(error.contains("may only use"), "{name}: {error}");
-        }
-        assert!(overlay_from_tar(&tar(&[], &["etc/a;b"])).unwrap_err().to_string().contains("may only use"));
-        assert!(overlay_from_tar(&tar(&[("./etc/nest-local_1.conf", 0o644, b"x", 0)], &[])).is_ok());
     }
 
     fn nestlocal_unit(pki: Option<&Pki>) -> FakeVolume {
@@ -1735,13 +1595,6 @@ mod tests {
         let mut stock_unit = nestlocal_unit(None);
         patch(&mut stock_unit, &options(), false).unwrap();
         assert!(!stock_unit.files.contains_key("etc/nestlocal/options"));
-        // A cloud URL or an overlay of the user's own replaces nestlocal's
-        // files instead: they are left to those.
-        let mut cloud = nestlocal_unit(Some(&pki));
-        patch(&mut cloud, &Options { zigbee: true, ..options() }, false).unwrap();
-        patch(&mut cloud, &Options { cloud_url: Some("https://cloud.example/entry".into()), ..options() }, false).unwrap();
-        assert!(cloud.text("etc/nestlocal/options").contains("-zigbee"));
-        assert!(cloud.text("etc/nestlabs/client.config").contains("https://cloud.example/entry"));
     }
 
     #[test]
@@ -1784,6 +1637,19 @@ mod tests {
         let mut odd = FakeVolume::new(stock());
         odd.files.get_mut("etc/init.d/usb-gadget").unwrap().2 = b"USB_GADGET_MOD=g_mass_storage\n".to_vec();
         assert!(patch(&mut odd, &options(), false).unwrap_err().to_string().contains("g_acm_ms"));
+    }
+
+    #[test]
+    fn ssh_without_password_login_takes_keys_only_and_needs_a_key() {
+        let mut volume = FakeVolume::new(stock());
+        let key = Some(public_key("ssh-ed25519", &[&[1; 32]]));
+        assert!(patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ..options() }, false).is_err(), "no key: no way in");
+        patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin prohibit-password\n"));
+        patch(&mut volume, &Options { ssh: true, ssh_public_key: key, ..options() }, false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin yes\n"), "password login allowed again");
+        patch(&mut volume, &options(), false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin no\n"), "SSH off: stock");
     }
 
     #[test]
@@ -2203,7 +2069,6 @@ mod tests {
         let hash = root_hash("unfr0zen").unwrap();
         assert!(hash.starts_with("$6$") && hash.split('$').count() == 4, "{hash}");
         assert!(root_hash("a:b").is_err() && root_hash("").is_err());
-        assert!(check_cloud_url("ftp://x").is_err() && check_cloud_url("https://x.example/entry").is_ok());
         assert!(check_ntp_server("-bad").is_err() && check_ntp_server("pool.ntp.org").is_ok());
     }
 }

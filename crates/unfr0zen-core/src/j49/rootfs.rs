@@ -22,6 +22,10 @@ pub(crate) const SHELL: &str = "#!/bin/sh\n# A root shell on the USB serial port
 /// The login unfr0zen-gen2.py put there, which this shell replaces.
 pub(crate) const GEN2_GETTY: &str = "# A login on the USB serial port (unfr0zen-gen2.py)\n::sysinit:/bin/sh -c \"while :; do \
                                      [ -e /dev/ttyGS0 ] && /sbin/getty -L ttyGS0 115200 vt100; sleep 5; done &\"\n";
+/// The SSH server's init script, and the end of its dropbear line, before
+/// which -s goes for keys-only logins.
+const SSH_INIT: &str = "etc/init.d/unfr0zen-ssh";
+const DROPBEAR_PIDFILE: &str = " -P \"$PIDFILE\"";
 /// rcS's stock sshd line, and the start of the server --ssh adds.
 const SSH_START: (&str, &str) = ("\n${INITDIR}/sshd start\n", "${INITDIR}/unfr0zen-ssh start\n");
 
@@ -44,7 +48,7 @@ fn patch(tree: &mut Tree, options: &Options) -> Result<()> {
     if options.ssh && server.is_none() {
         return device("--ssh on a j49 needs its SSH server's files");
     }
-    patch_ssh(tree, server)?;
+    patch_ssh(tree, server, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {
         patch_shell(tree, false)?;
     }
@@ -67,7 +71,7 @@ pub(crate) fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
 
 /// With a server given, its files and their start in rcS, after stock's sshd
 /// line (whose sshd is absent); without, no start.
-pub(crate) fn patch_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overlay>) -> Result<()> {
+pub(crate) fn patch_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overlay>, password_login: bool) -> Result<()> {
     let (anchor, start) = SSH_START;
     let mut rcs = text(tree, "etc/init.d/rcS")?.replace(&format!("{anchor}{start}"), anchor);
     if rcs.contains(start) || rcs.matches(anchor).count() != 1 {
@@ -77,6 +81,14 @@ pub(crate) fn patch_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overl
         rcs = rcs.replace(anchor, &format!("{anchor}{start}"));
         for (name, mode, data) in &server.files {
             tree.insert(name.clone(), (data.clone(), *mode));
+        }
+        // dropbear's -s: no password logins, keys only.
+        if !password_login {
+            let init = text(tree, SSH_INIT)?;
+            if init.matches(DROPBEAR_PIDFILE).count() != 1 {
+                return device(format!("{SSH_INIT}: expected one '{}'", DROPBEAR_PIDFILE.trim()));
+            }
+            put(tree, SSH_INIT, init.replace(DROPBEAR_PIDFILE, &format!(" -s{DROPBEAR_PIDFILE}")));
         }
     }
     put(tree, "etc/init.d/rcS", rcs);
@@ -118,13 +130,25 @@ mod tests {
         let stock = "a\n${INITDIR}/sshd start\nb\n";
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (stock.as_bytes().to_vec(), 0o750))]);
         let server = Overlay { directories: vec![], files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] };
-        patch_ssh(&mut tree, Some(&server)).unwrap();
+        patch_ssh(&mut tree, Some(&server), true).unwrap();
         let started = "a\n${INITDIR}/sshd start\n${INITDIR}/unfr0zen-ssh start\nb\n";
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes());
         assert_eq!(tree["usr/sbin/dropbearmulti"], (b"ELF".to_vec(), 0o755));
-        patch_ssh(&mut tree, Some(&server)).unwrap();
+        patch_ssh(&mut tree, Some(&server), true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes(), "once");
-        patch_ssh(&mut tree, None).unwrap();
+        patch_ssh(&mut tree, None, true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, stock.as_bytes());
+    }
+
+    #[test]
+    fn a_j49_without_password_login_starts_dropbear_with_keys_only() {
+        let init = include_str!("../../../../platform/j49/ssh.init");
+        let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (b"a\n${INITDIR}/sshd start\nb\n".to_vec(), 0o750))]);
+        let server = Overlay { directories: vec![], files: vec![(SSH_INIT.into(), 0o755, init.as_bytes().to_vec())] };
+        patch_ssh(&mut tree, Some(&server), false).unwrap();
+        let patched = String::from_utf8(tree[SSH_INIT].0.clone()).unwrap();
+        assert!(patched.contains(" -s -P \"$PIDFILE\""), "{patched}");
+        patch_ssh(&mut tree, Some(&server), true).unwrap();
+        assert_eq!(tree[SSH_INIT].0, init.as_bytes(), "password login again: the script as shipped");
     }
 }

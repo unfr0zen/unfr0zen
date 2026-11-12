@@ -12,6 +12,27 @@ use std::time::{Duration, Instant};
 use crate::Result;
 
 /// What the flow tells its front end as it runs.
+/// The parts of a patch run a person follows, in order; the steps inside
+/// each are for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Until the unit is in its boot ROM's USB download mode.
+    DownloadMode,
+    /// Recovery U-Boot, or the NAND flasher, loaded and answering.
+    Recovery,
+    /// The whole NAND read and hashed, when a backup comes first.
+    Backup,
+    /// The boot order, the root volume and its firmware read.
+    Check,
+    /// What the patch writes made ready: the initramfs booted, or the
+    /// patched volume built in memory.
+    Prepare,
+    /// The changes written to the unit.
+    Patch,
+    /// The unit restarted into its application and confirmed.
+    Restart,
+}
+
 pub trait Progress: Send {
     /// A high-level step started.
     fn begin(&mut self, label: &str);
@@ -30,6 +51,8 @@ pub trait Progress: Send {
     /// `next` under way with nothing more said until they land. A front end
     /// may draw a bar.
     fn transfer(&mut self, _done: u64, _next: u64, _total: u64) {}
+    /// A patch run entered `phase`; the one before it is done.
+    fn phase(&mut self, _phase: Phase) {}
 }
 
 /// Runs one step, reporting its start, elapsed time and outcome.

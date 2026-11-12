@@ -10,10 +10,10 @@ use std::time::Duration;
 use unfr0zen_core::nestlocal::{self, Matter, Mqtt, Pki};
 use unfr0zen_core::nlclient;
 use unfr0zen_core::patch::{self, Options};
-use unfr0zen_core::{Error, Result, Slot};
+use unfr0zen_core::{Error, Result};
 
 use crate::device::{self, Device};
-use crate::progress::{self, Progress};
+use crate::progress::{self, Phase, Progress};
 use crate::diamond3::usb::EntryPoint;
 use crate::{assets, diamond3, j49};
 
@@ -31,12 +31,10 @@ pub(crate) fn failure(error: impl std::fmt::Display) -> Error {
 pub struct PatchInputs {
     pub root_password: Option<String>,
     pub ntp_server: Option<String>,
-    pub cloud_url: Option<String>,
     pub backplate_sim: bool,
     /// Resolve Nest's and Google's names to nowhere; implies the default
     /// NTP server unless one is given, since time.nest.com goes too.
     pub block_cloud: bool,
-    pub overlay: Option<PathBuf>,
     pub mqtt: Option<String>,
     pub mqtt_user: Option<String>,
     pub mqtt_password: Option<String>,
@@ -66,6 +64,8 @@ pub struct PatchInputs {
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
     pub ssh_public_key: Option<PathBuf>,
+    /// SSH takes keys only, refusing root's password; requires the key.
+    pub ssh_key_only: bool,
     /// The USB root shell (an ACM port); off by default. Without it the run
     /// cannot log in at the end to confirm the result.
     pub usb_shell: bool,
@@ -94,6 +94,7 @@ impl PatchInputs {
             ("root-password", secret(&self.root_password)),
             ("ssh", on(self.ssh)),
             ("ssh-public-key", file(&self.ssh_public_key)),
+            ("ssh-key-only", on(self.ssh_key_only)),
             ("usb-shell", on(self.usb_shell)),
             ("mqtt", self.mqtt.as_deref().map(mask_url)),
             ("mqtt-user", secret(&self.mqtt_user)),
@@ -109,8 +110,6 @@ impl PatchInputs {
             ("doom", on(self.doom)),
             ("external-temperature", on(self.external_temperature)),
             ("dark-theme", on(self.dark_theme)),
-            ("overlay", file(&self.overlay)),
-            ("cloud-url", self.cloud_url.as_deref().map(mask_url)),
             ("backplate-sim", on(self.backplate_sim)),
             ("block-cloud", on(self.block_cloud)),
         ];
@@ -124,6 +123,9 @@ impl PatchInputs {
     pub fn build(&self) -> Result<Options> {
         if self.ssh_public_key.is_some() && !self.ssh {
             return Err(failure("--ssh-public-key needs --ssh"));
+        }
+        if self.ssh_key_only && self.ssh_public_key.is_none() {
+            return Err(failure("--ssh-key-only needs --ssh-public-key: without a key nothing could log in"));
         }
         if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some())
             && self.mqtt.is_none() {
@@ -140,18 +142,8 @@ impl PatchInputs {
         if self.external_temperature && self.mqtt.is_none() && !matter && !self.zigbee {
             return Err(failure("--external-temperature takes its readings over --mqtt, --matter or --zigbee"));
         }
-        let nestlocal = self.mqtt.is_some() || matter || self.zigbee || self.doom;
-        if nestlocal && self.overlay.is_some() {
-            return Err(failure("--mqtt, --matter, --zigbee and --doom build their own overlay; drop --overlay"));
-        }
-        if nestlocal && self.cloud_url.is_some() {
-            return Err(failure("--mqtt, --matter, --zigbee and --doom point the unit at nestlocal; drop --cloud-url"));
-        }
         let read = |flag: &str, path: &Path| fs::read(path)
             .map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
-        if let Some(url) = &self.cloud_url {
-            patch::check_cloud_url(url)?;
-        }
         if let Some(server) = self.ntp_server.as_deref().filter(|s| !s.is_empty()) {
             patch::check_ntp_server(server)?;
         }
@@ -170,15 +162,12 @@ impl PatchInputs {
                 path.file_name().unwrap_or_default().to_string_lossy())))?;
             patch::ssh_public_key(&data)
         }).transpose()?;
-        let overlay = self.overlay.as_deref().map(|p| patch::overlay_from_tar(&read("--overlay", p)?)).transpose()?;
         Ok(Options {
             root_hash: patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?,
             version: progress::app_version().to_string(),
             ntp_server: self.ntp_server.clone().or_else(|| self.block_cloud.then(String::new)),
-            cloud_url: self.cloud_url.clone(),
             backplate_sim: self.backplate_sim,
             block_cloud: self.block_cloud,
-            overlay,
             mqtt,
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
             wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
@@ -191,6 +180,7 @@ impl PatchInputs {
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key,
+            ssh_key_only: self.ssh_key_only,
             ssh_server: None,
             usb_shell: self.usb_shell,
         })
@@ -203,16 +193,12 @@ pub struct Config {
     /// The device to expect, instead of whichever the USB identity names;
     /// Diamond and j49 share their boot ROM's USB ID, taken as j49 without it.
     pub omap: Option<Device>,
-    pub slot: Option<Slot>,
-    pub dry_run: bool,
-    /// Read and save the whole volume before patching (slow; off by default).
-    pub backup: bool,
     /// How the 3rd generation's boot ROM is entered for recovery.
     pub entry_point: EntryPoint,
     /// How long to wait for the unit in its boot ROM's USB download mode.
     pub wait_usb: Duration,
     pub wait_shell: Duration,
-    /// Where backups and run records go.
+    /// Where run records go.
     pub work_dir: PathBuf,
     /// Where nestlocal's key set for units without their own is kept.
     pub data_dir: PathBuf,
@@ -332,14 +318,25 @@ pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<Path
 /// Returns the final status line.
 pub fn run(config: &Config, progress: &mut dyn Progress,
            cancel: &device::CancelFlag) -> Result<String> {
+    run_after_backup(config, None, progress, cancel)
+}
+
+/// [`run`], with the whole NAND backed up to `backup` first, while the unit
+/// is in recovery for the patch: one entry into USB download mode for both.
+pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut dyn Progress,
+                        cancel: &device::CancelFlag) -> Result<String> {
+    if let Some(out) = backup.filter(|out| out.exists()) {
+        return Err(failure(format!("{} exists", out.display())));
+    }
+    progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
             Err(failure("--dark-theme is only for the 2nd generation")),
-        Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
+        Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
         Device::Diamond if config.options.external_temperature =>
             Err(failure("--external-temperature is not supported on the 1st generation")),
-        Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel),
+        Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }

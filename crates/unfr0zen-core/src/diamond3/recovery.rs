@@ -177,20 +177,6 @@ pub fn md_words(response: &str, address: u32, count: usize) -> Result<Vec<u32>> 
     Ok(words)
 }
 
-/// The UBIFS image in a volume, from its superblock: leb_cnt LEBs of leb_size.
-pub fn superblock_length(words: &[u32], slot: Slot) -> Result<usize> {
-    if words.len() != 11 || words[0] != 0x0610_1831 || words[5] & 0xff != 6 {
-        return device(format!("{slot} does not start with a UBIFS superblock"));
-    }
-    let (leb_size, leb_cnt) = (words[9] as usize, words[10] as usize);
-    let length = leb_size * leb_cnt;
-    if length == 0 || length > RAM_LIMIT {
-        return device(format!("{slot} UBIFS is {leb_cnt} LEBs of {leb_size}: larger than the \
-                               {RAM_LIMIT}-byte fastboot buffer"));
-    }
-    Ok(length)
-}
-
 /// The DRAM banks bdinfo reports: (start, size).
 pub fn dram_banks(bdinfo: &str) -> Vec<(u64, u64)> {
     static BANK: LazyLock<Regex> = LazyLock::new(|| {
@@ -344,9 +330,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
 
     /// The first slot in the stock boot order whose UBIFS mounts and whose FIT
     /// loads with every hash verified: the one the stock U-Boot would boot.
-    pub fn select_slot(&mut self, order: [Slot; 2], requested: Option<Slot>) -> Result<Slot> {
-        let slots = requested.map_or(order.to_vec(), |slot| vec![slot]);
-        for slot in slots {
+    pub fn select_slot(&mut self, order: [Slot; 2]) -> Result<Slot> {
+        for slot in order {
             let mounted = self.console.command_allow_failure(&format!("ubifsmount ubi0:{slot}"), seconds(60))?;
             let lower = mounted.to_lowercase();
             if ["error", "fail", "not found"].iter().any(|word| lower.contains(word)) {
@@ -391,28 +376,6 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         let response = self.console.command("printenv filesize", seconds(10))?;
         SIZE.captures(&response).and_then(|c| usize::from_str_radix(&c[1], 16).ok())
             .map_or_else(|| device("U-Boot did not report the loaded file's size"), Ok)
-    }
-
-    /// The UBIFS image in the volume, sized from its superblock. Reading past
-    /// it into LEBs never written left recovery U-Boot to crash.
-    pub fn image_size(&mut self, slot: Slot) -> Result<usize> {
-        self.console.command(&format!("ubi read {RAM_BASE:#x} {slot} 0x1000"), seconds(30))?;
-        let response = self.console.command(&format!("md.l {RAM_BASE:#x} 0xb"), seconds(30))?;
-        let words = md_words(&response, RAM_BASE, 11)
-            .or_else(|_| device(format!("could not read the {slot} superblock from RAM")))?;
-        let length = superblock_length(&words, slot)?;
-        log::info!("Root volume image: {length} bytes ({} LEBs of {})", words[10], words[9]);
-        Ok(length)
-    }
-
-    /// The whole slot image, for the backup.
-    pub fn retrieve(&mut self, slot: Slot) -> Result<Vec<u8>> {
-        let length = self.image_size(slot)?;
-        let response = self.console.command(&format!("ubi read {RAM_BASE:#x} {slot} {length:#x}"), seconds(150))?;
-        if !response.contains(&format!("Read {length} bytes from volume {slot}")) {
-            return device(format!("UBI could not read the expected {length} bytes from {slot}"));
-        }
-        self.upload_ram(length)
     }
 
     /// Puts data in the fastboot buffer and checks it there: (length, CRC32).
@@ -778,12 +741,12 @@ pub(crate) mod tests {
     fn prefers_the_first_bootable_volume_and_falls_back() {
         let unit = Unit { bootable: ["root0".to_string(), "root1".to_string()].into(), ..Unit::default() };
         let (mut board, unit) = board(unit);
-        assert_eq!(board.select_slot([Slot::Root1, Slot::Root0], None).unwrap(), Slot::Root1);
+        assert_eq!(board.select_slot([Slot::Root1, Slot::Root0]).unwrap(), Slot::Root1);
         assert_eq!(board.firmware.as_deref(), Some("6.4-8"));
         unit.borrow_mut().bootable.remove("root1");
-        assert_eq!(board.select_slot([Slot::Root1, Slot::Root0], None).unwrap(), Slot::Root0);
+        assert_eq!(board.select_slot([Slot::Root1, Slot::Root0]).unwrap(), Slot::Root0);
         unit.borrow_mut().bootable.clear();
-        let error = board.select_slot([Slot::Root0, Slot::Root1], None).err().unwrap().to_string();
+        let error = board.select_slot([Slot::Root0, Slot::Root1]).err().unwrap().to_string();
         assert!(error.contains("firmware 6.4-8"), "{error}");
     }
 
@@ -800,34 +763,6 @@ pub(crate) mod tests {
         assert!(verified_fit(&format!("FIT image found\n{}", "sha256+\n".repeat(10))));
         assert!(!verified_fit(&format!("FIT image found\n{}", "sha256+\n".repeat(9))));
         assert!(!verified_fit(&format!("FIT image found\n{}Bad hash in FIT image!", "sha256+\n".repeat(10))));
-    }
-
-    fn ubifs(lebs: u32, leb_size: u32) -> Vec<u8> {
-        let mut image = vec![0u8; (lebs * leb_size) as usize];
-        let words = [0x0610_1831u32, 0, 0, 0, 0, 6, 0, 0, 0, leb_size, lebs];
-        for (i, word) in words.iter().enumerate() {
-            image[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
-        }
-        image[4096] = 0x5a;
-        image
-    }
-
-    #[test]
-    fn backup_is_the_whole_image_its_superblock_names() {
-        let mut unit = Unit::default();
-        let image = ubifs(3, 4096);
-        let mut volume = image.clone();
-        volume.extend_from_slice(&[0xee; 8192]); // LEBs past the image are never read
-        unit.volumes.insert("root0".into(), volume);
-        let (mut board, _) = board(unit);
-        assert_eq!(board.retrieve(Slot::Root0).unwrap(), image);
-        let mut other = Unit::default();
-        other.volumes.insert("root0".into(), vec![0u8; 8192]);
-        assert!(board_with(other).image_size(Slot::Root0).is_err());
-    }
-
-    fn board_with(unit: Unit) -> Board {
-        board(unit).0
     }
 
     #[test]
@@ -875,7 +810,7 @@ pub(crate) mod tests {
     fn boot_checks_the_verified_fit_instead_of_loading_it_again() {
         let unit = Unit { dram: 0x2000_0000, bootable: ["root0".to_string()].into(), ..Unit::default() };
         let (mut board, unit) = board(unit);
-        board.select_slot([Slot::Root0, Slot::Root1], None).unwrap();
+        board.select_slot([Slot::Root0, Slot::Root1]).unwrap();
         let (length, _) = board.stage(&[7u8; 0x1234]).unwrap();
         board.boot_initramfs(Slot::Root0, &installed_environment(), length).unwrap();
         assert_eq!(unit.borrow().loads, 1);
@@ -886,7 +821,7 @@ pub(crate) mod tests {
     fn a_fit_changed_in_ram_stops_the_boot() {
         let unit = Unit { dram: 0x2000_0000, bootable: ["root0".to_string()].into(), ..Unit::default() };
         let (mut board, unit) = board(unit);
-        board.select_slot([Slot::Root0, Slot::Root1], None).unwrap();
+        board.select_slot([Slot::Root0, Slot::Root1]).unwrap();
         unit.borrow_mut().ram.push((FIT_ADDR + 4, b"overwritten".to_vec()));
         let (length, _) = board.stage(&[7u8; 0x1234]).unwrap();
         let error = board.boot_initramfs(Slot::Root0, &installed_environment(), length).unwrap_err();
@@ -969,8 +904,6 @@ pub(crate) mod tests {
         assert!(board.upload_ram(0).is_err());
         assert!(board.upload_ram(RAM_LIMIT + 1).is_err());
         assert!(unit.borrow().lines.iter().all(|l| l.is_empty()), "{:?}", unit.borrow().lines);
-        let words = [0x0610_1831, 0, 0, 0, 0, 6, 0, 0, 0, 0x2_0000, 0x801];
-        assert!(superblock_length(&words, Slot::Root0).unwrap_err().to_string().contains("larger than"));
         // md.l lines at other addresses do not count towards the words asked for.
         let md = "88000010: 00000005 00000006\n88000000: 00000001 00000002\n";
         assert_eq!(md_words(md, RAM_BASE, 2).unwrap(), [1, 2]);

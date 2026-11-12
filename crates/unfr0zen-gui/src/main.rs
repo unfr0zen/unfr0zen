@@ -17,6 +17,11 @@ mod macos_about;
 mod nandmap;
 mod patch;
 mod run;
+mod setup;
+use setup::Look;
+pub(crate) use setup::{boxed, boxed_select, card, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+#[cfg(test)]
+mod snapshot;
 mod terminal;
 mod when;
 
@@ -115,57 +120,7 @@ fn main() -> eframe::Result<()> {
         no_zoom_keys(&cc.egui_ctx);
         #[cfg(debug_assertions)]
         no_id_shift_outlines(&cc.egui_ctx);
-        cc.egui_ctx.all_styles_mut(|style| {
-            style.visuals.panel_fill = BG;
-            // No grid fitting: hinting thins and narrows the glyphs at 1x,
-            // where the system's own text is unhinted.
-            style.visuals.text_options.font_hinting = false;
-            // Rounded as the design has it: widgets 4 px (the checkboxes share
-            // it), surfaces 8 px.
-            for widget in [&mut style.visuals.widgets.noninteractive, &mut style.visuals.widgets.inactive,
-                           &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active,
-                           &mut style.visuals.widgets.open] {
-                widget.corner_radius = egui::CornerRadius::same(4);
-            }
-            style.visuals.window_corner_radius = egui::CornerRadius::same(8);
-            style.visuals.menu_corner_radius = egui::CornerRadius::same(8);
-            // Text as the design has it: near white, not egui's grey.
-            style.visuals.widgets.noninteractive.fg_stroke.color = TEXT;
-            style.visuals.widgets.inactive.fg_stroke.color = TEXT;
-            style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
-            style.visuals.widgets.active.fg_stroke.color = egui::Color32::WHITE;
-            // Buttons, drop-downs and fields as the checkboxes: an inset box
-            // with a thin border, lit on hover.
-            let widgets = &mut style.visuals.widgets;
-            widgets.inactive.bg_fill = INSET;
-            widgets.inactive.weak_bg_fill = INSET;
-            widgets.inactive.bg_stroke = egui::Stroke::new(1.0, LINE);
-            widgets.hovered.bg_fill = NAV_HOVER;
-            widgets.hovered.weak_bg_fill = NAV_HOVER;
-            widgets.hovered.bg_stroke = egui::Stroke::new(1.0, MUTED);
-            widgets.active.bg_fill = NAV_SELECTED;
-            widgets.active.weak_bg_fill = NAV_SELECTED;
-            widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-            widgets.open.bg_fill = NAV_SELECTED;
-            widgets.open.weak_bg_fill = NAV_SELECTED;
-            widgets.open.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-            style.visuals.extreme_bg_color = INSET;
-            style.interaction.selectable_labels = false;
-            // Every popup frame (dialogs, menus, tooltips) sits on the page's
-            // colour, so its widgets look as they do on a page, and pads its
-            // content by this much.
-            style.visuals.window_fill = BG;
-            style.visuals.window_stroke = egui::Stroke::new(1.0, LINE);
-            style.spacing.menu_margin = egui::Margin::same(12);
-            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            style.spacing.button_padding = egui::vec2(10.0, 4.0);
-            use egui::TextStyle::*;
-            style.text_styles.insert(Small, egui::FontId::proportional(11.0));
-            style.text_styles.insert(Body, egui::FontId::proportional(14.0));
-            style.text_styles.insert(Button, egui::FontId::proportional(14.0));
-            style.text_styles.insert(Monospace, egui::FontId::monospace(12.5));
-            style.text_styles.insert(Heading, medium(20.0));
-        });
+        install_style(&cc.egui_ctx);
         #[cfg(target_os = "macos")]
         macos_about::install();
         #[cfg(windows)]
@@ -184,12 +139,70 @@ fn main() -> eframe::Result<()> {
     result
 }
 
-/// A drop-down whose rows keep one height. egui takes the inactive border's
-/// width out of a row's padding but draws no frame on an inactive row, so with
-/// the theme's border a row grows under the pointer and overflows the list.
+/// The window's look: its surfaces, the accent, rounded widgets, and the
+/// text sizes the pages use.
+fn install_style(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        style.visuals.panel_fill = BG;
+        // No grid fitting: hinting thins and narrows the glyphs at 1x,
+        // where the system's own text is unhinted.
+        style.visuals.text_options.font_hinting = false;
+        // Rounded as the set-up flow's cards: fields and drop-downs 9 px,
+        // menus 12, windows 16.
+        for widget in [&mut style.visuals.widgets.noninteractive, &mut style.visuals.widgets.inactive,
+                       &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active,
+                       &mut style.visuals.widgets.open] {
+            widget.corner_radius = egui::CornerRadius::same(9);
+        }
+        style.visuals.window_corner_radius = egui::CornerRadius::same(16);
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(12);
+        // Text as the design has it: near white, not egui's grey.
+        style.visuals.widgets.noninteractive.fg_stroke.color = TEXT;
+        style.visuals.widgets.inactive.fg_stroke.color = TEXT;
+        style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
+        style.visuals.widgets.active.fg_stroke.color = egui::Color32::WHITE;
+        // Buttons, drop-downs and fields as the set-up flow's fields: an
+        // inset box with an edge that shows, lit on hover.
+        let widgets = &mut style.visuals.widgets;
+        widgets.inactive.bg_fill = INSET;
+        widgets.inactive.weak_bg_fill = INSET;
+        widgets.inactive.bg_stroke = egui::Stroke::new(1.0, setup::FIELD_EDGE);
+        widgets.hovered.bg_fill = NAV_HOVER;
+        widgets.hovered.weak_bg_fill = NAV_HOVER;
+        widgets.hovered.bg_stroke = egui::Stroke::new(1.0, MUTED);
+        widgets.active.bg_fill = NAV_SELECTED;
+        widgets.active.weak_bg_fill = NAV_SELECTED;
+        widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        widgets.open.bg_fill = NAV_SELECTED;
+        widgets.open.weak_bg_fill = NAV_SELECTED;
+        widgets.open.bg_stroke = egui::Stroke::new(1.0, ACCENT);
+        style.visuals.extreme_bg_color = INSET;
+        style.interaction.selectable_labels = false;
+        // Every popup frame (menus, tooltips) sits on a card's colour, as
+        // the dialogs do, and pads its content by this much.
+        style.visuals.window_fill = CARD;
+        style.visuals.window_stroke = egui::Stroke::new(1.0, LINE);
+        style.spacing.menu_margin = egui::Margin::same(12);
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        use egui::TextStyle::*;
+        style.text_styles.insert(Small, egui::FontId::proportional(11.0));
+        style.text_styles.insert(Body, egui::FontId::proportional(14.0));
+        style.text_styles.insert(Button, egui::FontId::proportional(14.0));
+        style.text_styles.insert(Monospace, egui::FontId::monospace(12.5));
+        style.text_styles.insert(Heading, medium(20.0));
+    });
+}
+
+/// A drop-down whose rows keep one height, its chosen row on the accent.
+/// egui takes the inactive border's width out of a row's padding but draws no
+/// frame on an inactive row, so with the theme's border a row grows under the
+/// pointer and overflows the list.
 pub(crate) fn dropdown(id: &str, width: f32) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id).width(width).popup_style(egui::style::StyleModifier::new(|style| {
         style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        style.visuals.selection.bg_fill = ACCENT;
+        style.visuals.selection.stroke = egui::Stroke::new(1.0, ON_ACCENT);
     }))
 }
 
@@ -208,59 +221,47 @@ fn no_id_shift_outlines(ctx: &egui::Context) {
     ctx.all_styles_mut(|style| style.debug.warn_if_rect_changes_id = false);
 }
 
-/// The window's type: the platform's own UI font where it has one, Inter
-/// behind it, each with a medium cut for headings and names; JetBrains Mono
-/// for logs and the terminal. egui's own fonts stay last for the glyphs
-/// they lack.
+/// The window's type: DM Sans, one variable font giving the text's regular
+/// cut and the medium one for headings and names; Outfit Light for titles
+/// and big numbers; JetBrains Mono for logs and the terminal. egui's own fonts stay
+/// last for the glyphs they lack.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let data = |bytes: &'static [u8]| Arc::new(egui::FontData::from_static(bytes));
-    fonts.font_data.insert("Inter".into(), data(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")));
-    fonts.font_data.insert("Inter-Medium".into(), data(include_bytes!("../../../assets/fonts/Inter-Medium.ttf")));
-    fonts.font_data.insert("JetBrainsMono".into(), data(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf")));
-    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "Inter".into());
+    const DM_SANS: &[u8] = include_bytes!("../../../assets/fonts/DMSans-Variable.ttf");
+    // A cut of DM Sans: its optical size and weight.
+    let cut = |size: f32, weight: f32| Arc::new(egui::FontData::from_static(DM_SANS).tweak(egui::FontTweak {
+        coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
+        ..egui::FontTweak::default()
+    }));
+    fonts.font_data.insert("DMSans".into(), cut(14.0, 400.0));
+    fonts.font_data.insert("DMSans-Medium".into(), cut(14.0, 500.0));
+    fonts.font_data.insert("Outfit".into(),
+                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/Outfit-Light.ttf"))));
+    fonts.font_data.insert("JetBrainsMono".into(),
+                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"))));
+    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "DMSans".into());
     fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".into());
-    let mut medium = vec!["Inter-Medium".to_string()];
-    medium.extend(fonts.families[&egui::FontFamily::Proportional].iter().cloned());
-    if let Some((regular, medium_cut)) = system_font() {
-        fonts.font_data.insert("system".into(), Arc::new(regular));
-        fonts.font_data.insert("system-medium".into(), Arc::new(medium_cut));
-        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "system".into());
-        medium.insert(0, "system-medium".into());
-    }
-    fonts.families.insert(egui::FontFamily::Name(MEDIUM.into()), medium);
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    let family = |first: &str| std::iter::once(first.to_string()).chain(fallback.iter().cloned()).collect::<Vec<_>>();
+    fonts.families.insert(egui::FontFamily::Name(MEDIUM.into()), family("DMSans-Medium"));
+    fonts.families.insert(egui::FontFamily::Name(DISPLAY.into()), family("Outfit"));
     ctx.set_fonts(fonts);
-}
-
-/// The platform's UI font, read at start, as its regular and medium cuts:
-/// San Francisco on macOS (one variable file, its weight axis set for the
-/// medium), Segoe UI on Windows. None elsewhere.
-fn system_font() -> Option<(egui::FontData, egui::FontData)> {
-    if cfg!(target_os = "macos") {
-        // At its text optical size, where the letters are spaced for
-        // reading; the file's default is the tight display cut.
-        let bytes = std::fs::read("/System/Library/Fonts/SFNS.ttf").ok()?;
-        let cut = |weight: f32| egui::FontTweak {
-            coords: egui::epaint::text::VariationCoords::new([(b"opsz", 13.0), (b"wght", weight)]),
-            ..egui::FontTweak::default()
-        };
-        Some((egui::FontData::from_owned(bytes.clone()).tweak(cut(400.0)), egui::FontData::from_owned(bytes).tweak(cut(500.0))))
-    } else if cfg!(windows) {
-        let dir = std::path::PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts");
-        let regular = std::fs::read(dir.join("segoeui.ttf")).ok()?;
-        let medium = std::fs::read(dir.join("seguisb.ttf")).ok()?;
-        Some((egui::FontData::from_owned(regular), egui::FontData::from_owned(medium)))
-    } else {
-        None
-    }
 }
 
 /// The family name of the medium cut.
 const MEDIUM: &str = "medium";
 
-/// Inter Medium at `size`: headings, names, the selected page.
+/// DM Sans Medium at `size`: headings, names, the selected page.
 pub(crate) fn medium(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(MEDIUM.into()))
+}
+
+/// The family name of the display cut.
+const DISPLAY: &str = "display";
+
+/// Outfit Light at `size`: the pages' titles and the big numbers.
+pub(crate) fn display(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(DISPLAY.into()))
 }
 
 /// Runs a file dialog to its answer on its own thread and sends the chosen
@@ -379,8 +380,7 @@ impl Updates {
             match state {
                 UpdateState::Available(ref release) => {
                     ui.set_width(400.0);
-                    ui.heading(egui::RichText::new(tr!("update.available_heading", version = release.tag))
-                        .color(ui.visuals().strong_text_color()));
+                    dialog_title(ui, &tr!("update.available_heading", version = release.tag));
                     ui.label(tr!("update.current_version", version = BUILD_VERSION));
                     ui.add_space(8.0);
                     if let Some(body) = &release.body {
@@ -393,12 +393,12 @@ impl Updates {
                             ui.add_space(8.0);
                         }
                     }
-                    ui.separator();
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        if ui.button(tr!("update.install")).clicked() {
+                        if setup::page_button(ui, tr!("update.install"), Look::Primary, true).clicked() {
                             self.install(ui.ctx(), release.clone());
                         }
-                        if ui.button(tr!("update.not_now")).clicked() {
+                        if setup::page_button(ui, tr!("update.not_now"), Look::Secondary, true).clicked() {
                             self.dialog_open = false;
                         }
                         ui.hyperlink_to(tr!("update.github"), &release.url);
@@ -406,34 +406,31 @@ impl Updates {
                     false
                 }
                 UpdateState::Installing(ref tag) => {
-                    ui.heading(egui::RichText::new(tr!("update.installing_heading", version = tag))
-                        .color(ui.visuals().strong_text_color()));
+                    dialog_title(ui, &tr!("update.installing_heading", version = tag));
                     ui.spinner();
                     false
                 }
                 UpdateState::Installed(ref tag) => {
-                    ui.heading(egui::RichText::new(tr!("update.installed_heading", version = tag))
-                        .color(ui.visuals().strong_text_color()));
+                    dialog_title(ui, &tr!("update.installed_heading", version = tag));
                     ui.label(tr!("update.restart_description"));
-                    ui.separator();
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        if ui.button(tr!("update.restart")).clicked() {
+                        if setup::page_button(ui, tr!("update.restart"), Look::Primary, true).clicked() {
                             self.restart.store(true, Ordering::Relaxed);
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                        ui.button(tr!("update.later")).clicked()
+                        setup::page_button(ui, tr!("update.later"), Look::Secondary, true).clicked()
                     }).inner
                 }
                 UpdateState::Failed(ref error, ref release) => {
-                    ui.heading(egui::RichText::new(tr!("update.failed"))
-                        .color(ui.visuals().warn_fg_color));
+                    ui.label(egui::RichText::new(tr!("update.failed")).font(display(22.0)).color(WARN));
                     ui.label(error.as_str());
-                    ui.separator();
+                    ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        if ui.button(tr!("update.retry")).clicked() {
+                        if setup::page_button(ui, tr!("update.retry"), Look::Primary, true).clicked() {
                             self.install(ui.ctx(), release.clone());
                         }
-                        ui.button(tr!("common.close")).clicked()
+                        setup::page_button(ui, tr!("common.close"), Look::Secondary, true).clicked()
                     }).inner
                 }
                 _ => {
@@ -452,7 +449,7 @@ impl Updates {
 const WAIT_USB: Duration = Duration::from_secs(120);
 
 /// The window, fixed: every page is laid out for it.
-const WINDOW: [f32; 2] = [1080.0, 680.0];
+const WINDOW: [f32; 2] = [1080.0, 800.0];
 
 /// The sidebar's pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -488,6 +485,9 @@ impl Page {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Task {
     Patch,
+    /// The whole NAND backed up to the file, then the patch, with the unit
+    /// in recovery once for both.
+    BackupPatch(PathBuf),
     Backup(PathBuf),
     Restore(PathBuf),
     Uboot,
@@ -497,7 +497,8 @@ enum Task {
 impl Task {
     fn title(&self) -> &'static str {
         match self {
-            Task::Patch => tr!("page.patch"),
+            Task::Patch => tr!("task.patch"),
+            Task::BackupPatch(_) => tr!("task.backup_patch"),
             Task::Backup(_) => tr!("task.backup"),
             Task::Restore(_) => tr!("task.restore"),
             Task::Uboot => tr!("task.uboot"),
@@ -508,6 +509,7 @@ impl Task {
     fn log_title(&self) -> &'static str {
         match self {
             Task::Patch => "Patch",
+            Task::BackupPatch(_) => "Back up NAND and patch",
             Task::Backup(_) => "Back up NAND",
             Task::Restore(_) => "Restore NAND",
             Task::Uboot => "Load recovery U-Boot",
@@ -518,7 +520,7 @@ impl Task {
     /// What the task is doing, for the run's card.
     fn doing(&self) -> &'static str {
         match self {
-            Task::Patch => tr!("task.patching"),
+            Task::Patch | Task::BackupPatch(_) => tr!("task.patching"),
             Task::Backup(_) => tr!("task.backing_up"),
             Task::Restore(_) => tr!("task.restoring"),
             Task::Uboot => tr!("task.loading_uboot"),
@@ -529,15 +531,24 @@ impl Task {
     /// The page the task was started from, where its summary shows.
     fn page(&self) -> Page {
         match self {
-            Task::Patch => Page::Patch,
+            Task::Patch | Task::BackupPatch(_) => Page::Patch,
             Task::Backup(_) | Task::Restore(_) => Page::Backups,
             Task::Uboot => Page::Uboot,
             Task::Boot => Page::Boot,
         }
     }
 
+    /// The task writes a backup into the folder, or reads one from it.
     fn is_nand(&self) -> bool {
-        matches!(self, Task::Backup(_) | Task::Restore(_))
+        matches!(self, Task::Backup(_) | Task::BackupPatch(_) | Task::Restore(_))
+    }
+
+    /// The backup the task writes.
+    fn backup(&self) -> Option<&PathBuf> {
+        match self {
+            Task::Backup(out) | Task::BackupPatch(out) => Some(out),
+            _ => None,
+        }
     }
 }
 
@@ -598,8 +609,23 @@ struct App {
     pending_image: Option<Receiver<Option<PathBuf>>>,
     /// When the wait for USB download mode began: it shows as a popup, not a step.
     sdp_wait: Option<Instant>,
-    /// The patch page's advanced panel is out.
-    advanced_open: bool,
+    /// The review step's developer options are out.
+    developer_open: bool,
+    /// The patch flow's step, while no run of its own shows.
+    step: setup::Step,
+    /// The task under way, or the last one, was started by the patch flow:
+    /// its progress and outcome show in the flow, not in the run's card.
+    flow_run: bool,
+    /// The backup the flow took before its patch, once whole.
+    flow_backup: Option<PathBuf>,
+    /// Counts the flow's runs ending and restarts: its pages' scroll areas
+    /// are new each time, so they open at the top.
+    flow_epoch: u32,
+    /// The set-up steps go on with no unit on USB: in debug builds, to
+    /// work on them without one.
+    steps_without_unit: bool,
+    /// The version at the sidebar's foot; none when empty.
+    version: &'static str,
     /// The Serial console page's terminal, on the application's shells.
     shell: Terminal,
     /// The U-Boot page's terminal, on the recovery console.
@@ -635,7 +661,7 @@ impl Default for App {
     fn default() -> Self {
         App {
             page: Page::default(),
-            form: Form::default(),
+            form: Form::new(),
             library: Library::new(default_data_dir().join("backups")),
             bus: Watcher::default(),
             run: None,
@@ -645,7 +671,13 @@ impl Default for App {
             delete: None,
             pending_image: None,
             sdp_wait: None,
-            advanced_open: false,
+            developer_open: false,
+            step: setup::Step::default(),
+            flow_run: false,
+            flow_backup: None,
+            flow_epoch: 0,
+            steps_without_unit: cfg!(debug_assertions),
+            version: BUILD_VERSION,
             shell: Terminal::new(terminal::SHELLS),
             uboot: Terminal::new(terminal::RECOVERY),
             maps: nandmap::Maps::default(),
@@ -677,6 +709,16 @@ struct LogContext {
     outcome: Option<Result<String, String>>,
     /// The unit the run found: device and silicon, once read.
     device: Option<String>,
+    /// A patch run's phases so far, newest last; the last may still be open.
+    phases: Vec<PhaseRow>,
+}
+
+/// A phase of a patch run: when it began, and how long it took and whether
+/// it went through, once it is over.
+struct PhaseRow {
+    phase: unfr0zen_host::Phase,
+    started: Instant,
+    done: Option<(Duration, bool)>,
 }
 
 impl LogContext {
@@ -750,19 +792,20 @@ impl App {
         if !self.idle() {
             return;
         }
+        // A task started elsewhere is not the flow's: Set up leaves its run.
+        // start_flow marks its own once started.
+        self.flow_run = false;
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
-            Task::Patch => format!("Selected: Patch, {}", self.form.inputs().describe()),
+            Task::Patch | Task::BackupPatch(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
             task => format!("Selected: {}", task.log_title()),
         });
         let entry_point = self.form.entry_point;
         let run = match &task {
-            Task::Patch => self.form.config().map(Run::start),
-            Task::Backup(out) => {
-                let dir = out.parent().filter(|dir| !dir.as_os_str().is_empty());
-                dir.map_or(Ok(()), |dir| std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display())))
-                    .map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point))
-            }
+            Task::Patch => self.form.config().map(|config| Run::start(config, None)),
+            Task::BackupPatch(out) => self.form.config()
+                .and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone())))),
+            Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
             Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
             Task::Boot => Ok(Run::task(move |progress| boot::boot(WAIT_USB, entry_point, progress))),
@@ -814,6 +857,13 @@ impl App {
         }
     }
 
+    /// Ends the phase under way, if one is.
+    fn close_phase(&mut self, ok: bool) {
+        if let Some(row) = self.logs.phases.last_mut().filter(|row| row.done.is_none()) {
+            row.done = Some((row.started.elapsed(), ok));
+        }
+    }
+
     fn drain(&mut self) {
         let Some(run) = &self.run else { return };
         for event in run.events() {
@@ -852,7 +902,13 @@ impl App {
             Event::Waiting(message) => self.logs.waiting = Some(message),
             Event::Transfer { done, next, total } => self.on_transfer(done, next, total),
             Event::Confirm(question, reply) => self.confirm = Some((question, reply)),
+            Event::Phase(phase) => {
+                self.close_phase(true);
+                self.logs.phases.push(PhaseRow { phase, started: Instant::now(), done: None });
+            }
             Event::Done(result) => {
+                self.close_phase(result.is_ok());
+                self.flow_epoch += 1;
                 self.sdp_wait = None;
                 // A run called off at the download prompt leaves no log.
                 if self.cancelled {
@@ -873,35 +929,50 @@ impl App {
                     self.refresh_history();
                 }
                 // A backup landed, or a restore read the folder's image.
-                if let Some(Task::Backup(out)) = &self.task {
+                if let Some(out) = self.task.as_ref().and_then(Task::backup) {
                     self.maps.forget(out);
                 }
                 if self.task.as_ref().is_some_and(Task::is_nand) {
                     self.library.refresh();
+                }
+                // The flow's backup is whole once its checksum is written,
+                // whether or not the patch after it went through.
+                if let Some(Task::BackupPatch(out)) = &self.task {
+                    if unfr0zen_host::nand::checksum_path(out).exists() {
+                        self.flow_backup = Some(out.clone());
+                    }
                 }
             }
         }
     }
 }
 
+/// Makes the folder a backup goes in.
+fn backup_folder(out: &Path) -> Result<(), String> {
+    let dir = out.parent().filter(|dir| !dir.as_os_str().is_empty());
+    dir.map_or(Ok(()), |dir| std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display())))
+}
+
 // The diamond3 boot logo's icy blue: the accent of every primary button.
 const LOGO_BLUE: egui::Color32 = egui::Color32::from_rgb(0x81, 0xce, 0xfa);
 pub(crate) const ACCENT: egui::Color32 = LOGO_BLUE;
 /// Text on the accent fill.
-const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0x0b, 0x12, 0x1e);
-const OK: egui::Color32 = egui::Color32::from_rgb(0x2e, 0xa0, 0x43);
+pub(crate) const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0x0b, 0x12, 0x1e);
+pub(crate) const OK: egui::Color32 = egui::Color32::from_rgb(0x2e, 0xa0, 0x43);
 pub(crate) const BAD: egui::Color32 = egui::Color32::from_rgb(0xd0, 0x33, 0x2e);
-const WARN: egui::Color32 = egui::Color32::from_rgb(0xf3, 0xc5, 0x65);
+pub(crate) const WARN: egui::Color32 = egui::Color32::from_rgb(0xf3, 0xc5, 0x65);
 // The shell's surfaces: the page, the sidebar, the title bar, the status bar.
 const BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x1b, 0x21);
 pub(crate) const SIDE: egui::Color32 = egui::Color32::from_rgb(0x14, 0x17, 0x1c);
 const BAR: egui::Color32 = egui::Color32::from_rgb(0x1e, 0x22, 0x29);
 pub(crate) const STATUS: egui::Color32 = egui::Color32::from_rgb(0x0e, 0x10, 0x14);
-const INSET: egui::Color32 = egui::Color32::from_rgb(0x12, 0x15, 0x1a);
+pub(crate) const INSET: egui::Color32 = egui::Color32::from_rgb(0x12, 0x15, 0x1a);
+/// A card on the page: one shade lifted.
+pub(crate) const CARD: egui::Color32 = egui::Color32::from_rgb(0x21, 0x25, 0x2d);
 pub(crate) const LINE: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x2f, 0x39);
 const NAV_SELECTED: egui::Color32 = egui::Color32::from_rgb(0x26, 0x2b, 0x35);
 const NAV_HOVER: egui::Color32 = egui::Color32::from_rgb(0x1e, 0x22, 0x29);
-const TEXT: egui::Color32 = egui::Color32::from_rgb(0xe6, 0xe8, 0xec);
+pub(crate) const TEXT: egui::Color32 = egui::Color32::from_rgb(0xe6, 0xe8, 0xec);
 pub(crate) const MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0xa3, 0xb2);
 const MAP_ROOT0: egui::Color32 = egui::Color32::from_rgb(0x3f, 0x7f, 0xc4);
 const MAP_ROOT1: egui::Color32 = egui::Color32::from_rgb(0x3f, 0xb5, 0x9f);
@@ -921,8 +992,6 @@ const CAPTION_BUTTON: f32 = 46.0;
 const CLOSE_HOVER: egui::Color32 = egui::Color32::from_rgb(0xc4, 0x2b, 0x1c);
 /// The backup detail pane's margin on each side of the map.
 pub(crate) const DETAIL_MARGIN: f32 = 12.0;
-/// The patch page's advanced panel.
-const ADVANCED_WIDTH: f32 = 340.0;
 /// The run's card: its width, the most of it the steps take, and how long
 /// it stays after a success.
 const POPUP_WIDTH: f32 = 420.0;
@@ -932,7 +1001,7 @@ const POPUP_MAX_HEIGHT: f32 = 600.0;
 const POPUP_LINGER: Duration = Duration::from_millis(1500);
 /// The Logs page's list: its text size, the gap between columns and the
 /// padding at a row's left.
-const HISTORY_FONT: f32 = 11.5;
+const HISTORY_FONT: f32 = 12.5;
 /// The text of the steps in the Logs page's run pane.
 const RUN_STEP_FONT: f32 = 12.0;
 /// The share of the run pane's height its title and steps take at most.
@@ -985,9 +1054,9 @@ impl App {
         self.status_bar(ui);
         self.sidebar(ui);
         let frame = egui::Frame::new().fill(BG)
-            .inner_margin(egui::Margin { left: 20, right: 20, top: 14, bottom: 10 });
+            .inner_margin(egui::Margin { left: 28, right: 28, top: 16, bottom: 4 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| match self.page {
-            Page::Patch => self.patch_page(ui),
+            Page::Patch => self.setup_page(ui),
             Page::Backups => self.backups_page(ui),
             Page::Logs => self.logs_page(ui),
             Page::Uboot => self.uboot_page(ui),
@@ -1037,7 +1106,7 @@ impl App {
                     ui.add_space(TRAFFIC_LIGHTS);
                 }
                 // The name, with the zero in the accent and a glint now and then.
-                let font = egui::TextStyle::Body.resolve(ui.style());
+                let font = display(16.0);
                 let time = ui.input(|input| input.time);
                 // One section per letter whatever the colours: sections are
                 // shaped apart, so merging equal neighbours, as append does,
@@ -1048,7 +1117,7 @@ impl App {
                     byte_range: egui::text::ByteIndex(index)..egui::text::ByteIndex(index + 1),
                     format: egui::TextFormat::simple(font.clone(), name_color(index, time)),
                 }).collect();
-                ui.label(name);
+                slashed_zero_label(ui, name, NAME_ZERO, font.size, name_color(NAME_ZERO, time));
                 ui.ctx().request_repaint_after(glint_wait(time));
                 ui.label(egui::RichText::new("›").color(DIM));
                 ui.label(egui::RichText::new(self.page.title()).font(medium(13.5)));
@@ -1073,14 +1142,16 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.add_space(2.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        if ui.add(egui::Label::new(egui::RichText::new(BUILD_VERSION).size(11.0).color(DIM))
-                            .sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text(tr!("nav.about_hint")).clicked() {
-                            self.show(Page::About);
-                        }
-                    });
+                    if !self.version.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            if ui.add(egui::Label::new(egui::RichText::new(self.version).size(11.0).color(DIM))
+                                .sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(tr!("nav.about_hint")).clicked() {
+                                self.show(Page::About);
+                            }
+                        });
+                    }
                     if let Some(notice) = self.updates.notice() {
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
@@ -1185,50 +1256,9 @@ impl App {
         }
     }
 
-    fn patch_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(egui::RichText::new(tr!("page.patch")).strong());
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.add(egui::Label::new(egui::RichText::new(tr!("patch.about")).color(MUTED)).wrap());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(egui::RichText::new(tr!("common.advanced")).size(12.0)).on_hover_text(tr!("patch.advanced_hint")).clicked() {
-                    self.advanced_open = !self.advanced_open;
-                }
-            });
-        });
-        let frame = egui::Frame::new().inner_margin(egui::Margin { top: 10, ..egui::Margin::ZERO });
-        egui::Panel::bottom("patch_actions").show_separator_line(true).frame(frame).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if accent_button(ui, tr!("patch.start"), self.idle())
-                    .on_hover_text(tr!("patch.start_hint"))
-                    .on_disabled_hover_text(tr!("patch.start_disabled"))
-                    .clicked() {
-                    self.start(Task::Patch);
-                }
-                if self.running() && self.task == Some(Task::Patch) {
-                    running_notice(ui);
-                }
-            });
-        });
-        let frame = egui::Frame::new().fill(SIDE).corner_radius(8)
-            .inner_margin(egui::Margin { left: 14, right: 14, top: 10, bottom: 10 });
-        let running = self.running();
-        egui::Panel::right("patch_advanced").exact_size(ADVANCED_WIDTH).resizable(false).show_separator_line(false)
-            .frame(frame).show_collapsible(ui, &mut self.advanced_open, |ui| {
-                egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]).show(ui, |ui| {
-                    let bus = self.bus.current();
-                    ui.add_enabled_ui(!running, |ui| self.form.advanced_ui(ui, &bus));
-                });
-            });
-        egui::ScrollArea::vertical().id_salt("patch").auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(2.0);
-            ui.add_enabled_ui(!running, |ui| self.form.ui(ui));
-        });
-    }
-
     fn backups_page(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr!("backup.title")).font(medium(20.0)));
+            ui.label(egui::RichText::new(tr!("backup.title")).font(display(34.0)));
             ui.add_space(4.0);
             let dir = self.library.dir.clone();
             let short = short_path(&dir);
@@ -1240,27 +1270,32 @@ impl App {
         ui.label(egui::RichText::new(
             tr!("backup.description")).color(MUTED));
         ui.add_space(10.0);
-        let frame = egui::Frame::new().inner_margin(egui::Margin { top: 10, ..egui::Margin::ZERO });
-        egui::Panel::bottom("backup_actions").show_separator_line(true).frame(frame).show(ui, |ui| {
+        // The actions as the set-up flow's: under a line, between even gaps.
+        egui::Panel::bottom("backup_actions").show_separator_line(false).frame(egui::Frame::new()).show(ui, |ui| {
+            setup::separator(ui);
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 // Wide enough for the longer label, so the two match.
-                let size = egui::vec2(130.0, 28.0);
+                let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
                 if accent_button_sized(ui, tr!("backup.create"), self.idle(), size)
                     .on_hover_text(tr!("backup.create_hint"))
                     .clicked() {
                     let out = self.library.fresh_path();
                     self.start(Task::Backup(out));
                 }
-                if ui.add_enabled(self.idle(), egui::Button::new(tr!("backup.restore_file")).min_size(size))
+                if setup::rounded_button(ui, tr!("backup.restore_file"), Look::Secondary, self.idle(), size)
                     .on_hover_text(tr!("backup.restore_file_hint"))
                     .clicked() {
                     self.choose_restore_image();
                 }
             });
+            ui.add_space(12.0);
         });
         // The pane holds the map exactly, whatever the display's pixel ratio.
         let detail_width = nandmap::width(ui.pixels_per_point()) + 2.0 * DETAIL_MARGIN;
-        let frame = egui::Frame::new().fill(SIDE).corner_radius(8).inner_margin(egui::Margin::same(DETAIL_MARGIN as i8));
+        let frame = egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(DETAIL_MARGIN as i8));
+        // Clear of the actions' line, as the set-up flow's cards are.
+        let frame = frame.outer_margin(egui::Margin { bottom: 12, ..egui::Margin::ZERO });
         egui::Panel::right("backup_detail").exact_size(detail_width).resizable(false).show_separator_line(false)
             .frame(frame).show(ui, |ui| self.backup_detail(ui));
         egui::ScrollArea::vertical().id_salt("backups").auto_shrink([false, false]).show(ui, |ui| {
@@ -1281,8 +1316,8 @@ impl App {
         // Each column as wide as its widest value, its title at least; the
         // name takes what they leave.
         const GAP: f32 = 8.0;
-        const ROW: f32 = 28.0;
-        const CELL: f32 = 11.5;
+        const ROW: f32 = 38.0;
+        const CELL: f32 = 12.5;
         const RIGHT_MARGIN: f32 = 4.0;
         let header_font = egui::FontId::proportional(10.5);
         let measure = |text: &str, font: &egui::FontId| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font.clone(), DIM).size().x);
@@ -1302,11 +1337,11 @@ impl App {
         let name_width = (width - RIGHT_MARGIN - fixed.iter().map(|(_, w)| w + GAP).sum::<f32>()).max(80.0);
         let columns: Vec<(&str, f32)> = std::iter::once((tr!("backup.image_column"), name_width)).chain(fixed).collect();
         // The header.
-        let (header, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
-        let mut x = header.left();
+        let (header, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+        let mut x = header.left() + 8.0;
         for (title, w) in &columns {
             ui.painter().text(egui::pos2(x, header.center().y), egui::Align2::LEFT_CENTER, title.to_uppercase(),
-                              egui::FontId::proportional(10.5), DIM);
+                              egui::FontId::proportional(10.5), setup::LABEL);
             x += w + GAP;
         }
         ui.painter().hline(header.x_range(), header.bottom(), egui::Stroke::new(1.0, LINE));
@@ -1324,12 +1359,11 @@ impl App {
             let trash = ui.interact(icon_rect(trash_at), delete_id(&entry.path), sense);
             let selected = Some(&entry.path) == self.library.selected.as_ref();
             let fill = if selected { NAV_SELECTED } else if response.hovered() || reveal.hovered() || trash.hovered() { NAV_HOVER } else { egui::Color32::TRANSPARENT };
-            ui.painter().rect_filled(rect, 6.0, fill);
-            ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, INSET));
+            ui.painter().rect_filled(rect, 10.0, fill);
             let text_color = ui.visuals().text_color();
             let cells = [entry.device_label().to_string(), entry.taken_label(), backups::size_label(entry.size)];
             let mut x = rect.left() + 8.0;
-            let name = truncated(ui, entry.name(), medium(12.0), ui.visuals().strong_text_color(), name_width - 8.0);
+            let name = truncated(ui, entry.name(), medium(13.0), ui.visuals().strong_text_color(), name_width - 8.0);
             ui.painter().galley(egui::pos2(x, rect.center().y - name.size().y * 0.5), name, text_color);
             x += name_width + GAP - 8.0;
             for (text, (_, w)) in cells.iter().zip(&fixed) {
@@ -1400,7 +1434,8 @@ impl App {
         ui.add(egui::Label::new(egui::RichText::new(short_path(&entry.path)).size(11.5).color(DIM)).wrap());
         let idle = self.idle();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            let size = egui::vec2(ui.available_width(), 28.0);
+            // As wide as the page's other actions, within the pane's margin.
+            let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
             if accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)
                 .on_hover_text(tr!("backup.restore_hint"))
                 .on_disabled_hover_text(if entry.checksum.is_none() {
@@ -1417,17 +1452,22 @@ impl App {
     fn nand_progress(&self, ui: &mut egui::Ui) {
         let running = self.running();
         let stage = self.logs.current().unwrap_or(if running { tr!("run.starting") } else { tr!("run.done") });
-        ui.label(egui::RichText::new(stage).strong());
+        ui.label(egui::RichText::new(stage).font(medium(14.0)));
         // The bar and the line under it together: reports can be 64 MiB apart.
         // A run that ended stands at what it reported.
         let position = |t: &Transfer| if running { t.shown() } else { t.done };
         let fraction = self.logs.transfer.as_ref().map_or(0.0, |t| position(t) as f32 / t.total.max(1) as f32);
-        // No fill at all before progress: egui draws an empty fill as a dot.
-        let fill = if fraction > 0.0 { ACCENT.gamma_multiply(0.7) } else { egui::Color32::TRANSPARENT };
+        // A rounded track, lit in the accent to the share done; none before
+        // there is any.
         let width = ui.available_width();
-        let bar = ui.add(egui::ProgressBar::new(fraction).desired_width(width).fill(fill));
-        ui.painter().text(bar.rect.center(), egui::Align2::CENTER_CENTER, tr!("transfer.percent", percent = format!("{:.0}", fraction * 100.0)),
-                          egui::TextStyle::Button.resolve(ui.style()), ui.visuals().strong_text_color());
+        let (bar, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
+        ui.painter().rect_filled(bar, 10.0, setup::TRACK);
+        if fraction > 0.0 {
+            let lit = egui::Rect::from_min_size(bar.min, egui::vec2((bar.width() * fraction.min(1.0)).max(bar.height()), bar.height()));
+            ui.painter().rect_filled(lit, 10.0, ACCENT.gamma_multiply(0.8));
+        }
+        ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, tr!("transfer.percent", percent = format!("{:.0}", fraction * 100.0)),
+                          medium(12.0), ui.visuals().strong_text_color());
         if let Some(t) = &self.logs.transfer {
             let (size, speed, left) = transfer_texts(position(t), t.next, t.total, t.speed());
             let font = egui::FontId::proportional(11.5);
@@ -1443,15 +1483,14 @@ impl App {
     /// steps and log beside them.
     fn logs_page(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr!("page.logs")).font(medium(20.0)));
+            ui.label(egui::RichText::new(tr!("page.logs")).font(display(34.0)));
             ui.add_space(4.0);
             let dir = Self::logs_dir();
             if pill(ui, &short_path(&dir), ACCENT, INSET, true).on_hover_text(dir.display().to_string()).clicked() {
                 let _ = std::fs::create_dir_all(&dir).and_then(|_| open_path(&dir));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = egui::RichText::new(tr!("logs.delete_old")).size(12.0);
-                if ui.add_enabled(!self.history.is_empty(), egui::Button::new(label))
+                if setup::page_button(ui, tr!("logs.delete_old"), Look::Secondary, !self.history.is_empty())
                     .on_hover_text(tr!("logs.delete_old_hint"))
                     .clicked() {
                     self.delete_logs = true;
@@ -1470,7 +1509,7 @@ impl App {
         // to the pane, so the pane keeps as much width as it can.
         let list_width = columns.iter().sum::<f32>() + HISTORY_GAP * 2.0 + 8.0;
         let pane_width = (ui.available_width() - list_width - 6.0).max(200.0);
-        let frame = egui::Frame::new().fill(SIDE).corner_radius(8).inner_margin(egui::Margin::same(14));
+        let frame = egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(16));
         egui::Panel::right("run_pane").exact_size(pane_width).resizable(false).show_separator_line(false)
             .frame(frame).show(ui, |ui| self.run_pane(ui));
         egui::ScrollArea::vertical().id_salt("history").auto_shrink([false, false]).show(ui, |ui| {
@@ -1505,14 +1544,14 @@ impl App {
     /// One row per run, the live one first, the shown one lit, in columns
     /// of the given widths.
     fn history_table(&mut self, ui: &mut egui::Ui, rows: Vec<HistoryRow>, columns: [f32; 3]) {
-        const ROW: f32 = 26.0;
+        const ROW: f32 = 36.0;
         let [when_width, task_width, result_width] = columns;
         let width = ui.available_width();
-        let (header, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
-        let mut x = header.left();
+        let (header, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
+        let mut x = header.left() + HISTORY_PAD;
         for (title, w) in [(tr!("logs.run_column"), when_width), (tr!("logs.task_column"), task_width), (tr!("logs.result_column"), result_width)] {
             ui.painter().text(egui::pos2(x, header.center().y), egui::Align2::LEFT_CENTER, title.to_uppercase(),
-                              egui::FontId::proportional(10.5), DIM);
+                              egui::FontId::proportional(10.5), setup::LABEL);
             x += w + HISTORY_GAP;
         }
         ui.painter().hline(header.x_range(), header.bottom(), egui::Stroke::new(1.0, LINE));
@@ -1527,8 +1566,7 @@ impl App {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ROW), egui::Sense::click());
             let selected = stamp == self.history_selected && (stamp.is_some() || self.task.is_some());
             let fill = if selected { NAV_SELECTED } else if response.hovered() { NAV_HOVER } else { egui::Color32::TRANSPARENT };
-            ui.painter().rect_filled(rect, 6.0, fill);
-            ui.painter().hline(rect.x_range(), rect.bottom(), egui::Stroke::new(1.0, INSET));
+            ui.painter().rect_filled(rect, 10.0, fill);
             let mut x = rect.left() + HISTORY_PAD;
             let font = if stamp.is_none() { medium(HISTORY_FONT) } else { egui::FontId::proportional(HISTORY_FONT) };
             let galley = truncated(ui, when, font, text_color, when_width);
@@ -1599,13 +1637,13 @@ impl App {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(path) = &path {
-                    if ui.add(egui::Button::new(egui::RichText::new(tr!("logs.reveal")).size(12.0)))
+                    if setup::page_button(ui, tr!("logs.reveal"), Look::Secondary, true)
                         .on_hover_text(tr!("logs.reveal_hint")).clicked() {
                         let _ = path.parent().map(open_path);
                     }
                 }
-                ui.add(egui::TextEdit::singleline(&mut self.log_filter).font(egui::FontId::proportional(12.0))
-                    .hint_text(tr!("logs.filter")).desired_width(ui.available_width()))
+                let width = ui.available_width();
+                boxed(ui, egui::TextEdit::singleline(&mut self.log_filter).hint_text(tr!("logs.filter")), width)
                     .on_hover_text(tr!("logs.filter_hint"));
             });
         });
@@ -1627,9 +1665,9 @@ impl App {
         } else {
             text.lines().filter(|l| l.to_lowercase().contains(&filter)).collect::<Vec<_>>().join("\n")
         };
-        let frame = egui::Frame::new().fill(STATUS).corner_radius(6).inner_margin(egui::Margin::same(8));
+        let frame = egui::Frame::new().fill(STATUS).corner_radius(10).inner_margin(egui::Margin::same(10));
         frame.show(ui, |ui| {
-            ui.set_min_height(ui.available_height() - 16.0);
+            ui.set_min_height(ui.available_height() - 20.0);
             egui::ScrollArea::both().id_salt("run_log").auto_shrink([false, false]).stick_to_bottom(live).show(ui, |ui| {
                 ui.add(egui::Label::new(egui::RichText::new(shown).monospace().size(11.0)).extend().selectable(true));
             });
@@ -1643,15 +1681,14 @@ impl App {
         }
         let response = backdrop::modal(ctx, "delete_logs").show(ctx, |ui| {
             ui.set_max_width(340.0);
-            ui.label(egui::RichText::new(tr!("logs.delete_title")).strong().size(16.0));
+            dialog_title(ui, tr!("logs.delete_title"));
             ui.add(egui::Label::new(tr!("logs.delete_description")).wrap());
             let mut answer = None;
             ui.horizontal(|ui| {
-                if ui.button(tr!("common.cancel")).clicked() {
+                if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
                     answer = Some(false);
                 }
-                let delete = egui::Button::new(egui::RichText::new(tr!("common.delete")).color(egui::Color32::WHITE)).fill(BAD);
-                if ui.add(delete).clicked() {
+                if setup::page_button(ui, tr!("common.delete"), Look::Danger, true).clicked() {
                     answer = Some(true);
                 }
             });
@@ -1728,7 +1765,8 @@ impl App {
     /// The Logs page shows the run itself. Returns whether the card is up.
     fn run_popup(&mut self, ctx: &egui::Context) -> bool {
         let Some(task) = &self.task else { return false };
-        if self.page == Page::Logs || self.popup_dismissed {
+        // The flow's run shows on Set up and in the status bar, never as a card.
+        if self.page == Page::Logs || self.popup_dismissed || self.flow_run {
             return false;
         }
         let outcome = self.logs.outcome.as_ref();
@@ -1762,7 +1800,7 @@ impl App {
                     // The action in place of the word Device, before the unit;
                     // a failed run's close button at the right.
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(doing).color(MUTED));
+                        ui.label(egui::RichText::new(doing).font(medium(14.0)).color(MUTED));
                         if let Some(device) = &self.logs.device {
                             // One line always: cut at what the close button leaves.
                             let room = ui.available_width() - if failed { CLOSE_SIZE + ui.spacing().item_spacing.x } else { 0.0 };
@@ -1805,31 +1843,33 @@ impl App {
         true
     }
 
-    /// The USB download mode dialog. Clicking the backdrop or pressing Escape
+    /// The USB download mode dialog: the time left in a searching ring, and
+    /// what to do. Cancel, clicking the backdrop or pressing Escape
     /// dismisses it and cancels the wait.
     fn sdp_ui(&mut self, ctx: &egui::Context) {
         let Some(since) = self.sdp_wait else { return };
+        let left = WAIT_USB.saturating_sub(since.elapsed()).as_secs();
+        let holding = self.logs.waiting.is_some();
         let response = backdrop::modal(ctx, "enter_sdp").show(ctx, |ui| {
-            ui.set_max_width(320.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
-            ui.label(egui::RichText::new(tr!("download.title")).strong().size(16.0));
-            let step = |ui: &mut egui::Ui, number: &str, text: &str| {
-                ui.horizontal_top(|ui| {
-                    ui.label(egui::RichText::new(number).strong());
-                    ui.add(egui::Label::new(text).wrap());
+            ui.set_width(520.0);
+            ui.horizontal_top(|ui| {
+                setup::waiting_ring(ui, 120.0, &format!("{}:{:02}", left / 60, left % 60), tr!("download.left"));
+                ui.add_space(20.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    dialog_title(ui, tr!("download.title"));
+                    setup::numbered(ui, 1, tr!("download.connect"));
+                    if holding {
+                        setup::numbered(ui, 2, tr!("download.hold_button"));
+                    }
                 });
-            };
-            step(ui, "1.", tr!("download.connect"));
-            if self.logs.waiting.is_some() {
-                step(ui, "2.", tr!("download.hold_button"));
-            }
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(14.0));
-                let left = WAIT_USB.saturating_sub(since.elapsed()).as_secs();
-                ui.label(egui::RichText::new(tr!("download.waiting", minutes = left / 60, seconds = format!("{:02}", left % 60))).weak());
             });
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked()
+            }).inner
         });
-        if response.should_close() {
+        if response.inner || response.should_close() {
             if let Some(run) = &self.run {
                 run.cancel_wait();
                 self.cancelled = true;
@@ -1843,15 +1883,14 @@ impl App {
         let question = question.clone();
         let answer = backdrop::modal(ctx, "confirm_restore").show(ctx, |ui| {
             ui.set_max_width(320.0);
-            ui.label(egui::RichText::new(tr!("backup.restore_title")).strong().size(16.0));
+            dialog_title(ui, tr!("backup.restore_title"));
             ui.add(egui::Label::new(question).wrap());
             let mut answer = None;
             ui.horizontal(|ui| {
-                if ui.button(tr!("common.cancel")).clicked() {
+                if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
                     answer = Some(false);
                 }
-                let erase = egui::Button::new(egui::RichText::new(tr!("backup.erase_restore")).color(egui::Color32::WHITE)).fill(BAD);
-                if ui.add(erase).clicked() {
+                if setup::page_button(ui, tr!("backup.erase_restore"), Look::Danger, true).clicked() {
                     answer = Some(true);
                 }
             });
@@ -1869,15 +1908,14 @@ impl App {
         let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let response = backdrop::modal(ctx, "confirm_delete").show(ctx, |ui| {
             ui.set_max_width(320.0);
-            ui.label(egui::RichText::new(tr!("backup.delete_title")).strong().size(16.0));
+            dialog_title(ui, tr!("backup.delete_title"));
             ui.add(egui::Label::new(tr!("backup.delete_description", name = name)).wrap());
             let mut answer = None;
             ui.horizontal(|ui| {
-                if ui.button(tr!("common.cancel")).clicked() {
+                if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
                     answer = Some(false);
                 }
-                let delete = egui::Button::new(egui::RichText::new(tr!("common.delete")).color(egui::Color32::WHITE)).fill(BAD);
-                if ui.add(delete).clicked() {
+                if setup::page_button(ui, tr!("common.delete"), Look::Danger, true).clicked() {
                     answer = Some(true);
                 }
             });
@@ -1914,7 +1952,7 @@ impl App {
             ui.horizontal(|ui| {
                 match row.done {
                     None => {
-                        ui.add(egui::Spinner::new().size(14.0));
+                        ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
                         ui.label(&row.label);
                     }
                     Some((_, ok)) => {
@@ -1956,11 +1994,18 @@ fn text_of(outcome: &Result<String, String>) -> String {
     match outcome { Ok(t) | Err(t) => t.clone() }
 }
 
-/// The page's title and what it does.
+/// A dialog's question, in the display cut.
+fn dialog_title(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).font(display(22.0)));
+    ui.add_space(2.0);
+}
+
+/// The page's title, as the set-up flow's steps have theirs, and what it does.
 fn page_header(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.heading(egui::RichText::new(title).strong());
+    ui.label(egui::RichText::new(title).font(display(34.0)));
     ui.add_space(2.0);
     ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
+    ui.add_space(8.0);
 }
 
 /// The page's icon, a line drawing 12 px across centred on `c`.
@@ -2074,6 +2119,8 @@ pub(crate) fn section_after(ui: &mut egui::Ui, name: &str, space: f32) {
 }
 
 const NAME: &str = "unfr0zen";
+/// The byte index of the name's zero, drawn slashed.
+const NAME_ZERO: usize = 4;
 /// Seconds from launch to the name's first glint.
 const GLINT_FIRST: f64 = 0.5;
 /// Seconds between the starts of the name's glints.
@@ -2097,7 +2144,7 @@ fn glint_phase(time: f64) -> f64 {
 /// The colour at `time` of the name's letter at `index`: white under the
 /// glint, which enters and leaves past the ends so no letter jumps.
 fn name_color(index: usize, time: f64) -> egui::Color32 {
-    let rest = if NAME.as_bytes()[index] == b'0' { ACCENT } else { MUTED };
+    let rest = if index == NAME_ZERO { ACCENT } else { MUTED };
     let phase = glint_phase(time);
     if phase < 0.0 {
         return rest;
@@ -2109,7 +2156,7 @@ fn name_color(index: usize, time: f64) -> egui::Color32 {
 
 /// A translated heading with the app name's animated colour spans.
 pub(crate) fn name_heading(ui: &mut egui::Ui, text: &str) {
-    let font = egui::TextStyle::Heading.resolve(ui.style());
+    let font = display(30.0);
     let time = ui.input(|input| input.time);
     let start = text.find(NAME).expect("the heading contains the app name");
     let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::default());
@@ -2128,8 +2175,23 @@ pub(crate) fn name_heading(ui: &mut egui::Ui, text: &str) {
         byte_range: egui::text::ByteIndex(start + NAME.len())..egui::text::ByteIndex(text.len()),
         format: egui::TextFormat::simple(font.clone(), ui.visuals().strong_text_color()),
     })).collect();
-    ui.label(job);
+    let zero = text[..start + NAME_ZERO].chars().count();
+    slashed_zero_label(ui, job, zero, font.size, name_color(NAME_ZERO, time));
     ui.ctx().request_repaint_after(glint_wait(time));
+}
+
+/// Lays out `job` and draws it with a slash through the zero at character
+/// `zero`, the name's look: no bundled font has a slashed zero to select.
+fn slashed_zero_label(ui: &mut egui::Ui, job: egui::text::LayoutJob, zero: usize, size: f32, color: egui::Color32) {
+    let galley = ui.painter().layout_job(job);
+    let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+    let glyph = galley.rows.iter().flat_map(|row| row.glyphs.iter().map(move |glyph| (row.pos, glyph))).nth(zero);
+    ui.painter().galley(rect.min, galley.clone(), color);
+    if let Some((row, glyph)) = glyph {
+        let ink = egui::Rect::from_min_size(rect.min + row.to_vec2() + glyph.pos.to_vec2() + glyph.uv_rect.offset, glyph.uv_rect.size);
+        let stroke = egui::Stroke::new(size * 0.06, color);
+        ui.painter().line_segment([ink.lerp_inside(egui::vec2(0.3, 0.78)), ink.lerp_inside(egui::vec2(0.7, 0.22))], stroke);
+    }
 }
 
 /// How long the name can go without a repaint: until the next glint, then
@@ -2185,53 +2247,13 @@ fn short_path(path: &Path) -> String {
     }
 }
 
-/// A checkbox in the design's colours: the box on the accent with a dark
-/// check when ticked, inset when not; the label beside it. Greyed when
-/// not enabled.
-pub(crate) fn checkbox(ui: &mut egui::Ui, enabled: bool, checked: &mut bool, text: &str) -> egui::Response {
-    const BOX: f32 = 15.0;
-    let enabled = enabled && ui.is_enabled();
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    // The label is cut at the room there is, never run past it.
-    let room = (ui.available_width() - BOX - 6.0).max(20.0);
-    // Laid out uncoloured: the paint below picks the enabled or disabled colour.
-    let galley = truncated(ui, text.to_string(), font, egui::Color32::PLACEHOLDER, room);
-    let height = ui.spacing().interact_size.y.max(BOX);
-    let width = BOX + if text.is_empty() { 0.0 } else { 6.0 + galley.size().x };
-    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
-    if enabled && response.clicked() {
-        *checked = !*checked;
-        response.mark_changed();
-    }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, *checked, text));
-    let shade = if enabled { 1.0 } else { 0.4 };
-    let square = egui::Rect::from_center_size(egui::pos2(rect.left() + BOX * 0.5, rect.center().y), egui::vec2(BOX, BOX));
-    let painter = ui.painter();
-    if *checked {
-        painter.rect_filled(square, 4.0, ACCENT.gamma_multiply(shade));
-        let stroke = egui::Stroke::new(2.0, ON_ACCENT.gamma_multiply(shade));
-        let p = |fx: f32, fy: f32| egui::pos2(square.left() + BOX * fx, square.top() + BOX * fy);
-        painter.line_segment([p(0.24, 0.52), p(0.43, 0.72)], stroke);
-        painter.line_segment([p(0.43, 0.72), p(0.78, 0.30)], stroke);
-    } else {
-        let hovered = enabled && response.hovered();
-        painter.rect(square, 4.0, if hovered { NAV_HOVER } else { INSET },
-                     egui::Stroke::new(1.0, if hovered { MUTED } else { LINE }), egui::StrokeKind::Inside);
-    }
-    if !text.is_empty() {
-        let color = if enabled { ui.visuals().text_color() } else { DIM };
-        painter.galley(egui::pos2(square.right() + 6.0, rect.center().y - galley.size().y * 0.5), galley, color);
-    }
-    if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
-}
-
 /// A close glyph: an × in a square that lights on hover.
 fn close_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(CLOSE_SIZE, CLOSE_SIZE), egui::Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr!("common.close"));
     let color = if response.hovered() { ui.visuals().strong_text_color() } else { MUTED };
     if response.hovered() {
-        ui.painter().rect_filled(rect, 4.0, NAV_HOVER);
+        ui.painter().circle_filled(rect.center(), CLOSE_SIZE * 0.5, NAV_HOVER);
     }
     let stroke = egui::Stroke::new(1.5, color);
     let (c, r) = (rect.center(), 4.0);
@@ -2247,15 +2269,19 @@ fn dot(ui: &mut egui::Ui, color: egui::Color32) {
     ui.painter().circle_filled(rect.center(), 3.5, color);
 }
 
+/// The Backups page's buttons, all one width: its longest label's.
+const BACKUPS_BUTTON: f32 = 160.0;
+
+/// Every page's buttons are this high, as the set-up flow's.
+pub(crate) const BUTTON_HEIGHT: f32 = 36.0;
+
 /// The primary action, on the accent fill.
 pub(crate) fn accent_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
-    accent_button_sized(ui, text, enabled, egui::vec2(120.0, 28.0))
+    accent_button_sized(ui, text, enabled, egui::vec2(120.0, BUTTON_HEIGHT))
 }
 
 fn accent_button_sized(ui: &mut egui::Ui, text: &str, enabled: bool, size: egui::Vec2) -> egui::Response {
-    let label = egui::RichText::new(text).size(14.0).color(if enabled { ON_ACCENT } else { ON_ACCENT.gamma_multiply(0.45) });
-    let fill = if enabled { ACCENT } else { ACCENT.gamma_multiply(0.5) };
-    ui.add_enabled(enabled, egui::Button::new(label).fill(fill).min_size(size))
+    setup::rounded_button(ui, text, Look::Primary, enabled, size)
 }
 
 /// The texts under the progress bar: bytes done of the total (and the piece
@@ -2295,37 +2321,6 @@ fn outcome_mark(ui: &mut egui::Ui, ok: bool, size: f32) {
         painter.line_segment([rect.left_top() + pad, rect.right_bottom() - pad], stroke);
         painter.line_segment([rect.right_top() + egui::vec2(-pad.x, pad.y), rect.left_bottom() + egui::vec2(pad.x, -pad.y)], stroke);
     }
-}
-
-// The frost shimmer: a bright band sweeping left to right across the text,
-// in columns.
-const SHIMMER_SWEEP: f64 = 1.2;
-const SHIMMER_HALF_WIDTH: f32 = 6.0;
-
-/// `color` under the shimmer band at `progress` (0 to 1 across the sweep) for
-/// the character at `col` of `cols`.
-fn shimmer(color: egui::Color32, col: usize, cols: usize, progress: f32) -> egui::Color32 {
-    let span = cols as f32 + 2.0 * SHIMMER_HALF_WIDTH;
-    let center = progress * span - SHIMMER_HALF_WIDTH;
-    let glint = (1.0 - (col as f32 - center).abs() / SHIMMER_HALF_WIDTH).max(0.0);
-    color.lerp_to_gamma(egui::Color32::WHITE, glint * glint * 0.85)
-}
-
-/// The notice beside Start while a patch is under way, with the shimmer
-/// sweeping across it every RUNNING_LOOP seconds as its sign of activity.
-fn running_notice(ui: &mut egui::Ui) {
-    let text = tr!("patch.running_notice");
-    const RUNNING_LOOP: f64 = 2.0;
-    let progress = ((ui.input(|i| i.time) % RUNNING_LOOP) / SHIMMER_SWEEP).min(1.0) as f32;
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let cols = text.chars().count();
-    let mut job = egui::text::LayoutJob::default();
-    for (col, c) in text.chars().enumerate() {
-        let format = egui::TextFormat::simple(font.clone(), shimmer(MUTED, col, cols, progress));
-        job.append(c.encode_utf8(&mut [0; 4]), 0.0, format);
-    }
-    ui.label(job);
-    ui.ctx().request_repaint();
 }
 
 /// Opens a folder in the platform's file manager.
@@ -2393,6 +2388,11 @@ fn round_corners(cc: &eframe::CreationContext<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One unit of `device` on USB, running its application.
+    fn on_usb(device: Device) -> Watcher {
+        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }))
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("unfr0zen-gui-main-{name}-{}", std::process::id()));
@@ -2487,6 +2487,289 @@ mod tests {
     }
 
     #[test]
+    fn the_flow_steps_through_and_skips_the_integrations() {
+        let mut app = App { bus: on_usb(Device::Diamond3), ..App::default() };
+        assert_eq!(app.screen_name(), "Step(Connect)");
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Connect your thermostat"), "{shown:?}");
+        app.step = setup::Step::Integrations;
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Skip"), "nothing chosen: {shown:?}");
+        app.form.mqtt.on = true;
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Continue") && !shown.iter().any(|t| t == "Skip"), "{shown:?}");
+        app.step = setup::Step::Features;
+        let shown = texts(&render_frames(&mut app, [WINDOW[0], 2000.0], 2));
+        assert!(shown.iter().any(|t| t == "Doom"), "{shown:?}");
+    }
+
+    #[test]
+    fn continue_needs_a_supported_unit_and_its_leaving_goes_back_to_connect() {
+        let release = || App { steps_without_unit: false, ..App::default() };
+        let continue_enabled = |app: &mut App| {
+            let output = render_frames(app, WINDOW, 2);
+            let label = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == "Continue" => Some(t.galley.job.sections[0].format.color),
+                _ => None,
+            }).expect("Continue is drawn");
+            label == ON_ACCENT
+        };
+        assert!(!continue_enabled(&mut release()), "nothing on USB");
+        assert!(!continue_enabled(&mut App { bus: on_usb(Device::Onyx), ..release() }), "a Thermostat E");
+        assert!(continue_enabled(&mut App { bus: on_usb(Device::J49), ..release() }));
+        assert!(continue_enabled(&mut App { steps_without_unit: true, ..App::default() }), "a debug build goes on without one");
+        let mut app = App { step: setup::Step::Features, ..release() };
+        render_frames(&mut app, WINDOW, 1);
+        assert_eq!(app.screen_name(), "Step(Connect)", "unplugged before the run");
+        let mut running = App { step: setup::Step::Review, flow_run: true, task: Some(Task::Patch), ..App::default() };
+        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        render_frames(&mut running, WINDOW, 1);
+        assert_eq!((running.step, running.screen_name().as_str()), (setup::Step::Review, "Running"), "a run re-enumerates the unit");
+    }
+
+    #[test]
+    fn a_full_review_value_wraps_whole_onto_more_lines() {
+        let mut app = App { bus: on_usb(Device::J49), step: setup::Step::Review, ..App::default() };
+        app.form.ssh = true;
+        app.form.usb_shell = true;
+        app.form.doom = true;
+        let output = render_frames(&mut app, [WINDOW[0], WINDOW[1]], 2);
+        let extras = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("SSH · ") => Some(t.galley.clone()),
+            _ => None,
+        }).expect("the extras are listed");
+        assert_eq!(extras.job.text, "SSH · USB console · Doom");
+        assert!(!extras.elided, "not cut");
+    }
+
+    #[test]
+    fn a_failed_flow_stays_off_other_pages_and_another_task_takes_set_up_off_it() {
+        let mut app = App { flow_run: true, task: Some(Task::BackupPatch("nand.bin".into())), ..App::default() };
+        app.on_event(Event::Done(Err("nlclient undo journal does not match the executable".into())));
+        assert_eq!(app.screen_name(), "Failed");
+        // On Backups, no card repeats the flow's failure; the status bar has it.
+        app.show(Page::Backups);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(!shown.iter().any(|t| t.contains("undo journal")), "{shown:?}");
+        // A task started there, and its success, are not the flow's. A
+        // restore of a missing image ends before anything reaches USB.
+        app.start(Task::Restore("/nonexistent/nand.bin".into()));
+        assert!(!app.flow_run);
+        app.run = None;
+        app.logs.outcome = Some(Ok("NAND restored".into()));
+        assert_eq!(app.screen_name(), "Step(Connect)", "not the flow's Done");
+    }
+
+    #[test]
+    fn the_review_step_offers_the_backup_and_starts_the_flows_run() {
+        let mut app = App { bus: on_usb(Device::Diamond3), step: setup::Step::Review, ..App::default() };
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        for label in ["Back up first?", "Back up, then patch", "Patch without a backup", "Back up and patch"] {
+            assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
+        }
+        // Options that fail before the unit is touched start the patch at
+        // once, which reports the failure in the flow.
+        app.form.matter.on = true;
+        app.form.matter.code = "1559-813-5764".into();
+        app.form.backup_first = false;
+        app.start_flow();
+        assert!(app.flow_run && !app.running());
+        assert_eq!(app.task, Some(Task::Patch));
+        assert_eq!(app.screen_name(), "Failed");
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Patch stopped"), "{shown:?}");
+        // Patching is the flow's own phase; the run card would name it again.
+        assert_eq!(shown.iter().filter(|t| *t == "Patching").count(), 1, "no run card over the flow: {shown:?}");
+    }
+
+    #[test]
+    fn done_lists_a_next_step_per_integration_chosen() {
+        let mut app = App { flow_run: true, task: Some(Task::Patch), flow_backup: Some("nand-1.bin".into()), ..App::default() };
+        app.form.matter.on = true;
+        app.logs.outcome = Some(Ok("patched".into()));
+        assert_eq!(app.screen_name(), "Done");
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        for label in ["Your thermostat is ready", "Put it back on its base", "Pair it with Matter"] {
+            assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|t| t == "Check your MQTT broker"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_backup_before_the_patch_is_one_run_listed_by_its_phases() {
+        let dir = temp_dir("backup-patch");
+        let mut app = App { library: Library::new(dir.clone()), ..App::default() };
+        // Options that fail before the unit is touched keep the run off USB.
+        app.form.matter.on = true;
+        app.form.matter.code = "1559-813-5764".into();
+        app.start_flow();
+        assert!(matches!(&app.task, Some(Task::BackupPatch(out)) if out.parent() == Some(dir.as_path())), "{:?}", app.task);
+        assert_eq!(app.screen_name(), "Failed");
+        assert!(app.flow_backup.is_none(), "no backup was written");
+        let out = dir.join("nand.bin");
+        let mut app = App { flow_run: true, task: Some(Task::BackupPatch(out.clone())), ..App::default() };
+        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        use unfr0zen_host::Phase;
+        // Every phase is listed from the start, the steps inside them not.
+        let titles = ["Waiting for download mode", "Starting recovery", "Backing up", "Checking your thermostat",
+                      "Preparing new features", "Patching", "Restarting"];
+        app.on_event(Event::Phase(Phase::DownloadMode));
+        app.on_event(Event::Phase(Phase::Recovery));
+        app.on_event(Event::Begin("Load recovery U-Boot".into()));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(titles.iter().all(|title| shown.iter().any(|t| t == title)), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Load recovery U-Boot"), "{shown:?}");
+        app.on_event(Event::Phase(Phase::Backup));
+        assert!(app.backing_up());
+        app.on_event(Event::Phase(Phase::Check));
+        assert!(!app.backing_up(), "patching once the backup is done");
+        assert_eq!(app.logs.phases.iter().map(|row| row.done.map(|(_, ok)| ok)).collect::<Vec<_>>(),
+                   [Some(true), Some(true), Some(true), None]);
+        // A patch that fails after the backup marks its phase and still
+        // names the backup.
+        std::fs::write(unfr0zen_host::nand::checksum_path(&out), "sum").unwrap();
+        app.on_event(Event::Done(Err("the unit came back in app mode".into())));
+        assert_eq!(app.logs.phases.last().unwrap().done.map(|(_, ok)| ok), Some(false));
+        assert_eq!(app.flow_backup.as_deref(), Some(out.as_path()));
+        // Without a backup first, Backing up is not listed.
+        let mut plain = App { flow_run: true, task: Some(Task::Patch), ..App::default() };
+        plain.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        plain.on_event(Event::Phase(Phase::DownloadMode));
+        let shown = texts(&render_frames(&mut plain, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Restarting") && !shown.iter().any(|t| t == "Backing up"), "{shown:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Each page, and each step of the patch flow, as a PNG in
+    /// $UNFR0ZEN_SNAPSHOTS, to look at:
+    /// `UNFR0ZEN_SNAPSHOTS=dir cargo test -p unfr0zen-gui snapshots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn snapshots() {
+        use crate::bus::Seen;
+        let dir = PathBuf::from(std::env::var_os("UNFR0ZEN_SNAPSHOTS").expect("UNFR0ZEN_SNAPSHOTS"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shot = |name: &str, app: &mut App, size: [f32; 2]| {
+            snapshot::render(size, 2.0, 4, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
+        };
+        // A dialog fades in over its first frames.
+        let dialog = |name: &str, app: &mut App| {
+            snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
+        };
+        for page in Page::MAIN.into_iter().chain(Page::ADVANCED).filter(|p| *p != Page::Patch) {
+            let mut app = App::default();
+            app.show(page);
+            shot(&format!("{page:?}").to_lowercase(), &mut app, WINDOW);
+        }
+        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }));
+        let flow = |step| App { bus: gen3(), step, ..App::default() };
+        shot("1-connect", &mut flow(setup::Step::Connect), WINDOW);
+        shot("1-connect-waiting", &mut App::default(), WINDOW);
+        shot("2-integrations", &mut flow(setup::Step::Integrations), WINDOW);
+        let mut chosen = flow(setup::Step::Integrations);
+        chosen.form.mqtt.on = true;
+        chosen.form.mqtt.value = "10.22.4.2".into();
+        chosen.form.matter.on = true;
+        shot("2-integrations-chosen", &mut chosen, [WINDOW[0], 1400.0]);
+        let mut features = flow(setup::Step::Features);
+        features.form.doom = true;
+        features.form.ssh = true;
+        shot("3-features", &mut features, [WINDOW[0], 1400.0]);
+        features.form.usb_shell = true;
+        shot("3-features-both-shells", &mut features, [WINDOW[0], 1400.0]);
+        let mut review = flow(setup::Step::Review);
+        review.form.mqtt.on = true;
+        review.form.mqtt.value = "10.22.4.2".into();
+        shot("4-review", &mut review, WINDOW);
+        review.developer_open = true;
+        shot("4-review-developer", &mut review, WINDOW);
+        review.form.ssh = true;
+        review.form.usb_shell = true;
+        review.form.doom = true;
+        review.form.matter.on = true;
+        review.developer_open = false;
+        shot("4-review-full", &mut review, WINDOW);
+        let mut running = flow(setup::Step::Review);
+        running.flow_run = true;
+        running.task = Some(Task::BackupPatch("nand-20261109-1131.bin".into()));
+        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Backup));
+        running.on_event(Event::Begin("Back up NAND".into()));
+        running.on_transfer(210 << 20, 1 << 20, 512 << 20);
+        shot("5-running", &mut running, WINDOW);
+        let mut done = flow(setup::Step::Review);
+        done.form.mqtt.on = true;
+        done.form.matter.on = true;
+        done.flow_run = true;
+        done.task = Some(Task::Patch);
+        done.flow_backup = Some("nand-20261109-1131.bin".into());
+        done.logs.outcome = Some(Ok("patched".into()));
+        shot("6-done", &mut done, WINDOW);
+        let mut failed = flow(setup::Step::Review);
+        failed.flow_run = true;
+        failed.task = Some(Task::Patch);
+        failed.logs.rows.push(Row { label: "Find the application root volume".into(), started: Instant::now(), done: Some((Duration::from_secs(2), false)) });
+        failed.logs.outcome = Some(Err("no application root volume found".into()));
+        shot("7-failed", &mut failed, WINDOW);
+        let mut sdp = flow(setup::Step::Review);
+        sdp.flow_run = true;
+        sdp.task = Some(Task::Patch);
+        sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        sdp.on_event(Event::Waiting("Hold the front panel button".into()));
+        sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
+        dialog("8-download-mode", &mut sdp);
+        let mut delete = App { page: Page::Backups, delete: Some("nand-20261109-1131.bin".into()), ..App::default() };
+        delete.show(Page::Backups);
+        dialog("9-delete-backup", &mut delete);
+        let mut card = App { page: Page::Backups, task: Some(Task::Backup("nand-20261111-2010.bin".into())), ..App::default() };
+        card.show(Page::Backups);
+        card.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        card.on_event(Event::Device("Nest gen 3 (diamond3): i.MX6SoloX rev 1.2".into()));
+        card.on_event(Event::Begin("Load recovery U-Boot".into()));
+        card.on_event(Event::End { label: "Load recovery U-Boot".into(), elapsed: Duration::from_secs(6), ok: true });
+        card.on_event(Event::Begin("Back up NAND".into()));
+        card.on_transfer(210 << 20, 16 << 20, 512 << 20);
+        dialog("10-run-card", &mut card);
+    }
+
+    /// The README's and the website's screenshots, as bare windows at 2x in
+    /// $UNFR0ZEN_SCREENSHOTS, the backups from this machine's own.
+    /// utils/app-screenshots.py frames them as macOS windows:
+    /// `UNFR0ZEN_SCREENSHOTS=dir cargo test -p unfr0zen-gui screenshots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn screenshots() {
+        let dir = PathBuf::from(std::env::var_os("UNFR0ZEN_SCREENSHOTS").expect("UNFR0ZEN_SCREENSHOTS"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Without the version, which names a commit.
+        let shot = |name: &str, app: &mut App| {
+            app.version = "";
+            snapshot::render(WINDOW, 2.0, 6, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
+        };
+        let mut integrations = App { bus: on_usb(Device::Diamond3), step: setup::Step::Integrations, ..App::default() };
+        integrations.form.mqtt.on = true;
+        integrations.form.mqtt.value = "homeassistant.local".into();
+        integrations.form.matter.on = true;
+        shot("1-integrations", &mut integrations);
+        let mut features = App { bus: on_usb(Device::Diamond3), step: setup::Step::Features, ..App::default() };
+        features.form.block_cloud = true;
+        features.form.doom = true;
+        shot("2-features", &mut features);
+        let mut backups = App { bus: on_usb(Device::Diamond3), ..App::default() };
+        backups.show(Page::Backups);
+        // The map is read on a thread of its own: shown once it has been.
+        for _ in 0..100 {
+            if !texts(&render(&mut backups, WINDOW)).iter().any(|t| t == tr!("backup.reading")) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        shot("3-backups", &mut backups);
+    }
+
+    #[test]
     fn every_page_renders_in_the_window() {
         let dir = temp_dir("pages");
         std::fs::File::create(dir.join("nand.bin")).unwrap().set_len(512 << 20).unwrap();
@@ -2531,7 +2814,7 @@ mod tests {
             egui::epaint::Shape::Text(t) if t.galley.job.text == text => Some(t.galley.rect.translate(t.pos.to_vec2())),
             _ => None,
         }).unwrap_or_else(|| panic!("{text} is drawn"));
-        const BUTTON: f32 = 130.0;
+        const BUTTON: f32 = BACKUPS_BUTTON;
         let pane = rect("Select a backup");
         let (back_up, restore) = (rect("Back up unit"), rect("Restore from file"));
         assert!((back_up.center().x - (rect("NAND backups").left() + BUTTON / 2.0)).abs() < 1.0, "{back_up:?}");
@@ -2584,7 +2867,7 @@ mod tests {
 
     #[test]
     fn a_dropdowns_last_row_stays_put_under_the_pointer_with_no_scrollbar() {
-        let mut app = App { page: Page::Patch, advanced_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::Diamond3), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
         let context = egui::Context::default();
         install_fonts(&context);
         // The app's theme gives inactive widgets this border.
@@ -2599,14 +2882,24 @@ mod tests {
             _ => None,
         }).collect::<Vec<_>>();
         let settled = (0..4).map(|_| frame(vec![])).last().unwrap();
-        // Slot, then device, then entry point.
-        let (device, _) = text_at(&settled, "auto")[1];
+        // Device, then entry point.
+        let (device, _) = text_at(&settled, "auto")[0];
         let press = |pressed| egui::Event::PointerButton { pos: device, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
         frame(vec![egui::Event::PointerMoved(device)]);
         frame(vec![press(true)]);
         frame(vec![press(false)]);
         let open = (0..6).map(|_| frame(vec![])).last().unwrap();
         let (row, list) = *text_at(&open, "diamond3").last().unwrap();
+        // The chosen row, auto, sits on the accent.
+        let (chosen, _) = *text_at(&open, "auto").iter().find(|(_, clip)| *clip == list).expect("auto is listed");
+        // The list may still be fading in: the accent, whatever its alpha.
+        let accent = |fill: egui::Color32| fill.a() > 0 && {
+            let [r, g, b, _] = fill.to_srgba_unmultiplied();
+            [r, g, b].iter().zip([ACCENT.r(), ACCENT.g(), ACCENT.b()]).all(|(x, y)| x.abs_diff(y) <= 3)
+        };
+        assert!(open.shapes.iter().any(|clipped| matches!(&clipped.shape,
+            egui::epaint::Shape::Rect(r) if accent(r.fill) && r.rect.contains(chosen + egui::vec2(2.0, 2.0)))),
+            "the chosen row is on the accent");
         frame(vec![egui::Event::PointerMoved(row + egui::vec2(4.0, 4.0))]);
         let hovered = (0..30).map(|_| frame(vec![])).last().unwrap();
         assert_eq!(*text_at(&hovered, "diamond3").last().unwrap(), (row, list), "the row and the list keep their place and size");
@@ -2678,7 +2971,7 @@ mod tests {
         app.on_event(Event::End { label: "Restart the unit from an earlier initramfs shell".into(), elapsed: Duration::ZERO, ok: true });
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Put the device in USB download mode"), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Enter USB download mode"), "{shown:?}");
         app.sdp_wait = None;
         assert!(card(&mut app, "Restart the unit from an earlier initramfs shell"), "the card is back");
         // So does the restore's confirmation.
@@ -2686,31 +2979,6 @@ mod tests {
         app.on_event(Event::Confirm("Erase the NAND?".into(), reply));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Restore NAND?"), "{shown:?}");
-    }
-
-    #[test]
-    fn a_disabled_checkboxs_label_is_dimmed() {
-        // The label's colour, and the text colour of the panel it is in.
-        let colour = |enabled| {
-            let context = egui::Context::default();
-            install_fonts(&context);
-            let mut text_colour = egui::Color32::PLACEHOLDER;
-            let output = context.run_ui(egui::RawInput::default(), |ui| {
-                text_colour = ui.visuals().text_color();
-                checkbox(ui, enabled, &mut false, "Option");
-            });
-            let label = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) if text.galley.job.text == "Option" => {
-                    assert_eq!(text.galley.job.sections[0].format.color, egui::Color32::PLACEHOLDER);
-                    Some(text.fallback_color)
-                }
-                _ => None,
-            }).expect("the label is drawn");
-            (label, text_colour)
-        };
-        assert_eq!(colour(false).0, DIM);
-        let (label, text_colour) = colour(true);
-        assert_eq!(label, text_colour);
     }
 
     #[test]
@@ -2773,13 +3041,14 @@ mod tests {
     #[test]
     fn main_page_controls_show_hints_on_hover() {
         for (page, label, hint) in [
-            (Page::Patch, "Start", "Patch the connected thermostat with the selected options"),
-            (Page::Patch, "Block Nest and Google servers", "Block the thermostat's access to Nest and Google servers; use a custom NTP server for time"),
+            (Page::Patch, "Back up and patch", "Patch the connected thermostat with the selected options"),
             (Page::Boot, "Boot the application", "Connect one 3rd generation thermostat, finish any operation, close file pickers, and disconnect any open console first"),
         ] {
             let context = egui::Context::default();
             install_fonts(&context);
-            let mut app = App { page, ..App::default() };
+            // The Boot page's hint is the one it shows with no unit on USB.
+            let bus = if page == Page::Patch { on_usb(Device::Diamond3) } else { Watcher::default() };
+            let mut app = App { bus, page, step: setup::Step::Review, ..App::default() };
             let frame = |app: &mut App, time, events| context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
                 time: Some(time),
@@ -2801,24 +3070,6 @@ mod tests {
             assert!(shown.iter().any(|text| text == hint), "{label}: {shown:?}");
             assert!(app.task.is_none(), "hovering does not start a task");
         }
-    }
-
-    #[test]
-    fn the_advanced_button_sits_on_the_patch_pages_description_line() {
-        let output = render_frames(&mut App { page: Page::Patch, ..App::default() }, WINDOW, 2);
-        let rect = |text: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == text && t.pos.x > SIDEBAR_WIDTH => Some(t.galley.rect.translate(t.pos.to_vec2())),
-            _ => None,
-        }).unwrap_or_else(|| panic!("{text} is drawn"));
-        let (button, about) = (rect("Advanced"), rect(tr!("patch.about")));
-        assert!((button.center().y - about.center().y).abs() < 1.0, "{button:?} {about:?}");
-        assert!(button.left() > about.right());
-        assert!(about.height() < 2.0 * button.height(), "the description keeps to one line: {about:?}");
-        let framed = output.shapes.iter().any(|shape| match &shape.shape {
-            egui::epaint::Shape::Rect(r) => r.fill.a() > 0 && r.rect.contains_rect(button) && r.rect.width() < 2.0 * button.width(),
-            _ => false,
-        });
-        assert!(framed, "drawn as a button while the panel is closed");
     }
 
     #[test]
@@ -2917,7 +3168,7 @@ mod tests {
         assert!(!texts(&render_frames(&mut app, WINDOW, 4)).iter().any(|t| t == "Nest gen 3"), "no card before a step");
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 4));
-        assert!(shown.iter().any(|t| t == "Put the device in USB download mode"), "{shown:?}");
+        assert!(shown.iter().any(|t| t == "Enter USB download mode"), "{shown:?}");
         assert!(!shown.iter().any(|t| t == "Nest gen 3"), "{shown:?}");
         app.on_event(Event::End { label: WAIT_USB_BOOT_STAGE.into(), elapsed: Duration::ZERO, ok: true });
         app.on_event(Event::Begin("Check the image's SHA-256".into()));
@@ -2925,9 +3176,9 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_point_outlasts_the_unit_leaving_the_bus() {
+    fn the_entry_point_stays_chosen_while_greyed_for_another_generation() {
         let entry_point = unfr0zen_host::diamond3::usb::EntryPoint::Cve20177936;
-        let mut app = App { page: Page::Patch, advanced_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::J49), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
         app.form.entry_point = entry_point;
         let shown = texts(&render_frames(&mut app, WINDOW, 4));
         assert_eq!(app.form.entry_point, entry_point);
@@ -3025,14 +3276,14 @@ mod tests {
         }
         let output = render_frames(&mut app, WINDOW, 3);
         let pane = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Rect(r) if r.fill == SIDE && r.rect.left() > SIDEBAR_WIDTH => Some(r.rect),
+            egui::epaint::Shape::Rect(r) if r.fill == CARD && r.rect.left() > SIDEBAR_WIDTH => Some(r.rect),
             _ => None,
         }).expect("the run pane is drawn");
         let steps_end = output.shapes.iter().find_map(|shape| match &shape.shape {
             egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("Step number") => Some(shape.clip_rect.bottom()),
             _ => None,
         }).expect("a step is drawn");
-        let inner = pane.shrink(14.0);
+        let inner = pane.shrink(16.0);
         let share = (steps_end - inner.top()) / inner.height();
         assert!((share - RUN_TOP_SHARE).abs() < 0.01, "the top part takes {share} of the pane");
     }
@@ -3092,7 +3343,7 @@ mod tests {
 
     #[test]
     fn the_status_bar_says_how_a_run_went_without_its_message() {
-        const MESSAGE: &str = "NAND backup verified: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
+        const MESSAGE: &str = "NAND backup: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
         const STEP: &str = "Check the FCB against the restored U-Boot copies";
         for (outcome, line) in [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")] {
             let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, popup_dismissed: true, ..App::default() };

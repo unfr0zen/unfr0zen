@@ -205,17 +205,17 @@ impl Terminal {
             ui.add_enabled_ui(!connected, |ui| {
                 let selected = self.ports.iter().find(|p| Some(&p.name) == self.chosen.as_ref())
                     .map_or_else(|| crate::tr!("terminal.no_port").to_string(), Candidate::label);
-                crate::dropdown("serial_port", 380.0).selected_text(selected).show_ui(ui, |ui| {
+                crate::boxed_select(ui, "serial_port", 380.0, &selected, |ui| {
                     for port in &self.ports {
                         ui.selectable_value(&mut self.chosen, Some(port.name.clone()), port.label());
                     }
-                }).response.on_hover_text(crate::tr!("terminal.port_hint"));
+                }).on_hover_text(crate::tr!("terminal.port_hint"));
             });
             // Both buttons the accent button's height, so the row, and the
             // terminal under it, keep their size across connect and disconnect.
-            let size = egui::vec2(120.0, 28.0);
+            let size = egui::vec2(120.0, crate::BUTTON_HEIGHT);
             if connected {
-                if ui.add(egui::Button::new(crate::tr!("terminal.disconnect")).min_size(size))
+                if crate::setup::rounded_button(ui, crate::tr!("terminal.disconnect"), crate::setup::Look::Secondary, true, size)
                     .on_hover_text(crate::tr!("terminal.disconnect_hint"))
                     .clicked() {
                     self.disconnect();
@@ -226,7 +226,7 @@ impl Terminal {
                 .clicked() {
                 self.connect(ui.ctx().clone());
             }
-            if ui.add(egui::Button::new(crate::tr!("terminal.clear")).min_size(egui::vec2(0.0, 28.0)))
+            if crate::setup::page_button(ui, crate::tr!("terminal.clear"), crate::setup::Look::Secondary, true)
                 .on_hover_text(crate::tr!("terminal.clear_hint"))
                 .clicked() {
                 self.scrollback.lock().unwrap().clear();
@@ -237,16 +237,18 @@ impl Terminal {
                     .on_hover_text(error);
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(12.0);
         // The terminal takes the keys while it has focus; a click gives it.
         let id = ui.id().with("terminal");
         let focused = ui.memory(|m| m.has_focus(id));
         let stroke = if focused && self.connected() { egui::Stroke::new(1.0, crate::ACCENT) } else { egui::Stroke::new(1.0, crate::LINE) };
-        let frame = egui::Frame::new().fill(crate::STATUS).stroke(stroke).corner_radius(8).inner_margin(egui::Margin::same(10));
+        let frame = egui::Frame::new().fill(crate::STATUS).stroke(stroke).corner_radius(14).inner_margin(egui::Margin::same(12));
         let height = ui.available_height().max(80.0);
+        // Its frame's margins and edge, and the gap under it the set-up
+        // flow's pages keep above the status bar.
         let area = frame.show(ui, |ui| {
-            ui.set_min_height(height - 22.0);
-            ui.set_max_height(height - 22.0);
+            ui.set_min_height(height - 38.0);
+            ui.set_max_height(height - 38.0);
             egui::ScrollArea::vertical().id_salt("terminal").auto_shrink([false, false]).stick_to_bottom(true)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
