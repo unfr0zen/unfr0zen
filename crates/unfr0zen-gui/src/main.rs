@@ -221,65 +221,37 @@ fn no_id_shift_outlines(ctx: &egui::Context) {
     ctx.all_styles_mut(|style| style.debug.warn_if_rect_changes_id = false);
 }
 
-/// The window's type: the platform's own UI font where it has one, Inter
-/// behind it, each with a medium cut for headings and names and a light
-/// one for titles; JetBrains Mono
-/// for logs and the terminal. egui's own fonts stay last for the glyphs
-/// they lack.
+/// The window's type: DM Sans, one variable font giving the text's regular
+/// cut and the medium one for headings and names; Outfit Light for titles
+/// and big numbers; JetBrains Mono for logs and the terminal. egui's own fonts stay
+/// last for the glyphs they lack.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let data = |bytes: &'static [u8]| Arc::new(egui::FontData::from_static(bytes));
-    fonts.font_data.insert("Inter".into(), data(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")));
-    fonts.font_data.insert("Inter-Medium".into(), data(include_bytes!("../../../assets/fonts/Inter-Medium.ttf")));
-    fonts.font_data.insert("JetBrainsMono".into(), data(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf")));
-    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "Inter".into());
+    const DM_SANS: &[u8] = include_bytes!("../../../assets/fonts/DMSans-Variable.ttf");
+    // A cut of DM Sans: its optical size and weight.
+    let cut = |size: f32, weight: f32| Arc::new(egui::FontData::from_static(DM_SANS).tweak(egui::FontTweak {
+        coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
+        ..egui::FontTweak::default()
+    }));
+    fonts.font_data.insert("DMSans".into(), cut(14.0, 400.0));
+    fonts.font_data.insert("DMSans-Medium".into(), cut(14.0, 500.0));
+    fonts.font_data.insert("Outfit".into(),
+                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/Outfit-Light.ttf"))));
+    fonts.font_data.insert("JetBrainsMono".into(),
+                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"))));
+    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "DMSans".into());
     fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".into());
-    let mut medium = vec!["Inter-Medium".to_string()];
-    medium.extend(fonts.families[&egui::FontFamily::Proportional].iter().cloned());
-    let mut display = fonts.families[&egui::FontFamily::Proportional].clone();
-    if let Some((regular, medium_cut, light)) = system_font() {
-        fonts.font_data.insert("system".into(), Arc::new(regular));
-        fonts.font_data.insert("system-medium".into(), Arc::new(medium_cut));
-        fonts.font_data.insert("system-light".into(), Arc::new(light));
-        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "system".into());
-        medium.insert(0, "system-medium".into());
-        display.insert(0, "system-light".into());
-    }
-    fonts.families.insert(egui::FontFamily::Name(MEDIUM.into()), medium);
-    fonts.families.insert(egui::FontFamily::Name(DISPLAY.into()), display);
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    let family = |first: &str| std::iter::once(first.to_string()).chain(fallback.iter().cloned()).collect::<Vec<_>>();
+    fonts.families.insert(egui::FontFamily::Name(MEDIUM.into()), family("DMSans-Medium"));
+    fonts.families.insert(egui::FontFamily::Name(DISPLAY.into()), family("Outfit"));
     ctx.set_fonts(fonts);
-}
-
-/// The platform's UI font, read at start, as its regular, medium and light
-/// cuts: San Francisco on macOS (one variable file, its weight and optical
-/// size axes set for each), Segoe UI on Windows. None elsewhere.
-fn system_font() -> Option<(egui::FontData, egui::FontData, egui::FontData)> {
-    if cfg!(target_os = "macos") {
-        // Text at its text optical size, where the letters are spaced for
-        // reading; titles at the display size they are drawn at.
-        let bytes = std::fs::read("/System/Library/Fonts/SFNS.ttf").ok()?;
-        let cut = |size: f32, weight: f32| egui::FontTweak {
-            coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
-            ..egui::FontTweak::default()
-        };
-        Some((egui::FontData::from_owned(bytes.clone()).tweak(cut(13.0, 400.0)),
-              egui::FontData::from_owned(bytes.clone()).tweak(cut(13.0, 500.0)),
-              egui::FontData::from_owned(bytes).tweak(cut(28.0, 300.0))))
-    } else if cfg!(windows) {
-        let dir = std::path::PathBuf::from(std::env::var_os("WINDIR")?).join("Fonts");
-        let regular = std::fs::read(dir.join("segoeui.ttf")).ok()?;
-        let medium = std::fs::read(dir.join("seguisb.ttf")).ok()?;
-        let light = std::fs::read(dir.join("segoeuil.ttf")).unwrap_or_else(|_| regular.clone());
-        Some((egui::FontData::from_owned(regular), egui::FontData::from_owned(medium), egui::FontData::from_owned(light)))
-    } else {
-        None
-    }
 }
 
 /// The family name of the medium cut.
 const MEDIUM: &str = "medium";
 
-/// Inter Medium at `size`: headings, names, the selected page.
+/// DM Sans Medium at `size`: headings, names, the selected page.
 pub(crate) fn medium(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(MEDIUM.into()))
 }
@@ -287,8 +259,7 @@ pub(crate) fn medium(size: f32) -> egui::FontId {
 /// The family name of the display cut.
 const DISPLAY: &str = "display";
 
-/// The system font's light display cut at `size`: the patch flow's titles
-/// and big numbers.
+/// Outfit Light at `size`: the pages' titles and the big numbers.
 pub(crate) fn display(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(DISPLAY.into()))
 }
@@ -1135,7 +1106,7 @@ impl App {
                     ui.add_space(TRAFFIC_LIGHTS);
                 }
                 // The name, with the zero in the accent and a glint now and then.
-                let font = egui::TextStyle::Body.resolve(ui.style());
+                let font = display(16.0);
                 let time = ui.input(|input| input.time);
                 // One section per letter whatever the colours: sections are
                 // shaped apart, so merging equal neighbours, as append does,
@@ -1146,7 +1117,7 @@ impl App {
                     byte_range: egui::text::ByteIndex(index)..egui::text::ByteIndex(index + 1),
                     format: egui::TextFormat::simple(font.clone(), name_color(index, time)),
                 }).collect();
-                ui.label(name);
+                slashed_zero_label(ui, name, NAME_ZERO, font.size, name_color(NAME_ZERO, time));
                 ui.ctx().request_repaint_after(glint_wait(time));
                 ui.label(egui::RichText::new("›").color(DIM));
                 ui.label(egui::RichText::new(self.page.title()).font(medium(13.5)));
@@ -1287,7 +1258,7 @@ impl App {
 
     fn backups_page(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr!("backup.title")).font(display(30.0)));
+            ui.label(egui::RichText::new(tr!("backup.title")).font(display(34.0)));
             ui.add_space(4.0);
             let dir = self.library.dir.clone();
             let short = short_path(&dir);
@@ -1512,7 +1483,7 @@ impl App {
     /// steps and log beside them.
     fn logs_page(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tr!("page.logs")).font(display(30.0)));
+            ui.label(egui::RichText::new(tr!("page.logs")).font(display(34.0)));
             ui.add_space(4.0);
             let dir = Self::logs_dir();
             if pill(ui, &short_path(&dir), ACCENT, INSET, true).on_hover_text(dir.display().to_string()).clicked() {
@@ -2031,7 +2002,7 @@ fn dialog_title(ui: &mut egui::Ui, text: &str) {
 
 /// The page's title, as the set-up flow's steps have theirs, and what it does.
 fn page_header(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.label(egui::RichText::new(title).font(display(30.0)));
+    ui.label(egui::RichText::new(title).font(display(34.0)));
     ui.add_space(2.0);
     ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
     ui.add_space(8.0);
@@ -2148,6 +2119,8 @@ pub(crate) fn section_after(ui: &mut egui::Ui, name: &str, space: f32) {
 }
 
 const NAME: &str = "unfr0zen";
+/// The byte index of the name's zero, drawn slashed.
+const NAME_ZERO: usize = 4;
 /// Seconds from launch to the name's first glint.
 const GLINT_FIRST: f64 = 0.5;
 /// Seconds between the starts of the name's glints.
@@ -2171,7 +2144,7 @@ fn glint_phase(time: f64) -> f64 {
 /// The colour at `time` of the name's letter at `index`: white under the
 /// glint, which enters and leaves past the ends so no letter jumps.
 fn name_color(index: usize, time: f64) -> egui::Color32 {
-    let rest = if NAME.as_bytes()[index] == b'0' { ACCENT } else { MUTED };
+    let rest = if index == NAME_ZERO { ACCENT } else { MUTED };
     let phase = glint_phase(time);
     if phase < 0.0 {
         return rest;
@@ -2202,8 +2175,23 @@ pub(crate) fn name_heading(ui: &mut egui::Ui, text: &str) {
         byte_range: egui::text::ByteIndex(start + NAME.len())..egui::text::ByteIndex(text.len()),
         format: egui::TextFormat::simple(font.clone(), ui.visuals().strong_text_color()),
     })).collect();
-    ui.label(job);
+    let zero = text[..start + NAME_ZERO].chars().count();
+    slashed_zero_label(ui, job, zero, font.size, name_color(NAME_ZERO, time));
     ui.ctx().request_repaint_after(glint_wait(time));
+}
+
+/// Lays out `job` and draws it with a slash through the zero at character
+/// `zero`, the name's look: no bundled font has a slashed zero to select.
+fn slashed_zero_label(ui: &mut egui::Ui, job: egui::text::LayoutJob, zero: usize, size: f32, color: egui::Color32) {
+    let galley = ui.painter().layout_job(job);
+    let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+    let glyph = galley.rows.iter().flat_map(|row| row.glyphs.iter().map(move |glyph| (row.pos, glyph))).nth(zero);
+    ui.painter().galley(rect.min, galley.clone(), color);
+    if let Some((row, glyph)) = glyph {
+        let ink = egui::Rect::from_min_size(rect.min + row.to_vec2() + glyph.pos.to_vec2() + glyph.uv_rect.offset, glyph.uv_rect.size);
+        let stroke = egui::Stroke::new(size * 0.06, color);
+        ui.painter().line_segment([ink.lerp_inside(egui::vec2(0.3, 0.78)), ink.lerp_inside(egui::vec2(0.7, 0.22))], stroke);
+    }
 }
 
 /// How long the name can go without a repaint: until the next glint, then

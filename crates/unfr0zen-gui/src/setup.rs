@@ -381,7 +381,7 @@ impl App {
                     Some(_) => (tr!("setup.failed_title"), tr!("setup.failed_about")),
                     None => (tr!("setup.running_title"), tr!("setup.running_about")),
                 };
-                ui.label(egui::RichText::new(title).font(crate::display(30.0)));
+                ui.label(egui::RichText::new(title).font(crate::display(34.0)));
                 ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
                 ui.add_space(14.0);
                 if let Some(backup) = &self.flow_backup {
@@ -449,7 +449,7 @@ impl App {
                 done_mark(ui);
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(tr!("setup.done_title")).font(crate::display(32.0)));
+                    ui.label(egui::RichText::new(tr!("setup.done_title")).font(crate::display(34.0)));
                     let about = if self.flow_backup.is_some() {
                         tr!("setup.done_about_backup")
                     } else {
@@ -562,7 +562,7 @@ fn tick(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
 
 /// A step's title in the display cut, its line under it.
 fn heading(ui: &mut egui::Ui, title: &str, about: &str) {
-    ui.label(egui::RichText::new(title).font(crate::display(30.0)));
+    ui.label(egui::RichText::new(title).font(crate::display(34.0)));
     ui.add_space(2.0);
     ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
     ui.add_space(12.0);
