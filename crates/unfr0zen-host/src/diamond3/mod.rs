@@ -155,7 +155,8 @@ const OUT: &str = "/unfr0zen";
 /// keeps what it reports in the run directory: nlclient.json, and the unit's
 /// stock nlclient when no review covers it. Returns initramfs-changes.txt.
 fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path) -> Result<String> {
-    let run = shell.run_with(&format!("tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT} 2>&1",
+    // No input: the shell's own (the host's nudges among it) stays out of the hook scripts.
+    let run = shell.run_with(&format!("tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT} < /dev/null 2>&1",
                                       bundle::APPLY, bundle::APPLY), seconds(600), false);
     match &run {
         Ok(output) => output.lines().for_each(|line| log::info!("unit: {line}")),
