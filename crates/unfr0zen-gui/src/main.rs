@@ -977,6 +977,8 @@ pub(crate) const MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0xa3, 0xb2
 const MAP_ROOT0: egui::Color32 = egui::Color32::from_rgb(0x3f, 0x7f, 0xc4);
 const MAP_ROOT1: egui::Color32 = egui::Color32::from_rgb(0x3f, 0xb5, 0x9f);
 const MAP_SYSTEM_CONFIG: egui::Color32 = egui::Color32::from_rgb(0xb5, 0x8c, 0xf0);
+/// U-Boot in Fledge's orange, as its NAND map draws it.
+const MAP_UBOOT: egui::Color32 = egui::Color32::from_rgb(0xf2, 0x6a, 0x12);
 const MAP_OTHER: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x74, 0x86);
 const MAP_ERASED: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x36, 0x45);
 pub(crate) const DIM: egui::Color32 = egui::Color32::from_rgb(0x5c, 0x65, 0x75);
@@ -1411,7 +1413,7 @@ impl App {
         match entry.device.and_then(|device| self.maps.get(&entry.path, device, ui.ctx())) {
             Some(map) => {
                 let colors = nandmap::Colors {
-                    uboot: ACCENT, env: WARN, system_config: MAP_SYSTEM_CONFIG,
+                    uboot: MAP_UBOOT, env: WARN, system_config: MAP_SYSTEM_CONFIG,
                     root0: MAP_ROOT0, root1: MAP_ROOT1, other: MAP_OTHER, erased: MAP_ERASED, bad: BAD,
                 };
                 nandmap::draw(ui, &map, colors);
