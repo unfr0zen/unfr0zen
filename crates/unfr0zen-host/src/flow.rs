@@ -40,6 +40,10 @@ pub struct PatchInputs {
     pub mqtt_password: Option<String>,
     pub mqtt_tls: bool,
     pub mqtt_ca: Option<PathBuf>,
+    /// The name MQTT and Matter give the unit; None keeps the unit's.
+    pub device_name: Option<String>,
+    /// What replaces nestlocal_<serial> in the entity IDs; None keeps the unit's.
+    pub ha_entity_root: Option<String>,
     /// Serve the unit over Matter too (or instead of MQTT).
     pub matter: bool,
     /// Enable the onboard Thread transport for Matter.
@@ -101,7 +105,9 @@ impl PatchInputs {
             ("mqtt-password", secret(&self.mqtt_password)),
             ("mqtt-tls", on(self.mqtt_tls)),
             ("mqtt-ca", file(&self.mqtt_ca)),
+            ("ha-entity-root", self.ha_entity_root.clone()),
             ("matter", on(self.matter)),
+            ("device-name", self.device_name.as_ref().map(|name| format!("{name:?}"))),
             ("matter-code", secret(&self.matter_code)),
             ("matter-thread", on(self.matter_thread)),
             ("zigbee", on(self.zigbee)),
@@ -127,12 +133,15 @@ impl PatchInputs {
         if self.ssh_key_only && self.ssh_public_key.is_none() {
             return Err(failure("--ssh-key-only needs --ssh-public-key: without a key nothing could log in"));
         }
-        if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some())
-            && self.mqtt.is_none() {
-            return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls and --mqtt-ca need --mqtt"));
+        if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some()
+            || self.ha_entity_root.is_some()) && self.mqtt.is_none() {
+            return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls, --mqtt-ca and --ha-entity-root need --mqtt"));
         }
         let code = self.matter_code.as_deref().map(str::trim).filter(|c| !c.is_empty());
         let matter = self.matter || code.is_some();
+        if self.device_name.is_some() && self.mqtt.is_none() && !matter {
+            return Err(failure("--device-name names the unit for --mqtt or --matter: it needs one of them"));
+        }
         if self.matter_thread && (!matter || self.zigbee) {
             return Err(failure("Matter over Thread requires Matter and cannot share the radio with Zigbee"));
         }
@@ -151,11 +160,15 @@ impl PatchInputs {
             Some(url) => Some(Mqtt {
                 url: url.clone(), user: self.mqtt_user.clone(), password: self.mqtt_password.clone(),
                 tls: self.mqtt_tls, ca: self.mqtt_ca.as_deref().map(|p| read("--mqtt-ca", p)).transpose()?,
+                entity_root: self.ha_entity_root.clone(),
             }),
             None => None,
         };
         if let Some(mqtt) = &mqtt {
             nestlocal::mqtt_options(mqtt)?;
+        }
+        if let Some(name) = &self.device_name {
+            nestlocal::check_device_name(name)?;
         }
         let ssh_public_key = self.ssh_public_key.as_deref().map(|path| {
             let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
@@ -170,6 +183,7 @@ impl PatchInputs {
             block_cloud: self.block_cloud,
             mqtt,
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
+            device_name: self.device_name.clone(),
             wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
@@ -357,6 +371,17 @@ mod describe_tests {
             .describe(), "--entry-point cve-2017-7932");
         let error = "nope".parse::<EntryPoint>().err().unwrap();
         assert!(error.contains("auto, cve-2017-7932, cve-2017-7936 or official-loader"), "{error}");
+    }
+
+    #[test]
+    fn the_device_name_is_for_mqtt_or_matter() {
+        let alone = PatchInputs { device_name: Some("Nest FamRm".into()), ..PatchInputs::default() };
+        assert!(alone.build().err().unwrap().to_string().contains("--device-name"));
+        let matter = PatchInputs { matter: true, ..alone.clone() };
+        assert_eq!(matter.build().unwrap().device_name.as_deref(), Some("Nest FamRm"));
+        assert_eq!(matter.describe(), "--matter --device-name \"Nest FamRm\"");
+        assert!(PatchInputs { mqtt: Some("broker".into()), ..alone.clone() }.build().is_ok());
+        assert!(PatchInputs { device_name: Some("x".repeat(33)), ..matter }.build().is_err(), "past Matter's 32");
     }
 
     #[test]

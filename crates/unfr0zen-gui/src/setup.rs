@@ -196,7 +196,8 @@ impl App {
             }
             let hint = match step {
                 Step::Connect if !can_continue => Some(tr!("setup.connect_hint")),
-                Step::Integrations if !can_continue => Some(tr!("setup.mqtt_needs_broker")),
+                Step::Integrations if !can_continue && self.form.mqtt.on && self.form.mqtt.value.trim().is_empty() => Some(tr!("setup.mqtt_needs_broker")),
+                Step::Integrations if !can_continue => Some(tr!("setup.fix_fields")),
                 Step::Features if !can_continue => Some(tr!("setup.ssh_needs_secret")),
                 Step::Integrations if !self.form.any_integration() => Some(tr!("setup.integrations_skip_hint")),
                 _ => None,
@@ -601,22 +602,37 @@ pub(crate) const FIELD_EDGE: egui::Color32 = egui::Color32::from_rgb(0x3a, 0x41,
 /// A text field with its label over it: a rounded box `width` wide whose
 /// edge lights while it is typed in.
 pub(crate) fn field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
+    checked_field(ui, label, edit, width, false)
+}
+
+/// A field as [`field`] draws it, its edge red while what it holds is
+/// refused.
+pub(crate) fn checked_field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit<'_>, width: f32, invalid: bool)
+                            -> egui::Response {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         ui.label(egui::RichText::new(label).size(12.5).color(LABEL));
-        boxed(ui, edit, width)
+        checked_box(ui, edit, width, invalid)
     }).inner
 }
 
 /// A text field as a rounded box `width` wide whose edge lights while it
 /// is typed in.
 pub(crate) fn boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
+    checked_box(ui, edit, width, false)
+}
+
+/// The box [`boxed`] draws: its edge red while what it holds is refused,
+/// else lit while it is typed in.
+fn checked_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool) -> egui::Response {
     let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(9)
         .inner_margin(egui::Margin::symmetric(11, 7));
     let mut prepared = frame.begin(ui);
     let room = (width - 24.0).max(40.0);
     let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(14.0)));
-    if response.has_focus() {
+    if invalid {
+        prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, BAD));
+    } else if response.has_focus() {
         prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, ACCENT));
     }
     prepared.end(ui);

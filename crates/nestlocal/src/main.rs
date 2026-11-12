@@ -19,6 +19,7 @@ mod logger;
 mod matter;
 mod mqtt;
 mod mqtttls;
+mod naming;
 mod nlsettings;
 mod occupancy;
 mod sensor;
@@ -233,8 +234,18 @@ async fn run(config: flags::Config) {
         logf!("nestlocal: nlclient runs with {}: it heats while it reports can_heat false", heatlink::KEY);
     }
     let bridge = (!config.mqtt.is_empty() || config.matter || config.zigbee).then(|| {
+        // <serial> in either name stands for the unit's serial, lowercase in entity IDs.
+        let root = Some(config.ha_entity_root.replace("<serial>", &config.serial.to_lowercase()))
+            .filter(|root| !root.is_empty());
+        if let Some(root) = root.as_ref().filter(|root| !naming::valid_root(root)) {
+            logf!("mqtt: -ha-entity-root {root:?}: not an entity ID root (lowercase letters, digits and _); keeping the last");
+        }
+        let root = root.filter(|root| naming::valid_root(root));
+        let names = naming::Naming::load(&config.ha_store, &config.serial,
+                                         naming::read_device_name(&config.device_name_file)
+                                             .map(|name| name.replace("<serial>", &config.serial)), root);
         bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
-                            Some(live.clone()), wwn_boiler)
+                            Some(live.clone()), wwn_boiler, names)
     });
     if let (Some(bridge), Some(sensor)) = (&bridge, &sensor) {
         bridge.attach_sensor(sensor.clone());

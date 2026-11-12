@@ -31,6 +31,14 @@ pub fn list() -> Result<BTreeMap<String, Id>> {
         .collect())
 }
 
+/// The serial number each device on the bus reports, by physical port;
+/// read by the system as it enumerated the device, without opening it.
+pub fn serial_numbers() -> Result<BTreeMap<String, String>> {
+    Ok(nusb::list_devices().wait().map_err(usb_error)?
+        .filter_map(|info| Some((port_name(&info), info.serial_number()?.to_string())))
+        .collect())
+}
+
 /// A claimed interface's bulk OUT and IN endpoints.
 pub struct Pipe {
     out: nusb::Endpoint<Bulk, Out>,

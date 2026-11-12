@@ -79,8 +79,8 @@ const CONNMAND_ORIGINAL: &str = "etc/unfr0zen/connmand.original";
 /// is NUL-terminated and padded to the same length, to be swapped in place.
 const CHECK_URLS: (&[u8], &[u8]) = (b"http://clients3.google.com/generate_204\0",
                                     b"http://cp.cloudflare.com/generate_204\0\0\0");
-/// A password or CA from an earlier --mqtt build must not outlive it.
-const STALE_SECRETS: [&str; 2] = [nestlocal::PASSWORD_FILE, nestlocal::CA_FILE];
+/// A password, CA or device name from an earlier build must not outlive it.
+const STALE_SECRETS: [&str; 3] = [nestlocal::PASSWORD_FILE, nestlocal::CA_FILE, nestlocal::NAME_FILE];
 
 /// Host copies of the volume's files: name, (contents, mode).
 pub type Tree = BTreeMap<String, (Vec<u8>, u32)>;
@@ -409,6 +409,8 @@ pub struct Options {
     pub block_cloud: bool,
     pub mqtt: Option<Mqtt>,
     pub matter: Option<Matter>,
+    /// The name MQTT and Matter give the unit; None keeps the unit's.
+    pub device_name: Option<String>,
     /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
     /// installed with Matter on a gen 2 or gen 3, removed without.
     pub wake_filter: Vec<u8>,
@@ -574,11 +576,12 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             None => new_pki()?,
         };
         overlay = Some(nestlocal::overlay(|name| tree.get(name).cloned(), options.mqtt.as_ref(),
-                                          options.matter.as_ref(), options.zigbee || options.thread.is_some(), nestlocal_binary, &pki)?);
+                                          options.matter.as_ref(), options.zigbee || options.thread.is_some(),
+                                          options.device_name.as_deref(), nestlocal_binary, &pki)?);
         if let Some(thread) = &options.thread {
             let overlay = overlay.as_mut().unwrap();
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
-            *line = nestlocal::options(options.mqtt.as_ref(), options.matter.as_ref(), false)?.0;
+            *line = nestlocal::options(options.mqtt.as_ref(), options.matter.as_ref(), false, options.device_name.as_deref())?.0;
             line.pop();
             line.extend_from_slice(b" -matter-thread\n");
             overlay.files.extend(thread.files.clone());
@@ -1235,7 +1238,7 @@ mod tests {
         // Again changes neither.
         assert!(!names(&patch(&mut volume, &options, false).unwrap()).contains(WAKE_FILTER));
         let changes = patch(&mut volume, &Options { matter: None, mqtt: Some(Mqtt { url: "tcp://b:1883".into(), user: None,
-            password: None, tls: false, ca: None }), ..options }, false).unwrap();
+            password: None, tls: false, ca: None, entity_root: None }), ..options }, false).unwrap();
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);

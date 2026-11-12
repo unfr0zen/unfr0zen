@@ -19,7 +19,7 @@ mod patch;
 mod run;
 mod setup;
 use setup::Look;
-pub(crate) use setup::{boxed, boxed_select, card, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{boxed, boxed_select, card, checked_field, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
 #[cfg(test)]
 mod snapshot;
 mod terminal;
@@ -2391,7 +2391,7 @@ mod tests {
 
     /// One unit of `device` on USB, running its application.
     fn on_usb(device: Device) -> Watcher {
-        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }))
+        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -2661,7 +2661,7 @@ mod tests {
             app.show(page);
             shot(&format!("{page:?}").to_lowercase(), &mut app, WINDOW);
         }
-        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }));
+        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }));
         let flow = |step| App { bus: gen3(), step, ..App::default() };
         shot("1-connect", &mut flow(setup::Step::Connect), WINDOW);
         shot("1-connect-waiting", &mut App::default(), WINDOW);
@@ -3290,7 +3290,7 @@ mod tests {
 
     #[test]
     fn boot_and_uboot_need_a_diamond3_on_the_bus() {
-        let seen = |device| bus::Seen { device, mode: "app", port: "1".into(), id: (0, 0) };
+        let seen = |device| bus::Seen { device, mode: "app", port: "1".into(), id: (0, 0), serial: None };
         let d3 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::Diamond3))), ..App::default() };
         assert!(d3.diamond3_on_bus(), "a 3rd generation is on the bus");
         let j49 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::J49))), ..App::default() };

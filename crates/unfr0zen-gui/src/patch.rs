@@ -24,6 +24,10 @@ pub struct Form {
     mqtt_password: String,
     mqtt_tls: bool,
     mqtt_ca: FilePick,
+    /// The device name MQTT and Matter give the unit, and Home Assistant's
+    /// entity ID root; empty keeps the unit's.
+    device_name: String,
+    ha_entity_root: String,
     pub matter: MatterCode,
     matter_thread: bool,
     zigbee: bool,
@@ -39,6 +43,8 @@ pub struct Form {
     device: Option<Device>,
     /// The device last known, kept while no unit is on the bus.
     last_device: Option<Device>,
+    /// The serial of the unit on the bus, for the entity IDs' preview.
+    serial: Option<String>,
     pub doom: bool,
     external_temperature: bool,
     dark_theme: bool,
@@ -146,12 +152,14 @@ impl Form {
             ntp_server: self.ntp.on.then(|| self.ntp.value.clone()),
             backplate_sim: self.backplate_sim,
             block_cloud: self.block_cloud,
-            mqtt: self.mqtt.on.then(|| self.mqtt.value.clone()),
+            mqtt: self.mqtt.on.then(|| self.mqtt.value.trim().to_string()),
             mqtt_user: self.mqtt.on.then(|| text(&self.mqtt_user)).flatten(),
             mqtt_password: self.mqtt.on.then(|| text(&self.mqtt_password)).flatten(),
             mqtt_tls: self.mqtt.on && self.mqtt_tls,
             // The CA field only shows under TLS, so it only sends under TLS.
             mqtt_ca: (self.mqtt.on && self.mqtt_tls).then(|| self.mqtt_ca.path.clone()).flatten(),
+            device_name: self.names_device().then(|| text(self.device_name.trim())).flatten(),
+            ha_entity_root: self.mqtt.on.then(|| text(self.ha_entity_root.trim())).flatten(),
             matter: self.matter.on,
             matter_thread: self.matter.on && self.matter_thread,
             matter_code: self.matter.on.then(|| self.matter.code.clone()),
@@ -198,9 +206,32 @@ impl Form {
     }
 
     /// Whether the integrations step can be left: with MQTT on, a broker
-    /// must be named.
+    /// must be named; and nothing typed may be refused.
     pub fn integrations_done(&self) -> bool {
-        !self.mqtt.on || !self.mqtt.value.trim().is_empty()
+        let mqtt = !self.mqtt.on || (!self.mqtt.value.trim().is_empty() && self.mqtt_errors().iter().all(Option::is_none));
+        mqtt && (!self.names_device() || self.device_name_error().is_none())
+    }
+
+    /// Whether an integration on takes the device name: MQTT or Matter.
+    fn names_device(&self) -> bool {
+        self.mqtt.on || self.matter.on
+    }
+
+    /// What is wrong with the broker and entity ID root as typed, each
+    /// checked as the run will check it; an empty one is no error.
+    pub fn mqtt_errors(&self) -> [Option<&'static str>; 2] {
+        use unfr0zen_core::nestlocal::{check_entity_root, mqtt_url};
+        [
+            typed_error(&self.mqtt.value, mqtt_url(self.mqtt.value.trim()).is_ok(), crate::tr!("patch.mqtt.broker_invalid")),
+            typed_error(&self.ha_entity_root, check_entity_root(self.ha_entity_root.trim()).is_ok(),
+                        crate::tr!("patch.mqtt.ha_entity_root_invalid")),
+        ]
+    }
+
+    /// What is wrong with the device name as typed; empty is no error.
+    pub fn device_name_error(&self) -> Option<&'static str> {
+        let ok = unfr0zen_core::nestlocal::check_device_name(self.device_name.trim()).is_ok();
+        typed_error(&self.device_name, ok, crate::tr!("patch.device_name_invalid"))
     }
 
     /// Whether the features step can be left: SSH needs a way in, a key or
@@ -233,13 +264,19 @@ impl Form {
     /// The integrations step: MQTT, Matter and Zigbee, and what rides on them.
     pub fn integrations_ui(&mut self, ui: &mut egui::Ui) {
         self.drain_dialogs();
+        let [broker_error, root_error] = self.mqtt_errors();
+        let name_error = self.device_name_error();
         crate::option_card(ui, &mut self.mqtt.on, true, crate::tr!("setup.mqtt"), crate::tr!("setup.mqtt_about"), |ui| {
             // The broker across the card, the sign-in side by side under it.
             let width = ui.available_width();
             let half = (width - 14.0) / 2.0;
-            crate::field(ui, crate::tr!("patch.mqtt.broker"),
-                         egui::TextEdit::singleline(&mut self.mqtt.value).hint_text("host[:port]"), width)
+            crate::checked_field(ui, crate::tr!("patch.mqtt.broker"),
+                                 egui::TextEdit::singleline(&mut self.mqtt.value).hint_text("host[:port]"), width,
+                                 broker_error.is_some())
                 .on_hover_text(crate::tr!("patch.mqtt.broker_hint"));
+            if let Some(error) = broker_error {
+                field_error(ui, error);
+            }
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 crate::field(ui, crate::tr!("patch.mqtt.user"),
@@ -288,6 +325,46 @@ impl Form {
         // A Heat Link model whose radio nestlocal takes heats through W1.
         if self.holds_radio() {
             crate::toggle_card(ui, &mut self.wwn_boiler, true, crate::tr!("patch.wwn_boiler"), crate::tr!("patch.wwn_boiler_hint"));
+        }
+
+        // The names Home Assistant shows: the device's, for MQTT and Matter,
+        // and the entity IDs' root, for MQTT alone.
+        if self.names_device() {
+            crate::group(ui, crate::tr!("setup.group.home_assistant"));
+            let mqtt = self.mqtt.on;
+            crate::card(ui, |ui| {
+                let half = (ui.available_width() - 14.0) / 2.0;
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    device_name_field(ui, &mut self.device_name, if mqtt { half } else { FIELD_WIDTH }, name_error.is_some());
+                    if mqtt {
+                        crate::checked_field(ui, crate::tr!("patch.mqtt.ha_entity_root"),
+                                             egui::TextEdit::singleline(&mut self.ha_entity_root)
+                                                 .hint_text(crate::tr!("patch.mqtt.ha_entity_root_placeholder")), half,
+                                             root_error.is_some())
+                            .on_hover_text(crate::tr!("patch.mqtt.ha_entity_root_hint"));
+                    }
+                });
+                for error in [name_error, root_error.filter(|_| mqtt)].into_iter().flatten() {
+                    field_error(ui, error);
+                }
+                if !mqtt {
+                    return;
+                }
+                // The entity IDs the root gives, as it is typed, with the
+                // serial of the unit on the bus.
+                let typed = self.ha_entity_root.trim();
+                let root = if typed.is_empty() { crate::tr!("patch.mqtt.ha_entity_root_placeholder") } else { typed };
+                let root = with_serial(&self.serial, root);
+                crate::muted_line(ui, crate::tr!("patch.mqtt.ha_entity_ids"));
+                crate::code_line(ui, &format!("climate.{root}_thermostat\nsensor.{root}_current_temperature"));
+                crate::muted_line(ui, if typed.is_empty() {
+                    crate::tr!("patch.mqtt.ha_keep_about")
+                } else {
+                    crate::tr!("patch.mqtt.ha_move_about")
+                });
+            });
+            ui.add_space(10.0);
         }
 
         crate::group(ui, crate::tr!("setup.group.sensors"));
@@ -454,6 +531,10 @@ impl Form {
             }
             self.last_device = Some(device);
         }
+        self.serial = match bus {
+            Bus::One(seen) => seen.serial.clone(),
+            _ => None,
+        };
     }
 
     /// The developer options, folded away on the review step: the CLI's
@@ -560,6 +641,32 @@ fn entry_point_label(entry_point: EntryPoint) -> &'static str {
     }
 }
 
+/// The device name's field, in MQTT's card and Matter's alike.
+fn device_name_field(ui: &mut egui::Ui, name: &mut String, width: f32, invalid: bool) {
+    crate::checked_field(ui, crate::tr!("patch.device_name"),
+                         egui::TextEdit::singleline(name).hint_text(crate::tr!("patch.device_name_placeholder")), width, invalid)
+        .on_hover_text(crate::tr!("patch.device_name_hint"));
+}
+
+/// An error for a value typed, none for one left empty.
+fn typed_error(value: &str, ok: bool, error: &'static str) -> Option<&'static str> {
+    (!value.trim().is_empty() && !ok).then_some(error)
+}
+
+/// What is wrong with the field above, in red as its edge.
+fn field_error(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).size(12.5).color(crate::BAD));
+}
+
+/// An entity ID root with <serial> as the unit on the bus has it, in
+/// lowercase; kept as <serial> with no unit to read it from.
+fn with_serial(serial: &Option<String>, root: &str) -> String {
+    match serial {
+        Some(serial) => root.replace("<serial>", &serial.to_lowercase()),
+        None => root.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,9 +753,9 @@ mod tests {
     fn the_entry_point_goes_back_to_auto_only_when_the_device_changes() {
         use crate::bus::Seen;
         use unfr0zen_host::{device, diamond3::usb};
-        let one = |id| Bus::One(Seen { device: device::identify(id).unwrap(), mode: "", port: "1".into(), id });
+        let one = |id| Bus::One(Seen { device: device::identify(id).unwrap(), mode: "", port: "1".into(), id, serial: None });
         let gen3 = one(usb::SDP);
-        let gen2 = Bus::One(Seen { device: Device::J49, mode: "", port: "1".into(), id: (0, 0) });
+        let gen2 = Bus::One(Seen { device: Device::J49, mode: "", port: "1".into(), id: (0, 0), serial: None });
         let mut form = Form::default();
         form.track_device(&gen3);
         form.entry_point = EntryPoint::Cve20177936;
@@ -721,6 +828,80 @@ mod tests {
 
         let bare = Form::default().inputs();
         assert!(bare.mqtt.is_none() && bare.root_password.is_none() && !bare.backplate_sim);
+    }
+
+    #[test]
+    fn home_assistant_names_are_trimmed_and_blank_keeps_the_units() {
+        let mut form = Form { mqtt: Toggle { on: true, value: "broker".into() }, ..Form::default() };
+        form.device_name = " Nest FamRm ".into();
+        form.ha_entity_root = "nest_famrm ".into();
+        let inputs = form.inputs();
+        assert_eq!((inputs.device_name.as_deref(), inputs.ha_entity_root.as_deref()), (Some("Nest FamRm"), Some("nest_famrm")));
+        assert!(inputs.build().is_ok());
+        form.device_name = "  ".into();
+        form.ha_entity_root.clear();
+        let inputs = form.inputs();
+        assert!(inputs.device_name.is_none() && inputs.ha_entity_root.is_none());
+        form.ha_entity_root = "Nest FamRm".into();
+        assert!(form.inputs().build().is_err(), "a root Home Assistant would change");
+    }
+
+    #[test]
+    fn the_preview_takes_the_serial_of_the_unit_on_the_bus() {
+        use crate::bus::Seen;
+        let mut form = Form::default();
+        assert_eq!(with_serial(&form.serial, "kikoo_<serial>_lol"), "kikoo_<serial>_lol");
+        let seen = Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030),
+                          serial: Some("09AA01AC25160NMZ".into()) };
+        form.track_device(&Bus::One(seen));
+        assert_eq!(with_serial(&form.serial, "kikoo_<serial>_lol"), "kikoo_09aa01ac25160nmz_lol");
+        form.track_device(&Bus::Nothing);
+        assert_eq!(with_serial(&form.serial, "<serial>"), "<serial>", "unplugged, the serial is no longer known");
+        // What goes to the unit is the root as typed.
+        form.mqtt = Toggle { on: true, value: "broker".into() };
+        form.ha_entity_root = "kikoo_<serial>_lol".into();
+        assert_eq!(form.inputs().ha_entity_root.as_deref(), Some("kikoo_<serial>_lol"));
+    }
+
+    #[test]
+    fn invalid_fields_hold_the_step() {
+        let mut form = Form { mqtt: Toggle { on: true, value: "mqtt.lan:1883".into() }, ..Form::default() };
+        assert!(form.integrations_done());
+        assert_eq!(form.mqtt_errors(), [None, None]);
+        for (broker, name, root, errors) in [
+            ("mqtt lan", "", "", [true, false, false]),
+            ("mqtt.lan:99999", "", "", [true, false, false]),
+            ("mqtt.lan", "two\nlines", "", [false, true, false]),
+            ("mqtt.lan", &"x".repeat(33), "", [false, true, false]),
+            ("mqtt.lan", "", "Nest FamRm", [false, false, true]),
+            ("mqtt.lan", "", &"a".repeat(65), [false, false, true]),
+            ("mqtt.lan", "Nest <serial>", "kikoo_<serial>_lol", [false, false, false]),
+        ] {
+            form.mqtt.value = broker.into();
+            form.device_name = name.into();
+            form.ha_entity_root = root.into();
+            let [broker_error, root_error] = form.mqtt_errors();
+            let found = [broker_error.is_some(), form.device_name_error().is_some(), root_error.is_some()];
+            assert_eq!(found, errors, "{broker:?} {name:?} {root:?}");
+            assert_eq!(form.integrations_done(), errors == [false; 3], "{broker:?} {name:?} {root:?}");
+            if errors == [false; 3] {
+                assert!(form.inputs().build().is_ok(), "the run takes what the step lets through");
+            }
+        }
+        // Matter alone takes the name, and holds the step for a bad one.
+        form.mqtt = Toggle { on: false, value: "mqtt lan".into() };
+        form.matter.on = true;
+        form.device_name = "x".repeat(33);
+        assert!(!form.integrations_done());
+        form.device_name = "Nest <serial>".into();
+        assert!(form.integrations_done());
+        let options = form.inputs().build().unwrap();
+        assert_eq!(options.device_name.as_deref(), Some("Nest <serial>"));
+        // With neither, the name is not asked for: it holds nothing up and goes nowhere.
+        form.matter.on = false;
+        form.device_name = "x".repeat(33);
+        assert!(form.integrations_done());
+        assert!(form.inputs().device_name.is_none());
     }
 
     #[test]
