@@ -129,9 +129,9 @@
   "patch.matter": "Matter",
   "patch.matter.pairing_code": "Pairing code",
   "patch.matter.pairing_code_hint": "The pairing code to enter in your Matter controller when adding the thermostat",
-  "patch.matter.thread": "Thread support (replaces Heat Link)",
+  "patch.matter.thread": "Thread support",
   "patch.matter.thread_disabled_hint": "Turn off Zigbee first: Thread and Zigbee cannot share the radio",
-  "patch.matter.thread_hint": "Use the onboard radio for Matter over Thread; replaces Heat Link and cannot be combined with Zigbee",
+  "patch.matter.thread_hint": "Use the onboard radio for Matter over Thread; cannot be combined with Zigbee",
   "patch.mqtt.broker": "Broker",
   "patch.mqtt.broker_hint": "MQTT broker hostname or IP address, optionally followed by :port",
   "patch.mqtt.ca_certificate": "CA certificate",
@@ -149,7 +149,7 @@
   "patch.technique.spray_stack": "CVE-2017-7936",
   "patch.wwn_boiler": "Works With Nest boiler",
   "patch.wwn_boiler_hint": "With Zigbee or Thread on a Heat Link model (Display-3.x, Display-5.x): heat through W1 as a Works With Nest boiler. Without it, firmware 6.4-8 can stop on error H71/H74 with no Heat Link",
-  "patch.zigbee": "Zigbee (replaces Heat Link)",
+  "patch.zigbee": "Zigbee",
   "patch.zigbee_disabled_hint": "Turn off Thread support first: Zigbee and Thread cannot share the radio",
   "run.disabled_busy": "Finish the current operation, close any file picker, and disconnect any open console first",
   "run.done": "Done",
@@ -301,7 +301,7 @@
   "setup.waiting_for_unit": "Looking for your thermostat…",
   "setup.whats_next": "What's next",
   "setup.zigbee": "Zigbee",
-  "setup.zigbee_about": "Join a Zigbee network (Zigbee2MQTT or ZHA) as a thermostat and router. Replaces the Heat Link, and can't be combined with Thread.",
+  "setup.zigbee_about": "Join a Zigbee network (Zigbee2MQTT or ZHA) as a thermostat and router. Can't be combined with Thread.",
   "setup.edit": "Edit",
   "setup.another": "Patch another thermostat",
   "setup.gen2": "2nd Gen",
@@ -333,5 +333,6 @@
   "setup.ssh_keygen_missing": "ssh-keygen could not run: {error}",
   "setup.ssh_login": "Log in afterwards from a terminal with:",
   "setup.ssh_address": "<thermostat's IP address>",
-  "setup.ssh_needs_secret": "Choose a key, or allow password login, to continue."
+  "setup.ssh_needs_secret": "Choose a key, or allow password login, to continue.",
+  "setup.radio_warning": "Uses the thermostat's own radio: a Nest Heat Link can no longer connect to it."
 }

@@ -273,12 +273,15 @@ impl Form {
                 });
                 ui.label(egui::RichText::new(crate::tr!("patch.matter.thread")).color(if free { crate::TEXT } else { crate::DIM }));
             });
+            if self.matter_thread {
+                radio_warning(ui);
+            }
         });
         if matter_was && !self.matter.on {
             self.matter_thread = false;
         }
         let thread = self.matter_thread;
-        crate::toggle_card(ui, &mut self.zigbee, !thread, crate::tr!("patch.zigbee"), crate::tr!("setup.zigbee_about"));
+        crate::option_card(ui, &mut self.zigbee, !thread, crate::tr!("patch.zigbee"), crate::tr!("setup.zigbee_about"), radio_warning);
         if thread {
             crate::muted_line(ui, crate::tr!("patch.zigbee_disabled_hint"));
         }
@@ -480,6 +483,11 @@ impl Form {
 /// The items, joined, or None.
 fn joined(items: &[&str]) -> String {
     if items.is_empty() { crate::tr!("setup.none").to_string() } else { items.join(" · ") }
+}
+
+/// Under Thread and Zigbee: they take the radio a Heat Link talks over.
+fn radio_warning(ui: &mut egui::Ui) {
+    ui.add(egui::Label::new(egui::RichText::new(crate::tr!("setup.radio_warning")).color(crate::WARN).size(13.0)).wrap());
 }
 
 /// Root's password, shared by SSH and the USB console.
