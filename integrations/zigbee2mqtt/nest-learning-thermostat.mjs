@@ -87,7 +87,7 @@ const ea = exposes.access;
 
 const THERMOSTAT = 1;
 const BACKPLATE = 2;
-const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4, fan_schedule_minutes: 7, fan_schedule_start: 8,
+const OUTPUTS = {heating_boost: 40, fan_timer_duration: 3, target_humidity: 4, fan_schedule_minutes: 7, fan_schedule_start: 8,
     fan_schedule_end: 9};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
 const TEMPERATURE_SOURCE = 28;
@@ -284,7 +284,7 @@ const nest = {
         convert: (model, msg) => {
             const name = byEndpoint(OUTPUTS, msg.endpoint.ID);
             if (name && msg.data.presentValue !== undefined) {
-                return {[name]: Math.round(msg.data.presentValue)};
+                return {[name]: name === 'heating_boost' ? String(Math.round(msg.data.presentValue)) : Math.round(msg.data.presentValue)};
             }
         },
     },
@@ -344,7 +344,7 @@ const set = {
         key: Object.keys(OUTPUTS),
         convertSet: async (entity, key, value, meta) => {
             await meta.device.getEndpoint(OUTPUTS[key]).write('genAnalogOutput', {presentValue: Number(value)});
-            return {state: {[key]: Number(value)}};
+            return {state: {[key]: key === 'heating_boost' ? String(value) : Number(value)}};
         },
         convertGet: async (entity, key, meta) => {
             await meta.device.getEndpoint(OUTPUTS[key]).read('genAnalogOutput', ['presentValue']);
@@ -492,6 +492,10 @@ const definition = {
         if (has(device, TEMPERATURE_SOURCE)) {
             result.push(e.enum('temperature_source', ea.STATE, ['backplate', 'external']).withLabel('Temperature source')
                 .withCategory('diagnostic').withDescription('Which sensor regulates'));
+        }
+        if (has(device, OUTPUTS.heating_boost)) {
+            result.push(e.enum('heating_boost', ea.ALL, ['0', '30', '60', '120', '180'])
+                .withLabel('Heating boost').withDescription('Boost +2°C for these minutes; 0 cancels'));
         }
         if (has(device, OUTPUTS.fan_timer_duration)) {
             result.push(e.numeric('fan_timer_duration', ea.ALL).withUnit('min').withValueMin(15).withValueMax(1440)

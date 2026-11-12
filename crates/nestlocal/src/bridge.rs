@@ -43,6 +43,7 @@ const RENAME_WAIT: Duration = Duration::from_secs(2);
 
 pub struct Bridge {
     me: Weak<Bridge>,
+    pub boost_lock: Mutex<()>,
     pub serial: String,
     pub base: String,
     discovery: String,
@@ -75,6 +76,7 @@ impl Bridge {
         let (time_ok, time_ok_rx) = mpsc::channel(1);
         Arc::new_cyclic(|me| Bridge {
             me: me.clone(),
+            boost_lock: Mutex::new(()),
             serial: serial.into(),
             base: format!("{prefix}/{serial}"),
             discovery: discovery.into(),
@@ -362,6 +364,14 @@ impl Bridge {
         let on_off = |k: &str| format!("{{{{ 'ON' if value_json.{k} else 'OFF' }}}}");
 
         let (can_heat, can_cool) = (truthy(sh.get("can_heat")), truthy(sh.get("can_cool")));
+        if can_heat {
+            add("select", "heating_boost", "Heating boost", fields!{
+                "value_template" => tmpl("heating_boost"),
+                "command_topic" => format!("{set}heating_boost"),
+                "options" => vec!["0", "30", "60", "120", "180"],
+                "icon" => "mdi:radiator",
+            });
+        }
         let mut modes = vec!["off"];
         if can_heat {
             modes.push("heat");
@@ -778,6 +788,7 @@ fn rfc3339(t: f64) -> Value {
 pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     let now = chrono::Utc::now().timestamp() as f64;
     let mut s = Fields::new();
+    s.insert("heating_boost".into(), sprint(dev.get("heating_boost")).parse::<u16>().unwrap_or(0).to_string().into());
 
     let mode = match sprint(sh.get("target_temperature_type")).as_str() {
         "heat" => "heat",
@@ -1098,6 +1109,7 @@ pub mod tests {
                 if k.ends_with("command_topic") {
                     let name = v.strip_prefix("nestlocal/S/set/").unwrap_or_else(|| panic!("{topic}: {k} {v}"));
                     let arg = match name {
+                        "heating_boost" => "0",
                         "mode" => "heat",
                         "preset" => "eco",
                         "fan_mode" => "auto",

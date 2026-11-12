@@ -48,6 +48,7 @@ pub struct Store {
     path: PathBuf,
     inner: Mutex<Inner>,
     dirty: Notify,
+    writing: Mutex<()>,
 }
 
 /// A held subscribe's place among the store's listeners; dropping it
@@ -79,7 +80,7 @@ impl Store {
             }
             logf!("store: loaded {} buckets from {}", inner.objects.len(), path.display());
         }
-        Arc::new(Store { path, inner: Mutex::new(inner), dirty: Notify::new() })
+        Arc::new(Store { path, inner: Mutex::new(inner), dirty: Notify::new(), writing: Mutex::new(()) })
     }
 
     pub fn get(&self, key: &str) -> Option<Object> {
@@ -151,22 +152,37 @@ impl Store {
         loop {
             self.dirty.notified().await;
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let objects = self.all();
             let store = self.clone();
-            let saved = tokio::task::spawn_blocking(move || store.write(&objects)).await;
+            let saved = tokio::task::spawn_blocking(move || store.save(false)).await;
             if let Ok(Err(e)) = saved {
                 logf!("store: {e}");
             }
         }
     }
 
-    fn write(&self, objects: &[Object]) -> std::io::Result<()> {
+    pub fn flush(&self) -> std::io::Result<()> {
+        self.save(true)
+    }
+
+    fn save(&self, durable: bool) -> std::io::Result<()> {
+        let _writing = self.writing.lock().unwrap();
+        self.write(&self.all(), durable)
+    }
+
+    fn write(&self, objects: &[Object], durable: bool) -> std::io::Result<()> {
         let mut bytes = Vec::new();
         let mut ser = serde_json::Serializer::with_formatter(&mut bytes, serde_json::ser::PrettyFormatter::with_indent(b" "));
         objects.serialize(&mut ser).map_err(std::io::Error::other)?;
         let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
         write_private(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.path)
+        if durable { std::fs::File::open(&tmp)?.sync_all()?; }
+        std::fs::rename(&tmp, &self.path)?;
+        #[cfg(unix)]
+        if durable {
+            std::fs::File::open(self.path.parent().filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new(".")))?.sync_all()?;
+        }
+        Ok(())
     }
 }
 
@@ -226,7 +242,7 @@ pub mod tests {
     fn file_round_trip() {
         let s = temp_store();
         s.merge("device.S", &fields!{"t" => 19.5, "on" => true}, 3, 99, true);
-        s.write(&s.all()).unwrap();
+        s.write(&s.all(), false).unwrap();
         let text = std::fs::read_to_string(&s.path).unwrap();
         assert!(text.starts_with("[\n {\n  \"object_key\": \"device.S\",\n  \"object_revision\": 3,"), "{text}");
         let again = Store::new(s.path.clone());

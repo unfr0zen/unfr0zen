@@ -306,7 +306,7 @@ async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool
 }
 
 fn sleep_blocked(matter: bool, ready: bool, commissioning: bool) -> bool {
-    matter && (!ready || commissioning)
+    crate::boost::active() || (matter && (!ready || commissioning))
 }
 
 fn release_when_idle(bus: zbus::Connection, matter: bool, ready: Arc<AtomicBool>) {
@@ -410,7 +410,7 @@ impl SleepClient {
         if let Some(conn) = self.wake.as_ref().and_then(|w| w.conn()) {
             report(&self.bus, conn.remote).await;
         }
-        if crate::thread_sleep::blocked() || (self.zigbee && crate::zigbee::wakeup::pending()) {
+        if crate::boost::active() || crate::thread_sleep::blocked() || (self.zigbee && crate::zigbee::wakeup::pending()) {
             return (ENTITY_PATH.into(), false);
         }
         (ENTITY_PATH.into(), true)

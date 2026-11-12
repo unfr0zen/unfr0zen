@@ -73,7 +73,7 @@ use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
-use extras::{Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, Humidity, Labels, Switch, Switches,
+use extras::{Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HeatingBoost, Humidity, Labels, Switch, Switches,
              TemperatureSource};
 use thermostat::Thermostat;
 
@@ -527,6 +527,10 @@ fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: 
             clusters!(desc::DescHandler::CLUSTER, TemperatureSource::CLUSTER, Labels::CLUSTER),
         ));
     }
+    if switches.iter().any(|s| s.key == "away_temperature_low_enabled") {
+        endpoints.push(Endpoint::new(43, devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, HeatingBoost::CLUSTER, Labels::CLUSTER)));
+    }
     for switch in switches {
         endpoints.push(Endpoint::new(
             switch.endpoint,
@@ -554,6 +558,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
                          (FAN_TIMER, "Fan timer duration"), (EXTERNAL_TEMPERATURE, "External temperature"),
                          (TEMPERATURE_SOURCE, "Temperature source"), (FAN_SCHEDULE, "Fan schedule run time"),
                          (FAN_SCHEDULE + 1, "Fan schedule start"), (FAN_SCHEDULE + 2, "Fan schedule end")];
+    names.push((43, "Heating boost"));
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
         node,
@@ -595,6 +600,10 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(node: Node<'static>, mu
             .chain(
                 |e, c| e == FAN && c == Fan::CLUSTER.id,
                 Async(fan_control::HandlerAdaptor(Fan { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
+            )
+            .chain(
+                |e, c| e == 43 && c == HeatingBoost::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(HeatingBoost { dataver: Dataver::new_rand(&mut rand), nest: nest.clone() })),
             )
             .chain(
                 |e, c| e == FAN_TIMER && c == FanTimer::CLUSTER.id,
@@ -942,9 +951,9 @@ mod tests {
             let unit = nest(dev, sh);
             node(has_fan, &extras::switches(&unit)).endpoints.iter().map(|e| e.id).collect::<Vec<_>>()
         };
-        assert_eq!(ids(false, crate::fields!{}, crate::fields!{"can_heat" => true}), [0, 1, 2, 3, 10, 11, 12, 13, 14]);
+        assert_eq!(ids(false, crate::fields!{}, crate::fields!{"can_heat" => true}), [0, 1, 2, 3, 43, 10, 11, 12, 13, 14]);
         assert_eq!(ids(true, crate::fields!{"has_humidifier" => true}, crate::fields!{"can_heat" => true, "can_cool" => true}),
-                   [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]);
+                   [0, 1, 2, 3, 4, 5, 43, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]);
     }
 
     #[test]

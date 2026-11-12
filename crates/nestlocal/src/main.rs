@@ -5,6 +5,7 @@
 #![recursion_limit = "256"]
 
 mod bridge;
+mod boost;
 mod clock;
 mod cloud;
 mod commands;
@@ -259,6 +260,7 @@ async fn run(config: flags::Config) {
         tokio::spawn(updates.keep_checking());
     }
     if let Some(bridge) = &bridge {
+        boost::start(bridge.clone());
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());
     }
     let mut broker_port = None;

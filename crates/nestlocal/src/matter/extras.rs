@@ -945,3 +945,81 @@ mod tests {
         assert!(read(SWITCHES + 1).is_empty());
     }
 }
+
+pub struct HeatingBoost {
+    pub dataver: Dataver,
+    pub nest: Arc<Nest>,
+}
+
+impl mode_select::ClusterHandler for HeatingBoost {
+    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
+        .with_attrs(with!(required))
+        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+
+    dataver!();
+
+    fn description<P: TLVBuilderParent>(&self, _ctx: impl ReadContext, builder: Utf8StrBuilder<P>) -> Result<P, Error> {
+        builder.set("Heating boost")
+    }
+
+    fn standard_namespace(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::none())
+    }
+
+    fn supported_modes<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        macro_rules! option {
+            ($b:expr, $i:expr, $minutes:expr) => {
+                $b.label(&if $minutes == 0 { "Off".into() } else { format!("{} min", $minutes) })?.mode($i as u8)?.semantic_tags()?.end()?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for (i, minutes) in crate::boost::MINUTES.iter().enumerate() {
+                    array = option!(array.push()?, i, *minutes)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) if (i as usize) < crate::boost::MINUTES.len() => {
+                option!(item, i, crate::boost::MINUTES[i as usize])
+            }
+            ArrayAttributeRead::ReadOne(..) => Err(ErrorCode::ConstraintError.into()),
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn current_mode(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        let minutes = self.nest.view().device_number("heating_boost").unwrap_or(0.0) as u16;
+        Ok(crate::boost::MINUTES.iter().position(|m| *m == minutes).unwrap_or(0) as u8)
+    }
+
+    fn handle_change_to_mode(&self, _ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
+        -> Result<(), Error> {
+        let minutes = crate::boost::MINUTES.get(request.new_mode()? as usize).ok_or(ErrorCode::ConstraintError)?;
+        self.nest.apply("heating_boost", &minutes.to_string()).map_err(failed)
+    }
+}
+
+
+#[cfg(test)]
+mod boost_tests {
+    use super::*;
+    use super::super::tests::ctx;
+    use rs_matter::dm::clusters::decl::mode_select::ClusterHandler;
+    use rs_matter::tlv::TLVElement;
+    #[test]
+    fn boost_modes_start_replace_cancel_and_reject_unknown_modes() {
+        let bridge = crate::boost::tests::fixture();
+        let boost = HeatingBoost { dataver: Dataver::new(0), nest: Arc::new(Nest { bridge }) };
+        for mode in [1, 2, 3, 4, 0] {
+            boost.handle_change_to_mode(ctx(43), mode_select::ChangeToModeRequest::new(
+                TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18]))).unwrap();
+            assert_eq!(boost.current_mode(ctx(43)).unwrap(), mode);
+        }
+        assert!(boost.handle_change_to_mode(ctx(43), mode_select::ChangeToModeRequest::new(
+            TLVElement::new(&[0x15, 0x24, 0x00, 5, 0x18]))).is_err());
+    }
+}

@@ -253,6 +253,9 @@ impl Nest {
         if has_fan {
             endpoints.push(Endpoint { id: FAN_TIMER_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
         }
+        if has("can_heat") {
+            endpoints.push(Endpoint { id: 40, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
+        }
         if humidity_control {
             endpoints.push(Endpoint {
                 id: HUMIDITY_TARGET_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT],
@@ -456,6 +459,7 @@ impl Nest {
         let dev = self.view().dev;
         let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
         let (description, units, min, max, value) = match endpoint {
+            40 => ("Heating boost", MINUTES, 0.0, 180.0, number(dev.get("heating_boost")).unwrap_or(0.0)),
             FAN_TIMER_ENDPOINT => {
                 let minutes = number(dev.get("fan_timer_duration")).map_or(15.0, |s| s / 60.0);
                 ("Fan timer duration", MINUTES, 15.0, 1440.0, minutes)
@@ -482,6 +486,10 @@ impl Nest {
 
     fn write_analog_output(&self, endpoint: u8, attribute: u16, value: Value) -> u8 {
         match (attribute, value) {
+            (0x0055, Value::F32(v)) if endpoint == 40 => {
+                if !v.is_finite() || v.fract() != 0.0 { return status::INVALID_VALUE; }
+                self.apply("heating_boost", &v.to_string())
+            }
             (0x0055, Value::F32(v)) if endpoint == FAN_TIMER_ENDPOINT => {
                 self.apply("fan_timer_duration", &(v.round() as i64).to_string())
             }
@@ -757,11 +765,11 @@ mod tests {
     fn endpoints_follow_the_equipment() {
         let ids = |n: &Nest| n.endpoints.iter().map(|e| e.id).collect::<Vec<_>>();
         let n = nest(fields!{}, fields!{"can_heat" => true});
-        assert_eq!(ids(&n), [1, 2, 5, 10, 11, 12, 13, 14, 20, 21, 22, 23]);
+        assert_eq!(ids(&n), [1, 2, 40, 5, 10, 11, 12, 13, 14, 20, 21, 22, 23]);
         assert!(!n.has(1, FAN));
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 29, 20, 21, 22, 23, 24, 26]);
+        assert_eq!(ids(&n), [1, 2, 3, 40, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 29, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
     }
 
@@ -879,13 +887,13 @@ mod tests {
         let n = nest(fields!{"has_x2_heat" => true, "has_aux_heat" => true},
                      fields!{"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
                              "hvac_heat_x2_state" => true, "hvac_fan_state" => true});
-        let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|&id| id >= STAGE_ENDPOINTS).collect();
+        let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|id| (STAGE_ENDPOINTS..40).contains(id)).collect();
         assert_eq!(ids, [30, 31, 33], "heat stages 1 and 2, aux; no cool stage of its own");
         assert_eq!(n.read(31, BINARY_INPUT, 0x001C), Some(Value::Str("Heat stage 2".into())));
         assert_eq!(n.read(31, BINARY_INPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.read(33, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x000D)));
-        assert!(nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().all(|e| e.id < STAGE_ENDPOINTS));
+        assert!(nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().all(|e| !(STAGE_ENDPOINTS..40).contains(&e.id)));
         let cool = nest(fields!{"has_x2_cool" => true},
                         fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true});
         assert_eq!(cool.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0012)));
@@ -1205,5 +1213,21 @@ mod tests {
         assert_eq!(serve(&n, 1, WEATHER, &[0x04, 0xD6, 0x10, 8, 0x02, 0x01, 0x00, 0x29, 0x00, 0x00]),
                    Some(vec![0x1C, 0xD6, 0x10, 8, 0x04, 0x8D, 0x01, 0x00]));
         assert_eq!(n.read(1, THERMOSTAT, 0x0001), Some(Value::I16(-340)), "the readings stay");
+    }
+}
+
+#[cfg(test)]
+mod boost_tests {
+    use super::*;
+    #[test]
+    fn boost_output_starts_replaces_cancels_and_rejects_invalid_values() {
+        let n = Nest::new(crate::boost::tests::fixture());
+        for minutes in [30.0, 60.0, 120.0, 180.0, 0.0] {
+            assert_eq!(n.write_analog_output(40, 0x0055, Value::F32(minutes)), status::SUCCESS);
+            assert_eq!(n.analog_output(40, 0x0055), Some(Value::F32(minutes)));
+        }
+        for value in [f32::NAN, f32::INFINITY, -1.0, 30.5, 45.0] {
+            assert_ne!(n.write_analog_output(40, 0x0055, Value::F32(value)), status::SUCCESS);
+        }
     }
 }

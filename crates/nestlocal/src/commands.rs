@@ -73,6 +73,12 @@ impl Bridge {
 
     /// Applies one command, from MQTT, Matter or Zigbee (`from`, for the log).
     pub fn apply(&self, from: &str, name: &str, arg: &str) -> Result<(), String> {
+        let _boost_guard = self.boost_lock.lock().unwrap();
+        if name == "heating_boost" {
+            let result = crate::boost::command(self, arg);
+            if let Err(error) = &result { logf!("{from}: {name} {arg:?}: {error}"); }
+            return result;
+        }
         let (bucket, fields) = match self.fields(name, arg) {
             Err(e) => {
                 logf!("{from}: {name} {arg:?}: {e}");
@@ -89,6 +95,14 @@ impl Bridge {
         if let Some((key, _)) = changes.iter().find(|(key, _)| self.store.get(key).is_none()) {
             logf!("{from}: {name}: no {key} bucket yet");
             return Err(format!("no {key} bucket yet"));
+        }
+        if matches!(name, "mode" | "target" | "target_low" | "target_high" | "preset" | "clear_schedule"
+            | "learning_mode" | "auto_away_enable" | "preconditioning_enabled") || name.starts_with("raw/") {
+            if let Err(error) = crate::boost::cancel(self) {
+                // Turning heating off must still work if the recovery file cannot be saved.
+                if name != "mode" || arg != "off" { return Err(error); }
+                logf!("boost recovery while turning off: {error}");
+            }
         }
         if changes.iter().any(|(key, fields)| self.display_change(key, fields)) {
             // Publish before notifying held subscribes: nlclient consumes the
@@ -122,6 +136,7 @@ impl Bridge {
     pub fn fields(&self, name: &str, arg: &str) -> Result<Change, String> {
         let now = chrono::Utc::now().timestamp();
         if let Some(bucket) = name.strip_prefix("raw/") {
+            if bucket == "boost" { return Err("boost recovery state is internal".into()); }
             return match unmarshal_object(arg.as_bytes()) {
                 Ok(Some(f)) => Ok(Some((bucket.into(), f))),
                 Ok(None) => Ok(None),
@@ -130,6 +145,7 @@ impl Bridge {
         }
 
         match name {
+            "heating_boost" => crate::boost::duration(arg).map(|_| None),
             "mode" => {
                 let t = match arg {
                     "off" => "off",
