@@ -355,6 +355,8 @@ impl Settings {
             ssh_key_only: self.ssh_key_only,
             ssh_server: if self.ssh { bundle.optional_overlay(SSH) } else { None },
             unsigned_updates: self.unsigned_updates,
+            // The gen 3's bundle has its engine; the gen 1's and gen 2's none.
+            apply: bundle.files.get(APPLY).map(|(_, data)| data.clone()).unwrap_or_default(),
             record: self.record(),
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
@@ -474,6 +476,7 @@ mod tests {
             local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
             ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()),
+            apply: b"\x7fELF apply".to_vec(),
             ..Options::default()
         };
         let pki = Pki { ca: b"ca".to_vec(), server_crt: b"crt".to_vec(), server_key: b"key".to_vec() };

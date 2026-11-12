@@ -192,6 +192,7 @@ impl PatchInputs {
             local_cloud: assets::LOCAL_CLOUD.to_vec(),
             // Each device's run adds it from its bundle::Settings.
             record: Vec::new(),
+            apply: Vec::new(),
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,

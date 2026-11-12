@@ -6024,6 +6024,7 @@ dependencies = [
 name = "unfr0zen-apply"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "log",
  "serde_json",
  "unfr0zen-core",

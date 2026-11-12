@@ -120,6 +120,9 @@ const NLSLEEPD_START: (&str, &str) = (
 
 /// The last run's settings (bundle::Settings), for a run without the host.
 pub const RECORD: &str = "etc/unfr0zen/options.json";
+/// unfr0zen-apply, kept on a unit that patches itself (the gen 3) to install
+/// updates: the trusted code that checks a new bundle before running it.
+pub const APPLY: &str = "nestlabs/sbin/unfr0zen-apply";
 
 /// nlclient's init script, the same on the gen 2 and the gen 3.
 const NESTLABS: &str = "etc/init.d/nestlabs";
@@ -446,6 +449,9 @@ pub struct Options {
     /// The library preloaded into nlclient on a unit running nestlocal
     /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
     pub local_cloud: Vec<u8>,
+    /// unfr0zen-apply for a unit that installs updates; empty for one that
+    /// cannot (the gen 1 and gen 2, patched from the host).
+    pub apply: Vec<u8>,
     /// The unit installs updates whatever signs them, not only those the
     /// release key signs: a developer's. Kept in the record; the patch
     /// itself does nothing with it.
@@ -688,6 +694,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
     fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
     fetch(volume, &mut tree, &mut originals, &[LOCAL_CLOUD], false, false)?;
+    // Updates come through nestlocal: the engine stays with it.
+    fetch(volume, &mut tree, &mut originals, &[APPLY], false, false)?;
+    if overlay.is_some() && !options.apply.is_empty() {
+        tree.insert(APPLY.into(), (options.apply.clone(), 0o755));
+    }
     if overlay.is_some() {
         if options.local_cloud.is_empty() {
             return device("nestlocal needs the local cloud library for nlclient");
@@ -799,7 +810,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER, LOCAL_CLOUD])
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER, LOCAL_CLOUD, APPLY])
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -1304,6 +1315,19 @@ mod tests {
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);
+    }
+
+    #[test]
+    fn a_unit_running_nestlocal_keeps_the_update_engine_and_one_without_it_does_not() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
+        let changes = patch(&mut volume, &updates, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "create"));
+        assert_eq!((volume.files[APPLY].1, volume.files[APPLY].2.as_slice()), (0o755, &b"\x7fELF apply"[..]));
+        // A host-patched unit (no engine in its bundle) loses one an earlier run left.
+        let changes = patch(&mut volume, &Options { apply: Vec::new(), ..updates }, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "remove"));
     }
 
     #[test]

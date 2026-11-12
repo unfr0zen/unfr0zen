@@ -14,11 +14,18 @@ const DROP_CACHES: &str = "/proc/sys/vm/drop_caches";
 
 pub struct LocalVolume {
     root: PathBuf,
+    /// The running system's own root: it stays writable, as the unit runs on it.
+    live: bool,
 }
 
 impl LocalVolume {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        LocalVolume { root: root.into() }
+        LocalVolume { root: root.into(), live: false }
+    }
+
+    /// The root the unit is running from, patched in place for an update.
+    pub fn live(root: impl Into<PathBuf>) -> Self {
+        LocalVolume { root: root.into(), live: true }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -145,9 +152,13 @@ impl Volume for LocalVolume {
     }
 
     fn remount(&mut self, writable: bool) -> Result<()> {
-        // Remounting read-only commits the UBIFS journal.
+        // Remounting read-only commits the UBIFS journal; a live root, which
+        // processes hold files open on, only syncs.
         if !writable {
             sync();
+            if self.live {
+                return Ok(());
+            }
         }
         self.remount_command(writable)
     }

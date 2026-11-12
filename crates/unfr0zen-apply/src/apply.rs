@@ -27,13 +27,18 @@ static LOGGER: Logger = Logger;
 pub fn main() {
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let dry_run = args.iter().any(|a| a == "--dry-run");
-    let paths: Vec<&String> = args.iter().filter(|a| *a != "--dry-run").collect();
-    let [bundle, options, root, out] = paths[..] else {
-        eprintln!("usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run]");
-        std::process::exit(2);
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    let (dry_run, live) = (flag("--dry-run"), flag("--live"));
+    let paths: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
+    let result = match paths[..] {
+        ["update", bundle] => update(Path::new(bundle)),
+        [bundle, options, root, out] => run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run, live),
+        _ => {
+            eprintln!("usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] | update BUNDLE");
+            std::process::exit(2);
+        }
     };
-    if let Err(error) = run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run) {
+    if let Err(error) = result {
         eprintln!("unfr0zen-apply: {error}");
         std::process::exit(1);
     }
@@ -62,19 +67,73 @@ fn script(bundle: &Bundle, name: &str, out: &Path, env: &[(&str, String)]) -> Re
     Ok(())
 }
 
-fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool) -> Result<()> {
+/// The unit's settings, as the last run kept them.
+fn read_settings(path: &Path) -> Result<Settings> {
+    serde_json::from_slice(&fs::read(path).map_err(|e| failure(format!("{}: {e}", path.display())))?)
+        .map_err(|e| failure(format!("{}: {e}", path.display())))
+}
+
+/// Checks a new bundle and runs its own engine on the running unit.
+fn update(path: &Path) -> Result<()> {
+    let data = fs::read(path)?;
+    let bundle = Bundle::unpack(&data)?;
+    device(&bundle.manifest.device)?;
+    log::info!("Update to {} for the {}", bundle.manifest.version, bundle.manifest.device);
+    let options = Path::new("/").join(patch::RECORD);
+    let settings = read_settings(&options)?;
+    match bundle.verify(&bundle::verifying_key(bundle::RELEASE_KEY)?) {
+        Ok(()) => log::info!("Signed with the release key"),
+        Err(error) if settings.unsigned_updates => log::warn!("{error}: installed anyway, as unsigned updates are allowed"),
+        Err(error) => return Err(failure(format!("{error}: only updates the release key signs install on this unit"))),
+    }
+    let status = run_from_memory(bundle.file(bundle::APPLY)?, |engine| {
+        Command::new(engine).arg(path).arg(&options).arg("/").arg("/tmp/unfr0zen-update").arg("--live").status()
+    })?;
+    if !status.success() {
+        return Err(failure(format!("the update's engine failed ({status})")));
+    }
+    Ok(())
+}
+
+/// Runs an executable held in memory: /tmp and the unit's other writable
+/// places are noexec. run gets the path to execute it by.
+#[cfg(target_os = "linux")]
+fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    // SAFETY: the name is NUL-terminated; a failed call returns -1, checked.
+    let fd = unsafe { libc::memfd_create(c"unfr0zen-apply".as_ptr(), 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd was just created and nothing else owns it.
+    let mut file = unsafe { fs::File::from_raw_fd(fd) };
+    file.write_all(executable)?;
+    Ok(run(&format!("/proc/self/fd/{fd}"))?)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_from_memory<T>(_: &[u8], _: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
+    Err(failure("updates install on the unit"))
+}
+
+fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, live: bool) -> Result<()> {
     fs::create_dir_all(out)?;
     let bundle = Bundle::unpack(&fs::read(bundle)?)?;
     let target = device(&bundle.manifest.device)?;
     log::info!("Bundle {} for the {}", bundle.manifest.version, bundle.manifest.device);
-    let settings: Settings = serde_json::from_slice(&fs::read(options)?)
-        .map_err(|e| failure(format!("{}: {e}", options.display())))?;
+    let mut settings = read_settings(options)?;
+    if live {
+        // The unit's settings are the last run's: this run installs this bundle.
+        settings.version = bundle.manifest.version.clone();
+    }
     let options = settings.options(&bundle)?;
     let pki = settings.pki()?;
     let env = [
         ("UNFR0ZEN_ROOT", root.display().to_string()),
         ("UNFR0ZEN_VERSION", bundle.manifest.version.clone()),
         ("UNFR0ZEN_DRY_RUN", if dry_run { "1" } else { "0" }.to_string()),
+        ("UNFR0ZEN_LIVE", if live { "1" } else { "0" }.to_string()),
     ];
     script(&bundle, bundle::PRE_PATCH, out, &env)?;
 
@@ -107,7 +166,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool) ->
         Some(pki) => Ok(pki.clone()),
         None => nestlocal::generate_pki(),
     };
-    let mut volume = LocalVolume::new(root);
+    let mut volume = if live { LocalVolume::live(root) } else { LocalVolume::new(root) };
     let changes = patch::patch_on_device(&mut volume, target, &options, &nestlocal_binary, &mut new_pki, dry_run,
                                          &build_screen)?;
     let result = json!({
