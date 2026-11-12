@@ -871,7 +871,7 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
                      egui::FontId::proportional(12.0), MUTED);
         return;
     };
-    let ring = if device == Device::Onyx { WARN } else { OK };
+    let ring = if device == Device::Onyx { WARN } else { ACCENT };
     painter.circle_stroke(c, size * 0.5 - 11.0, egui::Stroke::new(2.0, ring));
     let (big, name) = match device {
         Device::Diamond3 => (tr!("setup.gen3"), tr!("setup.learning_thermostat")),
