@@ -13,7 +13,7 @@ png = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 http-body = "1"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["http1", "server"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 libc = "0.2"
 log = "0.4"
@@ -24,6 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "net", "time", "sync", "io-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# The release check and updates (fetch.rs): the unit's CA store has Nest's roots alone.
+webpki-roots = "1"
 
 # Matter (-matter): rs-matter pinned to the commit validated with Home
 # Assistant's Matter server; pure Rust crypto and mDNS.

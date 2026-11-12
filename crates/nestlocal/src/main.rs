@@ -11,6 +11,7 @@ mod commands;
 mod device;
 mod doom;
 mod entropy;
+mod fetch;
 mod flags;
 mod heatlink;
 mod json;
@@ -27,6 +28,7 @@ mod store;
 mod settings_ui;
 mod structure;
 mod thread_sleep;
+mod update;
 mod wake;
 mod weather;
 mod zigbee;
@@ -249,6 +251,12 @@ async fn run(config: flags::Config) {
     });
     if let (Some(bridge), Some(sensor)) = (&bridge, &sensor) {
         bridge.attach_sensor(sensor.clone());
+    }
+    // Before MQTT starts: its first announcement carries the update entity.
+    if let Some(bridge) = &bridge {
+        let updates = update::Updates::new(device::current().name, &config.releases, std::path::Path::new(&config.update_store));
+        bridge.attach_updates(updates.clone());
+        tokio::spawn(updates.keep_checking());
     }
     if let Some(bridge) = &bridge {
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());

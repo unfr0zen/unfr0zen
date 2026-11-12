@@ -101,6 +101,13 @@
             <ul class="chips">
                 <li>Filter reminder and its reset</li><li>Hot water state, schedule and boost</li><li>Humidifier and dehumidifier state</li><li>Humidity control</li>
             </ul>
+            <h3>Updates</h3>
+            <p>An <b>unfr0zen</b> update entity shows the version the thermostat runs and, when it can reach GitHub, the latest release, checked every 6 hours. On a 3rd generation unit <b>Install</b> downloads that release's bundle, checks it against its manifest and unfr0zen's release key, installs it and restarts the thermostat. Only official releases install, unless <b>Allow unsigned updates</b> was on when the unit was patched. 1st and 2nd generation units show the versions; update them with the app.</p>
+            <p>A thermostat that can't reach GitHub installs a release's bundle (<code>unfr0zen-diamond3-&lt;version&gt;.tgz</code>, from the release's assets) from your own network: put it on any web server the thermostat reaches and publish its URL, for example from a Home Assistant script:</p>
+<pre><code>action: mqtt.publish
+data:
+  topic: nestlocal/&lt;serial&gt;/set/update
+  payload: http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz</code></pre>
             <h3>Weather and clock</h3>
             <p>Two Home Assistant blueprints replace what Google supplied. Both need MQTT; on Zigbee, see <a href="#zigbee">Zigbee</a>.</p>
             <div class="cards cards-wide">

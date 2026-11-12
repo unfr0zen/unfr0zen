@@ -40,6 +40,8 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("mqtt-user", Kind::Text, "", "MQTT user name, empty for none"),
     ("ntp-server", Kind::Text, "pool.ntp.org", "NTP server to set the unit's clock from when it is off (clock.rs), empty for none"),
     ("origin", Kind::Text, "https://127.0.0.1", "base URL handed to the device in /entry"),
+    ("update-store", Kind::Text, "/media/data/nestlocal-update.json", "where the latest release the last check found is kept"),
+    ("releases", Kind::Text, crate::update::RELEASES, "where to ask for the latest unfr0zen release (GitHub's API, or a server answering as it does)"),
     ("seed-structure", Kind::Text, "", "what an older nestlocal.init passes: set structure_id in this settings file, then exit"),
     ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id"),
     ("serial", Kind::Text, "", "the unit's serial (default: the hostname, which the unit sets to it)"),
@@ -90,6 +92,8 @@ pub struct Config {
     pub topic: String,
     pub verbose: bool,
     pub wake_iface: String,
+    pub releases: String,
+    pub update_store: String,
 }
 
 /// A Go duration: "290s", "5m", "1h2m3.5s", "300ms", or "0".
@@ -249,6 +253,8 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         topic: get("topic"),
         verbose: flag("v"),
         wake_iface: get("wake-iface"),
+        releases: get("releases"),
+        update_store: get("update-store"),
     })
 }
 
