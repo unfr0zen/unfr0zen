@@ -322,11 +322,6 @@ impl Form {
         if thread {
             crate::muted_line(ui, crate::tr!("patch.zigbee_disabled_hint"));
         }
-        // A Heat Link model whose radio nestlocal takes heats through W1.
-        if self.holds_radio() {
-            crate::toggle_card(ui, &mut self.wwn_boiler, true, crate::tr!("patch.wwn_boiler"), crate::tr!("patch.wwn_boiler_hint"));
-        }
-
         // The names Home Assistant shows: the device's, for MQTT and Matter,
         // and the entity IDs' root, for MQTT alone.
         if self.names_device() {
@@ -380,7 +375,7 @@ impl Form {
         crate::toggle_card(ui, &mut self.external_temperature, enabled, label, hint);
     }
 
-    /// The features step: privacy, remote access, and the extras.
+    /// The features step: privacy, heating, remote access, and the extras.
     pub fn features_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
         self.drain_dialogs();
         crate::group(ui, crate::tr!("setup.group.privacy"));
@@ -400,6 +395,12 @@ impl Form {
                 crate::field(ui, crate::tr!("setup.time_server"),
                              egui::TextEdit::singleline(&mut self.ntp.value).hint_text(DEFAULT_NTP_SERVER), FIELD_WIDTH);
             });
+        }
+
+        // A Heat Link model whose radio nestlocal takes heats through W1.
+        if self.holds_radio() {
+            crate::group(ui, crate::tr!("setup.group.heating"));
+            crate::toggle_card(ui, &mut self.wwn_boiler, true, crate::tr!("patch.wwn_boiler"), crate::tr!("patch.wwn_boiler_hint"));
         }
 
         crate::group(ui, crate::tr!("setup.group.access"));
@@ -470,12 +471,14 @@ impl Form {
         let mut radio: Vec<&str> = Vec::new();
         if self.matter.on { radio.push(if self.matter_thread { crate::tr!("setup.matter_thread_short") } else { crate::tr!("patch.matter") }); }
         if self.zigbee { radio.push(crate::tr!("setup.zigbee")); }
-        if self.wwn_boiler && self.holds_radio() { radio.push(crate::tr!("patch.wwn_boiler")); }
         if self.inputs().external_temperature && self.external_temperature_enabled() { radio.push(crate::tr!("patch.external_temperature")); }
         rows.push((crate::tr!("setup.other_integrations"), joined(&radio), Step::Integrations));
         rows.push((crate::tr!("patch.block_cloud"), on_off(self.block_cloud), Step::Features));
         if self.ntp.on {
             rows.push((crate::tr!("setup.time_server"), self.ntp.value.clone(), Step::Features));
+        }
+        if self.holds_radio() {
+            rows.push((crate::tr!("patch.wwn_boiler"), on_off(self.wwn_boiler), Step::Features));
         }
         let mut extras: Vec<&str> = Vec::new();
         if self.ssh { extras.push(crate::tr!("setup.ssh")); }
@@ -954,6 +957,19 @@ mod tests {
     #[test]
     fn config_takes_the_device_from_usb() {
         assert_eq!(Form::default().config().unwrap().omap, None);
+    }
+
+    #[test]
+    fn the_boiler_is_a_feature_offered_with_the_radio() {
+        use crate::setup::Step;
+        let boiler = |form: &Form| form.summary().into_iter().find(|(label, _, _)| *label == crate::tr!("patch.wwn_boiler"));
+        let mut form = Form { wwn_boiler: true, ..Form::default() };
+        assert!(boiler(&form).is_none(), "not offered without a radio nestlocal holds");
+        form.zigbee = true;
+        let (_, value, step) = boiler(&form).unwrap();
+        assert_eq!((value.as_str(), step), (crate::tr!("setup.on"), Step::Features));
+        assert!(!form.summary().iter().any(|(_, value, _)| value.contains(crate::tr!("patch.wwn_boiler"))
+            && *value != crate::tr!("setup.on")), "no longer among the integrations");
     }
 
     #[test]
