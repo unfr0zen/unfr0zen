@@ -456,8 +456,8 @@ impl Bridge {
         }
 
         let number_entity = |add: &mut dyn FnMut(&str, &str, &str, Fields), key: &str, name: &str,
-                             min: f64, max: f64, step: f64, unit: &str| {
-            add("number", key, name, fields!{
+                             min: f64, max: f64, step: f64, unit: &str, class: &str| {
+            let mut c = fields!{
                 "value_template" => tmpl(key),
                 "command_topic" => format!("{set}{key}"),
                 "min" => num(min),
@@ -466,16 +466,21 @@ impl Bridge {
                 "unit_of_measurement" => unit,
                 "entity_category" => "config",
                 "mode" => "box",
-            });
+            };
+            // Home Assistant converts a temperature to its own unit system only with the class.
+            if !class.is_empty() {
+                c.insert("device_class".into(), class.into());
+            }
+            add("number", key, name, c);
         };
         if can_heat {
-            number_entity(&mut add, "away_temperature_low", "Eco heat temperature", ECO_LOW.0, ECO_LOW.1, 0.5, "°C");
+            number_entity(&mut add, "away_temperature_low", "Eco heat temperature", ECO_LOW.0, ECO_LOW.1, 0.5, "°C", "temperature");
         }
         if can_cool {
-            number_entity(&mut add, "away_temperature_high", "Eco cool temperature", ECO_HIGH.0, ECO_HIGH.1, 0.5, "°C");
+            number_entity(&mut add, "away_temperature_high", "Eco cool temperature", ECO_HIGH.0, ECO_HIGH.1, 0.5, "°C", "temperature");
         }
         if truthy(dev.get("has_humidifier")) || truthy(dev.get("has_dehumidifier")) {
-            number_entity(&mut add, "target_humidity", "Target humidity", 10.0, 60.0, 5.0, "%");
+            number_entity(&mut add, "target_humidity", "Target humidity", 10.0, 60.0, 5.0, "%", "");
             sw(&mut add, "target_humidity_enabled", "Humidity control", "mdi:water-percent");
         }
         if truthy(dev.get("has_air_filter")) {
@@ -867,6 +872,9 @@ pub mod tests {
         assert!(configs.contains_key("homeassistant/binary_sensor/nestlocal_s/heating/config"));
         assert!(!configs.contains_key("homeassistant/binary_sensor/nestlocal_s/cooling/config"));
         assert!(configs.contains_key("homeassistant/select/nestlocal_s/fan_timer_duration/config"));
+        let eco: Value = serde_json::from_str(&configs["homeassistant/number/nestlocal_s/away_temperature_low/config"]).unwrap();
+        assert_eq!((&eco["unit_of_measurement"], &eco["device_class"]), (&json!("°C"), &json!("temperature")),
+                   "Home Assistant shows it in its own unit");
     }
 
     #[test]

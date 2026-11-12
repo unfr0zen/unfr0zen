@@ -196,8 +196,12 @@ mod tests {
         r[0] = 0x24;
         r[1] = 2;
         r[40..44].copy_from_slice(&((unix + NTP_EPOCH) as u32).to_be_bytes()); // NTP era 1
+        let started = std::time::Instant::now();
         let got = ask(r).await.unwrap().duration_since(UNIX_EPOCH).unwrap();
-        assert!(got >= Duration::from_secs(unix) && got < Duration::from_secs(unix + 1), "{got:?}");
+        let elapsed = started.elapsed();
+        // Plus half the round trip, as sntp adds.
+        let d = got.checked_sub(Duration::from_secs(unix)).unwrap_or_else(|| panic!("{got:?} is before {unix} s"));
+        assert!(d * 2 <= elapsed, "got {got:?}, more than half the {elapsed:?} exchange after {unix} s");
     }
 
     #[test]
