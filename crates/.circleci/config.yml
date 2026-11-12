@@ -136,7 +136,9 @@ jobs:
       - cargo-registry-store
       # Linux binaries in tarballs, which keep them executable; Windows and the
       # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
-      # without compression or extra fields so every unzipper reads them.
+      # without compression or extra fields so every unzipper reads them. The
+      # x86_64 Linux job adds the gen 3's patch bundle, unsigned: units check
+      # its files against its manifest's hashes.
       - run:
           name: Package
           command: |
@@ -144,7 +146,11 @@ jobs:
             mkdir -p dist
             case $PLATFORM in
               linux-*)
-                tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen ;;
+                tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen
+                if [ "$PLATFORM" = linux-x86_64 ]; then
+                  cargo run --locked -p unfr0zen-host --bin unfr0zen-bundle -- \
+                    pack diamond3 "$VERSION" "dist/unfr0zen-diamond3-$VERSION.tgz"
+                fi ;;
               windows-*)
                 zip -0 -jqX dist/unfr0zen-$PLATFORM-$VERSION.zip "$out/unfr0zen.exe" ;;
               macos)
