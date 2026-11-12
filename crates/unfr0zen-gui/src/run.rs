@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
-use unfr0zen_host::{run_after_backup, CancelFlag, Config, Progress};
+use unfr0zen_host::{run_after_backup, CancelFlag, Config, Phase, Progress};
 
 /// One thing that happened in the flow, for the window.
 pub enum Event {
@@ -24,6 +24,8 @@ pub enum Event {
     Transfer { done: u64, next: u64, total: u64 },
     /// The job waits for a yes or no to the question before it writes.
     Confirm(String, Sender<bool>),
+    /// A patch run entered this phase; the one before it is done.
+    Phase(Phase),
     /// The run finished: the final status, or the error text.
     Done(Result<String, String>),
 }
@@ -51,6 +53,9 @@ impl Progress for ChannelProgress {
     }
     fn transfer(&mut self, done: u64, next: u64, total: u64) {
         let _ = self.tx.send(Event::Transfer { done, next, total });
+    }
+    fn phase(&mut self, phase: Phase) {
+        let _ = self.tx.send(Event::Phase(phase));
     }
 }
 

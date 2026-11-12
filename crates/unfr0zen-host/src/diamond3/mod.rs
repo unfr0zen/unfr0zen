@@ -22,7 +22,7 @@ use unfr0zen_core::{Error, Result};
 
 use crate::device::{CancelFlag, Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
-use crate::progress::{stage, Progress};
+use crate::progress::{stage, Phase, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
 use usb::Mode;
 pub(crate) use usb::EntryPoint;
@@ -131,10 +131,12 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
     let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    progress.phase(Phase::Recovery);
     let port = reach_recovery(progress, port, id, config.entry_point)?;
     let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     if let Some(out) = backup {
+        progress.phase(Phase::Backup);
         let line;
         (board, line) = nand::back_up_then(board, &port, progress, out, &mut hand_back)?;
         progress.status(&line);
@@ -149,6 +151,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
         ..config.options.clone()
     };
+    progress.phase(Phase::Check);
     let environment = stage(progress, "Read installed boot order from NAND", || {
         board.attach_ubi()?;
         board.read_installed_environment()
@@ -159,6 +162,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
 
     // Contents known before boot travel in the initramfs, over fastboot.
+    progress.phase(Phase::Prepare);
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
         crate::assets::nestlocal()
     } else {
@@ -194,6 +198,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         let firmware = release.split_once('-').map_or(release, |(_, build)| build);
         log::info!("Firmware {firmware} (kernel release {release})");
     }
+    progress.phase(Phase::Patch);
     let label = format!("Patch {slot} in place");
     let payload: BTreeSet<String> = payload.into_keys().collect();
     let pki_dir = config.data_dir.join("nestlocal-pki");
@@ -202,6 +207,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
                                false, &screen_builder(run_dir))
     })?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
+    progress.phase(Phase::Restart);
     shell.restart()?;
 
     let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default()))?;

@@ -159,7 +159,7 @@ pub(crate) fn back_up_whole(nand: &mut dyn Nand, progress: &mut dyn Progress, ou
     kept.0.push(parts.clone());
     let (bad, unstable) = backup(nand, progress, out, &parts)?;
     let checksum = checksum_path(out);
-    let sha = stage(progress, crate::nand::HASH_STAGE, || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
+    let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
     let name = out.file_name().unwrap_or_default().to_string_lossy();
     file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
     file(&parts, fs::remove_dir_all(&parts))?;

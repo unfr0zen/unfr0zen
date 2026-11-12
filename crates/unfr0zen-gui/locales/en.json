@@ -315,5 +315,12 @@
   "setup.developer": "Developer options",
   "setup.developer_hint": "The command line's other options, for development and testing",
   "task.backup_patch": "Back up and patch",
-  "download.left": "left to wait"
+  "download.left": "left to wait",
+  "setup.phase.download_mode": "Waiting for download mode",
+  "setup.phase.recovery": "Starting recovery",
+  "setup.phase.backup": "Backing up",
+  "setup.phase.check": "Checking your thermostat",
+  "setup.phase.prepare": "Preparing new features",
+  "setup.phase.patch": "Patching",
+  "setup.phase.restart": "Restarting"
 }

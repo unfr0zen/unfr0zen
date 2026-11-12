@@ -15,9 +15,6 @@ use crate::flow::failure;
 use crate::progress::{stage, Progress};
 use crate::{device, diamond3, j49};
 
-/// The stage that ends a backup: the image is whole once it is hashed.
-pub const HASH_STAGE: &str = "Hash the image";
-
 pub enum Job {
     Backup(PathBuf),
     Verify(PathBuf),

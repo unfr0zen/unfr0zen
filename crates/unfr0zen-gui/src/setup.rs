@@ -9,6 +9,8 @@ use eframe::egui;
 use unfr0zen_host::Device;
 
 use crate::bus::Bus;
+use crate::PhaseRow;
+use unfr0zen_host::Phase;
 use crate::{medium, tr, App, Page, Task, ACCENT, BAD, CARD, DIM, INSET, LINE, MUTED, OK, ON_ACCENT, TEXT, WARN};
 
 /// The flow's steps, in order.
@@ -132,14 +134,21 @@ impl App {
         self.flow_run = true;
     }
 
-    /// The flow's run is still backing up: its image is not hashed yet.
+    /// The flow's run is in its Backing up phase.
     pub(crate) fn backing_up(&self) -> bool {
-        matches!(self.task, Some(Task::BackupPatch(_)))
-            && !self.logs.rows.iter().any(|row| row.label == unfr0zen_host::nand::HASH_STAGE && row.done.is_some())
+        self.logs.phases.last().is_some_and(|row| row.phase == Phase::Backup && row.done.is_none())
+    }
+
+    /// The phases the flow's run goes through: Backing up only when it
+    /// backs up first.
+    fn flow_phases(&self) -> Vec<Phase> {
+        let backup = matches!(self.task, Some(Task::BackupPatch(_)));
+        PHASES.into_iter().filter(|&phase| phase != Phase::Backup || backup).collect()
     }
 
     /// Back to the first step, for another unit; the choices stay.
     fn restart_flow(&mut self) {
+        self.flow_epoch += 1;
         self.flow_run = false;
         self.flow_backup = None;
         self.step = Step::Connect;
@@ -151,7 +160,7 @@ impl App {
             .show(ui, |ui| self.action_bar(ui, step));
         stepper(ui, step);
         ui.add_space(18.0);
-        scrolled(ui, egui::Id::new(("setup", step.index())), |ui| {
+        scrolled(ui, egui::Id::new(("setup", step.index(), self.flow_epoch)), |ui| {
             if matches!(step, Step::Integrations | Step::Features) {
                 ui.set_max_width(COLUMN);
             }
@@ -375,17 +384,18 @@ impl App {
                 ui.add_space(14.0);
                 if let Some(backup) = &self.flow_backup {
                     let name = backup.file_name().unwrap_or_default().to_string_lossy();
-                    step_row(ui, StepMark::Done, &tr!("setup.backup_saved", name = name));
+                    step_row(ui, StepMark::Done, &tr!("setup.backup_saved", name = name), None);
                 }
-                // The latest steps; the log has them all.
-                let rows = &self.logs.rows;
-                for row in rows.iter().skip(rows.len().saturating_sub(7)) {
-                    let mark = match row.done {
-                        Some((_, true)) => StepMark::Done,
-                        Some((_, false)) => StepMark::Failed,
-                        None => StepMark::Running,
+                // The run's phases, every one from the start; the log has
+                // the steps inside them.
+                for phase in self.flow_phases() {
+                    let (mark, time) = match self.logs.phases.iter().find(|row| row.phase == phase) {
+                        Some(PhaseRow { done: Some((elapsed, true)), .. }) => (StepMark::Done, Some(*elapsed)),
+                        Some(PhaseRow { done: Some((elapsed, false)), .. }) => (StepMark::Failed, Some(*elapsed)),
+                        Some(PhaseRow { started, .. }) => (StepMark::Running, Some(started.elapsed())),
+                        None => (StepMark::Upcoming, None),
                     };
-                    step_row(ui, mark, &row.label);
+                    step_row(ui, mark, phase_title(phase), time);
                 }
                 if let Some(waiting) = &self.logs.waiting {
                     ui.add_space(4.0);
@@ -431,7 +441,7 @@ impl App {
             });
             ui.add_space(12.0);
         });
-        scrolled(ui, egui::Id::new("done"), |ui| {
+        scrolled(ui, egui::Id::new(("done", self.flow_epoch)), |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 done_mark(ui);
@@ -916,10 +926,9 @@ fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
     painter.galley(egui::pos2(rect.left() + 30.0, rect.center().y - galley.size().y * 0.5), galley, fg);
 }
 
-/// The run's ring, as the thermostat's: a 300° track open at the bottom,
-/// lit to `fraction` (shown as a percentage), or a lit arc that goes round
-/// while the share done is unknown; what it does above a big number in the
-/// middle.
+/// The run's ring: a whole track, lit from the top round to `fraction`
+/// (shown as a percentage), or a lit arc that goes round while the share
+/// done is unknown; what it does above a big number in the middle.
 fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &str, big: &str, under: &str, failed: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
@@ -927,26 +936,34 @@ fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &st
     let r = size * 0.5 - 12.0;
     painter.circle_filled(c, r - 6.0, FACE);
     painter.circle_filled(c - egui::vec2(0.0, 16.0), r * 0.62, FACE_LIGHT);
-    let start = TAU * (120.0 / 360.0);
-    let sweep = TAU * (300.0 / 360.0);
+    let start = -TAU / 4.0;
+    let sweep = TAU;
+    const WIDTH: f32 = 14.0;
     let arc = |from: f32, to: f32, color: egui::Color32| {
         let steps = ((to - from).abs() / 0.03).ceil().max(2.0) as usize;
         let points: Vec<egui::Pos2> = (0..=steps).map(|i| {
             let a = from + (to - from) * i as f32 / steps as f32;
             c + egui::vec2(a.cos(), a.sin()) * r
         }).collect();
-        painter.add(egui::Shape::line(points, egui::Stroke::new(14.0, color)));
+        painter.add(egui::Shape::line(points, egui::Stroke::new(WIDTH, color)));
+    };
+    // A lit arc's ends round, as the thermostat's own ring has them.
+    let lit_arc = |from: f32, to: f32, color: egui::Color32| {
+        arc(from, to, color);
+        for a in [from, to] {
+            painter.circle_filled(c + egui::vec2(a.cos(), a.sin()) * r, WIDTH * 0.5, color);
+        }
     };
     arc(start, start + sweep, TRACK);
     let lit = if failed { BAD } else { ACCENT };
     match fraction {
-        Some(f) if f > 0.0 => arc(start, start + sweep * f.clamp(0.0, 1.0), lit),
+        Some(f) if f > 0.0 => lit_arc(start, start + sweep * f.clamp(0.0, 1.0), lit),
         Some(_) => {}
         None if failed => arc(start, start + sweep, lit.gamma_multiply(0.5)),
         None => {
             let time = ui.input(|i| i.time) as f32;
             let head = start + (time * 0.9).rem_euclid(1.0) * sweep;
-            arc(head.max(start), (head + sweep * 0.22).min(start + sweep), lit);
+            lit_arc(head, head + sweep * 0.22, lit);
             ui.ctx().request_repaint();
         }
     }
@@ -955,9 +972,13 @@ fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &st
     let number = painter.layout_no_wrap(big.to_string(), crate::display(if percent { 72.0 } else { 54.0 }), TEXT);
     let at = c - number.size() * 0.5 + egui::vec2(if percent { -10.0 } else { 0.0 }, 4.0);
     let right = at.x + number.size().x;
+    // The digits' drawn top, which the percent sign's lines up with.
+    let digits_top = at.y + number.mesh_bounds.top();
     painter.galley(at, number, TEXT);
     if percent {
-        painter.text(egui::pos2(right + 2.0, c.y - 18.0), egui::Align2::LEFT_CENTER, "%", crate::display(26.0), TEXT);
+        let sign = painter.layout_no_wrap("%".into(), crate::display(26.0), TEXT);
+        let y = digits_top - sign.mesh_bounds.top();
+        painter.galley(egui::pos2(right + 2.0, y), sign, TEXT);
     }
     if !under.is_empty() {
         painter.text(c + egui::vec2(0.0, 52.0), egui::Align2::CENTER_CENTER, under, egui::FontId::proportional(12.5), MUTED);
@@ -968,11 +989,32 @@ enum StepMark {
     Done,
     Running,
     Failed,
+    /// Still to come.
+    Upcoming,
 }
 
-/// One of the run's steps beside the ring.
-fn step_row(ui: &mut egui::Ui, mark: StepMark, text: &str) {
+/// A patch run's phases, in order.
+const PHASES: [Phase; 7] = [Phase::DownloadMode, Phase::Recovery, Phase::Backup, Phase::Check, Phase::Prepare,
+                            Phase::Patch, Phase::Restart];
+
+/// What a phase is called beside the ring.
+fn phase_title(phase: Phase) -> &'static str {
+    match phase {
+        Phase::DownloadMode => tr!("setup.phase.download_mode"),
+        Phase::Recovery => tr!("setup.phase.recovery"),
+        Phase::Backup => tr!("setup.phase.backup"),
+        Phase::Check => tr!("setup.phase.check"),
+        Phase::Prepare => tr!("setup.phase.prepare"),
+        Phase::Patch => tr!("setup.phase.patch"),
+        Phase::Restart => tr!("setup.phase.restart"),
+    }
+}
+
+/// One of the run's phases beside the ring, with how long it took or has
+/// been going.
+fn step_row(ui: &mut egui::Ui, mark: StepMark, text: &str, time: Option<std::time::Duration>) {
     ui.horizontal(|ui| {
+        ui.set_width(STEPS_WIDTH);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
         let c = rect.center();
         let painter = ui.painter();
@@ -997,10 +1039,28 @@ fn step_row(ui: &mut egui::Ui, mark: StepMark, text: &str) {
                 ui.ctx().request_repaint();
                 egui::Color32::WHITE
             }
+            StepMark::Upcoming => {
+                painter.circle_stroke(c, 8.0, egui::Stroke::new(1.5, OFF));
+                DIM
+            }
         };
         ui.add(egui::Label::new(egui::RichText::new(text).color(color)).truncate());
+        if let Some(time) = time {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(duration_text(time)).color(DIM).size(13.0));
+            });
+        }
     });
     ui.add_space(2.0);
+}
+
+/// The list of phases' width: its times line up at the right.
+const STEPS_WIDTH: f32 = 380.0;
+
+/// A phase's time: seconds, then minutes and seconds.
+fn duration_text(time: std::time::Duration) -> String {
+    let seconds = time.as_secs();
+    if seconds < 60 { format!("{seconds}s") } else { format!("{}m {:02}s", seconds / 60, seconds % 60) }
 }
 
 /// The ticked circle at the head of Done.

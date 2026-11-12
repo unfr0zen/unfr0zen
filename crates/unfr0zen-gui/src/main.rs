@@ -647,6 +647,9 @@ struct App {
     flow_run: bool,
     /// The backup the flow took before its patch, once whole.
     flow_backup: Option<PathBuf>,
+    /// Counts the flow's runs ending and restarts: its pages' scroll areas
+    /// are new each time, so they open at the top.
+    flow_epoch: u32,
     /// The set-up steps go on with no unit on USB: in debug builds, to
     /// work on them without one.
     steps_without_unit: bool,
@@ -701,6 +704,7 @@ impl Default for App {
             step: setup::Step::default(),
             flow_run: false,
             flow_backup: None,
+            flow_epoch: 0,
             steps_without_unit: cfg!(debug_assertions),
             version: BUILD_VERSION,
             shell: Terminal::new(terminal::SHELLS),
@@ -734,6 +738,16 @@ struct LogContext {
     outcome: Option<Result<String, String>>,
     /// The unit the run found: device and silicon, once read.
     device: Option<String>,
+    /// A patch run's phases so far, newest last; the last may still be open.
+    phases: Vec<PhaseRow>,
+}
+
+/// A phase of a patch run: when it began, and how long it took and whether
+/// it went through, once it is over.
+struct PhaseRow {
+    phase: unfr0zen_host::Phase,
+    started: Instant,
+    done: Option<(Duration, bool)>,
 }
 
 impl LogContext {
@@ -807,6 +821,9 @@ impl App {
         if !self.idle() {
             return;
         }
+        // A task started elsewhere is not the flow's: Set up leaves its run.
+        // start_flow marks its own once started.
+        self.flow_run = false;
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
             Task::Patch | Task::BackupPatch(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
@@ -869,6 +886,13 @@ impl App {
         }
     }
 
+    /// Ends the phase under way, if one is.
+    fn close_phase(&mut self, ok: bool) {
+        if let Some(row) = self.logs.phases.last_mut().filter(|row| row.done.is_none()) {
+            row.done = Some((row.started.elapsed(), ok));
+        }
+    }
+
     fn drain(&mut self) {
         let Some(run) = &self.run else { return };
         for event in run.events() {
@@ -907,7 +931,13 @@ impl App {
             Event::Waiting(message) => self.logs.waiting = Some(message),
             Event::Transfer { done, next, total } => self.on_transfer(done, next, total),
             Event::Confirm(question, reply) => self.confirm = Some((question, reply)),
+            Event::Phase(phase) => {
+                self.close_phase(true);
+                self.logs.phases.push(PhaseRow { phase, started: Instant::now(), done: None });
+            }
             Event::Done(result) => {
+                self.close_phase(result.is_ok());
+                self.flow_epoch += 1;
                 self.sdp_wait = None;
                 // A run called off at the download prompt leaves no log.
                 if self.cancelled {
@@ -1293,6 +1323,8 @@ impl App {
         // The pane holds the map exactly, whatever the display's pixel ratio.
         let detail_width = nandmap::width(ui.pixels_per_point()) + 2.0 * DETAIL_MARGIN;
         let frame = egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(DETAIL_MARGIN as i8));
+        // Clear of the actions' line, as the set-up flow's cards are.
+        let frame = frame.outer_margin(egui::Margin { bottom: 12, ..egui::Margin::ZERO });
         egui::Panel::right("backup_detail").exact_size(detail_width).resizable(false).show_separator_line(false)
             .frame(frame).show(ui, |ui| self.backup_detail(ui));
         egui::ScrollArea::vertical().id_salt("backups").auto_shrink([false, false]).show(ui, |ui| {
@@ -1762,7 +1794,8 @@ impl App {
     /// The Logs page shows the run itself. Returns whether the card is up.
     fn run_popup(&mut self, ctx: &egui::Context) -> bool {
         let Some(task) = &self.task else { return false };
-        if self.page == Page::Logs || self.popup_dismissed || (self.flow_run && self.page == Page::Patch) {
+        // The flow's run shows on Set up and in the status bar, never as a card.
+        if self.page == Page::Logs || self.popup_dismissed || self.flow_run {
             return false;
         }
         let outcome = self.logs.outcome.as_ref();
@@ -2522,6 +2555,24 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_flow_stays_off_other_pages_and_another_task_takes_set_up_off_it() {
+        let mut app = App { flow_run: true, task: Some(Task::BackupPatch("nand.bin".into())), ..App::default() };
+        app.on_event(Event::Done(Err("nlclient undo journal does not match the executable".into())));
+        assert_eq!(app.screen_name(), "Failed");
+        // On Backups, no card repeats the flow's failure; the status bar has it.
+        app.show(Page::Backups);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(!shown.iter().any(|t| t.contains("undo journal")), "{shown:?}");
+        // A task started there, and its success, are not the flow's. A
+        // restore of a missing image ends before anything reaches USB.
+        app.start(Task::Restore("/nonexistent/nand.bin".into()));
+        assert!(!app.flow_run);
+        app.run = None;
+        app.logs.outcome = Some(Ok("NAND restored".into()));
+        assert_eq!(app.screen_name(), "Step(Connect)", "not the flow's Done");
+    }
+
+    #[test]
     fn the_review_step_offers_the_backup_and_starts_the_flows_run() {
         let mut app = App { bus: on_usb(Device::Diamond3), step: setup::Step::Review, ..App::default() };
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
@@ -2539,7 +2590,8 @@ mod tests {
         assert_eq!(app.screen_name(), "Failed");
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(shown.iter().any(|t| t == "Patch stopped"), "{shown:?}");
-        assert!(!shown.iter().any(|t| t == "Patching"), "no run card over the flow: {shown:?}");
+        // Patching is the flow's own phase; the run card would name it again.
+        assert_eq!(shown.iter().filter(|t| *t == "Patching").count(), 1, "no run card over the flow: {shown:?}");
     }
 
     #[test]
@@ -2556,7 +2608,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_before_the_patch_is_one_run_whose_ring_backs_up_until_the_image_is_hashed() {
+    fn a_backup_before_the_patch_is_one_run_listed_by_its_phases() {
         let dir = temp_dir("backup-patch");
         let mut app = App { library: Library::new(dir.clone()), ..App::default() };
         // Options that fail before the unit is touched keep the run off USB.
@@ -2569,16 +2621,34 @@ mod tests {
         let out = dir.join("nand.bin");
         let mut app = App { flow_run: true, task: Some(Task::BackupPatch(out.clone())), ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
-        app.on_event(Event::Begin("Back up NAND".into()));
+        use unfr0zen_host::Phase;
+        // Every phase is listed from the start, the steps inside them not.
+        let titles = ["Waiting for download mode", "Starting recovery", "Backing up", "Checking your thermostat",
+                      "Preparing new features", "Patching", "Restarting"];
+        app.on_event(Event::Phase(Phase::DownloadMode));
+        app.on_event(Event::Phase(Phase::Recovery));
+        app.on_event(Event::Begin("Load recovery U-Boot".into()));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(titles.iter().all(|title| shown.iter().any(|t| t == title)), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Load recovery U-Boot"), "{shown:?}");
+        app.on_event(Event::Phase(Phase::Backup));
         assert!(app.backing_up());
-        app.on_event(Event::End { label: "Back up NAND".into(), elapsed: Duration::from_secs(1), ok: true });
-        app.on_event(Event::Begin(unfr0zen_host::nand::HASH_STAGE.into()));
-        app.on_event(Event::End { label: unfr0zen_host::nand::HASH_STAGE.into(), elapsed: Duration::from_secs(1), ok: true });
-        assert!(!app.backing_up(), "patching once the image is hashed");
-        // A patch that fails after the backup still names the backup.
+        app.on_event(Event::Phase(Phase::Check));
+        assert!(!app.backing_up(), "patching once the backup is done");
+        assert_eq!(app.logs.phases.iter().map(|row| row.done.map(|(_, ok)| ok)).collect::<Vec<_>>(),
+                   [Some(true), Some(true), Some(true), None]);
+        // A patch that fails after the backup marks its phase and still
+        // names the backup.
         std::fs::write(unfr0zen_host::nand::checksum_path(&out), "sum").unwrap();
         app.on_event(Event::Done(Err("the unit came back in app mode".into())));
+        assert_eq!(app.logs.phases.last().unwrap().done.map(|(_, ok)| ok), Some(false));
         assert_eq!(app.flow_backup.as_deref(), Some(out.as_path()));
+        // Without a backup first, Backing up is not listed.
+        let mut plain = App { flow_run: true, task: Some(Task::Patch), ..App::default() };
+        plain.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        plain.on_event(Event::Phase(Phase::DownloadMode));
+        let shown = texts(&render_frames(&mut plain, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "Restarting") && !shown.iter().any(|t| t == "Backing up"), "{shown:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2635,9 +2705,10 @@ mod tests {
         running.flow_run = true;
         running.task = Some(Task::BackupPatch("nand-20261109-1131.bin".into()));
         running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
-        running.on_event(Event::Begin("Load recovery U-Boot".into()));
-        running.on_event(Event::End { label: "Load recovery U-Boot".into(), elapsed: Duration::from_secs(9), ok: true });
-        running.on_event(Event::Begin("Read NAND".into()));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Backup));
+        running.on_event(Event::Begin("Back up NAND".into()));
         running.on_transfer(210 << 20, 1 << 20, 512 << 20);
         shot("5-running", &mut running, WINDOW);
         let mut done = flow(setup::Step::Review);

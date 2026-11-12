@@ -26,7 +26,7 @@ use unfr0zen_core::{Device, Result, Slot};
 
 use crate::device::{CancelFlag, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
-use crate::progress::{stage, stage_with, Progress};
+use crate::progress::{stage, stage_with, Phase, Progress};
 use crate::usb::{verify_shell, Id, Pipe};
 use usb::Mode;
 
@@ -193,6 +193,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
         ssh_server: config.options.ssh.then(assets::ssh_server),
         ..config.options.clone()
     };
+    progress.phase(Phase::Check);
     progress.status(&format!("NAND: {}", nand.chip()));
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
     let device = generation(config.omap, &env, usb);
@@ -211,6 +212,8 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     } else {
         Vec::new()
     };
+    // The patched volume is built in memory, then written.
+    progress.phase(Phase::Prepare);
     let label = format!("Patch {slot}");
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
@@ -229,6 +232,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
     let upper = stage(progress, "Choose the kernel booted first", || upper_kernel(nand, slot, options))?;
+    progress.phase(Phase::Patch);
     let mut changed = false;
     if !changes.is_empty() {
         let plan = volume.programmed()?;
@@ -327,17 +331,24 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
     let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    progress.phase(Phase::Recovery);
     let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
     let silicon = omap::silicon(&asic, flasher.idcode);
     let outcome = match backup {
-        Some(out) => nand::back_up_whole(&mut flasher, progress, out, &mut hand_back)
-            .and_then(|line| {
+        Some(out) => {
+            progress.phase(Phase::Backup);
+            nand::back_up_whole(&mut flasher, progress, out, &mut hand_back).and_then(|line| {
                 progress.status(&line);
                 route(progress, config, usb, &silicon, &mut flasher, &run_dir)
-            }),
+            })
+        }
         None => route(progress, config, usb, &silicon, &mut flasher, &run_dir),
     };
-    // On failure too: whatever was written left the slot bootable.
+    // On failure too: whatever was written left the slot bootable. A
+    // failure stays the phase it happened in.
+    if outcome.is_ok() {
+        progress.phase(Phase::Restart);
+    }
     let reset = stage(progress, "Restart the unit", || flasher.reset());
     let outcome = outcome?;
     reset?;

@@ -13,7 +13,7 @@ use unfr0zen_core::patch::{self, Options};
 use unfr0zen_core::{Error, Result};
 
 use crate::device::{self, Device};
-use crate::progress::{self, Progress};
+use crate::progress::{self, Phase, Progress};
 use crate::diamond3::usb::EntryPoint;
 use crate::{assets, diamond3, j49};
 
@@ -321,6 +321,7 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
     if let Some(out) = backup.filter(|out| out.exists()) {
         return Err(failure(format!("{} exists", out.display())));
     }
+    progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
