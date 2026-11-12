@@ -2,12 +2,13 @@
 """Frames the app's screenshots as macOS windows, for the README and the website.
 
     UNFR0ZEN_SCREENSHOTS=RAW cargo test -p unfr0zen-gui screenshots -- --ignored
-    python3 utils/app-screenshots.py RAW SITE
+    python3 utils/app-screenshots.py RAW
 
-RAW holds the bare windows at 2x (1-setup.png, 2-backups.png, 3-logs.png). Each
-gets rounded corners, a light edge, the traffic lights and a shadow. SITE gets
-app1.png to app3.png at 2x for the website; assets/app.png becomes the README's
-animated PNG of the three at 1x. Needs Pillow.
+RAW holds the bare windows at 2x (1-integrations.png, 2-features.png,
+3-backups.png). Each gets rounded corners, a light edge, the traffic lights
+and a shadow. The website gets docs/assets/app1.png to app3.png at 2x;
+assets/app.png becomes the README's animated PNG of the three at 1x. Needs
+Pillow.
 """
 
 import sys
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
-NAMES = ["1-setup.png", "2-backups.png", "3-logs.png"]
+NAMES = ["1-integrations.png", "2-features.png", "3-backups.png"]
 # At 1x: the room around the window, its corner radius, and the traffic
 # lights' centre, spacing and radius, as macOS draws them.
 LEFT, TOP, BOTTOM = 56, 38, 74
@@ -48,12 +49,13 @@ def framed(window: Image.Image, scale: int) -> Image.Image:
 
 
 def main() -> None:
-    raw, site = Path(sys.argv[1]), Path(sys.argv[2])
+    raw = Path(sys.argv[1])
+    repo = Path(__file__).resolve().parent.parent
     windows = [Image.open(raw / name) for name in NAMES]
     for i, window in enumerate(windows, 1):
-        framed(window, 2).save(site / f"app{i}.png", optimize=True)
+        framed(window, 2).save(repo / "docs" / "assets" / f"app{i}.png", optimize=True)
     half = [framed(window.resize((window.width // 2, window.height // 2), Image.LANCZOS), 1) for window in windows]
-    readme = Path(__file__).resolve().parent.parent / "assets" / "app.png"
+    readme = repo / "assets" / "app.png"
     half[0].save(readme, save_all=True, append_images=half[1:], duration=5000, loop=0, optimize=True)
 
 

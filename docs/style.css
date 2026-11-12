@@ -288,7 +288,7 @@ section > .wrap > h2 {
 
 .app { padding: 24px 0 8px; }
 
-.app .section-intro { margin-bottom: 24px; }
+.app .section-intro { max-width: none; margin-bottom: 24px; }
 
 .shots {
     position: relative;

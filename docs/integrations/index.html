@@ -63,9 +63,9 @@
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>Relay to MQTT broker</b>, Broker <code>host[:port]</code></td><td data-label="CLI"><code>--mqtt host[:port]</code></td></tr>
+                        <tr><td data-label="App"><b>MQTT</b>, under Patch → Integrations; Broker <code>host[:port]</code></td><td data-label="CLI"><code>--mqtt host[:port]</code></td></tr>
                         <tr><td data-label="App">User, Password</td><td data-label="CLI"><code>--mqtt-user</code>, <code>--mqtt-password</code></td></tr>
-                        <tr><td data-label="App">TLS, CA certificate</td><td data-label="CLI"><code>--mqtt-tls</code>, <code>--mqtt-ca FILE</code></td></tr>
+                        <tr><td data-label="App">Encrypt the connection (TLS), CA certificate</td><td data-label="CLI"><code>--mqtt-tls</code>, <code>--mqtt-ca FILE</code></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -82,7 +82,7 @@
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>Matter</b></td><td data-label="CLI"><code>--matter</code></td></tr>
+                        <tr><td data-label="App"><b>Matter</b>, under Patch → Integrations</td><td data-label="CLI"><code>--matter</code></td></tr>
                         <tr><td data-label="App">Pairing code</td><td data-label="CLI"><code>--matter-code CODE</code></td></tr>
                     </tbody>
                 </table>
@@ -102,7 +102,7 @@
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>Thread support (replaces Heat Link)</b>, under Matter</td><td data-label="CLI"><code>--matter-thread</code></td></tr>
+                        <tr><td data-label="App"><b>Thread support</b>, under Matter</td><td data-label="CLI"><code>--matter-thread</code></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -113,7 +113,7 @@
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>Zigbee (replaces Heat Link)</b></td><td data-label="CLI"><code>--zigbee</code></td></tr>
+                        <tr><td data-label="App"><b>Zigbee</b>, under Patch → Integrations</td><td data-label="CLI"><code>--zigbee</code></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -137,7 +137,7 @@
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>External temperature</b>, under Patch → Advanced</td><td data-label="CLI"><code>--external-temperature</code></td></tr>
+                        <tr><td data-label="App"><b>External temperature</b>, under Patch → Integrations</td><td data-label="CLI"><code>--external-temperature</code></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -165,28 +165,23 @@
             </ul>
 
             <h2 id="options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Other options</h2>
-            <p>In the app, Dry run, Save the root volume first, Boot slot, Device, Entry point, Works With Nest boiler, Doom, Overlay tar, SSH key, the other cloud and Backplate simulator are behind the <b>Advanced</b> button on the Patch page.</p>
+            <p>The app's <b>Patch</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread) is on Integrations; Block Nest and Google servers, the time server, SSH, the USB console, Doom and Dark theme on Features; Device, Entry point and Backplate simulator under <b>Developer options</b> on Review, which also offers a NAND backup before the patch.</p>
             <div class="table-scroll">
                 <table>
                     <thead><tr><th>App</th><th>CLI</th><th>What it does</th></tr></thead>
                     <tbody>
                         <tr><td data-label="App">Block Nest and Google servers</td><td data-label="CLI"><code>--block-cloud</code></td><td data-label="What it does">Resolves Nest's and Google's servers to nowhere, and checks for the internet at Cloudflare. Turns on the custom NTP server.</td></tr>
-                        <tr><td data-label="App">Custom NTP server</td><td data-label="CLI"><code>--ntp-server [HOST]</code></td><td data-label="What it does">Sets the firmware's time server to HOST instead of time.nest.com (default pool.ntp.org). nestlocal's own clock check stays on pool.ntp.org.</td></tr>
-                        <tr><td data-label="App">SSH server (root login)</td><td data-label="CLI"><code>--ssh</code></td><td data-label="What it does">Runs an SSH server on the unit (dropbear on the 2nd generation, host keys kept in system-config).</td></tr>
+                        <tr><td data-label="App">Custom NTP server; Time server under Block Nest and Google servers</td><td data-label="CLI"><code>--ntp-server [HOST]</code></td><td data-label="What it does">Sets the firmware's time server to HOST instead of time.nest.com (default pool.ntp.org). nestlocal's own clock check stays on pool.ntp.org.</td></tr>
+                        <tr><td data-label="App">SSH</td><td data-label="CLI"><code>--ssh</code></td><td data-label="What it does">Runs an SSH server on the unit (dropbear on the 2nd generation, host keys kept in system-config).</td></tr>
                         <tr><td data-label="App">SSH key</td><td data-label="CLI"><code>--ssh-public-key FILE</code></td><td data-label="What it does">Requires <code>--ssh</code>. Adds one OpenSSH public key to root's authorized keys without replacing existing keys. Use an ECDSA key with the 3rd generation's stock OpenSSH 6.0; Ed25519 is supported by the 2nd generation's dropbear. Supply a public <code>.pub</code> file, never a private key.</td></tr>
-                        <tr><td data-label="App">USB root shell</td><td data-label="CLI"><code>--usb-shell</code></td><td data-label="What it does">Root shell on the unit's USB serial port. On the 2nd generation it installs a kernel with a USB serial port, booted ahead of the stock one, which stays as the fallback.</td></tr>
+                        <tr><td data-label="App">USB console</td><td data-label="CLI"><code>--usb-shell</code></td><td data-label="What it does">Root shell on the unit's USB serial port. On the 2nd generation it installs a kernel with a USB serial port, booted ahead of the stock one, which stays as the fallback.</td></tr>
                         <tr><td data-label="App">Root password</td><td data-label="CLI"><code>--root-password</code></td><td data-label="What it does">For SSH and the USB shell (default <code>unfr0zen</code>).</td></tr>
                         <tr><td data-label="App">Backplate simulator (1H1C)</td><td data-label="CLI"><code>--backplate-sim</code></td><td data-label="What it does">1H1C with a simulated temperature, for testing off the wall.</td></tr>
-                        <tr><td data-label="App">Dry run</td><td data-label="CLI"><code>--dry-run</code></td><td data-label="What it does">Lists the changes, writes nothing, boots the unit unchanged.</td></tr>
-                        <tr><td data-label="App">Save the root volume first</td><td data-label="CLI"><code>--backup</code></td><td data-label="What it does">Saves the original root volume before patching.</td></tr>
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>--nand-image FILE</code></td><td data-label="What it does">1st or 2nd generation: patches a raw NAND image (2112-byte pages) in place instead of a unit.</td></tr>
                         <tr><td data-label="App">Entry point</td><td data-label="CLI"><code>--entry-point ENTRY_POINT</code></td><td data-label="What it does">3rd generation: how its boot ROM is entered for recovery: <code>auto</code> (default) tries the official loader, then CVE-2017-7932, then CVE-2017-7936; or <code>official-loader</code>, <code>cve-2017-7932</code>, <code>cve-2017-7936</code>. It applies to a patch, backup, restore and booting the application, in the app and the CLI.</td></tr>
-                        <tr><td data-label="App">Boot slot</td><td data-label="CLI"><code>--slot root0|root1</code></td><td data-label="What it does">The root slot to patch, instead of the one the unit boots.</td></tr>
                         <tr><td data-label="App">Device</td><td data-label="CLI"><code>--device diamond|j49|diamond3</code></td><td data-label="What it does">The generation (1st, 2nd, 3rd) to expect instead of the one identified on USB. The app applies it to a patch only.</td></tr>
                         <tr><td data-label="App">Dark theme</td><td data-label="CLI"><code>--dark-theme</code></td><td data-label="What it does">2nd generation, Nest firmware 5.9.4-5: shows the settings screens in the 3rd generation's dark colours, and the boot logo on black. The app offers it when a 2nd generation is connected. A run without it brings back the light colours.</td></tr>
                         <tr><td data-label="App">Works With Nest boiler</td><td data-label="CLI"><code>--wwn-boiler</code></td><td data-label="What it does">Needs Zigbee or Thread. See <a href="#zigbee">Zigbee</a>.</td></tr>
-                        <tr><td data-label="App">Overlay tar</td><td data-label="CLI"><code>--overlay TAR</code></td><td data-label="What it does">Adds a tar of root-owned files to the root volume. Not with MQTT, Matter, Zigbee or Doom.</td></tr>
-                        <tr><td data-label="App">Point nlclient at another cloud, Cloud URL</td><td data-label="CLI"><code>--cloud-url URL</code></td><td data-label="What it does">Sets nlclient's cloud URL (Nest's frontdoor). Not with MQTT, Matter, Zigbee or Doom.</td></tr>
                         <tr><td data-label="App">Boot application</td><td data-label="CLI"><code>unfr0zen boot</code></td><td data-label="What it does">3rd generation: boots the application firmware from any mode.</td></tr>
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>unfr0zen uboot</code></td><td data-label="What it does">3rd generation: loads recovery U-Boot and leaves it at its prompt.</td></tr>
                         <tr><td data-label="App">Serial console</td><td data-label="CLI">Not available</td><td data-label="What it does">A terminal on a patched unit's USB root shell.</td></tr>
@@ -207,14 +202,14 @@
                     </tbody>
                 </table>
             </div>
-            <p>Backs up the whole NAND as an image with a <code>.sha256</code> beside it: 512 MiB, ECC-corrected and checked with a second read, on the 3rd generation; raw pages with OOB on the 1st and 2nd, unclean blocks read until two reads agree. Nothing is written during a backup. <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file. Restore verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again.</p>
+            <p>Backs up the whole NAND as an image with a <code>.sha256</code> beside it: 512 MiB, ECC-corrected, on the 3rd generation; raw pages with OOB on the 1st and 2nd, unclean blocks read until two reads agree. Nothing is written during a backup. <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file. Restore verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again.</p>
 
             <h2 id="doom"><svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>Doom</h2>
             <div class="table-scroll">
                 <table>
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="App"><b>Doom</b>, under Patch → Advanced</td><td data-label="CLI"><code>--doom</code></td></tr>
+                        <tr><td data-label="App"><b>Doom</b>, under Patch → Features</td><td data-label="CLI"><code>--doom</code></td></tr>
                     </tbody>
                 </table>
             </div>
