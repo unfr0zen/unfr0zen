@@ -185,6 +185,7 @@ impl PatchInputs {
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
             device_name: self.device_name.clone(),
             wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
+            local_cloud: assets::LOCAL_CLOUD.to_vec(),
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,

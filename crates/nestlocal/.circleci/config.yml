@@ -34,4 +34,4 @@ jobs:
           path: .work/nestlocal-target
       - module-store:
           module: nestlocal
-          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so build/unfr0zen-apply-armv7
+          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so build/localcloud/liblocalcloud.so build/unfr0zen-apply-armv7

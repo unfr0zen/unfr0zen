@@ -118,6 +118,32 @@ const NLSLEEPD_START: (&str, &str) = (
     "\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ",
     "\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ");
 
+/// nlclient's init script, the same on the gen 2 and the gen 3.
+const NESTLABS: &str = "etc/init.d/nestlabs";
+/// Where the start line below preloads the library from.
+const LOCAL_CLOUD: &str = "nestlabs/lib/liblocalcloud.so";
+/// How the script starts nlclient, and the same with the library that has
+/// nlclient's network count as connected (platform/common/localcloud), so it
+/// reaches nestlocal, its cloud on 127.0.0.1, with or without Wi-Fi.
+const NLCLIENT_START: (&str, &str) = (
+    "\n ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
+    "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
+
+/// nlclient started with the local cloud library on a unit running
+/// nestlocal; as stock without.
+fn patch_local_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
+    let (stock, preloaded) = NLCLIENT_START;
+    let mut script = text(tree, NESTLABS)?.replace(preloaded, stock);
+    if enabled {
+        if script.matches(stock).count() != 1 {
+            return device(format!("expected one line starting nlclient in {NESTLABS}"));
+        }
+        script = script.replace(stock, preloaded);
+    }
+    put(tree, NESTLABS, script);
+    Ok(())
+}
+
 /// nlsleepd started with the wake pattern library for a unit with Matter, so
 /// that a controller looking the sleeping unit up wakes it; as stock without.
 fn patch_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
@@ -414,6 +440,9 @@ pub struct Options {
     /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
     /// installed with Matter on a gen 2 or gen 3, removed without.
     pub wake_filter: Vec<u8>,
+    /// The library preloaded into nlclient on a unit running nestlocal
+    /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
+    pub local_cloud: Vec<u8>,
     /// Files for the optional onboard Thread transport.
     pub thread: Option<Overlay>,
     /// nestlocal joins a Zigbee network through the unit's radio, which it
@@ -641,6 +670,20 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             patch_wake_patterns(&mut tree, wake)?;
         }
     }
+    // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
+    fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
+    fetch(volume, &mut tree, &mut originals, &[LOCAL_CLOUD], false, false)?;
+    if overlay.is_some() {
+        if options.local_cloud.is_empty() {
+            return device("nestlocal needs the local cloud library for nlclient");
+        }
+        tree.insert(LOCAL_CLOUD.into(), (options.local_cloud.clone(), 0o755));
+    }
+    if tree.contains_key(NESTLABS) {
+        patch_local_cloud(&mut tree, overlay.is_some())?;
+    } else if overlay.is_some() {
+        return device(format!("{NESTLABS} is missing: nlclient could not reach nestlocal"));
+    }
     patch_root_rw(&mut tree, true)?;
     patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
     (rootfs.patch)(&mut tree, options)?;
@@ -741,7 +784,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER])
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER, LOCAL_CLOUD])
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -992,8 +1035,12 @@ mod tests {
             ("etc/init.d/sshd", 0o750, "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\n    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n".into()),
             ("etc/nestlabs/client.config", 0o644, BACKPLATE_SIM.iter().map(|k| format!("<a key=\"{k}\" value=\"0\"/>\n")).collect()),
             ("etc/init.d/usb-gadget", 0o750, format!("if [ `unlocked` -eq \"1\" ]; then\n{}else\n  USB_GADGET_MOD=g_mass_storage\nfi\n", GADGET_LINES.0)),
+            ("etc/init.d/nestlabs", 0o755, NESTLABS_SCRIPT.into()),
         ]
     }
+
+    const NESTLABS_SCRIPT: &str = "'monit_start')\n log_info \"Service initiation\"\n ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" \
+                                   -a \"${NLCLIENTAPP}\" -- `find_configs ${NESTLABSCONFDIR} ${CONFFILENAMES}`\n ;;\n";
 
     impl FakeVolume {
         fn new(files: Vec<(&str, u32, String)>) -> Self {
@@ -1186,7 +1233,7 @@ mod tests {
     }
 
     fn options() -> Options {
-        Options { root_hash: "$6$salt$hash".into(), ..Options::default() }
+        Options { root_hash: "$6$salt$hash".into(), local_cloud: b"\x7fELF local cloud".to_vec(), ..Options::default() }
     }
 
     fn no_pki() -> Result<Pki> {
@@ -1242,6 +1289,33 @@ mod tests {
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);
+    }
+
+    #[test]
+    fn nestlocal_has_nlclient_reach_it_without_wifi_and_a_unit_without_it_starts_nlclient_as_stock() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let zigbee = Options { zigbee: true, ..options() };
+        let changes = patch(&mut volume, &zigbee, false).unwrap();
+        assert!(names(&changes).contains(LOCAL_CLOUD) && names(&changes).contains(NESTLABS));
+        assert_eq!((volume.files[LOCAL_CLOUD].1, volume.files[LOCAL_CLOUD].2.as_slice()), (0o755, &b"\x7fELF local cloud"[..]));
+        assert!(volume.text(NESTLABS).contains("\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a "));
+        // Again changes neither, and turning every integration off keeps nestlocal, nlclient's cloud.
+        let again = names(&patch(&mut volume, &zigbee, false).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
+        assert!(!again.iter().any(|name| name == LOCAL_CLOUD || name == NESTLABS), "{again:?}");
+        patch(&mut volume, &Options { zigbee: false, ..zigbee.clone() }, false).unwrap();
+        assert!(volume.text(NESTLABS).contains("LD_PRELOAD=/nestlabs/lib/liblocalcloud.so"));
+        let error = patch(&mut volume, &Options { local_cloud: Vec::new(), ..zigbee }, false).unwrap_err();
+        assert!(error.to_string().contains("local cloud library"), "{error}");
+
+        // A unit without nestlocal: the library goes and nlclient starts as stock.
+        let mut volume = FakeVolume::new(stock());
+        volume.files.insert(NESTLABS.into(), ("0:0".into(), 0o755,
+            NESTLABS_SCRIPT.replace(" ${STARTDAEMON} -q -b -p", " LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p").into_bytes()));
+        volume.files.insert(LOCAL_CLOUD.into(), ("0:0".into(), 0o755, b"\x7fELF old".to_vec()));
+        let changes = patch(&mut volume, &options(), false).unwrap();
+        assert!(changes.iter().any(|c| c.name == LOCAL_CLOUD && c.action == "remove"));
+        assert_eq!(volume.text(NESTLABS), NESTLABS_SCRIPT);
     }
 
     #[test]

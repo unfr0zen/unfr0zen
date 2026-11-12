@@ -25,6 +25,7 @@ pub fn contents(device: Device) -> Result<(Files, BTreeMap<String, u32>)> {
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
         (bundle::NESTLOCAL.to_string(), (0o755, assets::nestlocal())),
         (bundle::WAKE_FILTER.to_string(), (0o755, assets::WAKE_FILTER.to_vec())),
+        (bundle::LOCAL_CLOUD.to_string(), (0o755, assets::LOCAL_CLOUD.to_vec())),
         (bundle::SCREEN.to_string(), (0o644, assets::CUSTOM_SCREEN.to_vec())),
         (bundle::PRE_PATCH.to_string(), (0o755, PRE_PATCH.to_vec())),
         (bundle::POST_PATCH.to_string(), (0o755, POST_PATCH.to_vec())),
@@ -58,6 +59,7 @@ mod tests {
                                   ..Settings::default() };
         let options = settings.options(&bundle).unwrap();
         assert_eq!(options.wake_filter, assets::WAKE_FILTER);
+        assert_eq!(options.local_cloud, assets::LOCAL_CLOUD);
         assert!(options.thread.unwrap().files.iter().any(|(name, _, _)| name == "usr/share/nestlocal/thread-rcp.bin"));
         assert_eq!(options.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
         assert!(pack(Device::J49, "1.0.0", None).is_err());

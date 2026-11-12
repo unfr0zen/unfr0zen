@@ -26,6 +26,8 @@ pub const SIGNATURE: &str = "manifest.sig";
 pub const APPLY: &str = "bin/unfr0zen-apply";
 pub const NESTLOCAL: &str = "assets/nestlocal";
 pub const WAKE_FILTER: &str = "assets/libwakefilter.so";
+/// Preloaded into nlclient on a unit running nestlocal (patch::Options::local_cloud).
+pub const LOCAL_CLOUD: &str = "assets/liblocalcloud.so";
 pub const SCREEN: &str = "assets/custom-screen.o";
 /// Run before the patch reads the volume; failing, it stops the run with
 /// nothing written.
@@ -306,6 +308,7 @@ impl Settings {
             }).transpose()?,
             matter,
             wake_filter: if matter.is_some() { bundle.file(WAKE_FILTER)?.to_vec() } else { Vec::new() },
+            local_cloud: bundle.file(LOCAL_CLOUD)?.to_vec(),
             thread: self.thread.then(|| bundle.overlay(THREAD)).transpose()?,
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
@@ -340,6 +343,7 @@ mod tests {
             (APPLY.to_string(), (0o755, b"\x7fELF apply".to_vec())),
             (NESTLOCAL.to_string(), (0o755, b"\x7fELF nestlocal".to_vec())),
             (WAKE_FILTER.to_string(), (0o755, b"\x7fELF wake".to_vec())),
+            (LOCAL_CLOUD.to_string(), (0o755, b"\x7fELF local cloud".to_vec())),
             (PRE_PATCH.to_string(), (0o755, b"#!/bin/sh\n".to_vec())),
         ]);
         let mut directories = BTreeMap::new();
@@ -418,6 +422,7 @@ mod tests {
                               ca: Some(b"-----BEGIN CERTIFICATE-----\n".to_vec()) }),
             matter: Some(Matter { passcode: 20202021, discriminator: 3840 }),
             wake_filter: b"\x7fELF wake".to_vec(),
+            local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
             ssh: true, usb_shell: true, device_name: Some("Hall".into()),
             ..Options::default()

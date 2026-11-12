@@ -186,6 +186,7 @@ fn the_patch_applies_to_both_slots() {
         ssh_server: Some(unfr0zen_core::nestlocal::Overlay { directories: vec![],
                                                              files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())] }),
         matter: Some(Matter::from_pairing_code(unfr0zen_core::nestlocal::DEFAULT_MATTER_CODE).unwrap()),
+        local_cloud: b"\x7fELF local cloud".to_vec(),
         ..Options::default()
     };
     for which in [Slot::Root1, Slot::Root0] {

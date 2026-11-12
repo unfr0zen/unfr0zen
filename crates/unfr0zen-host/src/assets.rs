@@ -15,6 +15,8 @@ pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custo
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
 /// The library nlsleepd preloads for Matter, either generation's.
 pub const WAKE_FILTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libwakefilter.so"));
+/// The library nlclient preloads beside nestlocal, so it reaches nestlocal without Wi-Fi.
+pub const LOCAL_CLOUD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/liblocalcloud.so"));
 
 fn gunzip(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
