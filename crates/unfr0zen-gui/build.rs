@@ -44,7 +44,9 @@ fn main() {
 
 /// Writes `OUT_DIR/third_party.rs`: every crate the `unfr0zen` binary links,
 /// with its SPDX license, read from `cargo metadata` and scoped to
-/// the binary's own (non-dev, non-build) dependency graph. The About page
+/// the binary's own (non-dev, non-build) dependency graph on the target
+/// being built: crates only other platforms take are neither listed nor
+/// needed in the local registry. The About page
 /// includes it, so the list stays in step with `Cargo.lock`. A metadata
 /// failure leaves the list empty rather than breaking the build.
 fn third_party_licenses(root: &std::path::Path) {
@@ -56,8 +58,9 @@ fn third_party_licenses(root: &std::path::Path) {
         std::fs::write(&dest, "pub static THIRD_PARTY: &[(&str, &str)] = &[];\n").unwrap();
     };
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let target = std::env::var("TARGET").unwrap();
     let output = std::process::Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--frozen"]).current_dir(root).output();
+        .args(["metadata", "--format-version", "1", "--frozen", "--filter-platform", &target]).current_dir(root).output();
     let json = match output {
         Ok(out) if out.status.success() => out.stdout,
         result => return empty(&format!("cargo metadata failed ({result:?})")),
