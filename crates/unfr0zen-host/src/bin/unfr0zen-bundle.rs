@@ -1,7 +1,8 @@
 //! The patch bundle as a release publishes it.
 //!
 //!     unfr0zen-bundle pack DEVICE VERSION OUT
-//!         Writes DEVICE's bundle (diamond3) to OUT, signed with the base64
+//!         Writes DEVICE's bundle (diamond3, or j49 for the gen 1 and gen 2)
+//!         to OUT, signed with the base64
 //!         Ed25519 seed in UNFR0ZEN_BUNDLE_KEY when it is set.
 //!     unfr0zen-bundle keygen KEY
 //!         Writes a new seed to KEY (mode 600) and prints its public key.
@@ -27,6 +28,7 @@ fn main() {
         ["pack", device, version, out] => {
             let device = match device {
                 "diamond3" => Device::Diamond3,
+                "j49" => Device::J49,
                 other => fail(format!("no bundle for {other}")),
             };
             let key = std::env::var("UNFR0ZEN_BUNDLE_KEY").ok().filter(|k| !k.is_empty())

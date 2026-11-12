@@ -88,7 +88,9 @@ The version comes from `git describe --tag --always --dirty`.
 
 - macOS universal app bundle: `sh utils/make_macos_app.sh` → `dist/unfr0zen.app`
 - Linux desktop entry and icon: `sh utils/install_linux.sh`
-- The gen 3's patch bundle, what the app sends the unit to patch itself:
+- The patch bundles: the gen 3's (`diamond3`), which the app sends the unit to
+  patch itself, and the gen 1's and gen 2's (`j49`), which it patches the
+  slot from on the host:
 
   ```sh
   cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz

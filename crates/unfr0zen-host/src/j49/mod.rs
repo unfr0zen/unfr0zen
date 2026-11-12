@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use unfr0zen_core::bundle::Settings;
 use unfr0zen_core::j49::flasher::{self, Flasher, Nand};
 use unfr0zen_core::j49::{jffs2, kernel, logo::{self, Logo}};
 use unfr0zen_core::j49::nand::{self as layout, Environment, PAGES_PER_BLOCK, PAGE_RAW};
@@ -193,12 +194,10 @@ struct Outcome {
 /// the SoC for the progress.
 fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &str, nand: &mut dyn Nand, run_dir: &Path)
          -> Result<Outcome> {
-    let options = &patch::Options {
-        thread: config.options.thread.as_ref()
-            .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
-        ssh_server: config.options.ssh.then(assets::ssh_server),
-        ..config.options.clone()
-    };
+    // The run's options with the files of the gen 1's and gen 2's bundle,
+    // the same one a release publishes.
+    let bundle = crate::bundle::assemble(Device::J49, &config.options.version)?;
+    let options = &Settings::new(&config.options, None).options(&bundle)?;
     progress.phase(Phase::Check);
     progress.status(&format!("NAND: {}", nand.chip()));
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
@@ -214,7 +213,7 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     let raw = stage_with(progress, &format!("Read {slot} over USB"), |progress| read_slot(nand, progress, slot))?;
     let mut volume = stage(progress, &format!("Scan {slot}'s JFFS2"), || jffs2::Slot::load(raw.clone()))?;
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
-        crate::assets::nestlocal()
+        bundle.file(unfr0zen_core::bundle::NESTLOCAL)?.to_vec()
     } else {
         Vec::new()
     };

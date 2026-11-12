@@ -29,6 +29,8 @@ pub const WAKE_FILTER: &str = "assets/libwakefilter.so";
 /// Preloaded into nlclient on a unit running nestlocal (patch::Options::local_cloud).
 pub const LOCAL_CLOUD: &str = "assets/liblocalcloud.so";
 pub const SCREEN: &str = "assets/custom-screen.o";
+/// The gen 2's native Sensors view helper, for the external temperature.
+pub const RCS_SCREEN: &str = "assets/j49-rcs-screen.o";
 /// Run before the patch reads the volume; failing, it stops the run with
 /// nothing written.
 pub const PRE_PATCH: &str = "scripts/pre-patch.sh";
@@ -38,6 +40,8 @@ pub const POST_PATCH: &str = "scripts/post-patch.sh";
 const OVERLAYS: &str = "overlays/";
 pub const THREAD: &str = "thread";
 pub const DOOM: &str = "doom";
+/// The SSH server of a unit without its own (the gen 2's dropbear).
+pub const SSH: &str = "ssh";
 
 /// Name: (mode, contents).
 pub type Files = BTreeMap<String, (u32, Vec<u8>)>;
@@ -70,15 +74,7 @@ pub struct Bundle {
 /// the files in name order. The same inputs give the same bytes.
 pub fn pack(device: Device, version: &str, files: &Files, directories: &BTreeMap<String, u32>,
             key: Option<&SigningKey>) -> Vec<u8> {
-    let manifest = Manifest {
-        format: FORMAT,
-        device: device.name().into(),
-        version: version.into(),
-        files: files.iter().map(|(name, (mode, data))| (name.clone(), Member { sha256: sha256_hex(data), mode: *mode })).collect(),
-        directories: directories.clone(),
-    };
-    let mut manifest_bytes = serde_json::to_vec_pretty(&manifest).expect("a manifest serializes");
-    manifest_bytes.push(b'\n');
+    let (_, manifest_bytes) = manifest(device, version, files, directories);
     let mut tar = tar::Builder::new(Vec::new());
     let mut add = |name: &str, mode: u32, data: &[u8]| {
         let mut header = tar::Header::new_ustar();
@@ -104,7 +100,28 @@ pub fn pack(device: Device, version: &str, files: &Files, directories: &BTreeMap
     gzip.finish().expect("writing to memory")
 }
 
+/// The manifest of these files, and its bytes as manifest.json holds them.
+fn manifest(device: Device, version: &str, files: &Files, directories: &BTreeMap<String, u32>) -> (Manifest, Vec<u8>) {
+    let manifest = Manifest {
+        format: FORMAT,
+        device: device.name().into(),
+        version: version.into(),
+        files: files.iter().map(|(name, (mode, data))| (name.clone(), Member { sha256: sha256_hex(data), mode: *mode })).collect(),
+        directories: directories.clone(),
+    };
+    let mut bytes = serde_json::to_vec_pretty(&manifest).expect("a manifest serializes");
+    bytes.push(b'\n');
+    (manifest, bytes)
+}
+
 impl Bundle {
+    /// The bundle of these files as unpack would give it, without packing it:
+    /// for a run patching on the host.
+    pub fn from_files(device: Device, version: &str, files: Files, directories: &BTreeMap<String, u32>) -> Bundle {
+        let (manifest, manifest_bytes) = manifest(device, version, &files, directories);
+        Bundle { manifest, manifest_bytes, signature: None, files }
+    }
+
     /// Unpacks a bundle and checks its files against its manifest: every one
     /// listed, present, and unchanged. The signature is checked by verify.
     pub fn unpack(data: &[u8]) -> Result<Bundle> {
@@ -155,6 +172,11 @@ impl Bundle {
 
     pub fn file(&self, name: &str) -> Result<&[u8]> {
         self.files.get(name).map(|(_, data)| data.as_slice()).map_or_else(|| device(format!("bundle: no {name}")), Ok)
+    }
+
+    /// The overlay under overlays/NAME/, if the bundle holds one.
+    fn optional_overlay(&self, name: &str) -> Option<Overlay> {
+        self.overlay(name).ok()
     }
 
     /// The overlay the bundle holds under overlays/NAME/.
@@ -314,12 +336,17 @@ impl Settings {
             wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(|| bundle.overlay(DOOM)).transpose()?,
             external_temperature: self.external_temperature,
-            external_temperature_screen: Vec::new(),
+            // Only the gen 2's bundle has these: the gen 3 needs neither.
+            external_temperature_screen: if self.external_temperature {
+                bundle.files.get(RCS_SCREEN).map(|(_, data)| data.clone()).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
             ssh_key_only: self.ssh_key_only,
-            ssh_server: None,
+            ssh_server: if self.ssh { bundle.optional_overlay(SSH) } else { None },
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
         })
@@ -436,5 +463,21 @@ mod tests {
         assert_eq!(rebuilt.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
         let thread = Settings { thread: true, ..Settings::default() };
         assert!(thread.options(&bundle).unwrap_err().to_string().contains("no thread overlay"));
+    }
+
+    #[test]
+    fn a_gen_2_bundle_brings_its_ssh_server_and_sensors_view_only_when_asked() {
+        let (mut files, mut directories) = contents();
+        files.insert(RCS_SCREEN.into(), (0o644, b"\x7fELF rcs".to_vec()));
+        add_overlay(&mut files, &mut directories, SSH, &Overlay {
+            files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())], directories: vec![],
+        });
+        let bundle = Bundle::from_files(Device::J49, "1", files.clone(), &directories);
+        assert_eq!(bundle.manifest, Bundle::unpack(&pack(Device::J49, "1", &files, &directories, None)).unwrap().manifest);
+        let asked = Settings { ssh: true, external_temperature: true, ..Settings::default() }.options(&bundle).unwrap();
+        assert_eq!(asked.external_temperature_screen, b"\x7fELF rcs");
+        assert_eq!(asked.ssh_server.unwrap().files[0].0, "usr/sbin/dropbearmulti");
+        let not = Settings::default().options(&bundle).unwrap();
+        assert!(not.external_temperature_screen.is_empty() && not.ssh_server.is_none());
     }
 }
