@@ -88,3 +88,14 @@ The version comes from `git describe --tag --always --dirty`.
 
 - macOS universal app bundle: `sh utils/make_macos_app.sh` → `dist/unfr0zen.app`
 - Linux desktop entry and icon: `sh utils/install_linux.sh`
+- The gen 3's patch bundle, what the app sends the unit to patch itself:
+
+  ```sh
+  cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz
+  ```
+
+  Its manifest lists every file's SHA-256, which unpacking checks. Releases
+  ship it unsigned for now; with `UNFR0ZEN_BUNDLE_KEY` set (a base64 Ed25519
+  seed) it is signed too. `unfr0zen-bundle keygen KEY` makes a key (and prints
+  its public half), `unfr0zen-bundle verify BUNDLE PUBLIC-KEY` checks a
+  signed bundle.

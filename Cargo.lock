@@ -6021,6 +6021,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "unfr0zen-apply"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde_json",
+ "unfr0zen-core",
+]
+
+[[package]]
 name = "unfr0zen-cli"
 version = "0.1.0"
 dependencies = [
@@ -6039,8 +6048,10 @@ dependencies = [
  "base64 0.22.1",
  "capstone",
  "crc32fast",
+ "ed25519-dalek",
  "flate2",
  "getrandom 0.3.4",
+ "libc",
  "log",
  "lzokay",
  "rand_core 0.6.4",
@@ -6050,6 +6061,8 @@ dependencies = [
  "serde_json",
  "sha-crypt",
  "sha2 0.11.0",
+ "tar",
+ "tempfile",
  "x509-cert 0.2.5",
  "zopfli",
 ]
@@ -6083,6 +6096,7 @@ dependencies = [
 name = "unfr0zen-host"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "crc32fast",
  "flate2",

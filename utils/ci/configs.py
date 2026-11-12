@@ -101,8 +101,10 @@ MODULES = {
     # Its job also runs the screen's host tests.
     "nlclient": {"paths": ["platform/common/nlclient/src", "platform/common/nlclient/tests"]},
     # The radio module brings nestlocal.sh and the Makefile nestlocal reads;
-    # nestlocal.sh also builds the wake pattern library the app installs.
-    "nestlocal": {"paths": ["crates/nestlocal", "platform/common/wakefilter", "Cargo.toml", "Cargo.lock"],
+    # nestlocal.sh also builds the wake pattern library the app installs. Its
+    # job builds unfr0zen-apply as well, the patch engine on unfr0zen-core.
+    "nestlocal": {"paths": ["crates/nestlocal", "crates/unfr0zen-apply", "crates/unfr0zen-core", "platform/common/wakefilter",
+                            "Cargo.toml", "Cargo.lock"],
                   "needs": ["radio", "zbwake", "j49-kernel"]},
 }
 

@@ -2,7 +2,7 @@
 # Build what the app installs on the thermostat, into build/: the diamond3's
 # ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loaders, NAND
 # flasher, dropbear and kernel with a USB serial port, the radio's firmware and zbwake.ko for each
-# gen3 release, nestlocal for ARMv7 carrying them, Doom, and the UNFR0ZEN
+# gen3 release, nestlocal for ARMv7 carrying them, unfr0zen-apply, Doom, and the UNFR0ZEN
 # screen's object for the app to link into the unit's nlclient. The build logs
 # go to .work/.
 #
@@ -51,6 +51,11 @@ step() {  # step NAME COMMAND...: a build step, its output in .work/build-NAME.l
     run "$@" > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
 }
 
+# `utils/build-firmware.sh apply` rebuilds unfr0zen-apply alone.
+if [ "${1:-}" = apply ]; then
+    step apply sh crates/unfr0zen-apply/build.sh
+    exit 0
+fi
 # `utils/build-firmware.sh nestlocal` rebuilds nestlocal alone, carrying the
 # radio images and zbwake.ko already in build/.
 if [ "${1:-}" = nestlocal ]; then
@@ -101,8 +106,9 @@ export NESTLOCAL_ZBWAKE="$root/build/zbwake"
 step thread-source sh platform/common/radio/thread/fetch-openthread.sh
 step thread sh platform/common/radio/thread/build.sh
 cp build/thread/nestlocal build/nestlocal-armv7
+step apply sh crates/unfr0zen-apply/build.sh
 step doom sh platform/common/doom/build.sh build/doom-armv7
 # One relocatable object for every firmware build: the app links it at the
 # addresses and layouts discovered in the unit's nlclient.
 step custom-screen sh platform/common/nlclient/build.sh build
-echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loaders and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom and the screen object under build/."
+echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loaders and flasher, the radio's firmware, zbwake.ko, nestlocal, unfr0zen-apply, Doom and the screen object under build/."

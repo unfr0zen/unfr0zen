@@ -15,6 +15,7 @@ path = "tools/boot_branding.rs"
 [dependencies]
 base64 = "0.22"
 crc32fast = "1"
+ed25519-dalek = "2.2"
 flate2 = "1"
 getrandom = { version = "0.3", features = ["std"] }
 log = "0.4"
@@ -29,4 +30,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 adler2 = "2"
 lzokay = "2.0.1"
+tar = { version = "0.4", default-features = false }
 zopfli = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

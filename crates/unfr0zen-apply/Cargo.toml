@@ -1,0 +1,10 @@
+[package]
+name = "unfr0zen-apply"
+version = "0.1.0"
+edition.workspace = true
+description = "Applies a patch bundle to a root volume, on the unit"
+
+[dependencies]
+unfr0zen-core = { path = "../unfr0zen-core" }
+log = "0.4"
+serde_json = "1.0.151"

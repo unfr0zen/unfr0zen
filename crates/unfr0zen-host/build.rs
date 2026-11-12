@@ -10,6 +10,8 @@
 //!   .work/initramfs, fetched with curl when absent);
 //! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/,
 //!   made again (`utils/build-firmware.sh nestlocal`) when its sources are newer;
+//! - unfr0zen-apply for the patch bundle, built there too, and made again
+//!   (`utils/build-firmware.sh apply`) when its or unfr0zen-core's sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way),
 //!   with the title for the UNFR0ZEN screen's Doom page made from it.
@@ -34,28 +36,30 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 19] = [
+const REQUIRED: [&str; 20] = [
     "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
     "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
     "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
-    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so",
+    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so", "unfr0zen-apply-armv7",
 ];
 
 fn firmware_missing(root: &Path) -> Vec<&'static str> {
     REQUIRED.into_iter().filter(|name| !root.join("build").join(name).is_file()).collect()
 }
 
-/// Runs the firmware build when build/ lacks anything, and nestlocal's alone
-/// when its sources are newer than its build. Cargo may run this script
+/// Runs the firmware build when build/ lacks anything, and nestlocal's or
+/// unfr0zen-apply's alone when its sources are newer than its build. Cargo may run this script
 /// several times at once, for several targets, so one builds and the others
 /// wait for it. CI brings build/ along, and Windows cannot build it.
 fn build_firmware(root: &Path) {
     let nestlocal = [root.join("crates/nestlocal"), root.join("Cargo.lock")];
-    for path in &nestlocal {
+    let apply = [root.join("crates/unfr0zen-apply"), root.join("crates/unfr0zen-core"), root.join("Cargo.lock")];
+    for path in nestlocal.iter().chain(&apply) {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    let stale = || nestlocal_stale(root, &nestlocal);
-    if firmware_missing(root).is_empty() && (cfg!(windows) || env::var_os("CI").is_some() || !stale()) {
+    let nestlocal_stale = || stale(root, "build/nestlocal-armv7", &nestlocal);
+    let apply_stale = || stale(root, "build/unfr0zen-apply-armv7", &apply);
+    if firmware_missing(root).is_empty() && (cfg!(windows) || env::var_os("CI").is_some() || !(nestlocal_stale() || apply_stale())) {
         return;
     }
     let missing = firmware_missing(root);
@@ -69,9 +73,15 @@ fn build_firmware(root: &Path) {
         run_firmware_build(root, None);
         let missing = firmware_missing(root);
         assert!(missing.is_empty(), "utils/build-firmware.sh left build/ without {missing:?}");
-    } else if stale() {
-        run_firmware_build(root, Some("nestlocal"));
-        assert!(!stale(), "utils/build-firmware.sh nestlocal left build/nestlocal-armv7 older than its sources");
+    } else {
+        if nestlocal_stale() {
+            run_firmware_build(root, Some("nestlocal"));
+            assert!(!nestlocal_stale(), "utils/build-firmware.sh nestlocal left build/nestlocal-armv7 older than its sources");
+        }
+        if apply_stale() {
+            run_firmware_build(root, Some("apply"));
+            assert!(!apply_stale(), "utils/build-firmware.sh apply left build/unfr0zen-apply-armv7 older than its sources");
+        }
     }
 }
 
@@ -90,8 +100,8 @@ fn run_firmware_build(root: &Path, only: Option<&str>) {
     assert!(status.success(), "utils/build-firmware.sh failed, as above; step logs are in .work/");
 }
 
-/// Whether any of nestlocal's sources changed after build/nestlocal-armv7 was made.
-fn nestlocal_stale(root: &Path, sources: &[PathBuf]) -> bool {
+/// Whether any of the sources changed after the build/ output was made.
+fn stale(root: &Path, output: &str, sources: &[PathBuf]) -> bool {
     fn newest(path: &Path) -> Option<std::time::SystemTime> {
         let metadata = fs::metadata(path).ok()?;
         if !metadata.is_dir() {
@@ -99,7 +109,7 @@ fn nestlocal_stale(root: &Path, sources: &[PathBuf]) -> bool {
         }
         fs::read_dir(path).ok()?.flatten().filter_map(|entry| newest(&entry.path())).max()
     }
-    let Some(built) = fs::metadata(root.join("build/nestlocal-armv7")).and_then(|m| m.modified()).ok() else {
+    let Some(built) = fs::metadata(root.join(output)).and_then(|m| m.modified()).ok() else {
         return true;
     };
     sources.iter().filter_map(|path| newest(path)).any(|changed| changed > built)
@@ -323,6 +333,12 @@ fn nestlocal(root: &Path, out: &Path) {
     assert_eq!(&data[..4], b"\x7fELF", "nestlocal is not an ELF binary");
     assert_eq!(data[18], 40, "nestlocal is not an ARM binary");
     gzip(&data, &out.join("nestlocal.gz"));
+    let binary = root.join("build/unfr0zen-apply-armv7");
+    println!("cargo:rerun-if-changed={}", binary.display());
+    let data = fs::read(&binary)
+        .unwrap_or_else(|_| panic!("build/unfr0zen-apply-armv7 is missing: build it first (utils/build-firmware.sh)"));
+    assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/unfr0zen-apply-armv7 is not an ARM ELF binary");
+    gzip(&data, &out.join("unfr0zen-apply.gz"));
 }
 
 /// The library nlsleepd preloads for Matter (platform/common/wakefilter).

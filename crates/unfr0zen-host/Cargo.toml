@@ -7,6 +7,7 @@ description = "unfr0zen on the host: USB transports, embedded firmware, and the 
 [dependencies]
 unfr0zen-core = { path = "../unfr0zen-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+base64 = "0.22"
 crc32fast = "1"
 flate2 = "1"
 getrandom = { version = "0.3", features = ["std"] }
