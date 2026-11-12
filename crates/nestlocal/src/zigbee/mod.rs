@@ -82,6 +82,11 @@ impl PairingAttempt {
 /// (its equipment decides what it offers); again after the radio fails.
 pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
     let spawned = std::thread::Builder::new().name("zigbee".into()).spawn(move || {
+        // The radio starts once nlclient has said what the unit is; until then the
+        // settings screen says what Zigbee waits for (liveness logs a long wait).
+        if !reported(&bridge) {
+            crate::settings_ui::status("zigbee", "Waiting for the thermostat to report.");
+        }
         while !reported(&bridge) {
             std::thread::sleep(Duration::from_secs(5));
         }
