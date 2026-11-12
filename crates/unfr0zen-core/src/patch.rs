@@ -446,6 +446,10 @@ pub struct Options {
     /// The library preloaded into nlclient on a unit running nestlocal
     /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
     pub local_cloud: Vec<u8>,
+    /// The unit installs updates whatever signs them, not only those the
+    /// release key signs: a developer's. Kept in the record; the patch
+    /// itself does nothing with it.
+    pub unsigned_updates: bool,
     /// The run's settings as etc/unfr0zen/options.json keeps them (mode 600:
     /// they hold the broker's credentials); empty leaves the file as it is.
     pub record: Vec<u8>,

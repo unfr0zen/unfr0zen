@@ -246,6 +246,9 @@ pub struct Settings {
     pub ssh_public_key: Option<String>,
     pub ssh_key_only: bool,
     pub usb_shell: bool,
+    /// Updates install unsigned or signed by another key (a developer option).
+    #[serde(default)]
+    pub unsigned_updates: bool,
     /// The name the device goes by in Home Assistant, Matter and Zigbee.
     #[serde(default)]
     pub device_name: Option<String>,
@@ -307,6 +310,7 @@ impl Settings {
             ssh_public_key: options.ssh_public_key.clone(),
             ssh_key_only: options.ssh_key_only,
             usb_shell: options.usb_shell,
+            unsigned_updates: options.unsigned_updates,
             device_name: options.device_name.clone(),
             pki: pki.map(|pki| PkiSettings {
                 ca: STANDARD.encode(&pki.ca), server_crt: STANDARD.encode(&pki.server_crt),
@@ -350,6 +354,7 @@ impl Settings {
             ssh_public_key: self.ssh_public_key.clone(),
             ssh_key_only: self.ssh_key_only,
             ssh_server: if self.ssh { bundle.optional_overlay(SSH) } else { None },
+            unsigned_updates: self.unsigned_updates,
             record: self.record(),
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
@@ -468,7 +473,7 @@ mod tests {
             wake_filter: b"\x7fELF wake".to_vec(),
             local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
-            ssh: true, usb_shell: true, device_name: Some("Hall".into()),
+            ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()),
             ..Options::default()
         };
         let pki = Pki { ca: b"ca".to_vec(), server_crt: b"crt".to_vec(), server_key: b"key".to_vec() };

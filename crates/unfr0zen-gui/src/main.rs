@@ -2907,8 +2907,9 @@ mod tests {
         frame(vec![egui::Event::PointerMoved(row + egui::vec2(4.0, 4.0))]);
         let hovered = (0..30).map(|_| frame(vec![])).last().unwrap();
         assert_eq!(*text_at(&hovered, "diamond3").last().unwrap(), (row, list), "the row and the list keep their place and size");
-        let bars = hovered.shapes.iter().filter(|clipped| matches!(&clipped.shape,
-            egui::epaint::Shape::Rect(rect) if rect.rect.width() <= 4.0 && rect.rect.height() > 20.0 && list.intersects(rect.rect))).count();
+        // The list's own: the page behind it may scroll.
+        let bars = hovered.shapes.iter().filter(|clipped| clipped.clip_rect == list && matches!(&clipped.shape,
+            egui::epaint::Shape::Rect(rect) if rect.rect.width() <= 4.0 && rect.rect.height() > 20.0)).count();
         assert_eq!(bars, 0, "no scrollbar over the list");
     }
 

@@ -32,6 +32,8 @@ pub struct PatchInputs {
     pub root_password: Option<String>,
     pub ntp_server: Option<String>,
     pub backplate_sim: bool,
+    /// The unit installs updates that the release key does not sign.
+    pub allow_unsigned_updates: bool,
     /// Resolve Nest's and Google's names to nowhere; implies the default
     /// NTP server unless one is given, since time.nest.com goes too.
     pub block_cloud: bool,
@@ -117,6 +119,7 @@ impl PatchInputs {
             ("external-temperature", on(self.external_temperature)),
             ("dark-theme", on(self.dark_theme)),
             ("backplate-sim", on(self.backplate_sim)),
+            ("allow-unsigned-updates", on(self.allow_unsigned_updates)),
             ("block-cloud", on(self.block_cloud)),
         ];
         let set: Vec<String> = flags.into_iter().filter_map(|(name, value)| value.map(|value|
@@ -180,6 +183,7 @@ impl PatchInputs {
             version: progress::app_version().to_string(),
             ntp_server: self.ntp_server.clone().or_else(|| self.block_cloud.then(String::new)),
             backplate_sim: self.backplate_sim,
+            unsigned_updates: self.allow_unsigned_updates,
             block_cloud: self.block_cloud,
             mqtt,
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,

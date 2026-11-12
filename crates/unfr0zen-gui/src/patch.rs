@@ -17,6 +17,7 @@ use crate::{spawn_dialog, WAIT_USB};
 #[derive(Default)]
 pub struct Form {
     backplate_sim: bool,
+    allow_unsigned_updates: bool,
     pub block_cloud: bool,
     ntp: Toggle,
     pub mqtt: Toggle,
@@ -151,6 +152,7 @@ impl Form {
             root_password: text(&self.root_password),
             ntp_server: self.ntp.on.then(|| self.ntp.value.clone()),
             backplate_sim: self.backplate_sim,
+            allow_unsigned_updates: self.allow_unsigned_updates,
             block_cloud: self.block_cloud,
             mqtt: self.mqtt.on.then(|| self.mqtt.value.trim().to_string()),
             mqtt_user: self.mqtt.on.then(|| text(&self.mqtt_user)).flatten(),
@@ -549,6 +551,9 @@ impl Form {
     /// options a run rarely needs, as the steps draw theirs.
     pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
         crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("patch.backplate_sim"), crate::tr!("patch.backplate_sim_hint"));
+        ui.add_space(4.0);
+        crate::switch_row(ui, &mut self.allow_unsigned_updates, crate::tr!("patch.unsigned_updates"),
+                          crate::tr!("patch.unsigned_updates_hint"));
         ui.add_space(4.0);
         let width = FIELD_WIDTH;
         crate::select(ui, crate::tr!("patch.device"), "device", width, self.device.map_or(crate::tr!("patch.auto"), Device::name), true, |ui| {
@@ -986,11 +991,12 @@ mod tests {
 
     #[test]
     fn the_developer_options_map_to_the_cli_options() {
-        let mut form = Form { doom: true, device: Some(Device::J49), backplate_sim: true, ..Form::default() };
+        let mut form = Form { doom: true, device: Some(Device::J49), backplate_sim: true, allow_unsigned_updates: true,
+                              ..Form::default() };
         form.ssh_key.path = Some("key.pub".into());
         let config = form.config().unwrap();
         assert_eq!(config.omap, Some(Device::J49));
-        assert!(config.options.doom.is_some() && config.options.backplate_sim);
+        assert!(config.options.doom.is_some() && config.options.backplate_sim && config.options.unsigned_updates);
         assert!(form.inputs().ssh_public_key.is_none(), "the key only goes with the SSH server");
         form.ssh = true;
         assert_eq!(form.inputs().ssh_public_key.as_deref(), Some(std::path::Path::new("key.pub")));
