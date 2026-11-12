@@ -19,9 +19,13 @@ use crate::logf;
 
 /// The broker drops the connection after 1.5 times this without a packet.
 /// The unit sleeps (wake.rs) and the ping timer stops with it, so the broker
-/// must wait out a sleep; the unit wakes for every broker message, and
-/// Client::woke pings on a wake when this is half gone.
-pub const KEEPALIVE: Duration = Duration::from_secs(20 * 60);
+/// must wait out a sleep. Left alone, a sleeping unit wakes about every 30
+/// minutes; the 90-minute cutoff leaves room for a wake that comes late or
+/// sends nothing.
+pub const KEEPALIVE: Duration = Duration::from_secs(60 * 60);
+/// A wake pings when nothing went to the broker for this long, so each
+/// wake of a unit left alone tells the broker it is there.
+const WAKE_PING: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY: Duration = Duration::from_secs(10);
 /// A ping sent on a wake and still unanswered this long after, by the wall
@@ -149,19 +153,21 @@ impl Client {
 
     /// The unit woke. Dials again when the broker has surely dropped the
     /// connection (nothing sent for 1.5 keepalives) or let a ping from an
-    /// earlier wake go unanswered; pings when nothing came from the broker
-    /// for half the keepalive. Packets sent prove nothing: on a connection the
+    /// earlier wake go unanswered. Pings when nothing went to the broker for
+    /// WAKE_PING, which is what its keepalive counts, or nothing came from it
+    /// for half the keepalive: packets sent prove nothing, on a connection the
     /// broker dropped unheard they go nowhere.
     pub fn woke(&self) {
         if !self.is_connected() {
             return;
         }
         let pinged = self.pinged.load(Ordering::Relaxed);
+        let unheard = unix_now().saturating_sub(self.heard.load(Ordering::Relaxed));
         if self.idle() > KEEPALIVE * 3 / 2 {
             let _ = self.tx.try_send(Request::Redial("nothing sent for 1.5 keepalives"));
         } else if pinged != 0 && unix_now().saturating_sub(pinged) >= PING_ANSWER.as_secs() {
             let _ = self.tx.try_send(Request::Redial("no answer to the ping sent on a wake"));
-        } else if pinged == 0 && unix_now().saturating_sub(self.heard.load(Ordering::Relaxed)) > KEEPALIVE.as_secs() / 2 {
+        } else if pinged == 0 && (self.idle() > WAKE_PING || unheard > KEEPALIVE.as_secs() / 2) {
             let _ = self.tx.try_send(Request::Ping);
         }
     }
@@ -652,6 +658,23 @@ pub mod tests {
         assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap().0, 0x31);
         client.woke();
         assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap(), (0xC0, vec![]));
+    }
+
+    #[tokio::test]
+    async fn a_wake_pings_a_talking_broker_when_the_unit_sent_it_nothing() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let mut broker = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+
+        // Heard from the broker just now, but sent nothing for a while: the
+        // broker's keepalive counts only what the unit sends.
+        client.sent.fetch_sub(WAKE_PING.as_secs() + 1, Ordering::Relaxed);
+        client.woke();
+        let ping = tokio::time::timeout(Duration::from_secs(1), next_packet(&mut broker, &mut buf)).await;
+        assert_eq!(ping.expect("a ping").unwrap(), (0xC0, vec![]));
     }
 
     #[tokio::test]
