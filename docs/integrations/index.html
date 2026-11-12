@@ -21,7 +21,7 @@
 <body>
 <header>
     <div class="wrap">
-        <a href="/" class="brand" aria-label="unfr0zen home"><img src="/assets/logo.png" alt="" width="30" height="30"></a>
+        <a href="/" class="brand" aria-label="unfr0zen home"><img src="/assets/logo.png" alt="" width="30" height="30"><span>unfr<span class="zero">0</span>zen</span></a>
         <nav>
             <a href="/integrations/" class="active" aria-current="page">Integrations</a>
             <a href="/protocols/">Protocols</a>
@@ -106,7 +106,7 @@
                     </tbody>
                 </table>
             </div>
-            <p>Experimental. The thermostat joins a Thread mesh as a router and serves Matter over it, beside Wi-Fi; the commissioner supplies the credentials. Needs Matter. Takes the radio from Nest's Thread firmware (Heat Link), so not with Zigbee. On the 2nd generation nestlocal flashes a Thread image and keeps the unit awake while Thread runs. Design and device details: <a href="https://github.com/unfr0zen/unfr0zen/blob/main/platform/common/radio/thread/README.md" target="_blank" rel="noopener">platform/common/radio/thread/README.md</a>.</p>
+            <p>The thermostat joins a Thread mesh as a router and serves Matter over it, beside Wi-Fi; the commissioner supplies the credentials. Needs Matter. Takes the radio from Nest's Thread firmware (Heat Link), so not with Zigbee. On the 2nd generation nestlocal flashes a Thread image and keeps the unit awake while Thread runs. Design and device details: <a href="https://github.com/unfr0zen/unfr0zen/blob/main/platform/common/radio/thread/README.md" target="_blank" rel="noopener">platform/common/radio/thread/README.md</a>.</p>
 
             <h2 id="zigbee"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>Zigbee</h2>
             <div class="table-scroll">
@@ -226,10 +226,24 @@
 
 <footer>
     <div class="wrap">
-        <span>unfr0zen is not affiliated with Google or Nest.</span>
-        <a href="https://buymeacoffee.com/willtm" target="_blank" rel="noopener">Buy me a coffee</a>
-        <a href="https://github.com/unfr0zen" target="_blank" rel="noopener">github.com/unfr0zen</a>
-        <a href="https://discord.gg/4YC7Yj3Tx" target="_blank" rel="noopener">Discord</a>
+        <div class="footer-grid">
+            <div>
+                <h2><a href="/">unfr<span class="zero">0</span>zen</a></h2>
+                <p>Give your Nest Learning Thermostat a life beyond the cloud. Local control with MQTT, Matter and Zigbee, installed over USB.</p>
+            </div>
+            <div>
+                <h3>Open source</h3>
+                <p>Free and open source: no subscriptions or paid unlocks. The GPL-3.0 code is yours to study, modify and share. Contributions and support are welcome.</p>
+                <div class="footer-actions">
+                    <a href="https://github.com/unfr0zen" class="btn btn-dark btn-small" target="_blank" rel="noopener">View on GitHub</a>
+                    <a href="https://buymeacoffee.com/willtm" class="footer-coffee" target="_blank" rel="noopener"><img src="/assets/buy-me-a-coffee.png" alt="Buy me a coffee" width="545" height="153" loading="lazy"></a>
+                </div>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>unfr0zen is not affiliated with Google or Nest.</p>
+            <a href="https://github.com/unfr0zen/unfr0zen/blob/main/LICENSE" target="_blank" rel="noopener">Licensed under GPL-3.0</a>
+        </div>
     </div>
 </footer>
 </body>
