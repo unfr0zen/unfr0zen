@@ -1436,10 +1436,12 @@ impl App {
         ui.add(egui::Label::new(egui::RichText::new(short_path(&entry.path)).size(11.5).color(DIM)).wrap());
         let idle = self.idle();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            // As wide as the page's other actions, within the pane's margin.
+            // As wide as the page's other actions, within the pane's margin;
+            // laid out in a row, as theirs are, so its label is centred.
             let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
-            if accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)
-                .on_hover_text(tr!("backup.restore_hint"))
+            let restore = ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center),
+                |ui| accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)).inner;
+            if restore.on_hover_text(tr!("backup.restore_hint"))
                 .on_disabled_hover_text(if entry.checksum.is_none() {
                     tr!("backup.restore_disabled_checksum")
                 } else {
