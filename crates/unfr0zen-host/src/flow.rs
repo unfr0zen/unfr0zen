@@ -311,14 +311,24 @@ pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<Path
 /// Returns the final status line.
 pub fn run(config: &Config, progress: &mut dyn Progress,
            cancel: &device::CancelFlag) -> Result<String> {
+    run_after_backup(config, None, progress, cancel)
+}
+
+/// [`run`], with the whole NAND backed up to `backup` first, while the unit
+/// is in recovery for the patch: one entry into USB download mode for both.
+pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut dyn Progress,
+                        cancel: &device::CancelFlag) -> Result<String> {
+    if let Some(out) = backup.filter(|out| out.exists()) {
+        return Err(failure(format!("{} exists", out.display())));
+    }
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
             Err(failure("--dark-theme is only for the 2nd generation")),
-        Device::Diamond3 => diamond3::run(config, progress, unit, cancel),
+        Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
         Device::Diamond if config.options.external_temperature =>
             Err(failure("--external-temperature is not supported on the 1st generation")),
-        Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel),
+        Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }

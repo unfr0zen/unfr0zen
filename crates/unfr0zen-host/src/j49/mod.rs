@@ -314,8 +314,10 @@ fn check(config: &Config) -> Result<()> {
 
 /// Runs the recovery from whatever mode the unit is in, as the diamond3's
 /// does: run records under `work_dir`, the run log, the final status line.
+/// With `backup`, the whole NAND is backed up there first, through the same
+/// flasher.
 pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
-                  cancel: &CancelFlag) -> Result<String> {
+                  cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
     let usb = unit.device;
     check(config)?;
     unsupported(usb, &config.options)?;
@@ -324,10 +326,17 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
-    let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
     let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
     let silicon = omap::silicon(&asic, flasher.idcode);
-    let outcome = route(progress, config, usb, &silicon, &mut flasher, &run_dir);
+    let outcome = match backup {
+        Some(out) => nand::back_up_whole(&mut flasher, progress, out, &mut hand_back)
+            .and_then(|line| {
+                progress.status(&line);
+                route(progress, config, usb, &silicon, &mut flasher, &run_dir)
+            }),
+        None => route(progress, config, usb, &silicon, &mut flasher, &run_dir),
+    };
     // On failure too: whatever was written left the slot bootable.
     let reset = stage(progress, "Restart the unit", || flasher.reset());
     let outcome = outcome?;

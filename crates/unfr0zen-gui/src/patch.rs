@@ -30,7 +30,7 @@ pub struct Form {
     wwn_boiler: bool,
     pub entry_point: EntryPoint,
     pub ssh: bool,
-    usb_shell: bool,
+    pub usb_shell: bool,
     root_password: String,
     /// Back up the whole NAND before patching (the review step's choice).
     pub backup_first: bool,
@@ -307,19 +307,28 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.access"));
+        // Root's password serves both: inside the one card that is on, or in
+        // a card of its own under them when both are.
+        let both = self.ssh && self.usb_shell;
         crate::option_card(ui, &mut self.ssh, true, crate::tr!("setup.ssh"), crate::tr!("setup.ssh_about"), |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::tr!("patch.ssh_key")).color(crate::MUTED));
                 self.ssh_key.ui(ui, crate::tr!("patch.file.choose"), crate::tr!("patch.file.openssh_public_key"), &["pub"]);
             });
-            root_password_field(ui, &mut self.root_password);
-        });
-        crate::option_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"), |ui| {
-            // One password for both: the SSH card shows it when SSH is on.
-            if !self.ssh {
+            if !both {
                 root_password_field(ui, &mut self.root_password);
             }
         });
+        if both {
+            crate::toggle_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"));
+        } else {
+            crate::option_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"),
+                               |ui| root_password_field(ui, &mut self.root_password));
+        }
+        if both {
+            crate::card(ui, |ui| root_password_field(ui, &mut self.root_password));
+            ui.add_space(10.0);
+        }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
         crate::toggle_card(ui, &mut self.doom, true, crate::tr!("patch.doom"), crate::tr!("setup.doom_about"));
@@ -404,6 +413,8 @@ impl Form {
     /// The developer options, folded away on the review step: the CLI's
     /// options a run rarely needs, as the steps draw theirs.
     pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
+        crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("patch.backplate_sim"), crate::tr!("patch.backplate_sim_hint"));
+        ui.add_space(4.0);
         let width = FIELD_WIDTH;
         crate::select(ui, crate::tr!("patch.device"), "device", width, self.device.map_or(crate::tr!("patch.auto"), Device::name), true, |ui| {
             ui.selectable_value(&mut self.device, None, crate::tr!("patch.auto"));
@@ -420,8 +431,6 @@ impl Form {
             }
         }).on_hover_text(crate::tr!("patch.entry_point_choice_hint"))
             .on_disabled_hover_text(crate::tr!("patch.entry_point_disabled_hint"));
-        ui.add_space(4.0);
-        crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("patch.backplate_sim"), crate::tr!("patch.backplate_sim_hint"));
     }
 }
 
@@ -479,6 +488,24 @@ mod tests {
             texts.iter().find(|(t, _)| t == "Matter").expect("Matter is drawn below the MQTT card").1
         };
         assert_eq!(matter_top(false), matter_top(true));
+    }
+
+    #[test]
+    fn the_root_password_shows_once_in_the_card_that_is_on_or_alone_with_both() {
+        let password = crate::tr!("patch.root_password");
+        for (ssh, usb_shell, shown) in [(false, false, 0), (true, false, 1), (false, true, 1), (true, true, 1)] {
+            let context = egui::Context::default();
+            crate::install_fonts(&context);
+            crate::install_style(&context);
+            let mut form = Form { ssh, usb_shell, ..Form::default() };
+            let output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2000.0))),
+                ..Default::default()
+            }, |ui| form.features_ui(ui, &Bus::Nothing));
+            let count = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text == password)).count();
+            assert_eq!(count, shown, "ssh {ssh}, usb shell {usb_shell}");
+        }
     }
 
     #[test]

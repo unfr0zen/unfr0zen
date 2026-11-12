@@ -16,7 +16,7 @@ pub mod update;
 pub mod usb;
 
 pub use device::{CancelFlag, Device, WAIT_USB_BOOT_STAGE};
-pub use flow::{mask_url, run, Config, PatchInputs};
+pub use flow::{mask_url, run, run_after_backup, Config, PatchInputs};
 pub use unfr0zen_core::nlclient;
 pub use progress::{end_log, init_logging, log_path, set_selection, Progress, Stage};
 /// The icy house icon rendered as braille dots.

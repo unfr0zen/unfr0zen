@@ -15,6 +15,9 @@ use crate::flow::failure;
 use crate::progress::{stage, Progress};
 use crate::{device, diamond3, j49};
 
+/// The stage that ends a backup: the image is whole once it is hashed.
+pub const HASH_STAGE: &str = "Hash the image";
+
 pub enum Job {
     Backup(PathBuf),
     Verify(PathBuf),
@@ -82,14 +85,6 @@ pub fn read_bad_blocks(path: &Path) -> Result<Option<Vec<u32>>> {
         u32::from_str_radix(line, 16).ok().filter(|block| block % BLOCK == 0 && *block < NAND_SIZE)
             .ok_or_else(|| failure(format!("{}: {line:?} is not a block offset", path.display())))
     }).collect::<Result<Vec<u32>>>().map(Some)
-}
-
-/// Adds `blocks` to the list at `path`.
-pub(crate) fn add_bad_blocks(path: &Path, blocks: &[u32]) -> Result<()> {
-    let mut listed = read_bad_blocks(path)?.unwrap_or_default();
-    listed.extend(blocks);
-    listed.sort_unstable();
-    write_bad_blocks(path, &listed)
 }
 
 /// The SHA-256 the .sha256 beside a restore's image records.
@@ -161,8 +156,6 @@ mod tests {
         write_bad_blocks(&path, &[0x0c00_0000, 0x1c42_0000]).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "0c000000\n1c420000\n");
         assert_eq!(read_bad_blocks(&path).unwrap(), Some(vec![0x0c00_0000, 0x1c42_0000]));
-        add_bad_blocks(&path, &[0x1000_0000]).unwrap();
-        assert_eq!(read_bad_blocks(&path).unwrap(), Some(vec![0x0c00_0000, 0x1000_0000, 0x1c42_0000]));
         for wrong in ["garbled\n", "00000800\n", "20000000\n"] {
             fs::write(&path, wrong).unwrap();
             assert!(read_bad_blocks(&path).is_err(), "{wrong}");

@@ -121,28 +121,34 @@ pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id, 
 
 /// Runs the recovery from whatever mode the unit is in to a confirmed root
 /// shell, writing run records under `work_dir` and the timestamped run log.
-/// Returns the final status line.
+/// With `backup`, the whole NAND is backed up there first, from the same
+/// recovery U-Boot. Returns the final status line.
 pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
-                  cancel: &CancelFlag) -> Result<String> {
+                  cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
     let (port, id) = find_unit(progress, config.wait_usb, false, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
     private_dir(&run_dir)?;
     let log_dir = start_log(progress, &stamp)?;
-    let _hand_back = HandBack(vec![run_dir.clone(), log_dir]);
+    let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
     let port = reach_recovery(progress, port, id, config.entry_point)?;
-    route(progress, config, &port, &run_dir)
+    let mut board = connect_recovery(progress, &port)?;
+    report_silicon(progress, &mut board);
+    if let Some(out) = backup {
+        let line;
+        (board, line) = nand::back_up_then(board, &port, progress, out, &mut hand_back)?;
+        progress.status(&line);
+    }
+    route(progress, config, board, &port, &run_dir)
 }
 
 /// From recovery U-Boot to the confirmed root shell.
-fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Path) -> Result<String> {
+fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &str, run_dir: &Path) -> Result<String> {
     let options = &patch::Options {
         thread: config.options.thread.as_ref()
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
         ..config.options.clone()
     };
-    let mut board = connect_recovery(progress, port)?;
-    report_silicon(progress, &mut board);
     let environment = stage(progress, "Read installed boot order from NAND", || {
         board.attach_ubi()?;
         board.read_installed_environment()

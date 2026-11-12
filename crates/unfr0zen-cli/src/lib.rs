@@ -138,8 +138,8 @@ enum Command {
     Boot,
     // A diamond3's whole 512 MiB NAND as an ECC-corrected image (2048-byte
     // pages, no OOB); the OMAP boards' as raw 2112-byte pages with OOB.
-    /// Back up the whole NAND to OUT and check it with a second read; nothing is
-    /// written to NAND. Run it again with the same OUT to resume an interrupted backup
+    /// Back up the whole NAND to OUT, with its SHA-256 beside it (`verify` reads it
+    /// again to compare); nothing is written to NAND. Run it again with the same OUT to resume an interrupted backup
     Backup {
         /// default: nand-<date>-<time>.bin in the current directory
         out: Option<PathBuf>,

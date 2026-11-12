@@ -149,7 +149,7 @@ terminal, over SSH or headless, with a few things the app doesn't have
 unfr0zen [OPTIONS] [COMMAND]
 
 Commands:
-  backup    Back up the whole NAND to a file, checked with a second read
+  backup    Back up the whole NAND to a file, with its SHA-256
   verify    Compare a NAND backup with the NAND
   restore   Write a verified NAND backup back to the NAND
   boot      Boot the application firmware (3rd generation)
@@ -180,9 +180,10 @@ replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
 commits past a tag, or local changes) never update.
 
 ## Undo it
-- **Before the first run:** the app's Backups page, Back up unit (or
-  `unfr0zen backup`) saves the whole NAND to a file, checked with a second
-  read. `unfr0zen verify` compares a backup with the unit.
+- **Before the first run:** the app's Patch page offers a backup of the
+  whole NAND just before patching, with the unit in recovery once for both;
+  the Backups page's Back up unit (or `unfr0zen backup`) takes one on its
+  own. `unfr0zen verify` compares a backup with the unit.
 - **To go back to stock:** Restore to unit (or `unfr0zen restore`) writes
   that backup back to the unit.
 

@@ -3,13 +3,14 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
-use unfr0zen_host::{run, CancelFlag, Config, Progress};
+use unfr0zen_host::{run_after_backup, CancelFlag, Config, Progress};
 
 /// One thing that happened in the flow, for the window.
 pub enum Event {
@@ -67,9 +68,10 @@ pub struct Run {
 }
 
 impl Run {
-    /// The recovery flow that patches the unit.
-    pub fn start(config: Config) -> Self {
-        Self::spawn(move |progress, _, cancel| run(&config, progress, &cancel))
+    /// The recovery flow that patches the unit, with the whole NAND backed
+    /// up to `backup` first, in the same recovery session.
+    pub fn start(config: Config, backup: Option<PathBuf>) -> Self {
+        Self::spawn(move |progress, _, cancel| run_after_backup(&config, backup.as_deref(), progress, &cancel))
     }
 
     /// A whole-NAND backup or restore.

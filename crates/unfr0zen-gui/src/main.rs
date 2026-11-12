@@ -18,7 +18,7 @@ mod nandmap;
 mod patch;
 mod run;
 mod setup;
-pub(crate) use setup::{field, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{card, field, group, muted_line, option_card, select, switch, switch_row, toggle_card};
 #[cfg(test)]
 mod snapshot;
 mod terminal;
@@ -515,6 +515,9 @@ impl Page {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Task {
     Patch,
+    /// The whole NAND backed up to the file, then the patch, with the unit
+    /// in recovery once for both.
+    BackupPatch(PathBuf),
     Backup(PathBuf),
     Restore(PathBuf),
     Uboot,
@@ -525,6 +528,7 @@ impl Task {
     fn title(&self) -> &'static str {
         match self {
             Task::Patch => tr!("task.patch"),
+            Task::BackupPatch(_) => tr!("task.backup_patch"),
             Task::Backup(_) => tr!("task.backup"),
             Task::Restore(_) => tr!("task.restore"),
             Task::Uboot => tr!("task.uboot"),
@@ -535,6 +539,7 @@ impl Task {
     fn log_title(&self) -> &'static str {
         match self {
             Task::Patch => "Patch",
+            Task::BackupPatch(_) => "Back up NAND and patch",
             Task::Backup(_) => "Back up NAND",
             Task::Restore(_) => "Restore NAND",
             Task::Uboot => "Load recovery U-Boot",
@@ -545,7 +550,7 @@ impl Task {
     /// What the task is doing, for the run's card.
     fn doing(&self) -> &'static str {
         match self {
-            Task::Patch => tr!("task.patching"),
+            Task::Patch | Task::BackupPatch(_) => tr!("task.patching"),
             Task::Backup(_) => tr!("task.backing_up"),
             Task::Restore(_) => tr!("task.restoring"),
             Task::Uboot => tr!("task.loading_uboot"),
@@ -556,15 +561,24 @@ impl Task {
     /// The page the task was started from, where its summary shows.
     fn page(&self) -> Page {
         match self {
-            Task::Patch => Page::Patch,
+            Task::Patch | Task::BackupPatch(_) => Page::Patch,
             Task::Backup(_) | Task::Restore(_) => Page::Backups,
             Task::Uboot => Page::Uboot,
             Task::Boot => Page::Boot,
         }
     }
 
+    /// The task writes a backup into the folder, or reads one from it.
     fn is_nand(&self) -> bool {
-        matches!(self, Task::Backup(_) | Task::Restore(_))
+        matches!(self, Task::Backup(_) | Task::BackupPatch(_) | Task::Restore(_))
+    }
+
+    /// The backup the task writes.
+    fn backup(&self) -> Option<&PathBuf> {
+        match self {
+            Task::Backup(out) | Task::BackupPatch(out) => Some(out),
+            _ => None,
+        }
     }
 }
 
@@ -632,11 +646,8 @@ struct App {
     /// The task under way, or the last one, was started by the patch flow:
     /// its progress and outcome show in the flow, not in the run's card.
     flow_run: bool,
-    /// The backup the flow took before its patch, once verified.
+    /// The backup the flow took before its patch, once whole.
     flow_backup: Option<PathBuf>,
-    /// The running backup was asked for before a patch, which starts once
-    /// the backup succeeds.
-    patch_after_backup: bool,
     /// The Serial console page's terminal, on the application's shells.
     shell: Terminal,
     /// The U-Boot page's terminal, on the recovery console.
@@ -686,7 +697,6 @@ impl Default for App {
             step: setup::Step::default(),
             flow_run: false,
             flow_backup: None,
-            patch_after_backup: false,
             shell: Terminal::new(terminal::SHELLS),
             uboot: Terminal::new(terminal::RECOVERY),
             maps: nandmap::Maps::default(),
@@ -793,17 +803,15 @@ impl App {
         }
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
-            Task::Patch => format!("Selected: Patch, {}", self.form.inputs().describe()),
+            Task::Patch | Task::BackupPatch(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
             task => format!("Selected: {}", task.log_title()),
         });
         let entry_point = self.form.entry_point;
         let run = match &task {
-            Task::Patch => self.form.config().map(Run::start),
-            Task::Backup(out) => {
-                let dir = out.parent().filter(|dir| !dir.as_os_str().is_empty());
-                dir.map_or(Ok(()), |dir| std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display())))
-                    .map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point))
-            }
+            Task::Patch => self.form.config().map(|config| Run::start(config, None)),
+            Task::BackupPatch(out) => self.form.config()
+                .and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone())))),
+            Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
             Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
             Task::Boot => Ok(Run::task(move |progress| boot::boot(WAIT_USB, entry_point, progress))),
@@ -914,23 +922,28 @@ impl App {
                     self.refresh_history();
                 }
                 // A backup landed, or a restore read the folder's image.
-                if let Some(Task::Backup(out)) = &self.task {
+                if let Some(out) = self.task.as_ref().and_then(Task::backup) {
                     self.maps.forget(out);
                 }
                 if self.task.as_ref().is_some_and(Task::is_nand) {
                     self.library.refresh();
                 }
-                // The backup asked for before a patch: the patch follows only
-                // a verified one; a failed or called-off backup stops there.
-                if std::mem::take(&mut self.patch_after_backup) && matches!(self.logs.outcome, Some(Ok(_))) {
-                    if let Some(Task::Backup(out)) = self.task.clone() {
-                        self.flow_backup = Some(out);
-                        self.start(Task::Patch);
+                // The flow's backup is whole once its checksum is written,
+                // whether or not the patch after it went through.
+                if let Some(Task::BackupPatch(out)) = &self.task {
+                    if unfr0zen_host::nand::checksum_path(out).exists() {
+                        self.flow_backup = Some(out.clone());
                     }
                 }
             }
         }
     }
+}
+
+/// Makes the folder a backup goes in.
+fn backup_folder(out: &Path) -> Result<(), String> {
+    let dir = out.parent().filter(|dir| !dir.as_os_str().is_empty());
+    dir.map_or(Ok(()), |dir| std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display())))
 }
 
 // The diamond3 boot logo's icy blue: the accent of every primary button.
@@ -2331,6 +2344,11 @@ fn round_corners(cc: &eframe::CreationContext<'_>) {
 mod tests {
     use super::*;
 
+    /// One unit of `device` on USB, running its application.
+    fn on_usb(device: Device) -> Watcher {
+        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }))
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("unfr0zen-gui-main-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2425,7 +2443,7 @@ mod tests {
 
     #[test]
     fn the_flow_steps_through_and_skips_the_integrations() {
-        let mut app = App::default();
+        let mut app = App { bus: on_usb(Device::Diamond3), ..App::default() };
         assert_eq!(app.screen_name(), "Step(Connect)");
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(shown.iter().any(|t| t == "Connect your thermostat"), "{shown:?}");
@@ -2441,8 +2459,30 @@ mod tests {
     }
 
     #[test]
+    fn continue_needs_a_supported_unit_and_its_leaving_goes_back_to_connect() {
+        let continue_enabled = |app: &mut App| {
+            let output = render_frames(app, WINDOW, 2);
+            let label = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == "Continue" => Some(t.galley.job.sections[0].format.color),
+                _ => None,
+            }).expect("Continue is drawn");
+            label != DIM
+        };
+        assert!(!continue_enabled(&mut App::default()), "nothing on USB");
+        assert!(!continue_enabled(&mut App { bus: on_usb(Device::Onyx), ..App::default() }), "a Thermostat E");
+        assert!(continue_enabled(&mut App { bus: on_usb(Device::J49), ..App::default() }));
+        let mut app = App { step: setup::Step::Features, ..App::default() };
+        render_frames(&mut app, WINDOW, 1);
+        assert_eq!(app.screen_name(), "Step(Connect)", "unplugged before the run");
+        let mut running = App { step: setup::Step::Review, flow_run: true, task: Some(Task::Patch), ..App::default() };
+        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        render_frames(&mut running, WINDOW, 1);
+        assert_eq!((running.step, running.screen_name().as_str()), (setup::Step::Review, "Running"), "a run re-enumerates the unit");
+    }
+
+    #[test]
     fn the_review_step_offers_the_backup_and_starts_the_flows_run() {
-        let mut app = App { step: setup::Step::Review, ..App::default() };
+        let mut app = App { bus: on_usb(Device::Diamond3), step: setup::Step::Review, ..App::default() };
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         for label in ["Back up first?", "Back up, then patch", "Patch without a backup", "Back up and patch"] {
             assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
@@ -2451,6 +2491,7 @@ mod tests {
         // once, which reports the failure in the flow.
         app.form.matter.on = true;
         app.form.matter.code = "1559-813-5764".into();
+        app.form.backup_first = false;
         app.start_flow();
         assert!(app.flow_run && !app.running());
         assert_eq!(app.task, Some(Task::Patch));
@@ -2474,19 +2515,30 @@ mod tests {
     }
 
     #[test]
-    fn the_patch_follows_only_a_verified_backup() {
-        // Wrong options keep the chained patch from reaching USB in a test:
-        // it is reported as started and failed at once.
-        let finish = |result: Result<String, String>| {
-            let mut app = App { task: Some(Task::Backup("nand.bin".into())), patch_after_backup: true, ..App::default() };
-            app.form.matter.on = true;
-            app.form.matter.code = "1559-813-5764".into();
-            app.on_event(Event::Done(result));
-            assert!(!app.patch_after_backup);
-            app.task
-        };
-        assert_eq!(finish(Ok("NAND backup verified".into())), Some(Task::Patch));
-        assert_eq!(finish(Err("no unit entered USB download mode".into())), Some(Task::Backup("nand.bin".into())));
+    fn a_backup_before_the_patch_is_one_run_whose_ring_backs_up_until_the_image_is_hashed() {
+        let dir = temp_dir("backup-patch");
+        let mut app = App { library: Library::new(dir.clone()), ..App::default() };
+        // Options that fail before the unit is touched keep the run off USB.
+        app.form.matter.on = true;
+        app.form.matter.code = "1559-813-5764".into();
+        app.start_flow();
+        assert!(matches!(&app.task, Some(Task::BackupPatch(out)) if out.parent() == Some(dir.as_path())), "{:?}", app.task);
+        assert_eq!(app.screen_name(), "Failed");
+        assert!(app.flow_backup.is_none(), "no backup was written");
+        let out = dir.join("nand.bin");
+        let mut app = App { flow_run: true, task: Some(Task::BackupPatch(out.clone())), ..App::default() };
+        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.on_event(Event::Begin("Back up NAND".into()));
+        assert!(app.backing_up());
+        app.on_event(Event::End { label: "Back up NAND".into(), elapsed: Duration::from_secs(1), ok: true });
+        app.on_event(Event::Begin(unfr0zen_host::nand::HASH_STAGE.into()));
+        app.on_event(Event::End { label: unfr0zen_host::nand::HASH_STAGE.into(), elapsed: Duration::from_secs(1), ok: true });
+        assert!(!app.backing_up(), "patching once the image is hashed");
+        // A patch that fails after the backup still names the backup.
+        std::fs::write(unfr0zen_host::nand::checksum_path(&out), "sum").unwrap();
+        app.on_event(Event::Done(Err("the unit came back in app mode".into())));
+        assert_eq!(app.flow_backup.as_deref(), Some(out.as_path()));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Each page, and each step of the patch flow, as a PNG in
@@ -2520,6 +2572,8 @@ mod tests {
         features.form.doom = true;
         features.form.ssh = true;
         shot("3-features", &mut features, [WINDOW[0], 1400.0]);
+        features.form.usb_shell = true;
+        shot("3-features-both-shells", &mut features, [WINDOW[0], 1400.0]);
         let mut review = flow(setup::Step::Review);
         review.form.mqtt.on = true;
         review.form.mqtt.value = "10.22.4.2".into();
@@ -2528,7 +2582,7 @@ mod tests {
         shot("4-review-developer", &mut review, WINDOW);
         let mut running = flow(setup::Step::Review);
         running.flow_run = true;
-        running.task = Some(Task::Backup("nand-20261109-1131.bin".into()));
+        running.task = Some(Task::BackupPatch("nand-20261109-1131.bin".into()));
         running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
         running.on_event(Event::Begin("Load recovery U-Boot".into()));
         running.on_event(Event::End { label: "Load recovery U-Boot".into(), elapsed: Duration::from_secs(9), ok: true });
@@ -2649,7 +2703,7 @@ mod tests {
 
     #[test]
     fn a_dropdowns_last_row_stays_put_under_the_pointer_with_no_scrollbar() {
-        let mut app = App { page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::Diamond3), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
         let context = egui::Context::default();
         install_fonts(&context);
         // The app's theme gives inactive widgets this border.
@@ -2818,7 +2872,9 @@ mod tests {
         ] {
             let context = egui::Context::default();
             install_fonts(&context);
-            let mut app = App { page, step: setup::Step::Review, ..App::default() };
+            // The Boot page's hint is the one it shows with no unit on USB.
+            let bus = if page == Page::Patch { on_usb(Device::Diamond3) } else { Watcher::default() };
+            let mut app = App { bus, page, step: setup::Step::Review, ..App::default() };
             let frame = |app: &mut App, time, events| context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
                 time: Some(time),
@@ -2946,9 +3002,9 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_point_outlasts_the_unit_leaving_the_bus() {
+    fn the_entry_point_stays_chosen_while_greyed_for_another_generation() {
         let entry_point = unfr0zen_host::diamond3::usb::EntryPoint::Cve20177936;
-        let mut app = App { page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::J49), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
         app.form.entry_point = entry_point;
         let shown = texts(&render_frames(&mut app, WINDOW, 4));
         assert_eq!(app.form.entry_point, entry_point);
@@ -3113,7 +3169,7 @@ mod tests {
 
     #[test]
     fn the_status_bar_says_how_a_run_went_without_its_message() {
-        const MESSAGE: &str = "NAND backup verified: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
+        const MESSAGE: &str = "NAND backup: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
         const STEP: &str = "Check the FCB against the restored U-Boot copies";
         for (outcome, line) in [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")] {
             let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, popup_dismissed: true, ..App::default() };

@@ -2,18 +2,18 @@
 //! U-Boot. Port of scripts/backup_nand.py.
 //!
 //! A backup reads every chunk into the fastboot buffer and pulls it over USB,
-//! checked against U-Boot's CRC32, then reads NAND a second time and compares
-//! (the boot-control pages, whose bits flip between reads, are the only bytes
-//! allowed to differ). Chunks already read are kept in OUT.parts/, so running
-//! the same command again resumes an interrupted backup. Bad blocks are kept
-//! in the image as erased, at their own offsets.
+//! checked against U-Boot's CRC32. Chunks already read are kept in
+//! OUT.parts/, so running the same command again resumes an interrupted
+//! backup. Bad blocks are kept in the image as erased, at their own offsets.
+//! A verify reads NAND again and compares it with an image (the boot-control
+//! pages, whose bits flip between reads, are the only bytes allowed to
+//! differ).
 //!
 //! A block with a page the ECC cannot correct does not stop a backup or a
 //! verify: it is kept in the image as read, the rest of its pages intact, and
 //! it reads differently each time, so a verify leaves it out. The .bad list
-//! beside the image names these blocks and the bad ones; a backup adds any its
-//! verify finds. A verify reports the ones it finds beyond the list, and a
-//! restore's read-back fails on any.
+//! beside the image names these blocks and the bad ones. A verify reports the
+//! ones it finds beyond the list, and a restore's read-back fails on any.
 //!
 //! A restore writes such a backup back, beside its .sha256. Two areas are not
 //! copied from the image: the FCB blocks, whose ROM encoding a BCH18 read
@@ -35,7 +35,7 @@ use super::usb;
 use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon, Board};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
-use crate::nand::{add_bad_blocks, bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
+use crate::nand::{bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
 use crate::progress::{stage, stage_with, Progress};
 
 /// Whether a whole-NAND image of `len` bytes is a diamond3's: its
@@ -97,34 +97,10 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     let port = reach_recovery(progress, port, id, entry_point)?;
     let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
-    let bad = stage(progress, "Check for bad blocks", || board.bad_blocks())?;
-    if bad.is_empty() {
-        progress.status("NAND has no bad blocks");
-    } else {
-        log::info!("Bad blocks: {bad:#x?}");
-        progress.status(&format!("NAND has {} bad blocks; they are skipped and kept as erased", bad.len()));
-    }
+    let bad = bad_blocks(progress, &mut board)?;
     let mut unit = Unit { board, port, bad };
     let message = match job {
-        Job::Backup(out) => {
-            let parts = out.with_extension("parts");
-            hand_back.0.push(parts.clone());
-            let uncorrectable = backup(&mut unit, progress, out, &parts)?;
-            let found = verify(&mut unit, progress, out)?;
-            add_bad_blocks(&bad_blocks_path(out), &found)?;
-            let checksum = checksum_path(out);
-            let sha = stage(progress, "Hash the image", || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
-            let name = out.file_name().unwrap_or_default().to_string_lossy();
-            file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
-            file(&parts, fs::remove_dir_all(&parts))?;
-            hand_back.0.pop();
-            hand_back.0.extend([out.clone(), checksum, bad_blocks_path(out)]);
-            let kept = match uncorrectable + found.len() {
-                0 => String::new(),
-                count => format!("; {count} blocks with uncorrectable pages kept as read and left out of the check"),
-            };
-            format!("NAND backup verified: {} ({NAND_SIZE} bytes, SHA-256 {sha}){kept}", out.display())
-        }
+        Job::Backup(out) => back_up_whole(&mut unit, progress, out, &mut hand_back)?,
         Job::Verify(image) => {
             let left_out = match verify(&mut unit, progress, image)?.len() {
                 0 => String::new(),
@@ -141,6 +117,49 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
     stage(progress, "Wait for the application firmware", || usb::wait_restored_application(seconds(120), &port))?;
     Ok(message)
+}
+
+/// The chip's bad blocks, as recovery U-Boot reads them, reported.
+fn bad_blocks(progress: &mut dyn Progress, board: &mut Board) -> Result<Vec<u32>> {
+    let bad = stage(progress, "Check for bad blocks", || board.bad_blocks())?;
+    if bad.is_empty() {
+        progress.status("NAND has no bad blocks");
+    } else {
+        log::info!("Bad blocks: {bad:#x?}");
+        progress.status(&format!("NAND has {} bad blocks; they are skipped and kept as erased", bad.len()));
+    }
+    Ok(bad)
+}
+
+/// Backs the whole NAND up to `out`, with its SHA-256 and bad block list
+/// beside it, each listed in `kept` once written. Returns the status line.
+fn back_up_whole(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, kept: &mut HandBack) -> Result<String> {
+    let parts = out.with_extension("parts");
+    kept.0.push(parts.clone());
+    let uncorrectable = backup(unit, progress, out, &parts)?;
+    let checksum = checksum_path(out);
+    let sha = stage(progress, crate::nand::HASH_STAGE, || file(out, fs::read(out)).map(|data| sha256_hex(&data)))?;
+    let name = out.file_name().unwrap_or_default().to_string_lossy();
+    file(&checksum, fs::write(&checksum, format!("{sha}  {name}\n")))?;
+    file(&parts, fs::remove_dir_all(&parts))?;
+    kept.0.pop();
+    kept.0.extend([out.to_path_buf(), checksum, bad_blocks_path(out)]);
+    let left = match uncorrectable {
+        0 => String::new(),
+        count => format!("; {count} blocks with uncorrectable pages kept as read"),
+    };
+    Ok(format!("NAND backup: {} ({NAND_SIZE} bytes, SHA-256 {sha}){left}", out.display()))
+}
+
+/// Backs the whole NAND up to `out` from recovery U-Boot on `port`, which
+/// stays at its prompt for what follows. Returns the board and the status line.
+pub(crate) fn back_up_then(board: Board, port: &str, progress: &mut dyn Progress, out: &Path, kept: &mut HandBack)
+                           -> Result<(Board, String)> {
+    let mut board = board;
+    let bad = bad_blocks(progress, &mut board)?;
+    let mut unit = Unit { board, port: port.to_string(), bad };
+    let line = back_up_whole(&mut unit, progress, out, kept)?;
+    Ok((unit.board, line))
 }
 
 /// Writes the image and its bad block list. Returns how many blocks have

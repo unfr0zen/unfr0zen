@@ -94,7 +94,16 @@ impl App {
         format!("{:?}", self.screen())
     }
 
+    /// One unit unfr0zen supports is on USB: the steps past Connect need it.
+    fn connected(&self) -> bool {
+        matches!(self.bus.current(), Bus::One(seen) if seen.device != Device::Onyx)
+    }
+
     pub(crate) fn setup_page(&mut self, ui: &mut egui::Ui) {
+        // The unit leaving before a run takes the flow back to Connect.
+        if !self.flow_run && self.step != Step::Connect && !self.connected() {
+            self.step = Step::Connect;
+        }
         match self.screen() {
             Screen::Step(step) => self.step_page(ui, step),
             Screen::Running => self.running_page(ui, None),
@@ -106,21 +115,21 @@ impl App {
         }
     }
 
-    /// Starts the run the review step asked for: a backup first when chosen
-    /// (the patch follows a verified one), else the patch. Options that fail
-    /// before the unit is touched go straight to the patch, which reports them.
+    /// Starts the run the review step asked for: the patch, with the whole
+    /// NAND backed up first when chosen, in the same entry into recovery.
     pub(crate) fn start_flow(&mut self) {
         if !self.idle() {
             return;
         }
         self.flow_backup = None;
-        if self.form.backup_first && self.form.config().is_ok() {
-            self.start(Task::Backup(self.library.fresh_path()));
-            self.patch_after_backup = self.running();
-        } else {
-            self.start(Task::Patch);
-        }
+        self.start(if self.form.backup_first { Task::BackupPatch(self.library.fresh_path()) } else { Task::Patch });
         self.flow_run = true;
+    }
+
+    /// The flow's run is still backing up: its image is not hashed yet.
+    pub(crate) fn backing_up(&self) -> bool {
+        matches!(self.task, Some(Task::BackupPatch(_)))
+            && !self.logs.rows.iter().any(|row| row.label == unfr0zen_host::nand::HASH_STAGE && row.done.is_some())
     }
 
     /// Back to the first step, for another unit; the choices stay.
@@ -158,7 +167,11 @@ impl App {
     }
 
     fn action_bar(&mut self, ui: &mut egui::Ui, step: Step) {
-        let can_continue = step != Step::Integrations || self.form.integrations_done();
+        let can_continue = match step {
+            Step::Connect => self.connected(),
+            Step::Integrations => self.form.integrations_done(),
+            _ => true,
+        };
         separator(ui);
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -166,7 +179,7 @@ impl App {
                 self.step = step.back();
             }
             let hint = match step {
-                Step::Connect => Some(tr!("setup.connect_hint")),
+                Step::Connect if !can_continue => Some(tr!("setup.connect_hint")),
                 Step::Integrations if !can_continue => Some(tr!("setup.mqtt_needs_broker")),
                 Step::Integrations if !self.form.any_integration() => Some(tr!("setup.integrations_skip_hint")),
                 _ => None,
@@ -319,13 +332,13 @@ impl App {
     /// it is, the steps so far beside it; a failure says why and offers the
     /// way back.
     fn running_page(&mut self, ui: &mut egui::Ui, error: Option<String>) {
-        let backing_up = matches!(self.task, Some(Task::Backup(_)));
+        let backing_up = self.backing_up();
         ui.add_space(((ui.available_height() - 300.0) * 0.4).max(20.0));
         ui.horizontal_top(|ui| {
             ui.add_space(16.0);
             let (fraction, label, big, under) = if error.is_some() {
                 (None, tr!("setup.ring_stopped"), "!".to_string(), String::new())
-            } else if let Some(t) = self.logs.transfer.as_ref() {
+            } else if let Some(t) = self.logs.transfer.as_ref().filter(|t| t.shown() < t.total) {
                 let fraction = t.shown() as f32 / t.total.max(1) as f32;
                 let left = t.speed().map(|rate| ((t.total.saturating_sub(t.shown())) as f64 / rate / 60.0).ceil() as u64);
                 let under = left.map_or_else(String::new, |m| tr!("setup.minutes_left", minutes = m.max(1)));
@@ -768,7 +781,7 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
                      egui::FontId::proportional(12.0), MUTED);
         return;
     };
-    let ring = if device == Device::Onyx { WARN } else { ACCENT };
+    let ring = if device == Device::Onyx { WARN } else { OK };
     painter.circle_stroke(c, size * 0.5 - 11.0, egui::Stroke::new(2.0, ring));
     let (big, name) = match device {
         Device::Diamond3 => (tr!("setup.gen3"), tr!("setup.learning_thermostat")),
