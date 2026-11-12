@@ -60,6 +60,9 @@ struct Args {
     /// authorize one OpenSSH public key for root (gen3's stock SSH may need ECDSA)
     #[arg(long, value_name = "FILE", requires = "ssh", help_heading = "Root filesystem options")]
     ssh_public_key: Option<PathBuf>,
+    /// SSH takes keys only: root's password is refused (needs --ssh-public-key)
+    #[arg(long, requires = "ssh_public_key", help_heading = "Root filesystem options")]
+    ssh_key_only: bool,
     /// a root shell on the unit's USB serial port, which the run then confirms (default: no USB serial port)
     #[arg(long, help_heading = "Root filesystem options")]
     usb_shell: bool,
@@ -194,6 +197,7 @@ impl Args {
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
+            ssh_key_only: self.ssh_key_only,
             usb_shell: self.usb_shell,
         }
     }

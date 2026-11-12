@@ -142,7 +142,6 @@
   "patch.ntp_hint": "Use your chosen NTP server to keep the thermostat's clock in sync",
   "patch.root_password": "Root password",
   "patch.root_password_hint": "Set the root login password; leave blank to use unfr0zen",
-  "patch.ssh_key": "SSH key",
   "patch.start_disabled": "Finish the current operation, close any file picker, and disconnect any open console before starting a run",
   "patch.start_hint": "Patch the connected thermostat with the selected options",
   "patch.technique.jump_certificates": "CVE-2017-7932",
@@ -322,5 +321,17 @@
   "setup.phase.check": "Checking your thermostat",
   "setup.phase.prepare": "Preparing new features",
   "setup.phase.patch": "Patching",
-  "setup.phase.restart": "Restarting"
+  "setup.phase.restart": "Restarting",
+  "setup.ssh_key": "Your key",
+  "setup.ssh_password_login": "Allow password login",
+  "setup.ssh_password_login_hint": "Off, only your key logs in and root's password is refused over SSH",
+  "setup.ssh_default_password_warning": "With no password set, it stays unfr0zen's public default, unfr0zen: anyone on your network could log in. Set your own, or turn password login off.",
+  "setup.ssh_key_what": "What's an SSH key?",
+  "setup.ssh_key_explain": "A pair of files that lets this computer log in without a password. The public half goes onto the thermostat. The private half stays on this computer, and you never share it. It's safer than a password because nothing can be guessed.",
+  "setup.ssh_create": "Create a key for me",
+  "setup.ssh_create_where": "Saves it as ~/.ssh/unfr0zen, and picks it above",
+  "setup.ssh_keygen_missing": "ssh-keygen could not run: {error}",
+  "setup.ssh_login": "Log in afterwards from a terminal with:",
+  "setup.ssh_address": "<thermostat's IP address>",
+  "setup.ssh_needs_secret": "Choose a key, or allow password login, to continue."
 }

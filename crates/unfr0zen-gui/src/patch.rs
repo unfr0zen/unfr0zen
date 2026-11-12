@@ -43,6 +43,10 @@ pub struct Form {
     external_temperature: bool,
     dark_theme: bool,
     ssh_key: FilePick,
+    /// SSH also takes root's password; off, keys only.
+    pub ssh_password_login: bool,
+    /// Why the last Create a key for me failed.
+    ssh_key_error: Option<String>,
 }
 
 /// A file chosen with the platform's picker: the path, and the dialog a
@@ -160,6 +164,7 @@ impl Form {
             dark_theme: self.dark_theme && self.device.or(self.last_device) == Some(Device::J49),
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
+            ssh_key_only: self.ssh && !self.ssh_password_login,
             usb_shell: self.usb_shell,
         }
     }
@@ -196,6 +201,12 @@ impl Form {
     /// must be named.
     pub fn integrations_done(&self) -> bool {
         !self.mqtt.on || !self.mqtt.value.trim().is_empty()
+    }
+
+    /// Whether the features step can be left: SSH needs a way in, a key or
+    /// password login.
+    pub fn features_done(&self) -> bool {
+        !self.ssh || self.ssh_password_login || self.ssh_key.path.is_some()
     }
 
     /// Whether any integration is chosen; with none, the step is skipped.
@@ -312,27 +323,54 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.access"));
-        // Root's password serves both: inside the one card that is on, or in
-        // a card of its own under them when both are.
-        let both = self.ssh && self.usb_shell;
+        // Root's password serves SSH, when it takes passwords, and the USB
+        // console: inside the one card that needs it, or in a card of its own
+        // under them when both do.
+        let ssh_password = self.ssh && self.ssh_password_login;
+        let both = ssh_password && self.usb_shell;
         crate::option_card(ui, &mut self.ssh, true, crate::tr!("setup.ssh"), crate::tr!("setup.ssh_about"), |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::tr!("patch.ssh_key")).color(crate::MUTED));
+                ui.label(egui::RichText::new(crate::tr!("setup.ssh_key")).color(crate::MUTED));
                 self.ssh_key.ui(ui, crate::tr!("patch.file.choose"), crate::tr!("patch.file.openssh_public_key"), &["pub"]);
             });
-            if !both {
-                root_password_field(ui, &mut self.root_password);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                crate::switch(ui, &mut self.ssh_password_login, true).on_hover_text(crate::tr!("setup.ssh_password_login_hint"));
+                ui.label(crate::tr!("setup.ssh_password_login"));
+            });
+            if self.ssh_password_login && !both {
+                ssh_password_field(ui, &mut self.root_password);
             }
+            crate::inset(ui, |ui| {
+                ui.label(egui::RichText::new(crate::tr!("setup.ssh_key_what")).font(crate::medium(14.0)));
+                ui.add(egui::Label::new(egui::RichText::new(crate::tr!("setup.ssh_key_explain")).size(13.0)).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    if crate::setup::rounded_button(ui, crate::tr!("setup.ssh_create"), crate::setup::Look::Primary, true,
+                                                    egui::vec2(0.0, 30.0)).clicked() {
+                        match create_ssh_key(&default_ssh_key()) {
+                            Ok(public) => {
+                                self.ssh_key.path = Some(public);
+                                self.ssh_key_error = None;
+                            }
+                            Err(e) => self.ssh_key_error = Some(e),
+                        }
+                    }
+                    ui.label(egui::RichText::new(crate::tr!("setup.ssh_create_where")).color(crate::MUTED).size(13.0));
+                });
+                if let Some(error) = &self.ssh_key_error {
+                    ui.add(egui::Label::new(egui::RichText::new(error).color(crate::BAD).size(13.0)).wrap());
+                }
+                ui.label(egui::RichText::new(crate::tr!("setup.ssh_login")).size(13.0));
+                crate::code_line(ui, &ssh_command(self.ssh_key.path.as_deref()));
+            });
         });
         if both {
             crate::toggle_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"));
+            crate::card(ui, |ui| ssh_password_field(ui, &mut self.root_password));
+            ui.add_space(10.0);
         } else {
             crate::option_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"),
                                |ui| root_password_field(ui, &mut self.root_password));
-        }
-        if both {
-            crate::card(ui, |ui| root_password_field(ui, &mut self.root_password));
-            ui.add_space(10.0);
         }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
@@ -451,6 +489,56 @@ fn root_password_field(ui: &mut egui::Ui, password: &mut String) {
         .on_hover_text(crate::tr!("patch.root_password_hint"));
 }
 
+/// Root's password where SSH takes it: warned of while it is the public
+/// default, which anyone on the network could log in with.
+fn ssh_password_field(ui: &mut egui::Ui, password: &mut String) {
+    root_password_field(ui, password);
+    if password.is_empty() {
+        ui.add(egui::Label::new(egui::RichText::new(crate::tr!("setup.ssh_default_password_warning")).color(crate::WARN).size(13.0)).wrap());
+    }
+}
+
+/// Where Create a key for me puts the key: ~/.ssh/unfr0zen.
+fn default_ssh_key() -> PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_default();
+    home.join(".ssh").join("unfr0zen")
+}
+
+/// Makes an SSH key pair at `private` with ssh-keygen, or keeps the one
+/// there, and returns its public half. ECDSA: the gen 3's OpenSSH 6.0
+/// predates Ed25519.
+fn create_ssh_key(private: &std::path::Path) -> Result<PathBuf, String> {
+    let mut public = private.as_os_str().to_owned();
+    public.push(".pub");
+    let public = PathBuf::from(public);
+    if private.exists() && public.exists() {
+        return Ok(public);
+    }
+    if let Some(dir) = private.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let output = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ecdsa", "-b", "256", "-N", "", "-C", "unfr0zen", "-f"]).arg(private)
+        .output().map_err(|e| crate::tr!("setup.ssh_keygen_missing", error = e))?;
+    if !output.status.success() || !public.exists() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(public)
+}
+
+/// The command that logs in with the key at `public`'s private half.
+fn ssh_command(public: Option<&std::path::Path>) -> String {
+    let key = public.map_or_else(|| "~/.ssh/unfr0zen".to_string(), |path| {
+        let private = path.with_extension("");
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        match home.as_deref().and_then(|home| private.strip_prefix(home).ok()) {
+            Some(rest) => format!("~/{}", rest.display()),
+            None => private.display().to_string(),
+        }
+    });
+    format!("ssh -i {key} root@{}", crate::tr!("setup.ssh_address"))
+}
+
 /// Text fields in the steps' cards.
 const FIELD_WIDTH: f32 = 260.0;
 
@@ -496,21 +584,44 @@ mod tests {
     }
 
     #[test]
-    fn the_root_password_shows_once_in_the_card_that_is_on_or_alone_with_both() {
+    fn the_root_password_shows_once_where_it_is_taken_or_alone_when_both_take_it() {
         let password = crate::tr!("patch.root_password");
-        for (ssh, usb_shell, shown) in [(false, false, 0), (true, false, 1), (false, true, 1), (true, true, 1)] {
+        // SSH takes the password only with password login allowed.
+        for (ssh, ssh_password_login, usb_shell, shown) in [(false, false, false, 0), (true, false, false, 0), (true, true, false, 1),
+                                                            (false, false, true, 1), (true, false, true, 1), (true, true, true, 1)] {
             let context = egui::Context::default();
             crate::install_fonts(&context);
             crate::install_style(&context);
-            let mut form = Form { ssh, usb_shell, ..Form::default() };
+            let mut form = Form { ssh, ssh_password_login, usb_shell, ..Form::default() };
             let output = context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2000.0))),
                 ..Default::default()
             }, |ui| form.features_ui(ui, &Bus::Nothing));
             let count = output.shapes.iter().filter(|shape| matches!(&shape.shape,
                 egui::epaint::Shape::Text(text) if text.galley.job.text == password)).count();
-            assert_eq!(count, shown, "ssh {ssh}, usb shell {usb_shell}");
+            assert_eq!(count, shown, "ssh {ssh}, password login {ssh_password_login}, usb shell {usb_shell}");
         }
+    }
+
+    #[test]
+    fn ssh_takes_keys_only_unless_password_login_is_allowed_and_needs_a_way_in() {
+        let mut form = Form { ssh: true, ..Form::default() };
+        assert!(!form.features_done(), "neither a key nor password login");
+        assert!(form.inputs().ssh_key_only);
+        form.ssh_key.path = Some("key.pub".into());
+        assert!(form.features_done());
+        form.ssh_key.path = None;
+        form.ssh_password_login = true;
+        assert!(form.features_done() && !form.inputs().ssh_key_only);
+        form.ssh = false;
+        assert!(!form.inputs().ssh_key_only, "no SSH, nothing to refuse");
+    }
+
+    #[test]
+    fn the_login_command_names_the_key_chosen_from_home() {
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(ssh_command(Some(&home.join(".ssh/id_ecdsa.pub"))), "ssh -i ~/.ssh/id_ecdsa root@<thermostat's IP address>");
+        assert_eq!(ssh_command(None), "ssh -i ~/.ssh/unfr0zen root@<thermostat's IP address>");
     }
 
     #[test]

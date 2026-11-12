@@ -435,6 +435,9 @@ pub struct Options {
     pub ssh: bool,
     /// A validated OpenSSH public key to merge into root's authorized_keys; needs SSH.
     pub ssh_public_key: Option<String>,
+    /// SSH refuses root's password: only a key logs in. Off, root logs in
+    /// with its password too (DEFAULT_ROOT_PASSWORD unless one is given).
+    pub ssh_key_only: bool,
     /// The SSH server's files for a device without one of its own (the j49).
     pub ssh_server: Option<Overlay>,
     /// The USB root shell: an ACM port with a root shell on it. Without it
@@ -502,6 +505,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     let rootfs = rootfs(target)?;
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
+    }
+    if options.ssh_key_only && (!options.ssh || options.ssh_public_key.is_none()) {
+        return device("SSH without password login needs SSH and a public key to log in with");
     }
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
@@ -1434,7 +1440,7 @@ mod tests {
             ("etc/inittab", |f| f.2 = b"::sysinit:/etc/init.d/rcS\n".to_vec(), "USB getty"),
             ("etc/shadow", |f| f.1 = 0o644, "mode 640"),
             ("etc/init.d/rcS", |f| f.2.extend_from_slice(b"${MOUNT} -n -o remount,rw /\n"), "somewhere other than"),
-            ("etc/ssh/sshd_config", |f| f.2 = b"PermitRootLogin prohibit-password\n".to_vec(), "PermitRootLogin no"),
+            ("etc/ssh/sshd_config", |f| f.2 = b"PermitRootLogin without-password\n".to_vec(), "PermitRootLogin no"),
             ("etc/hosts", |f| f.2.extend_from_slice(HOSTS_BEGIN.as_bytes()), "without its end line"),
         ];
         for (name, change, error) in cases {
@@ -1631,6 +1637,19 @@ mod tests {
         let mut odd = FakeVolume::new(stock());
         odd.files.get_mut("etc/init.d/usb-gadget").unwrap().2 = b"USB_GADGET_MOD=g_mass_storage\n".to_vec();
         assert!(patch(&mut odd, &options(), false).unwrap_err().to_string().contains("g_acm_ms"));
+    }
+
+    #[test]
+    fn ssh_without_password_login_takes_keys_only_and_needs_a_key() {
+        let mut volume = FakeVolume::new(stock());
+        let key = Some(public_key("ssh-ed25519", &[&[1; 32]]));
+        assert!(patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ..options() }, false).is_err(), "no key: no way in");
+        patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin prohibit-password\n"));
+        patch(&mut volume, &Options { ssh: true, ssh_public_key: key, ..options() }, false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin yes\n"), "password login allowed again");
+        patch(&mut volume, &options(), false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin no\n"), "SSH off: stock");
     }
 
     #[test]

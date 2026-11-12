@@ -64,6 +64,8 @@ pub struct PatchInputs {
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
     pub ssh_public_key: Option<PathBuf>,
+    /// SSH takes keys only, refusing root's password; requires the key.
+    pub ssh_key_only: bool,
     /// The USB root shell (an ACM port); off by default. Without it the run
     /// cannot log in at the end to confirm the result.
     pub usb_shell: bool,
@@ -92,6 +94,7 @@ impl PatchInputs {
             ("root-password", secret(&self.root_password)),
             ("ssh", on(self.ssh)),
             ("ssh-public-key", file(&self.ssh_public_key)),
+            ("ssh-key-only", on(self.ssh_key_only)),
             ("usb-shell", on(self.usb_shell)),
             ("mqtt", self.mqtt.as_deref().map(mask_url)),
             ("mqtt-user", secret(&self.mqtt_user)),
@@ -120,6 +123,9 @@ impl PatchInputs {
     pub fn build(&self) -> Result<Options> {
         if self.ssh_public_key.is_some() && !self.ssh {
             return Err(failure("--ssh-public-key needs --ssh"));
+        }
+        if self.ssh_key_only && self.ssh_public_key.is_none() {
+            return Err(failure("--ssh-key-only needs --ssh-public-key: without a key nothing could log in"));
         }
         if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some())
             && self.mqtt.is_none() {
@@ -174,6 +180,7 @@ impl PatchInputs {
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key,
+            ssh_key_only: self.ssh_key_only,
             ssh_server: None,
             usb_shell: self.usb_shell,
         })

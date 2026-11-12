@@ -19,7 +19,7 @@ mod patch;
 mod run;
 mod setup;
 use setup::Look;
-pub(crate) use setup::{boxed, boxed_select, card, field, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{boxed, boxed_select, card, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
 #[cfg(test)]
 mod snapshot;
 mod terminal;

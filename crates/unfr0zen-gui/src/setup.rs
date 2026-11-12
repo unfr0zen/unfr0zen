@@ -185,6 +185,7 @@ impl App {
         let can_continue = match step {
             Step::Connect => self.may_go_on(),
             Step::Integrations => self.form.integrations_done(),
+            Step::Features => self.form.features_done(),
             _ => true,
         };
         separator(ui);
@@ -196,6 +197,7 @@ impl App {
             let hint = match step {
                 Step::Connect if !can_continue => Some(tr!("setup.connect_hint")),
                 Step::Integrations if !can_continue => Some(tr!("setup.mqtt_needs_broker")),
+                Step::Features if !can_continue => Some(tr!("setup.ssh_needs_secret")),
                 Step::Integrations if !self.form.any_integration() => Some(tr!("setup.integrations_skip_hint")),
                 _ => None,
             };
@@ -583,8 +585,9 @@ pub(crate) fn card<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) 
     }).inner
 }
 
-/// A note on the page: the backup Done names.
-fn inset(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+/// A note on the page or in a card: the backup Done names, the SSH key's
+/// explanation.
+pub(crate) fn inset(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new().fill(NOTE).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 8.0;
@@ -654,6 +657,15 @@ pub(crate) fn switch_row(ui: &mut egui::Ui, on: &mut bool, title: &str, about: &
         });
         response
     }).inner
+}
+
+/// A command to copy, in the monospace face on an inset.
+pub(crate) fn code_line(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, LINE)).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 7))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(egui::RichText::new(text).monospace().color(TEXT)).selectable(true).wrap());
+        });
 }
 
 /// A group's heading among the cards.
