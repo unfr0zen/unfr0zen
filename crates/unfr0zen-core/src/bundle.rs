@@ -347,9 +347,18 @@ impl Settings {
             ssh_public_key: self.ssh_public_key.clone(),
             ssh_key_only: self.ssh_key_only,
             ssh_server: if self.ssh { bundle.optional_overlay(SSH) } else { None },
+            record: self.record(),
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
         })
+    }
+
+    /// These settings as the unit keeps them: without the key set, which the
+    /// unit has its own copy of once patched.
+    fn record(&self) -> Vec<u8> {
+        let mut record = serde_json::to_vec_pretty(&Settings { pki: None, ..self.clone() }).expect("settings serialize");
+        record.push(b'\n');
+        record
     }
 
     pub fn pki(&self) -> Result<Option<Pki>> {
@@ -459,7 +468,9 @@ mod tests {
         let settings: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(settings.pki().unwrap(), Some(pki));
         let rebuilt = settings.options(&bundle).unwrap();
-        assert_eq!(format!("{rebuilt:?}"), format!("{options:?}"));
+        let kept: Settings = serde_json::from_slice(&rebuilt.record).unwrap();
+        assert_eq!(kept, Settings { pki: None, ..settings.clone() });
+        assert_eq!(format!("{:?}", Options { record: Vec::new(), ..rebuilt.clone() }), format!("{options:?}"));
         assert_eq!(rebuilt.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
         let thread = Settings { thread: true, ..Settings::default() };
         assert!(thread.options(&bundle).unwrap_err().to_string().contains("no thread overlay"));

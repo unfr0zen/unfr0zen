@@ -186,6 +186,8 @@ impl PatchInputs {
             device_name: self.device_name.clone(),
             wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
             local_cloud: assets::LOCAL_CLOUD.to_vec(),
+            // Each device's run adds it from its bundle::Settings.
+            record: Vec::new(),
             thread: self.matter_thread.then(assets::thread),
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,

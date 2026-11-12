@@ -118,6 +118,9 @@ const NLSLEEPD_START: (&str, &str) = (
     "\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ",
     "\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ");
 
+/// The last run's settings (bundle::Settings), for a run without the host.
+pub const RECORD: &str = "etc/unfr0zen/options.json";
+
 /// nlclient's init script, the same on the gen 2 and the gen 3.
 const NESTLABS: &str = "etc/init.d/nestlabs";
 /// Where the start line below preloads the library from.
@@ -443,6 +446,9 @@ pub struct Options {
     /// The library preloaded into nlclient on a unit running nestlocal
     /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
     pub local_cloud: Vec<u8>,
+    /// The run's settings as etc/unfr0zen/options.json keeps them (mode 600:
+    /// they hold the broker's credentials); empty leaves the file as it is.
+    pub record: Vec<u8>,
     /// Files for the optional onboard Thread transport.
     pub thread: Option<Overlay>,
     /// nestlocal joins a Zigbee network through the unit's radio, which it
@@ -669,6 +675,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         if tree.contains_key(NLSLEEP) {
             patch_wake_patterns(&mut tree, wake)?;
         }
+    }
+    if !options.record.is_empty() {
+        fetch(volume, &mut tree, &mut originals, &[RECORD], false, true)?;
+        tree.insert(RECORD.into(), (options.record.clone(), 0o600));
+        directories.push(("etc/unfr0zen".into(), 0o755));
     }
     // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
     fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
@@ -1289,6 +1300,19 @@ mod tests {
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);
+    }
+
+    #[test]
+    fn the_runs_settings_stay_on_the_unit_readable_by_root_alone() {
+        let mut volume = FakeVolume::new(stock());
+        patch(&mut volume, &options(), false).unwrap();
+        assert!(!volume.files.contains_key(RECORD));
+        let record = Options { record: b"{\"zigbee\": true}\n".to_vec(), ..options() };
+        let changes = patch(&mut volume, &record, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == RECORD && c.action == "create"));
+        assert_eq!((volume.files[RECORD].1, volume.files[RECORD].2.as_slice()), (0o600, &b"{\"zigbee\": true}\n"[..]));
+        assert_eq!(volume.directories["etc/unfr0zen"], "0:0 755");
+        assert!(!names(&patch(&mut volume, &record, false).unwrap()).contains(RECORD));
     }
 
     #[test]
