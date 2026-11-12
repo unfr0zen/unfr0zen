@@ -51,9 +51,9 @@ const COLUMN: f32 = 720.0;
 /// A panel inside a card: the backup note.
 const NOTE: egui::Color32 = egui::Color32::from_rgb(0x1a, 0x1e, 0x25);
 /// Small labels: group headings.
-const LABEL: egui::Color32 = egui::Color32::from_rgb(0x86, 0x8f, 0x9e);
+pub(crate) const LABEL: egui::Color32 = egui::Color32::from_rgb(0x86, 0x8f, 0x9e);
 /// The rings' track.
-const TRACK: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x30, 0x3b);
+pub(crate) const TRACK: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x30, 0x3b);
 /// The rings' face, and the lighter disc on it.
 const FACE: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x20, 0x27);
 const FACE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x23, 0x28, 0x31);
@@ -61,7 +61,7 @@ const FACE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x23, 0x28, 0x31);
 const ACCENT_DIM: egui::Color32 = egui::Color32::from_rgb(0x1d, 0x34, 0x44);
 const ACCENT_TINT: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x26, 0x30);
 /// A switch that is off, and an outlined button's edge.
-const OFF: egui::Color32 = egui::Color32::from_rgb(0x35, 0x3b, 0x47);
+pub(crate) const OFF: egui::Color32 = egui::Color32::from_rgb(0x35, 0x3b, 0x47);
 /// A done step's mark.
 const OK_FILL: egui::Color32 = egui::Color32::from_rgb(0x16, 0x2a, 0x1d);
 const OK_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x9e, 0xe0, 0xa3);
@@ -99,9 +99,15 @@ impl App {
         matches!(self.bus.current(), Bus::One(seen) if seen.device != Device::Onyx)
     }
 
+    /// The steps past Connect can be shown: a supported unit is on USB, or
+    /// this build goes on without one.
+    fn may_go_on(&self) -> bool {
+        self.steps_without_unit || self.connected()
+    }
+
     pub(crate) fn setup_page(&mut self, ui: &mut egui::Ui) {
         // The unit leaving before a run takes the flow back to Connect.
-        if !self.flow_run && self.step != Step::Connect && !self.connected() {
+        if !self.flow_run && self.step != Step::Connect && !self.may_go_on() {
             self.step = Step::Connect;
         }
         match self.screen() {
@@ -168,7 +174,7 @@ impl App {
 
     fn action_bar(&mut self, ui: &mut egui::Ui, step: Step) {
         let can_continue = match step {
-            Step::Connect => self.connected(),
+            Step::Connect => self.may_go_on(),
             Step::Integrations => self.form.integrations_done(),
             _ => true,
         };
@@ -269,21 +275,28 @@ impl App {
                     let rows = self.form.summary();
                     let count = rows.len();
                     for (i, (name, value, step)) in rows.into_iter().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.set_min_height(32.0);
-                            let left = egui::Layout::left_to_right(egui::Align::Center);
-                            ui.allocate_ui_with_layout(egui::vec2(230.0, 20.0), left, |ui| {
+                        // Name, value and Edit on the value's first line; a long
+                        // value, as a full Extras, wraps and the row grows.
+                        ui.horizontal_top(|ui| {
+                            let top = egui::Layout::top_down(egui::Align::Min);
+                            ui.allocate_ui_with_layout(egui::vec2(230.0, 20.0), top, |ui| {
                                 ui.set_width(230.0);
+                                ui.add_space(7.0);
                                 ui.add(egui::Label::new(egui::RichText::new(name).color(MUTED)).truncate());
                             });
                             let room = ui.available_width() - 50.0;
-                            ui.allocate_ui_with_layout(egui::vec2(room, 20.0), left, |ui| {
+                            ui.allocate_ui_with_layout(egui::vec2(room, 20.0), top, |ui| {
                                 ui.set_width(room);
-                                ui.add(egui::Label::new(value).truncate());
+                                ui.add_space(7.0);
+                                ui.add(egui::Label::new(value).wrap());
+                                ui.add_space(7.0);
                             });
-                            if link(ui, tr!("setup.edit")).clicked() {
-                                self.step = step;
-                            }
+                            ui.vertical(|ui| {
+                                ui.add_space(7.0);
+                                if link(ui, tr!("setup.edit")).clicked() {
+                                    self.step = step;
+                                }
+                            });
                         });
                         if i + 1 < count {
                             separator(ui);
@@ -543,7 +556,7 @@ fn heading(ui: &mut egui::Ui, title: &str, about: &str) {
     ui.add_space(12.0);
 }
 
-fn separator(ui: &mut egui::Ui) {
+pub(crate) fn separator(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, 0.0, LINE);
 }
@@ -570,7 +583,7 @@ fn inset(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// A field's edge: one that shows on the card, so it reads as somewhere to type.
-const FIELD_EDGE: egui::Color32 = egui::Color32::from_rgb(0x3a, 0x41, 0x4e);
+pub(crate) const FIELD_EDGE: egui::Color32 = egui::Color32::from_rgb(0x3a, 0x41, 0x4e);
 
 /// A text field with its label over it: a rounded box `width` wide whose
 /// edge lights while it is typed in.
@@ -578,17 +591,23 @@ pub(crate) fn field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit<'_>, wi
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         ui.label(egui::RichText::new(label).size(12.5).color(LABEL));
-        let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(9)
-            .inner_margin(egui::Margin::symmetric(11, 7));
-        let mut prepared = frame.begin(ui);
-        let room = (width - 24.0).max(40.0);
-        let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(14.0)));
-        if response.has_focus() {
-            prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, ACCENT));
-        }
-        prepared.end(ui);
-        response
+        boxed(ui, edit, width)
     }).inner
+}
+
+/// A text field as a rounded box `width` wide whose edge lights while it
+/// is typed in.
+pub(crate) fn boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
+    let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(9)
+        .inner_margin(egui::Margin::symmetric(11, 7));
+    let mut prepared = frame.begin(ui);
+    let room = (width - 24.0).max(40.0);
+    let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(14.0)));
+    if response.has_focus() {
+        prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, ACCENT));
+    }
+    prepared.end(ui);
+    response
 }
 
 /// A drop-down with its label over it, drawn as the fields are: a rounded
@@ -598,15 +617,17 @@ pub(crate) fn select(ui: &mut egui::Ui, label: &str, id: &str, width: f32, selec
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         ui.label(egui::RichText::new(label).size(12.5).color(if enabled { LABEL } else { DIM }));
-        ui.add_enabled_ui(enabled, |ui| {
-            let widgets = &mut ui.style_mut().visuals.widgets;
-            for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
-                widget.corner_radius = egui::CornerRadius::same(9);
-            }
-            widgets.inactive.bg_stroke = egui::Stroke::new(1.0, FIELD_EDGE);
-            ui.spacing_mut().button_padding = egui::vec2(11.0, 7.0);
-            crate::dropdown(id, width - 22.0).selected_text(egui::RichText::new(selected).font(medium(14.0))).show_ui(ui, rows).response
-        }).inner
+        ui.add_enabled_ui(enabled, |ui| boxed_select(ui, id, width, selected, rows)).inner
+    }).inner
+}
+
+/// A drop-down drawn as the text fields are: a rounded box `width` wide.
+pub(crate) fn boxed_select(ui: &mut egui::Ui, id: &str, width: f32, selected: &str,
+                           rows: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+    ui.scope(|ui| {
+        ui.style_mut().visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, FIELD_EDGE);
+        ui.spacing_mut().button_padding = egui::vec2(11.0, 9.0);
+        crate::dropdown(id, width - 22.0).selected_text(egui::RichText::new(selected).font(medium(14.0))).show_ui(ui, rows).response
     }).inner
 }
 
@@ -728,16 +749,47 @@ fn choice_card(ui: &mut egui::Ui, chosen: bool, title: &str, about: &str, badge:
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A rounded button: the accent with dark text for the step's action,
-/// outlined for the others.
-pub(crate) fn pill_button(ui: &mut egui::Ui, text: &str, primary: bool, enabled: bool) -> egui::Response {
-    let (fill, color, stroke) = if primary {
-        (if enabled { ACCENT } else { ACCENT.gamma_multiply(0.35) }, if enabled { ON_ACCENT } else { DIM }, egui::Stroke::NONE)
-    } else {
-        (egui::Color32::TRANSPARENT, if enabled { TEXT } else { DIM }, egui::Stroke::new(1.0, OFF))
+/// What a rounded button does, which its colours say.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Look {
+    /// The page's own action: the accent with dark text.
+    Primary,
+    /// Any other: outlined.
+    Secondary,
+    /// One that erases or deletes: red.
+    Danger,
+}
+
+/// A rounded button at least `size`, its ends fully round.
+pub(crate) fn rounded_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: egui::Vec2) -> egui::Response {
+    let (fill, color, stroke) = match look {
+        Look::Primary if enabled => (ACCENT, ON_ACCENT, egui::Stroke::NONE),
+        Look::Primary => (DISABLED_FILL, DISABLED_TEXT, egui::Stroke::NONE),
+        Look::Secondary => (egui::Color32::TRANSPARENT, if enabled { TEXT } else { DIM }, egui::Stroke::new(1.0, OFF)),
+        Look::Danger => (if enabled { BAD } else { BAD.gamma_multiply(0.35) }, if enabled { egui::Color32::WHITE } else { DIM }, egui::Stroke::NONE),
     };
     let label = egui::RichText::new(text).font(medium(14.0)).color(color);
-    ui.add_enabled(enabled, egui::Button::new(label).fill(fill).stroke(stroke).corner_radius(18).min_size(egui::vec2(96.0, 36.0)))
+    let radius = (size.y * 0.5).round() as u8;
+    // Room at the round ends, so a long label keeps clear of them.
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = 20.0;
+        ui.add_enabled(enabled, egui::Button::new(label).fill(fill).stroke(stroke).corner_radius(radius).min_size(size))
+    }).inner
+}
+
+/// A primary button that cannot act yet: grey, its label still readable.
+const DISABLED_FILL: egui::Color32 = egui::Color32::from_rgb(0x2b, 0x31, 0x3c);
+const DISABLED_TEXT: egui::Color32 = egui::Color32::from_rgb(0x7d, 0x85, 0x94);
+
+/// A page's or a dialog's rounded button, sized as the set-up flow's.
+pub(crate) fn page_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool) -> egui::Response {
+    rounded_button(ui, text, look, enabled, egui::vec2(96.0, crate::BUTTON_HEIGHT))
+}
+
+/// The set-up flow's rounded buttons: the accent for the step's action,
+/// outlined for the others.
+pub(crate) fn pill_button(ui: &mut egui::Ui, text: &str, primary: bool, enabled: bool) -> egui::Response {
+    page_button(ui, text, if primary { Look::Primary } else { Look::Secondary }, enabled)
 }
 
 /// Accent text that acts.
@@ -801,6 +853,39 @@ fn plug_icon(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
     let tip = egui::Rect::from_min_max(egui::pos2(c.x - 5.5, body.top() - 8.0), egui::pos2(c.x + 5.5, body.top()));
     painter.rect_stroke(tip, 1.0, stroke, egui::StrokeKind::Middle);
     painter.line_segment([egui::pos2(c.x, body.bottom()), egui::pos2(c.x, body.bottom() + 8.0)], stroke);
+}
+
+/// A ring searching as the connect step's does while no unit is there:
+/// `big` in its middle over `small`.
+pub(crate) fn waiting_ring(ui: &mut egui::Ui, size: f32, big: &str, small: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    let c = rect.center();
+    painter.circle_filled(c, size * 0.5, TRACK);
+    painter.circle_filled(c, size * 0.5 - 7.0, FACE);
+    let r = size * 0.5 - 3.5;
+    let time = ui.input(|i| i.time) as f32;
+    let head = (time / 2.4).rem_euclid(1.0) * TAU - TAU / 4.0;
+    let steps = 24;
+    for i in 0..steps {
+        let (a0, a1) = (head - (i + 1) as f32 * 0.07, head - i as f32 * 0.07);
+        let fade = 1.0 - i as f32 / steps as f32;
+        painter.line_segment([c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r],
+                             egui::Stroke::new(4.0, ACCENT.gamma_multiply(0.85 * fade * fade)));
+    }
+    painter.text(c - egui::vec2(0.0, 6.0), egui::Align2::CENTER_CENTER, big, crate::display(28.0), TEXT);
+    painter.text(c + egui::vec2(0.0, 20.0), egui::Align2::CENTER_CENTER, small, egui::FontId::proportional(11.5), MUTED);
+    ui.ctx().request_repaint();
+}
+
+/// One of a dialog's numbered steps: its number in the accent, the text
+/// beside it.
+pub(crate) fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.add_sized([16.0, 20.0], egui::Label::new(egui::RichText::new(number.to_string()).font(crate::display(20.0)).color(ACCENT)));
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(text).wrap());
+    });
 }
 
 /// Whether a unit is there, as a rounded status tag.

@@ -306,7 +306,10 @@ fn layers_id() -> Id {
 
 /// A modal that leaves its backdrop to `Backdrop`.
 pub fn modal(ctx: &Context, name: &str) -> Modal {
-    let modal = Modal::new(Id::new(name)).backdrop_color(Color32::TRANSPARENT);
+    // A card as the set-up flow's, lifted off the page.
+    let frame = egui::Frame::new().fill(crate::CARD).stroke(egui::Stroke::new(1.0, crate::LINE)).corner_radius(18)
+        .inner_margin(egui::Margin::same(24)).shadow(ctx.global_style().visuals.popup_shadow);
+    let modal = Modal::new(Id::new(name)).backdrop_color(Color32::TRANSPARENT).frame(frame);
     let layer = modal.area.layer();
     ctx.data_mut(|data| data.get_temp_mut_or_default::<Vec<LayerId>>(layers_id()).push(layer));
     modal

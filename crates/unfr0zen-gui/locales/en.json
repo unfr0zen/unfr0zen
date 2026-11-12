@@ -54,8 +54,7 @@
   "console.description": "A terminal on the root shell of a patched unit, over its USB serial port. While it is open no run can start.",
   "download.connect": "Connect the USB port on the back of the display to this computer with a data cable.",
   "download.hold_button": "Hold the front panel button for 10 seconds to enter USB download mode.",
-  "download.title": "Put the device in USB download mode",
-  "download.waiting": "Waiting for the unit, {minutes}:{seconds} left",
+  "download.title": "Enter USB download mode",
   "logs.delete_description": "Runs older than 30 days are removed from the logs folder. The others stay.",
   "logs.delete_old": "Delete older than 30 days…",
   "logs.delete_old_hint": "Remove run folders older than 30 days after confirmation; keep recent logs and the active run",
@@ -225,8 +224,8 @@
   "setup.connect_1_about": "Pull it straight off. Your heating stays off until you put it back.",
   "setup.connect_2": "Plug it into this computer",
   "setup.connect_2_about": "Use the micro-USB port on the back of the display and a cable that carries data. Charging-only cables are the usual problem.",
-  "setup.connect_3": "Restart it when asked",
-  "setup.connect_3_about": "During the run, unfr0zen tells you when to hold the display down so it restarts into USB download mode. You don't need to do this yet.",
+  "setup.connect_3": "Keep it connected for the whole process",
+  "setup.connect_3_about": "Leave the cable in until unfr0zen says it's done. The thermostat restarts a few times along the way, and unfr0zen tells you if it needs anything from you.",
   "setup.connect_about": "unfr0zen keeps Nest's own thermostat software and adds local control. Nothing is written until you review your choices.",
   "setup.connect_title": "Connect your thermostat",
   "setup.continue": "Continue",
@@ -315,5 +314,6 @@
   "task.patch": "Patch",
   "setup.developer": "Developer options",
   "setup.developer_hint": "The command line's other options, for development and testing",
-  "task.backup_patch": "Back up and patch"
+  "task.backup_patch": "Back up and patch",
+  "download.left": "left to wait"
 }

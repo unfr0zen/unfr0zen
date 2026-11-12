@@ -17,7 +17,7 @@ use crate::{spawn_dialog, WAIT_USB};
 #[derive(Default)]
 pub struct Form {
     backplate_sim: bool,
-    block_cloud: bool,
+    pub block_cloud: bool,
     ntp: Toggle,
     pub mqtt: Toggle,
     mqtt_user: String,
@@ -68,13 +68,18 @@ impl FilePick {
 
     /// The button that opens the picker for `kind` files, then the chosen
     /// file's name with a clear button.
-    fn ui(&mut self, ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, kind: &str, extensions: &[&str]) {
+    fn ui(&mut self, ui: &mut egui::Ui, label: &str, kind: &str, extensions: &[&str]) {
         self.button(ui, label, kind, extensions);
         self.chosen(ui);
     }
 
-    fn button(&mut self, ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, kind: &str, extensions: &[&str]) {
-        if ui.add(egui::Button::new(label))
+    /// The button, rounded as the cards' others, a switch's height.
+    fn button(&mut self, ui: &mut egui::Ui, label: &str, kind: &str, extensions: &[&str]) {
+        let button = ui.scope(|ui| {
+            ui.spacing_mut().button_padding.y = 3.0;
+            crate::setup::rounded_button(ui, label, crate::setup::Look::Secondary, true, egui::vec2(0.0, 26.0))
+        }).inner;
+        if button
             .on_hover_text(crate::tr!("patch.file.choose_hint", kind = kind))
             .clicked() && self.pending.is_none() {
             let (sender, receiver) = std::sync::mpsc::channel();
