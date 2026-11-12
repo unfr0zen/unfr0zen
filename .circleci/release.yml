@@ -152,7 +152,8 @@ workflows:
               platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
           name: app-<< matrix.platform >>
           requires: [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal, release-draft]
-          context: docker-hub
+          # bundle-signing: the patch bundles' key, readable by tag pipelines alone.
+          context: [docker-hub, bundle-signing]
           filters: *release-tags
       - release-publish:
           requires: [test, clippy, app-linux-x86_64, app-linux-arm64, app-linux-riscv64, app-windows-x86_64, app-windows-arm64, app-macos]

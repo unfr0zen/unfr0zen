@@ -96,8 +96,11 @@ The version comes from `git describe --tag --always --dirty`.
   cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz
   ```
 
-  Its manifest lists every file's SHA-256, which unpacking checks. Releases
-  ship it unsigned for now; with `UNFR0ZEN_BUNDLE_KEY` set (a base64 Ed25519
-  seed) it is signed too. `unfr0zen-bundle keygen KEY` makes a key (and prints
+  Its manifest lists every file's SHA-256, which unpacking checks. With
+  `UNFR0ZEN_BUNDLE_KEY` set (a base64 Ed25519 seed) it is signed too; a release
+  always is, with the key in the CircleCI context `bundle-signing` (tag
+  pipelines only), whose public half is `utils/bundle/release.pub`. Units
+  install only updates signed by it, unless the developer option "allow
+  unsigned updates" was on when they were patched. `unfr0zen-bundle keygen KEY` makes a key (and prints
   its public half), `unfr0zen-bundle verify BUNDLE PUBLIC-KEY` checks a
   signed bundle.

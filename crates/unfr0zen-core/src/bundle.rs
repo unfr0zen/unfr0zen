@@ -20,6 +20,9 @@ use crate::shell::sha256_hex;
 use crate::{device, Device, Error, Result};
 
 pub const FORMAT: u32 = 1;
+/// The public key releases sign their bundles with (utils/bundle/release.pub);
+/// a unit installs an update only when it is signed by it.
+pub const RELEASE_KEY: &str = include_str!("../../../utils/bundle/release.pub");
 pub const MANIFEST: &str = "manifest.json";
 pub const SIGNATURE: &str = "manifest.sig";
 /// The patch engine, a static ARMv7 binary.
@@ -406,6 +409,11 @@ mod tests {
         assert!(bundle.verify(&key(2).verifying_key()).unwrap_err().to_string().contains("bad signature"));
         let unsigned = Bundle::unpack(&pack(Device::Diamond3, "1.2.3", &files, &directories, None)).unwrap();
         assert!(unsigned.verify(&key(1).verifying_key()).unwrap_err().to_string().contains("unsigned"));
+    }
+
+    #[test]
+    fn the_release_key_is_a_public_key() {
+        verifying_key(RELEASE_KEY).unwrap();
     }
 
     #[test]

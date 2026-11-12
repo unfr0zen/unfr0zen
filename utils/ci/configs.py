@@ -105,14 +105,14 @@ MODULES = {
     # app installs. Its job builds unfr0zen-apply as well, the patch engine on
     # unfr0zen-core.
     "nestlocal": {"paths": ["crates/nestlocal", "crates/unfr0zen-apply", "crates/unfr0zen-core", "platform/common/wakefilter",
-                            "platform/common/localcloud", "Cargo.toml", "Cargo.lock"],
+                            "platform/common/localcloud", "utils/bundle", "Cargo.toml", "Cargo.lock"],
                   "needs": ["radio", "zbwake", "j49-kernel"]},
 }
 
 # The checks: the jobs that build nothing a later one takes. All compile the
 # workspace, which embeds every module and files of platform/ and assets/.
 PLATFORMS = ["linux-x86_64", "linux-arm64", "linux-riscv64", "windows-x86_64", "windows-arm64", "macos"]
-CHECK = {"paths": ["crates", "platform", "assets", "Cargo.toml", "Cargo.lock", ".config", "utils/make_macos_app.sh"],
+CHECK = {"paths": ["crates", "platform", "assets", "utils/bundle", "Cargo.toml", "Cargo.lock", ".config", "utils/make_macos_app.sh"],
          "needs": list(MODULES)}
 CHECKS = dict.fromkeys(["test", "clippy"] + ["app-" + platform for platform in PLATFORMS], CHECK)
 
