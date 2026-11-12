@@ -38,7 +38,7 @@ function fillButtons(assets) {
             // The GUI build only; the CLI's assets are named unfr0zen-cli-*.
             const asset = assets.find((a) => a.name.startsWith(`unfr0zen-${platform}-`));
             const a = document.createElement("a");
-            a.className = "btn btn-ice";
+            a.className = "btn btn-primary";
             a.textContent = LABELS[platform];
             a.href = asset ? asset.browser_download_url : RELEASES;
             box.append(a);
