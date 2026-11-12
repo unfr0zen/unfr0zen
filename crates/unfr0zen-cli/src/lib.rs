@@ -15,7 +15,7 @@ use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
-use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, PatchInputs, Slot};
+use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, PatchInputs};
 
 use ui::TerminalProgress;
 
@@ -29,7 +29,7 @@ fn help_styles() -> clap::builder::Styles {
 #[derive(Parser, Debug)]
 #[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
     Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
-    is written; --backup saves the volume first, --dry-run writes nothing.", args_conflicts_with_subcommands = true)]
+    is written.", args_conflicts_with_subcommands = true)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -39,18 +39,9 @@ struct Args {
     /// seconds to wait for the app root shell
     #[arg(long, default_value_t = 180)]
     wait_shell: u64,
-    /// backup and run record directory (default: unfr0zen's data directory)
+    /// run record directory (default: the runs folder in unfr0zen's data directory)
     #[arg(long)]
     work_dir: Option<PathBuf>,
-    /// patch copies with the volume mounted read-only, list the changes, write nothing, and boot the unit unchanged
-    #[arg(long)]
-    dry_run: bool,
-    /// read the whole root volume and save it as original.ubifs before patching (about 45 s)
-    #[arg(long)]
-    backup: bool,
-    /// override stock boot order when the previous Linux slot is known
-    #[arg(long, value_parser = ["root0", "root1"])]
-    slot: Option<String>,
     /// j49/diamond: patch FILE, a raw NAND image (2112-byte pages), in place instead of a unit
     #[arg(long, value_name = "FILE")]
     nand_image: Option<PathBuf>,
@@ -114,12 +105,6 @@ struct Args {
     /// gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
     #[arg(long, help_heading = "Root filesystem options")]
     dark_theme: bool,
-    /// tar of root-owned files to add
-    #[arg(long, value_name = "TAR", help_heading = "Root filesystem options")]
-    overlay: Option<PathBuf>,
-    /// set nlclient's cloudregisterurl (Nest's frontdoor) to URL; no nestlocal
-    #[arg(long, value_name = "URL", help_heading = "Root filesystem options")]
-    cloud_url: Option<String>,
     /// run nlclient's backplate simulator: 1H1C, simulated temperature
     #[arg(long, help_heading = "Root filesystem options")]
     backplate_sim: bool,
@@ -191,10 +176,8 @@ impl Args {
         PatchInputs {
             root_password: self.root_password.clone(),
             ntp_server: self.ntp_server.clone(),
-            cloud_url: self.cloud_url.clone(),
             backplate_sim: self.backplate_sim,
             block_cloud: self.block_cloud,
-            overlay: self.overlay.clone(),
             mqtt: self.mqtt.clone(),
             mqtt_user: self.mqtt_user.clone(),
             mqtt_password: self.mqtt_password.clone(),
@@ -223,8 +206,8 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
     fn shown(flag: &str, value: &str) -> Option<String> {
         match flag {
             "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" => Some("***".into()),
-            "--mqtt" | "--cloud-url" => Some(mask_url(value)),
-            "--mqtt-ca" | "--overlay" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" =>
+            "--mqtt" => Some(mask_url(value)),
+            "--mqtt-ca" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" =>
                 Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned()),
             _ => None,
         }
@@ -298,9 +281,6 @@ pub fn main() {
     let config = Config {
         options,
         omap: args.device,
-        slot: args.slot.as_deref().and_then(Slot::parse),
-        dry_run: args.dry_run,
-        backup: args.backup,
         entry_point: args.entry_point.unwrap_or_default(),
         wait_usb: Duration::from_secs(args.wait_usb),
         wait_shell: Duration::from_secs(args.wait_shell),
@@ -421,10 +401,10 @@ mod logged_arguments_tests {
     #[test]
     fn secrets_credentials_and_home_paths_stay_out_of_the_log() {
         let args = ["--zigbee", "--root-password", "hunter2", "--mqtt=mqtt://bob:pw@broker.lan:1883",
-                    "--mqtt-user", "bob", "--matter-code=20202021", "--overlay", "/Users/bob/extra.tar", "--slot", "root0"];
+                    "--mqtt-user", "bob", "--matter-code=20202021", "--mqtt-ca", "/Users/bob/ca.pem"];
         assert_eq!(logged_arguments(args.iter().map(|a| a.to_string())),
                    "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
-                    --mqtt-user *** --matter-code=*** --overlay extra.tar --slot root0");
+                    --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem");
     }
 }
 

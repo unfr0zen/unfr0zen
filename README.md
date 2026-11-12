@@ -158,8 +158,6 @@ Commands:
 
 Common options:
   --device <GEN>         diamond, j49 or diamond3 instead of the USB identity
-  --backup              Save the original root volume before patching
-  --dry-run             List the changes, write nothing
   --mqtt <URL>          Relay to this MQTT broker
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
@@ -187,7 +185,6 @@ commits past a tag, or local changes) never update.
   read. `unfr0zen verify` compares a backup with the unit.
 - **To go back to stock:** Restore to unit (or `unfr0zen restore`) writes
   that backup back to the unit.
-- `--backup` also saves the original root volume before each patch.
 
 ## When something is wrong
 **The app doesn't see the thermostat.** Use a USB cable that carries data:

@@ -42,4 +42,4 @@ pub fn logo_color(t: f32) -> [u8; 3] {
 
 pub use unfr0zen_core::nestlocal::DEFAULT_MATTER_CODE;
 pub use unfr0zen_core::patch::DEFAULT_NTP_SERVER;
-pub use unfr0zen_core::{Error, Result, Slot};
+pub use unfr0zen_core::{Error, Result};

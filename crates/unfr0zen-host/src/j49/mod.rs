@@ -201,26 +201,21 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     unsupported(device, &config.options)?;
     let order = env.boot_order()?;
     progress.status(&format!("Installed boot order: {} then {}", order[0], order[1]));
-    let slot = config.slot.unwrap_or(order[0]);
+    let slot = order[0];
     progress.status(&format!("Application root slot: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
     let raw = stage_with(progress, &format!("Read {slot} over USB"), |progress| read_slot(nand, progress, slot))?;
-    if config.backup {
-        let original = run_dir.join("original.raw");
-        fs::write(&original, &raw)?;
-        progress.status(&format!("Original root slot saved: {} (raw 2112-byte pages)", original.display()));
-    }
     let mut volume = stage(progress, &format!("Scan {slot}'s JFFS2"), || jffs2::Slot::load(raw.clone()))?;
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
         crate::assets::nestlocal()
     } else {
         Vec::new()
     };
-    let label = if config.dry_run { format!("Patch copies of {slot} files (dry run)") } else { format!("Patch {slot}") };
+    let label = format!("Patch {slot}");
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
                                                                  &mut || stored_pki(&pki_dir), &BTreeSet::new(),
-                                                                 config.dry_run, &screen_builder(run_dir));
+                                                                 false, &screen_builder(run_dir));
     let changes = stage(progress, &label, || match patch(&mut volume) {
         // Too little room beside the old nestlocal or nlclient: again, from
         // the same read, with the old ones' blocks erased for the new.
@@ -234,12 +229,6 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
     let upper = stage(progress, "Choose the kernel booted first", || upper_kernel(nand, slot, options))?;
-    if config.dry_run {
-        if let Some((_, what)) = &upper {
-            progress.status(&format!("Dry run: {what} would go in {slot}'s boot partition, booted first"));
-        }
-        return Ok(Outcome { device, slot, changed: false });
-    }
     let mut changed = false;
     if !changes.is_empty() {
         let plan = volume.programmed()?;
@@ -368,9 +357,6 @@ pub fn run_image(config: &Config, image: &Path, progress: &mut dyn Progress) -> 
 
 fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome: &Outcome, port: Option<&str>) -> Result<String> {
     let slot = outcome.slot;
-    if config.dry_run {
-        return Ok(format!("Dry run done: {slot} left as it was; changes listed in {}", run_dir.join("changes.txt").display()));
-    }
     let shell = match port.filter(|_| config.options.usb_shell) {
         Some(port) => Some(stage(progress, "Wait for USB root shell", || verify_shell(port, app_id(outcome.device), config.wait_shell))?),
         None => None,

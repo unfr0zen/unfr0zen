@@ -148,20 +148,9 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         board.read_installed_environment()
     })?;
     progress.status(&format!("Installed boot order: {} then {}", environment.order[0], environment.order[1]));
-    let slot = stage(progress, "Find the application root volume", || board.select_slot(environment.order, config.slot))?;
+    let slot = stage(progress, "Find the application root volume", || board.select_slot(environment.order))?;
     progress.status(&format!("Application root volume: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
-    if config.backup {
-        let original = run_dir.join("original.ubifs");
-        stage(progress, &format!("Read and download {slot} over USB"), || -> Result<()> {
-            let image = board.retrieve(slot)?;
-            fs::write(&original, &image)?;
-            log::info!("Original {slot} saved: {} SHA-256 {}, CRC32 {:08x}", original.display(), sha256_hex(&image),
-                       crc32fast::hash(&image));
-            Ok(())
-        })?;
-        progress.status(&format!("Original root filesystem saved: {}", original.display()));
-    }
 
     // Contents known before boot travel in the initramfs, over fastboot.
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
@@ -169,8 +158,7 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
     } else {
         Vec::new()
     };
-    let mut payload: BTreeMap<String, Vec<u8>> = options.overlay.iter()
-        .flat_map(|overlay| overlay.files.iter().map(|(_, _, data)| (sha256_hex(data), data.clone()))).collect();
+    let mut payload: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for bundle in options.thread.iter().chain(&options.doom) {
         for (_, _, data) in &bundle.files { payload.insert(sha256_hex(data), data.clone()); }
     }
@@ -200,12 +188,12 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         let firmware = release.split_once('-').map_or(release, |(_, build)| build);
         log::info!("Firmware {firmware} (kernel release {release})");
     }
-    let label = if config.dry_run { format!("Patch copies of {slot} files (dry run)") } else { format!("Patch {slot} in place") };
+    let label = format!("Patch {slot} in place");
     let payload: BTreeSet<String> = payload.into_keys().collect();
     let pki_dir = config.data_dir.join("nestlocal-pki");
     let changes = stage(progress, &label, || {
         patch::patch_on_device(&mut shell, Device::Diamond3, options, &nestlocal_binary, &mut || stored_pki(&pki_dir), &payload,
-                               config.dry_run, &screen_builder(run_dir))
+                               false, &screen_builder(run_dir))
     })?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
     shell.restart()?;
@@ -216,10 +204,6 @@ fn route(progress: &mut dyn Progress, config: &Config, port: &str, run_dir: &Pat
         let mut board = connect_recovery(progress, &port)?;
         board.attach_ubi()?;
         stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    }
-    if config.dry_run {
-        return Ok(format!("Dry run done: {slot} left as it was; changes listed in {}",
-                          run_dir.join("initramfs-changes.txt").display()));
     }
     // Without the USB root shell there is nothing to log in to: the patch's
     // writes were checked on the volume, and the unit coming back as its app

@@ -135,10 +135,8 @@ impl Form {
         PatchInputs {
             root_password: text(&self.root_password),
             ntp_server: self.ntp.on.then(|| self.ntp.value.clone()),
-            cloud_url: None,
             backplate_sim: self.backplate_sim,
             block_cloud: self.block_cloud,
-            overlay: None,
             mqtt: self.mqtt.on.then(|| self.mqtt.value.clone()),
             mqtt_user: self.mqtt.on.then(|| text(&self.mqtt_user)).flatten(),
             mqtt_password: self.mqtt.on.then(|| text(&self.mqtt_password)).flatten(),
@@ -167,9 +165,6 @@ impl Form {
         Ok(Config {
             options,
             omap: self.device,
-            slot: None,
-            dry_run: false,
-            backup: false,
             entry_point: self.entry_point,
             wait_usb: WAIT_USB,
             wait_shell: Duration::from_secs(180),
