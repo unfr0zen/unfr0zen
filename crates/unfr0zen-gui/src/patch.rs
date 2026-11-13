@@ -508,7 +508,12 @@ impl Form {
             return crate::tr!("patch.external_temperature_unsupported_hint");
         }
         if !self.external_temperature_enabled() {
-            return crate::tr!("patch.external_temperature_needs_integration_hint");
+            // Only a 3rd generation gives up its Bluetooth for it.
+            return match self.device.or(self.last_device) {
+                Some(Device::Diamond3) => crate::tr!("patch.external_temperature_needs_integration_ble_hint"),
+                Some(_) => crate::tr!("patch.external_temperature_needs_integration_hint"),
+                None => crate::tr!("patch.external_temperature_needs_integration_any_hint"),
+            };
         }
         match self.device.or(self.last_device) {
             Some(Device::Diamond3) => crate::tr!("patch.external_temperature_ble_hint"),
@@ -795,8 +800,13 @@ mod tests {
     fn external_temperatures_hint_says_why_it_is_greyed_out() {
         let mqtt = || Toggle { on: true, value: "tcp://broker:1883".into() };
         let hint = |form: Form| form.external_temperature_hint();
+        // Greyed out for want of an integration: Bluetooth named only where it goes.
         assert_eq!(hint(Form { last_device: Some(Device::Diamond3), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_needs_integration_ble_hint"));
+        assert_eq!(hint(Form { last_device: Some(Device::J49), ..Form::default() }),
                    crate::tr!("patch.external_temperature_needs_integration_hint"));
+        assert!(!hint(Form { last_device: Some(Device::J49), ..Form::default() }).contains("Bluetooth"));
+        assert_eq!(hint(Form::default()), crate::tr!("patch.external_temperature_needs_integration_any_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
                    crate::tr!("patch.external_temperature_unsupported_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond3), ..Form::default() }),
