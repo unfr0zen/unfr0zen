@@ -86,6 +86,17 @@ fn update(path: &Path) -> Result<()> {
         Err(error) if settings.unsigned_updates => log::warn!("{error}: installed anyway, as unsigned updates are allowed"),
         Err(error) => return Err(failure(format!("{error}: only updates the release key signs install on this unit"))),
     }
+    // Going back is refused: an older release, signed as it is, could
+    // bring back what a later one fixed. A developer's unit allows it.
+    let (installed, new) = (settings.version.as_str(), bundle.manifest.version.as_str());
+    match (bundle::is_downgrade(installed, new), bundle::is_downgrade(installed, installed)) {
+        (Some(false), _) => {}
+        (_, _) if settings.unsigned_updates => log::warn!("{new} over {installed}: installed anyway, as this unit allows it"),
+        (Some(true), _) => return Err(failure(format!("{new} is older than {installed}, which this unit runs"))),
+        // Nothing to compare with: the installed version is not one we order.
+        (None, None) => {}
+        (None, Some(_)) => return Err(failure(format!("{new} is not a version to compare with {installed}"))),
+    }
     let status = run_from_memory(bundle.file(bundle::APPLY)?, |engine| {
         Command::new(engine).arg(path).arg(&options).arg("/").arg("/tmp/unfr0zen-update").arg("--live").status()
     })?;

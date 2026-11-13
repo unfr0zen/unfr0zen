@@ -12,9 +12,10 @@
 //! version from the bundle.
 //!
 //! update is the unit's own engine (/nestlabs/sbin/unfr0zen-apply) taking a
-//! new bundle: it checks it against its manifest and the release key, unless
-//! the unit was patched to allow unsigned updates, then runs the bundle's
-//! engine --live on / with the unit's options.json. The caller restarts the
+//! new bundle: it checks it against its manifest and the release key, and
+//! refuses one older than the unit runs, unless the unit was patched to allow
+//! unsigned updates, then runs the bundle's engine --live on / with the
+//! unit's options.json. The caller restarts the
 //! unit.
 //!
 //! The log goes to stderr. Exits non-zero with the reason on stderr when the

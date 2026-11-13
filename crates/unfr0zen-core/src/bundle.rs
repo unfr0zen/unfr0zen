@@ -197,6 +197,33 @@ impl Bundle {
     }
 }
 
+/// Where a version stands among others: vMAJOR.MINOR.PATCH, then a release
+/// candidate (-rcN) before the release, and a build git describe names after
+/// it (-N-gHASH, maybe -dirty) after it. None for anything else.
+fn version_order(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
+    let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+    let (numbers, rest) = version.split_once('-').map_or((version, None), |(n, r)| (n, Some(r)));
+    let mut parts = numbers.split('.').map(|n| n.parse::<u64>().ok());
+    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() {
+        return None;
+    }
+    let (kind, n) = match rest {
+        None => (1, 0),
+        Some(rest) => match rest.strip_prefix("rc") {
+            Some(n) => (0, n.parse().ok()?),
+            None => (2, rest.split('-').next()?.parse().ok()?),
+        },
+    };
+    Some((major, minor, patch, kind, n))
+}
+
+/// Whether installing `new` over `installed` goes back: None when either
+/// version is not one version_order places.
+pub fn is_downgrade(installed: &str, new: &str) -> Option<bool> {
+    Some(version_order(new)? < version_order(installed)?)
+}
+
 /// An overlay's files and directories, as pack takes them under overlays/NAME/.
 pub fn add_overlay(files: &mut Files, directories: &mut BTreeMap<String, u32>, name: &str, overlay: &Overlay) {
     for (path, mode, data) in &overlay.files {
@@ -421,6 +448,19 @@ mod tests {
     #[test]
     fn the_release_key_is_a_public_key() {
         verifying_key(RELEASE_KEY).unwrap();
+    }
+
+    #[test]
+    fn versions_go_candidates_then_release_then_later_builds() {
+        let order = ["v0.4.2", "v0.4.3-rc1", "v0.4.3-rc2", "v0.4.3", "v0.4.3-1-gabc1234", "v0.4.3-12-gdef5678-dirty", "v0.5.0", "v1.0.0"];
+        for pair in order.windows(2) {
+            assert_eq!(is_downgrade(pair[1], pair[0]), Some(true), "{} after {}", pair[0], pair[1]);
+            assert_eq!(is_downgrade(pair[0], pair[1]), Some(false), "{} after {}", pair[1], pair[0]);
+        }
+        assert_eq!(is_downgrade("v0.4.3", "v0.4.3"), Some(false));
+        assert_eq!(is_downgrade("v0.4.3", "0.4.3"), Some(false));
+        assert_eq!(is_downgrade("(version unknown)", "v0.4.3"), None);
+        assert_eq!(is_downgrade("v0.4.3", "dev"), None);
     }
 
     #[test]
