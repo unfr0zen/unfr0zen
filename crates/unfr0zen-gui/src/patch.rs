@@ -455,11 +455,11 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
-        crate::toggle_card(ui, &mut self.doom, true, crate::tr!("patch.doom"), crate::tr!("setup.doom_about"));
         // Offered only with a gen 2 chosen or on the bus.
         if self.known_device(bus) == Some(Device::J49) {
             crate::toggle_card(ui, &mut self.dark_theme, true, crate::tr!("patch.dark_theme"), crate::tr!("patch.dark_theme_hint"));
         }
+        crate::toggle_card(ui, &mut self.doom, true, crate::tr!("patch.doom"), crate::tr!("setup.doom_about"));
     }
 
     /// What the run will do, a line per choice, for the review step, with
@@ -483,8 +483,8 @@ impl Form {
         let mut extras: Vec<&str> = Vec::new();
         if self.ssh { extras.push(crate::tr!("setup.ssh")); }
         if self.usb_shell { extras.push(crate::tr!("setup.usb_console")); }
-        if self.doom { extras.push(crate::tr!("patch.doom")); }
         if self.inputs().dark_theme { extras.push(crate::tr!("patch.dark_theme")); }
+        if self.doom { extras.push(crate::tr!("patch.doom")); }
         rows.push((crate::tr!("setup.extras"), joined(&extras), Step::Features));
         rows
     }
