@@ -19,6 +19,8 @@
     --wire: #4c7a92;
     --blocked: #f85149;
     --inward: #3fb950;
+    --warn: #f26a12;
+    --warn-soft: #ff9654;
     --display: Jost, Futura, "Century Gothic", sans-serif;
     --sans: InterVariable, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -584,7 +586,6 @@ tr:last-child td { border-bottom: none; }
 
 .mark-tested { background: #2ea043; }
 
-.mark-untested { border: 1.5px solid #db6d28; }
 
 .mark-none {
     height: 1.5px;
@@ -701,9 +702,10 @@ tr:last-child td { border-bottom: none; }
     border-radius: 12px;
     padding: 12px 16px;
     margin: 16px 0;
-    background: rgba(255, 190, 92, 0.08);
-    border: 1px solid rgba(255, 190, 92, 0.22);
-    color: #ecd3a6;
+    background: rgba(242, 106, 18, 0.16);
+    border: 1px solid var(--warn);
+    border-left-width: 3px;
+    color: var(--text);
 }
 
 .note a { color: inherit; }
@@ -791,6 +793,25 @@ footer a:hover { color: var(--text); text-decoration: underline; }
 
 /* Documentation pages */
 
+.doc { position: relative; isolation: isolate; overflow-x: clip; }
+
+/* The hero's glow, centred on the page's title: the heading is as wide as
+   its text, so the glow follows the word. */
+.doc h1 { position: relative; width: fit-content; }
+.doc h1::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: calc(50% + 30px);
+    z-index: -1;
+    width: 520px;
+    height: 260px;
+    background: radial-gradient(ellipse, rgba(143, 220, 255, 0.16), transparent 70%);
+    filter: blur(40px);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
 .doc .wrap { max-width: 860px; }
 
 .doc h1 {
@@ -811,17 +832,119 @@ footer a:hover { color: var(--text); text-decoration: underline; }
 }
 
 .doc h2 svg { width: 24px; height: 24px; }
-.doc h3 { font-size: 1.1rem; margin: 28px 0 8px; }
+.doc h3 { margin: 36px 0 10px; font: 500 1.25rem / 1.3 var(--display); letter-spacing: -0.005em; }
+
+.doc .lede {
+    margin: 0 0 20px;
+    font-size: 1.125rem;
+    color: var(--text-body);
+}
 
 .doc p, .doc li { color: var(--text-body); overflow-wrap: break-word; }
 .doc b { color: var(--text); font-weight: 600; }
 .doc ol, .doc ul { padding-left: 22px; }
 .doc li { margin: 8px 0; }
 .doc .table-scroll { margin: 4px 0 12px; }
-.doc td.nowrap { white-space: nowrap; }
 
 .doc .badge { margin: 4px 0 20px; }
 .doc .badge img { display: block; height: 40px; }
+
+/* A point to keep in mind that is not a warning. */
+.callout {
+    margin: 16px 0;
+    padding: 14px 18px;
+    background: rgba(143, 220, 255, 0.06);
+    border: 1px solid rgba(143, 220, 255, 0.2);
+    border-radius: 12px;
+}
+.doc .callout p { margin: 0; }
+.doc .callout p + p { margin-top: 8px; }
+
+/* Steps to follow in order, each under its number. */
+.doc ol.steps { list-style: none; padding: 0; counter-reset: step; }
+.doc ol.steps > li {
+    position: relative;
+    min-height: 28px;
+    margin: 12px 0;
+    padding-left: 44px;
+    counter-increment: step;
+}
+.doc ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    top: -1px;
+    left: 0;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: var(--accent);
+    font: 500 0.95rem / 1 var(--display);
+    border: 1px solid rgba(143, 220, 255, 0.35);
+    border-radius: 50%;
+}
+
+/* A numbered stage of a longer procedure, its own steps under it. */
+.doc h3.stage { display: flex; align-items: center; gap: 12px; margin-top: 44px; }
+.stage span {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: var(--accent-ink);
+    font-size: 1rem;
+    background: var(--accent);
+    border-radius: 50%;
+}
+
+/* Cards: a few things side by side, each whole in itself. */
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 16px;
+    margin: 16px 0 20px;
+}
+.cards-wide { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.card {
+    display: flex;
+    flex-direction: column;
+    padding: 18px 20px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+}
+.doc .card h3 { margin: 0 0 6px; font-size: 1.2rem; }
+.doc .card p { margin: 0 0 10px; font-size: 0.95rem; }
+.doc .card > :last-child { margin-bottom: 0; }
+.doc .card .badge { margin: auto 0 0; padding-top: 6px; }
+.card .tag {
+    align-self: flex-start;
+    margin-bottom: 10px;
+    padding: 2px 10px;
+    color: var(--accent);
+    font-size: 0.8125rem;
+    border: 1px solid rgba(143, 220, 255, 0.3);
+    border-radius: 999px;
+}
+.card .tag-warn { color: var(--warn-soft); border-color: var(--warn); }
+.doc .card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-size: 0.95rem; }
+.card dt { color: var(--muted); }
+.card dd { margin: 0; color: var(--text-body); }
+a.card { color: inherit; text-decoration: none; transition: border-color 0.15s, background 0.15s; }
+a.card:hover { border-color: var(--line-strong); background: var(--panel-raised); }
+
+/* A long list of short names, to scan instead of read. */
+.doc .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px; padding: 0; list-style: none; }
+.doc .chips li {
+    margin: 0;
+    padding: 3px 11px;
+    color: var(--text-body);
+    font-size: 0.875rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+}
 
 /* The install guide's photos and drawings: two to a row, one when narrow. */
 .figures {
@@ -840,6 +963,8 @@ footer a:hover { color: var(--text); text-decoration: underline; }
     border: 1px solid var(--line);
 }
 .illustration { background: var(--panel); }
+/* Photos side by side keep one height, cropped to it. */
+.figures img, .figures .illustration { aspect-ratio: 8 / 7; object-fit: cover; }
 .doc figcaption { margin-top: 8px; color: var(--muted); font-size: 0.875rem; }
 .doc figcaption a { color: inherit; }
 
@@ -883,6 +1008,8 @@ footer a:hover { color: var(--text); text-decoration: underline; }
     text-decoration: none;
 }
 .toc a:hover, .toc a:focus-visible { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+/* The section in view (toc.js). */
+.toc a[aria-current] { color: var(--text); background: rgba(143, 220, 255, 0.1); }
 
 /* With room beside the text, the contents stay in view in the left margin:
    a float pulled out of the column by its own width, then stuck. */

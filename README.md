@@ -41,19 +41,20 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 |-|-|:-:|:-:|:-:|:-:|
 | Nest Learning Thermostat (3rd generation) | `diamond3` | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
 | Nest Learning Thermostat (2nd generation) | `j49` | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
-| Nest Learning Thermostat (1st generation) | `diamond` | 🧪 | 🧪 Wi-Fi · — Thread | — | — |
+| Nest Learning Thermostat (1st generation) | `diamond` | ✅ | ✅ Wi-Fi · — Thread | — | ✅ |
 
-✅ tested on a unit · 🧪 built, not yet tested on a unit · — not available
+✅ supported · — not available
 
 <sub>No other model is supported: not the Nest Thermostat E, any other Nest thermostat, or another make.</sub>
 
 - **External temperature:** the thermostat regulates from a temperature you send
   it over MQTT, Matter or Zigbee (any thermometer in Home Assistant). Official
   Nest Temperature Sensors are not supported: on the 3rd generation the option
-  turns Bluetooth off, and the 2nd generation never had them.
-- **1st generation:** experimental. Patching has not been verified on a physical
-  unit or a stock NAND. Its CC2530 radio uses UART, not the 2nd generation's SPI
-  protocol, so there is no Zigbee, Matter over Thread or USB shell.
+  turns Bluetooth off, and the 1st and 2nd generation never had them.
+- **1st generation:** it has to be opened up to reach USB download mode: see the
+  [install guide](https://unfr0zen.com/install/#gen1). Its CC2530 radio uses UART,
+  not the 2nd generation's SPI protocol, so there is no Zigbee or Matter over
+  Thread, and it has no USB shell.
 - **Matter and sleep:** the thermostat sleeps and wakes for a controller's
   messages. On the 3rd generation a controller looking it up wakes it too; the
   2nd generation's Wi-Fi chip lets no lookup through while it sleeps, so it
@@ -164,7 +165,7 @@ Common options:
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
   --zigbee              Join a Zigbee network as a router (replaces Heat Link)
-  --external-temperature  Regulate from temperatures sent to it (2nd and 3rd generation; turns off the 3rd's Bluetooth)
+  --external-temperature  Regulate from temperatures sent to it (turns off the 3rd generation's Bluetooth)
   --doom                Install Doom, launched from UNFR0ZEN → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
