@@ -4,7 +4,7 @@
 //! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
 //! - the j49's NAND flasher, dropbear, kernel and the x-loader its boot ROM
-//!   takes over USB, built there too;
+//!   takes over USB, and the gen 1's x-loader, built there too;
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
 //!   .work/initramfs, fetched with curl when absent);
@@ -304,6 +304,17 @@ fn j49(root: &Path, out: &Path) {
     fs::write(out.join("x-load.bin"), xloader).unwrap();
 }
 
+/// The gen 1's x-loader, built in Docker as the j49's is; without it the app
+/// reaches no gen 1.
+fn diamond(root: &Path, out: &Path) {
+    let xloader = root.join("build/diamond/x-load.bin");
+    println!("cargo:rerun-if-changed={}", xloader.display());
+    let xloader = fs::read(&xloader).unwrap_or_default();
+    // Its reset vector: b reset.
+    assert!(xloader.is_empty() || xloader[3] == 0xea, "build/diamond/x-load.bin does not start with its vectors");
+    fs::write(out.join("diamond-x-load.bin"), xloader).unwrap();
+}
+
 fn nestlocal(root: &Path, out: &Path) {
     let binary = root.join("build/nestlocal-armv7");
     println!("cargo:rerun-if-changed={}", binary.display());
@@ -342,6 +353,7 @@ fn main() {
     build_firmware(&root);
     firmware(&root, &out);
     j49(&root, &out);
+    diamond(&root, &out);
     busybox(&root, &out);
     nestlocal(&root, &out);
     doom(&root, &out);

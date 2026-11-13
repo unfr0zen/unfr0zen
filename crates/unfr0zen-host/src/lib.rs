@@ -5,6 +5,7 @@
 
 pub mod assets;
 pub mod device;
+mod diamond;
 pub mod diamond3;
 pub mod flow;
 pub mod j49;

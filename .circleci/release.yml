@@ -112,6 +112,8 @@ workflows:
           filters: *release-tags
       - j49-kernel:
           filters: *release-tags
+      - diamond-xloader:
+          filters: *release-tags
       - zbwake:
           requires: [image-ready]
           context: docker-hub
@@ -137,11 +139,11 @@ workflows:
           context: docker-hub
           filters: *release-tags
       - test:
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+          requires: [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
           filters: *release-tags
       - clippy:
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal]
+          requires: [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
           filters: *release-tags
       - app:
@@ -149,7 +151,7 @@ workflows:
             parameters:
               platform: [linux-x86_64, linux-arm64, linux-riscv64, windows-x86_64, windows-arm64, macos]
           name: app-<< matrix.platform >>
-          requires: [recovery, j49, j49-kernel, zbwake, radio, thread, doom, nlclient, nestlocal, release-draft]
+          requires: [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal, release-draft]
           context: docker-hub
           filters: *release-tags
       - release-publish:

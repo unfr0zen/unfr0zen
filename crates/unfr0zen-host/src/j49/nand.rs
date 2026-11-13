@@ -259,7 +259,7 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
     find_unit(progress, wait_usb, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
-    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
+    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", || load_flasher(usb))?;
     // The generation only names the unit here; an environment a restore is
     // to repair may not parse.
     let device = read_environment(&mut flasher).ok().and_then(|env| env.device()).unwrap_or(usb);

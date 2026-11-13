@@ -57,19 +57,25 @@ fn generation(wanted: Option<Device>, env: &Environment, usb: Device) -> Device 
     wanted.or_else(|| env.device()).unwrap_or(usb)
 }
 
+/// The x-loader for the unit's generation as known before the flasher runs:
+/// the gen 1's own (crate::diamond) when its application gadget or
+/// `--device` named it, else the j49's.
+fn xloader(device: Device) -> &'static [u8] {
+    if device == Device::Diamond { crate::diamond::XLOADER } else { assets::XLOADER }
+}
+
 /// From the boot ROM to the flasher running from SDRAM: the ASIC ID,
 /// x-loader into SRAM, then x-loader (re-enumerated) loads the flasher.
-/// Returns the ASIC ID too. The one x-loader serves both generations: Nest's
-/// USB loaders for the two differ only in the muxing of pins the loader does
-/// not use.
-pub(crate) fn load_flasher() -> Result<(Vec<u8>, Flasher<Pipe>)> {
-    if assets::XLOADER.is_empty() {
+/// Returns the ASIC ID too.
+pub(crate) fn load_flasher(device: Device) -> Result<(Vec<u8>, Flasher<Pipe>)> {
+    let xloader = xloader(device);
+    if xloader.is_empty() {
         return Err(failure("this build has no x-loader (it needs Docker to build)"));
     }
     let (port, mut rom) = usb::open_rom(seconds(10))?;
     let asic = omap::probe(&mut rom)?;
     log::info!("OMAP boot ROM at {port}, ASIC ID {}", asic.iter().map(|b| format!("{b:02x}")).collect::<String>());
-    omap::load_first_stage(&mut rom, assets::XLOADER)?;
+    omap::load_first_stage(&mut rom, xloader)?;
     drop(rom);
     std::thread::sleep(Duration::from_millis(20));
     let (_, mut xloader) = usb::open_rom(seconds(60))?;
@@ -332,7 +338,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     let log_dir = start_log(progress, &stamp)?;
     let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
     progress.phase(Phase::Recovery);
-    let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", load_flasher)?;
+    let (asic, mut flasher) = stage(progress, "Load the NAND flasher over USB", || load_flasher(usb))?;
     let silicon = omap::silicon(&asic, flasher.idcode);
     let outcome = match backup {
         Some(out) => {
@@ -422,5 +428,16 @@ mod tests {
         kernel::install(&mut nand, Slot::Root0, &image).unwrap();
         let (image, what) = upper_kernel(&mut nand, Slot::Root0, &neither).unwrap().unwrap();
         assert_eq!((image, what.as_str()), (stock, "the stock kernel's boot logo"));
+    }
+
+    #[test]
+    fn a_gen_1_gets_its_own_x_loader_and_a_gen_2_the_j49s() {
+        if crate::diamond::XLOADER.is_empty() || assets::XLOADER.is_empty() {
+            eprintln!("No x-loaders in this build; skipping");
+            return;
+        }
+        assert_ne!(crate::diamond::XLOADER, assets::XLOADER);
+        assert_eq!(xloader(Device::Diamond), crate::diamond::XLOADER);
+        assert_eq!(xloader(Device::J49), assets::XLOADER);
     }
 }
