@@ -818,9 +818,40 @@ footer a:hover { color: var(--text); text-decoration: underline; }
 .doc ol, .doc ul { padding-left: 22px; }
 .doc li { margin: 8px 0; }
 .doc .table-scroll { margin: 4px 0 12px; }
+.doc td.nowrap { white-space: nowrap; }
 
 .doc .badge { margin: 4px 0 20px; }
 .doc .badge img { display: block; height: 40px; }
+
+/* The install guide's photos and drawings: two to a row, one when narrow. */
+.figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+}
+.doc figure { margin: 0; }
+.doc figure.wide { margin: 16px 0; max-width: 640px; }
+.doc figure img, .illustration {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+}
+.illustration { background: var(--panel); }
+.doc figcaption { margin-top: 8px; color: var(--muted); font-size: 0.875rem; }
+.doc figcaption a { color: inherit; }
+
+.ill-body { fill: var(--panel-raised); stroke: var(--line-strong); stroke-width: 2; }
+.ill-face { fill: var(--night); stroke: var(--line); }
+.ill-port { fill: var(--night); stroke: var(--accent); stroke-width: 1.5; }
+.ill-plug { fill: var(--wire); }
+.ill-cable, .ill-press { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.ill-label, .ill-note, .ill-big { text-anchor: middle; font-family: var(--sans); }
+.ill-label { fill: var(--muted); font-size: 12px; }
+.ill-note { fill: var(--muted); font-size: 12px; text-anchor: end; }
+.ill-big { fill: var(--text); font: 500 30px var(--display); }
 
 .toc {
     display: flex;
