@@ -1,5 +1,6 @@
 {
-  "about.credit.cuckoo_loader": "cuckoo loader (diamond/j49) —",
+  "about.credit.cuckoo_loader": "cuckoo loader —",
+  "about.credit.cuckoo_loader_gen1": "cuckoo loader gen 1 —",
   "about.credit.diamond3_loader": "diamond3 official loader —",
   "about.credits": "Credits",
   "about.heading": "About {app}",

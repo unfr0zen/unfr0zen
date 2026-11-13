@@ -248,4 +248,5 @@ under its shareware terms.
 - DOOM — [id Software](https://github.com/id-Software/DOOM)
 - CVE-2017-7932 and CVE-2017-7936 — [Quarkslab](https://quarkslab.com)
 - diamond3 official loader — [@evan-hoddinott](https://github.com/evan-hoddinott)
-- cuckoo loader (diamond/j49) — [@ajb142](https://github.com/ajb142)
+- cuckoo loader — [@ajb142](https://github.com/ajb142)
+- cuckoo loader gen 1 — [@guyman70718](https://github.com/guyman70718)
