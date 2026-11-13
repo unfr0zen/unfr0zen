@@ -380,7 +380,7 @@ section > .wrap > h2 {
 .dial text { text-anchor: middle; }
 .dial-temp { fill: var(--text); font: 400 56px var(--display); letter-spacing: -0.02em; }
 .dial-half { font-size: 26px; }
-.dial-label { fill: var(--muted); font: 400 15px var(--sans); }
+.dial-label { fill: var(--muted); font: 400 13px var(--sans); }
 
 /* The wires' box, stretched to the list's height and tucked under the dial's
    edge. Each wire runs level out of the dial and into its row, bending only
@@ -965,18 +965,25 @@ a.card:hover { border-color: var(--line-strong); background: var(--panel-raised)
 .illustration { background: var(--panel); }
 /* Photos side by side keep one height, cropped to it. */
 .figures img, .figures .illustration { aspect-ratio: 8 / 7; object-fit: cover; }
+/* The app's screenshots come framed as windows: shown whole, unbordered. */
+.doc figure img.app { aspect-ratio: auto; border: 0; border-radius: 0; }
 .doc figcaption { margin-top: 8px; color: var(--muted); font-size: 0.875rem; }
 .doc figcaption a { color: inherit; }
 
 .ill-body { fill: var(--panel-raised); stroke: var(--line-strong); stroke-width: 2; }
+.ill-ring { fill: var(--muted); stroke: var(--text); stroke-width: 1.5; }
 .ill-face { fill: var(--night); stroke: var(--line); }
+.ill-connector { fill: var(--night); stroke: var(--muted); stroke-width: 1.5; }
 .ill-port { fill: var(--night); stroke: var(--accent); stroke-width: 1.5; }
-.ill-plug { fill: var(--wire); }
+.ill-plug { fill: var(--panel); stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .ill-cable, .ill-press { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.ill-press { stroke: var(--warn); }
+.ill-hand { fill: var(--panel-raised); stroke: var(--text); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.ill-detail { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .ill-label, .ill-note, .ill-big { text-anchor: middle; font-family: var(--sans); }
 .ill-label { fill: var(--muted); font-size: 12px; }
 .ill-note { fill: var(--muted); font-size: 12px; text-anchor: end; }
-.ill-big { fill: var(--text); font: 500 30px var(--display); }
+.ill-big { fill: var(--text); font: 500 16px var(--display); }
 
 .toc {
     display: flex;

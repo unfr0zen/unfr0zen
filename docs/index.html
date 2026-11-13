@@ -127,13 +127,50 @@
                 </ul>
             </div>
             <script>
-              // The dial reads in Fahrenheit where the browser's region uses it.
+              // The dial's reading follows the scroll: 17 to 24 °C in half
+              // degrees as the dial crosses the window, the lit run ending at
+              // it. The track covers the Nest's 9 to 32 °C, a tick per 3.75°
+              // from its start at 135°. Whole °F where the browser's region
+              // uses them.
               {
+                const dial = document.querySelector(".dial");
+                const temp = dial.querySelector(".dial-temp");
+                const lit = dial.querySelector(".dial-ticks-on");
                 const region = new Intl.Locale(navigator.language).maximize().region;
-                if (["US", "PR", "GU", "VI", "AS", "MP", "UM", "BS", "BZ", "KY", "PW", "FM", "MH", "LR"].includes(region)) {
-                  document.querySelector(".dial-temp").textContent = "71";
-                  document.querySelector(".dial").setAttribute("aria-label", "A thermostat running nestlocal, reading 71 degrees");
+                const fahrenheit = ["US", "PR", "GU", "VI", "AS", "MP", "UM", "BS", "BZ", "KY", "PW", "FM", "MH", "LR"].includes(region);
+                const FROM = 20; // the lit run's first tick
+                const point = (tick) => {
+                  const a = (135 + 3.75 * tick) * Math.PI / 180;
+                  return `${(120 + 84 * Math.cos(a)).toFixed(2)} ${(120 + 84 * Math.sin(a)).toFixed(2)}`;
+                };
+                let shown;
+                const show = (celsius) => {
+                  if (celsius === shown) return;
+                  shown = celsius;
+                  if (fahrenheit) {
+                    temp.textContent = Math.round(celsius * 9 / 5 + 32);
+                  } else {
+                    const half = celsius % 1 ? '<tspan class="dial-half" dy="-21">5</tspan>' : "";
+                    temp.innerHTML = Math.floor(celsius) + half;
+                  }
+                  const to = Math.round((celsius - 9) / 23 * 72);
+                  const [a, b] = to < FROM ? [to, FROM] : [FROM, to];
+                  lit.setAttribute("d", `M${point(a)}A84 84 0 ${b - a > 48 ? 1 : 0} 1 ${point(b)}`);
+                  lit.setAttribute("pathLength", b - a);
+                };
+                const update = () => {
+                  const box = dial.getBoundingClientRect();
+                  const across = (innerHeight - box.top) / (innerHeight + box.height);
+                  show(17 + Math.round(Math.min(Math.max(across, 0), 1) * 14) / 2);
+                };
+                if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                  show(20.5);
+                } else {
+                  addEventListener("scroll", update, { passive: true });
+                  addEventListener("resize", update);
+                  update();
                 }
+                dial.setAttribute("aria-label", "A thermostat running nestlocal");
               }
             </script>
         </div>
@@ -199,7 +236,7 @@
             </div>
         </div>
         <div class="footer-bottom">
-            <p>unfr0zen is not affiliated with Google or Nest.</p>
+            <p>&copy; 2026 unfr0zen team</p>
             <a href="https://github.com/unfr0zen/unfr0zen/blob/main/LICENSE" target="_blank" rel="noopener">Licensed under GPL-3.0</a>
         </div>
     </div>

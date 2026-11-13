@@ -61,22 +61,22 @@ fn details(ui: &mut egui::Ui) {
     ui.add_space(12.0);
     // Each list in a card under its own heading, a line a row.
     crate::card(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 8.0;
-        ui.label(egui::RichText::new(crate::tr!("about.licenses")).font(crate::medium(16.0)));
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.label(egui::RichText::new(crate::tr!("about.licenses")).font(crate::medium(15.0)));
         for notice in licenses() {
-            ui.label(egui::RichText::new(notice).size(14.0).color(LIST));
+            ui.label(egui::RichText::new(notice).size(12.5).color(LIST));
         }
     });
     ui.add_space(14.0);
     crate::card(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 8.0;
-        ui.label(egui::RichText::new(crate::tr!("about.credits")).font(crate::medium(16.0)));
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.label(egui::RichText::new(crate::tr!("about.credits")).font(crate::medium(15.0)));
         for (what, author, url) in credits() {
             // Wrapped, so a long credit keeps to the card's width.
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                ui.label(egui::RichText::new(what).size(14.0).color(LIST));
-                ui.hyperlink_to(egui::RichText::new(author).size(14.0), url);
+                ui.label(egui::RichText::new(what).size(12.5).color(LIST));
+                ui.hyperlink_to(egui::RichText::new(author).size(12.5), url);
             });
         }
     });

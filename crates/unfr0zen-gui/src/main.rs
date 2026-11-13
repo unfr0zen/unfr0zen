@@ -19,7 +19,7 @@ mod patch;
 mod run;
 mod setup;
 use setup::Look;
-pub(crate) use setup::{boxed, boxed_select, card, checked_field, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{boxed_select, card, checked_field, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
 #[cfg(test)]
 mod snapshot;
 mod terminal;
@@ -516,7 +516,7 @@ impl Task {
             Task::Backup(_) => "Back up NAND",
             Task::Restore(_) => "Restore NAND",
             Task::Uboot => "Load recovery U-Boot",
-            Task::Boot => "Boot the application",
+            Task::Boot => "Rescue",
         }
     }
 
@@ -1007,7 +1007,9 @@ const POPUP_MAX_HEIGHT: f32 = 600.0;
 const POPUP_LINGER: Duration = Duration::from_millis(1500);
 /// The Logs page's list: its text size, the gap between columns and the
 /// padding at a row's left.
-const HISTORY_FONT: f32 = 12.5;
+const HISTORY_FONT: f32 = 11.5;
+/// The list's column titles.
+const HISTORY_HEADER_FONT: f32 = 10.0;
 /// The text of the steps in the Logs page's run pane.
 const RUN_STEP_FONT: f32 = 12.0;
 /// The share of the run pane's height its title and steps take at most.
@@ -1019,20 +1021,9 @@ const HISTORY_PAD: f32 = 8.0;
 /// run), when, the task, the result and its colour.
 type HistoryRow = (Option<String>, String, String, &'static str, egui::Color32);
 
-/// The widths the list's columns need: the widest of each, the result's
-/// as its widest tag.
-fn history_columns(ui: &egui::Ui, rows: &[HistoryRow]) -> [f32; 3] {
-    let width = |text: &str, font: egui::FontId| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, DIM).size().x);
-    let widest = |pick: fn(&HistoryRow) -> &str, font: egui::FontId, least: f32| {
-        rows.iter().map(|row| width(pick(row), font.clone())).fold(least, f32::max).ceil()
-    };
-    let when = widest(|row| &row.1, medium(HISTORY_FONT), width(&tr!("logs.run_column").to_uppercase(), egui::FontId::proportional(10.5))) + HISTORY_PAD;
-    let task = widest(|row| &row.2, egui::FontId::proportional(HISTORY_FONT), width(&tr!("logs.task_column").to_uppercase(), egui::FontId::proportional(10.5)));
-    // To the widest badge actually shown, not a fixed "running": with none
-    // running, the column shrinks and the run pane takes the slack.
-    let result = widest(|row| row.3, egui::FontId::proportional(11.0), width(&tr!("logs.result_column").to_uppercase(), egui::FontId::proportional(10.5))) + 14.0;
-    [when, task, result]
-}
+/// The list's column widths, fixed whatever runs it holds: a run's time
+/// and duration, its task, its result's tag. Wider text is cut to fit.
+const HISTORY_COLUMNS: [f32; 3] = [131.0, 118.0, 48.0];
 /// Delete old logs removes runs older than this.
 const LOG_RETENTION: Duration = Duration::from_secs(30 * 24 * 3600);
 
@@ -1498,7 +1489,7 @@ impl App {
                 let _ = std::fs::create_dir_all(&dir).and_then(|_| open_path(&dir));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if setup::page_button(ui, tr!("logs.delete_old"), Look::Secondary, !self.history.is_empty())
+                if setup::small_button(ui, tr!("logs.delete_old"), Look::Secondary, !self.history.is_empty())
                     .on_hover_text(tr!("logs.delete_old_hint"))
                     .clicked() {
                     self.delete_logs = true;
@@ -1510,9 +1501,9 @@ impl App {
             tr!("logs.description"))
             .color(MUTED));
         ui.add_space(10.0);
-        // The list is as wide as its widest texts; the run pane takes the rest.
+        // The list keeps one width; the run pane takes the rest.
         let rows = self.history_rows();
-        let columns = history_columns(ui, &rows);
+        let columns = HISTORY_COLUMNS;
         // Only enough past the last column for the scrollbar, then a small gap
         // to the pane, so the pane keeps as much width as it can.
         let list_width = columns.iter().sum::<f32>() + HISTORY_GAP * 2.0 + 8.0;
@@ -1552,14 +1543,14 @@ impl App {
     /// One row per run, the live one first, the shown one lit, in columns
     /// of the given widths.
     fn history_table(&mut self, ui: &mut egui::Ui, rows: Vec<HistoryRow>, columns: [f32; 3]) {
-        const ROW: f32 = 36.0;
+        const ROW: f32 = 28.0;
         let [when_width, task_width, result_width] = columns;
         let width = ui.available_width();
         let (header, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
         let mut x = header.left() + HISTORY_PAD;
         for (title, w) in [(tr!("logs.run_column"), when_width), (tr!("logs.task_column"), task_width), (tr!("logs.result_column"), result_width)] {
             ui.painter().text(egui::pos2(x, header.center().y), egui::Align2::LEFT_CENTER, title.to_uppercase(),
-                              egui::FontId::proportional(10.5), setup::LABEL);
+                              egui::FontId::proportional(HISTORY_HEADER_FONT), setup::LABEL);
             x += w + HISTORY_GAP;
         }
         ui.painter().hline(header.x_range(), header.bottom(), egui::Stroke::new(1.0, LINE));
@@ -1645,13 +1636,13 @@ impl App {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(path) = &path {
-                    if setup::page_button(ui, tr!("logs.reveal"), Look::Secondary, true)
+                    if setup::small_button(ui, tr!("logs.reveal"), Look::Secondary, true)
                         .on_hover_text(tr!("logs.reveal_hint")).clicked() {
                         let _ = path.parent().map(open_path);
                     }
                 }
                 let width = ui.available_width();
-                boxed(ui, egui::TextEdit::singleline(&mut self.log_filter).hint_text(tr!("logs.filter")), width)
+                setup::small_boxed(ui, egui::TextEdit::singleline(&mut self.log_filter).hint_text(tr!("logs.filter")), width)
                     .on_hover_text(tr!("logs.filter_hint"));
             });
         });
@@ -2071,14 +2062,18 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
                 path(&[(4.0, at), (6.5, at)]);
             }
         }
-        // The power sign: an open ring and the line through its gap.
+        // A lifebuoy: two rings, the bands between them on the diagonals.
         Page::Boot => {
-            let arc: Vec<(f32, f32)> = (0..=28).map(|i| {
-                let a = -std::f32::consts::FRAC_PI_2 + 0.6 + (2.0 * std::f32::consts::PI - 1.2) * i as f32 / 28.0;
-                (6.0 * a.cos(), 6.0 * a.sin())
-            }).collect();
-            path(&arc);
-            path(&[(0.0, -6.5), (0.0, -1.0)]);
+            let ring = |r: f32| (0..=32).map(|i| {
+                let a = 2.0 * std::f32::consts::PI * i as f32 / 32.0;
+                (r * a.cos(), r * a.sin())
+            }).collect::<Vec<_>>();
+            path(&ring(6.0));
+            path(&ring(2.5));
+            let d = std::f32::consts::FRAC_1_SQRT_2;
+            for (x, y) in [(d, d), (-d, d), (d, -d), (-d, -d)] {
+                path(&[(2.5 * x, 2.5 * y), (6.0 * x, 6.0 * y)]);
+            }
         }
     }
 }
@@ -2515,7 +2510,7 @@ mod tests {
         let mut app = App::default();
         let texts = texts(&render(&mut app, WINDOW));
         let at = |title: &str| texts.iter().position(|t| t == title);
-        assert!(at("Boot application").unwrap() < at("Serial console").unwrap(), "{texts:?}");
+        assert!(at("Rescue").unwrap() < at("Serial console").unwrap(), "{texts:?}");
         assert_eq!(at("U-Boot console"), None, "{texts:?}");
     }
 
@@ -2811,6 +2806,45 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         shot("3-backups", &mut backups);
+        // The install guide's: the patch flow from connecting to done.
+        let dialog = |name: &str, app: &mut App| {
+            app.version = "";
+            snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
+        };
+        let flow = |step| App { bus: on_usb(Device::Diamond3), step, ..App::default() };
+        shot("guide-connect-waiting", &mut App { bus: Watcher::fixed(Bus::Nothing), steps_without_unit: false, ..App::default() });
+        shot("guide-connect", &mut flow(setup::Step::Connect));
+        let mut review = flow(setup::Step::Review);
+        review.form.mqtt.on = true;
+        review.form.mqtt.value = "homeassistant.local".into();
+        shot("guide-review", &mut review);
+        let mut developer = App { bus: on_usb(Device::Diamond), step: setup::Step::Review, developer_open: true, ..App::default() };
+        developer.form.device = Some(Device::Diamond);
+        shot("guide-developer", &mut developer);
+        let mut sdp = flow(setup::Step::Review);
+        sdp.flow_run = true;
+        sdp.task = Some(Task::Patch);
+        sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        sdp.on_event(Event::Waiting("Hold the front panel button".into()));
+        sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
+        dialog("guide-download-mode", &mut sdp);
+        let mut running = flow(setup::Step::Review);
+        running.flow_run = true;
+        running.task = Some(Task::BackupPatch("nand-20261113-1012.bin".into()));
+        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
+        running.on_event(Event::Phase(unfr0zen_host::Phase::Backup));
+        running.on_event(Event::Begin("Back up NAND".into()));
+        running.on_transfer(210 << 20, 1 << 20, 512 << 20);
+        shot("guide-running", &mut running);
+        let mut done = flow(setup::Step::Review);
+        done.form.mqtt.on = true;
+        done.flow_run = true;
+        done.task = Some(Task::Patch);
+        done.flow_backup = Some("nand-20261113-1012.bin".into());
+        done.logs.outcome = Some(Ok("patched".into()));
+        shot("guide-done", &mut done);
     }
 
     #[test]
@@ -3101,7 +3135,7 @@ mod tests {
     fn main_page_controls_show_hints_on_hover() {
         for (page, label, hint) in [
             (Page::Patch, "Back up and patch", "Patch the connected thermostat with the selected options"),
-            (Page::Boot, "Boot the application", "Connect one Nest Learning Thermostat, finish any operation, close file pickers, and disconnect any open console first"),
+            (Page::Boot, "Rescue", "Connect one Nest Learning Thermostat, finish any operation, close file pickers, and disconnect any open console first"),
         ] {
             let context = egui::Context::default();
             install_fonts(&context);

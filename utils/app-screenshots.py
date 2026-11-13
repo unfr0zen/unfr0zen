@@ -7,8 +7,9 @@
 RAW holds the bare windows at 2x (1-integrations.png, 2-features.png,
 3-backups.png). Each gets rounded corners, a light edge, the traffic lights
 and a shadow. The website gets docs/assets/app1.png to app3.png at 2x;
-assets/app.png becomes the README's animated PNG of the three at 1x. Needs
-Pillow.
+assets/app.png becomes the README's animated PNG of the three at 1x. The
+install guide's, guide-*.png, become docs/assets/install/app-*.png at 2x.
+Needs Pillow.
 """
 
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 NAMES = ["1-integrations.png", "2-features.png", "3-backups.png"]
+GUIDE = ["connect-waiting", "connect", "review", "developer", "download-mode", "running", "done"]
 # At 1x: the room around the window, its corner radius, and the traffic
 # lights' centre, spacing and radius, as macOS draws them.
 LEFT, TOP, BOTTOM = 56, 38, 74
@@ -57,6 +59,8 @@ def main() -> None:
     half = [framed(window.resize((window.width // 2, window.height // 2), Image.LANCZOS), 1) for window in windows]
     readme = repo / "assets" / "app.png"
     half[0].save(readme, save_all=True, append_images=half[1:], duration=5000, loop=0, optimize=True)
+    for name in GUIDE:
+        framed(Image.open(raw / f"guide-{name}.png"), 2).save(repo / "docs" / "assets" / "install" / f"app-{name}.png", optimize=True)
 
 
 if __name__ == "__main__":

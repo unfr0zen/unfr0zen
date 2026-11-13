@@ -41,7 +41,7 @@ pub struct Form {
     pub backup_first: bool,
     // The developer options: the CLI's options a run rarely needs.
     /// The device to expect instead of the one USB names.
-    device: Option<Device>,
+    pub device: Option<Device>,
     /// The device last known, kept while no unit is on the bus.
     last_device: Option<Device>,
     /// The serial of the unit on the bus, for the entity IDs' preview.

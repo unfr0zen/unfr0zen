@@ -632,20 +632,25 @@ pub(crate) fn checked_field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit
     }).inner
 }
 
-/// A text field as a rounded box `width` wide whose edge lights while it
-/// is typed in.
-pub(crate) fn boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
-    checked_box(ui, edit, width, false)
+/// A text field as a rounded box `width` wide: its edge red while what it
+/// holds is refused, else lit while it is typed in.
+fn checked_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool) -> egui::Response {
+    sized_box(ui, edit, width, invalid, false)
 }
 
-/// The box [`boxed`] draws: its edge red while what it holds is refused,
-/// else lit while it is typed in.
-fn checked_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool) -> egui::Response {
-    let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(9)
-        .inner_margin(egui::Margin::symmetric(11, 7));
+/// A text field as a rounded box `width` wide whose edge lights while it
+/// is typed in, at the compact size of the Logs page's controls.
+pub(crate) fn small_boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
+    sized_box(ui, edit, width, false, true)
+}
+
+fn sized_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool, small: bool) -> egui::Response {
+    let (margin, font) = if small { (egui::Margin::symmetric(9, 4), 12.5) } else { (egui::Margin::symmetric(11, 7), 14.0) };
+    let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(if small { 7 } else { 9 })
+        .inner_margin(margin);
     let mut prepared = frame.begin(ui);
-    let room = (width - 24.0).max(40.0);
-    let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(14.0)));
+    let room = (width - 2.0 * margin.left as f32 - 2.0).max(40.0);
+    let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(font)));
     if invalid {
         prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, BAD));
     } else if response.has_focus() {
@@ -816,17 +821,29 @@ pub(crate) enum Look {
 
 /// A rounded button at least `size`, its ends fully round.
 pub(crate) fn rounded_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: egui::Vec2) -> egui::Response {
+    sized_button(ui, text, look, enabled, size, 14.0, 20.0)
+}
+
+/// A rounded button at the compact size of the Logs page's controls.
+pub(crate) fn small_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool) -> egui::Response {
+    sized_button(ui, text, look, enabled, egui::vec2(56.0, SMALL_HEIGHT), 12.5, 14.0)
+}
+
+/// The compact controls' height.
+pub(crate) const SMALL_HEIGHT: f32 = 26.0;
+
+fn sized_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: egui::Vec2, font: f32, padding: f32) -> egui::Response {
     let (fill, color, stroke) = match look {
         Look::Primary if enabled => (ACCENT, ON_ACCENT, egui::Stroke::NONE),
         Look::Primary => (DISABLED_FILL, DISABLED_TEXT, egui::Stroke::NONE),
         Look::Secondary => (egui::Color32::TRANSPARENT, if enabled { TEXT } else { DIM }, egui::Stroke::new(1.0, OFF)),
         Look::Danger => (if enabled { BAD } else { BAD.gamma_multiply(0.35) }, if enabled { egui::Color32::WHITE } else { DIM }, egui::Stroke::NONE),
     };
-    let label = egui::RichText::new(text).font(medium(14.0)).color(color);
+    let label = egui::RichText::new(text).font(medium(font)).color(color);
     let radius = (size.y * 0.5).round() as u8;
     // Room at the round ends, so a long label keeps clear of them.
     ui.scope(|ui| {
-        ui.spacing_mut().button_padding.x = 20.0;
+        ui.spacing_mut().button_padding.x = padding;
         ui.add_enabled(enabled, egui::Button::new(label).fill(fill).stroke(stroke).corner_radius(radius).min_size(size))
     }).inner
 }

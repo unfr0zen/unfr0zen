@@ -78,48 +78,165 @@
             </ul>
 
             <h2 id="app"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>Get the app</h2>
-            <p><a href="/download/">Download unfr0zen</a> for your system, then do its one-time setup there:</p>
-            <ul>
-                <li><b>macOS:</b> allow the app on first launch (it isn't notarized).</li>
-                <li><b>Windows:</b> for a 1st or 2nd generation, the first run installs the boot ROM's WinUSB driver (<code>0451:d00e</code>): accept the administrator prompt. For a 3rd generation, see the Android driver note if a run can't find the recovery device.</li>
-                <li><b>Linux:</b> add the udev rule, so the app can open the thermostat without root.</li>
-            </ul>
-            <p>Choose what to install on the Patch page's Integrations and Features steps; each option is described under <a href="/integrations/">Integrations</a>. Everything there is optional, and you can run the patch again later to change it.</p>
+            <p>Do this once, on the computer you'll plug the thermostat into.</p>
+
+            <h3 class="stage"><span>1</span>Download it</h3>
+            <ol class="steps">
+                <li>Open the <a href="/download/">download page</a>. It picks your computer's system for you; if it's wrong, click <b>macOS</b>, <b>Windows</b> or <b>Linux</b>.</li>
+                <li>Click the first button:
+                    <ul>
+                        <li><b>macOS (Universal)</b> works on every Mac.</li>
+                        <li><b>Windows (x86_64)</b> is right for almost every PC. Choose <b>Windows (arm64)</b> only if the PC has a Snapdragon processor.</li>
+                    </ul>
+                </li>
+                <li>The file lands in your <b>Downloads</b> folder.</li>
+            </ol>
+
+            <h3 class="stage"><span>2</span>Open it the first time</h3>
+            <p><b>On a Mac:</b></p>
+            <ol class="steps">
+                <li>Open <b>Downloads</b> in Finder and double-click the <code>.zip</code> file. <b>unfr0zen</b> appears next to it. You can drag it into <b>Applications</b>.</li>
+                <li>Double-click <b>unfr0zen</b>. macOS says it can't check the app for malicious software, because the app isn't registered with Apple. Click <b>Done</b>.</li>
+                <li>Open the Apple menu → <b>System Settings</b> → <b>Privacy &amp; Security</b>, scroll down to <b>Security</b>, and click <b>Open Anyway</b> next to the message about unfr0zen. Enter your Mac's password if it asks.</li>
+                <li>Double-click <b>unfr0zen</b> again and click <b>Open Anyway</b>. From now on it opens like any other app.</li>
+            </ol>
+            <p><b>On Windows:</b></p>
+            <ol class="steps">
+                <li>Open <b>Downloads</b>, right-click the <code>.zip</code> file and choose <b>Extract All…</b>, then <b>Extract</b>.</li>
+                <li>In the folder that opens, double-click <b>unfr0zen</b>.</li>
+                <li>If a blue box says <b>Windows protected your PC</b>, click <b>More info</b>, then <b>Run anyway</b>. The app isn't signed by a company Windows knows, so it warns once.</li>
+                <li>For a 1st or 2nd generation thermostat, Windows asks <b>Do you want to allow this app to make changes to your device?</b> the first time: click <b>Yes</b>. This installs the driver the app needs to talk to the thermostat.</li>
+            </ol>
+            <p><b>On Linux:</b> unpack the download, run <code>./unfr0zen</code>, and add the USB rule shown on the <a href="/download/">download page</a> once, so the app can reach the thermostat.</p>
 
             <h2 id="gen23"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></svg>2nd &amp; 3rd generation</h2>
-            <p>Both use the same steps: the display's own button puts it in USB download mode.</p>
+            <p>Both use the same steps, and the app walks you through them. You don't need any tools. Allow about half an hour.</p>
+
+            <h3 class="stage"><span>1</span>Take the display off and plug it in</h3>
             <div class="figures">
                 <figure>
-                    <svg class="illustration" viewBox="0 0 320 220" role="img" aria-label="The back of the display, off its base, with a USB cable plugged into its port">
-                        <circle class="ill-body" cx="130" cy="110" r="92"/>
-                        <circle class="ill-face" cx="130" cy="110" r="70"/>
-                        <rect class="ill-port" x="120" y="160" width="20" height="9" rx="2"/>
-                        <path class="ill-cable" d="M130 169v14c0 12 8 20 20 20h158"/>
-                        <rect class="ill-plug" x="122" y="169" width="16" height="16" rx="3"/>
-                        <text class="ill-label" x="130" y="114">back of the display</text>
-                        <text class="ill-note" x="300" y="194">to the computer</text>
+                    <svg class="illustration" viewBox="0 0 320 220" role="img" aria-label="Back of the display, off its base: plug the small end of the USB cable into the micro-USB port on the back, and connect the other end to the computer.">
+                        <circle class="ill-ring" cx="124" cy="108" r="70"/>
+                        <circle class="ill-body" cx="124" cy="108" r="63"/>
+                        <rect class="ill-connector" x="106" y="58" width="36" height="24" rx="4"/>
+                        <path class="ill-detail" d="M112 66h24v8h-24z"/>
+                        <path class="ill-port" d="M110 148h28v6l-4 5h-20l-4-5z"/>
+                        <path class="ill-cable" d="M124 186v10c0 12 20 10 50 8s80 6 110 16"/>
+                        <path class="ill-plug" d="M114 152h20v10h-20z"/>
+                        <rect class="ill-plug" x="112" y="160" width="24" height="36" rx="5"/>
+                        <path class="ill-cable" d="M98 204v-22m-5 5 5-5 5 5"/>
+                        <text class="ill-label" x="124" y="112">back of the display</text>
+                        <path class="ill-detail" d="M140 153h60"/>
+                        <text class="ill-label" x="232" y="157">micro-USB</text>
+                        <text class="ill-note" x="282" y="194">to the computer</text>
                     </svg>
                     <figcaption>Off its base, the display's USB port is on its back.</figcaption>
                 </figure>
                 <figure>
-                    <svg class="illustration" viewBox="0 0 320 220" role="img" aria-label="Pressing the display in and holding it for 10 seconds">
-                        <circle class="ill-body" cx="160" cy="118" r="92"/>
-                        <circle class="ill-face" cx="160" cy="118" r="70"/>
-                        <path class="ill-press" d="M160 20v44"/>
-                        <path class="ill-press" d="m146 50 14 14 14-14"/>
-                        <text class="ill-big" x="160" y="130">10 s</text>
+                    <img class="app" src="/assets/install/app-connect-waiting.png" width="1192" height="912" loading="lazy" alt="The app's Connect step: three numbered instructions, and a ring saying Plug in, with a data cable above Looking for your thermostat.">
+                    <figcaption>Before the thermostat is plugged in, the app is looking for it.</figcaption>
+                </figure>
+            </div>
+            <ol class="steps">
+                <li>Open unfr0zen. It starts on the <b>Patch</b> page, at <b>Connect</b>.</li>
+                <li>Hold the thermostat's display by its ring and pull it straight towards you, off the wall. The heating stays off until you put it back.</li>
+                <li>Turn it over to find the small USB port on the back.</li>
+                <li>Plug the small end of the cable into it, and the other end into the computer.</li>
+            </ol>
+
+            <h3 class="stage"><span>2</span>Check the app has found it</h3>
+            <figure class="wide">
+                <img class="app" src="/assets/install/app-connect.png" width="1192" height="912" loading="lazy" alt="The Connect step with the thermostat found: a ring reading 3rd Gen Learning Thermostat, a green Found your thermostat label, and Continue at the bottom right.">
+                <figcaption>Found: the ring names the generation. Click <b>Continue</b>.</figcaption>
+            </figure>
+            <ol class="steps">
+                <li>Within a few seconds the ring shows the generation and a green <b>Found your thermostat</b>.</li>
+                <li>Click <b>Continue</b>, at the bottom right.</li>
+            </ol>
+            <p>Still <b>Looking for your thermostat…</b> after half a minute? Try another cable: many cables only charge, and can't carry data. Plug it straight into the computer, not into a hub or a screen.</p>
+
+            <h3 class="stage"><span>3</span>Choose what to add</h3>
+            <div class="figures">
+                <figure>
+                    <img class="app" src="/assets/app1.png" width="1192" height="912" loading="lazy" alt="The Integrations step: MQTT on with its broker address, and Matter on with its pairing code.">
+                    <figcaption><b>Integrations</b>: how your smart home talks to the thermostat.</figcaption>
+                </figure>
+                <figure>
+                    <img class="app" src="/assets/app2.png" width="1192" height="912" loading="lazy" alt="The Features step: Nest and Google servers blocked with a time server, and Doom on.">
+                    <figcaption><b>Features</b>: extras for the thermostat itself.</figcaption>
+                </figure>
+            </div>
+            <ol class="steps">
+                <li>On <b>Integrations</b>, switch on the ones your smart home uses and fill in what each asks for. <a href="/integrations/">Integrations</a> explains each one. Not sure? Leave them all off: you can run the patch again later.</li>
+                <li>Click <b>Continue</b>.</li>
+                <li>On <b>Features</b>, do the same, then click <b>Continue</b>.</li>
+            </ol>
+
+            <h3 class="stage"><span>4</span>Start, with a backup</h3>
+            <figure class="wide">
+                <img class="app" src="/assets/install/app-review.png" width="1192" height="912" loading="lazy" alt="The Review step, Ready to patch: the chosen options with an Edit link each, Back up, then patch selected as Recommended, and the Back up and patch button at the bottom right.">
+                <figcaption>Leave <b>Back up, then patch</b> selected and click <b>Back up and patch</b>.</figcaption>
+            </figure>
+            <ol class="steps">
+                <li><b>Review</b> lists what you chose. Click <b>Edit</b> next to anything you want to change.</li>
+                <li>Leave <b>Back up, then patch</b> selected. The backup is a copy of everything on the thermostat, so it can always be put back exactly as it was.</li>
+                <li>Click <b>Back up and patch</b>, at the bottom right.</li>
+            </ol>
+
+            <h3 class="stage"><span>5</span>Press and hold the display</h3>
+            <div class="figures">
+                <figure>
+                    <img class="app" src="/assets/install/app-download-mode.png" width="1192" height="912" loading="lazy" alt="A window over the app titled Enter USB download mode: a ring counting down from 2 minutes, the instruction to hold the front panel button for 10 seconds, and Cancel.">
+                    <figcaption>The app asks, and counts down 2 minutes.</figcaption>
+                </figure>
+                <figure>
+                    <svg class="illustration" viewBox="0 0 320 220" role="img" aria-label="A finger presses the whole display inward like a button. Hold for about 10 seconds until the screen goes dark, keeping the USB cable plugged into the back.">
+                        <path class="ill-press" d="M89 12a14 14 0 1 0 14 14M89 17v9l6 4"/>
+                        <text class="ill-big" x="143" y="32">hold 10 s</text>
+                        <path class="ill-cable" d="M136 186v10c0 12 20 10 50 8s80 6 96 16"/>
+                        <rect class="ill-plug" x="126" y="166" width="20" height="30" rx="4"/>
+                        <circle class="ill-ring" cx="136" cy="110" r="65"/>
+                        <circle class="ill-face" cx="136" cy="110" r="58"/>
+                        <path class="ill-press" d="m169 83-25 20m1-10-1 10 10 1"/>
+                        <g transform="translate(136 116) rotate(-35)">
+                            <path class="ill-hand" d="M2 75 L-8 58 L-22 43
+                                q-4-6 1-10 q4-3 8 1 l5 6 V0 a8 8 0 0 1 16 0
+                                v24 q0-6 7-6 t7 7 v5 q0-6 7-6 t7 7
+                                v6 q0-6 7-6 t7 7 v15 q0 12-7 22z"/>
+                            <path class="ill-detail" d="M8 24v12m14-6v10m14-3v8"/>
+                        </g>
+                        <text class="ill-label" x="80" y="200">keep the cable<tspan x="80" dy="14">plugged in</tspan></text>
                     </svg>
                     <figcaption>The whole display is the button: press it in and hold.</figcaption>
                 </figure>
             </div>
             <ol class="steps">
-                <li>Open unfr0zen on the <b>Patch</b> page and go through Integrations and Features.</li>
-                <li>Pull the display straight off its base.</li>
-                <li>Connect the USB port on its back to the computer. The app shows <b>Found your thermostat</b> and its generation.</li>
-                <li>On <b>Review</b>, choose <b>Back up, then patch</b>. The backup lets you restore the thermostat exactly as it was; skip it only if you already have one.</li>
-                <li>When the app asks, press the display in and hold it for about 10 seconds, until the screen goes dark and the app moves on.</li>
-                <li>Leave everything alone. The thermostat restarts a few times, and the app says if it needs you again.</li>
-                <li>When it shows <b>Your thermostat is ready</b>, unplug the cable and click the display back onto its base.</li>
+                <li>A window titled <b>Enter USB download mode</b> appears.</li>
+                <li>With the cable still plugged in, press the middle of the display in, like a button, and keep it pressed for about 10 seconds, until the screen goes dark.</li>
+                <li>Let go. The window closes by itself once the app has the thermostat.</li>
+            </ol>
+            <p>You have 2 minutes. If the time runs out, the run stops before changing anything: click <b>Back to review</b>, then <b>Back up and patch</b> again.</p>
+
+            <h3 class="stage"><span>6</span>Wait</h3>
+            <figure class="wide">
+                <img class="app" src="/assets/install/app-running.png" width="1192" height="912" loading="lazy" alt="Patching your thermostat: a ring at 41 percent labelled Backing up, and a checklist from Waiting for download mode to Restarting.">
+                <figcaption>The ring shows how far the current step is; the list shows the steps.</figcaption>
+            </figure>
+            <ol class="steps">
+                <li>Don't unplug the cable or touch the display. The backup takes the longest; patching takes a few minutes more.</li>
+                <li>The thermostat's screen goes dark and lights up again a few times. That's normal.</li>
+                <li>If the app needs you again, it tells you what to do.</li>
+            </ol>
+
+            <h3 class="stage"><span>7</span>Put it back</h3>
+            <figure class="wide">
+                <img class="app" src="/assets/install/app-done.png" width="1192" height="912" loading="lazy" alt="Your thermostat is ready: the backup's file name with an Open Backups link, and What's next cards for putting it back on its base and the chosen integrations.">
+                <figcaption>Done. <b>What's next</b> lists the steps for the integrations you chose.</figcaption>
+            </figure>
+            <ol class="steps">
+                <li>When the app shows <b>Your thermostat is ready</b>, unplug the cable.</li>
+                <li>Push the display back onto its base on the wall until it clicks. It starts as usual, with your schedule.</li>
+                <li>Your backup is listed on the <b>Backups</b> page. Keep it: it's how you undo the patch.</li>
             </ol>
 
             <h2 id="gen1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg>1st generation</h2>
@@ -171,8 +288,12 @@
             <ol>
                 <li>On the <b>Patch</b> page, go through Integrations and Features as for any generation.</li>
                 <li>On <b>Review</b>, open <b>Developer options</b> and set <b>Device</b> to <b>diamond</b>. The 1st and 2nd generations look the same to the computer in download mode, and this tells the app which one to load.</li>
-                <li>Choose <b>Back up, then patch</b>. The app waits for the thermostat in USB download mode.</li>
+                <li>Leave <b>Back up, then patch</b> selected and click <b>Back up and patch</b>. The app waits for the thermostat in USB download mode.</li>
             </ol>
+            <figure class="wide">
+                <img class="app" src="/assets/install/app-developer.png" width="1192" height="912" loading="lazy" alt="The Review step with Developer options open and Device set to diamond.">
+                <figcaption>On <b>Review</b>: <b>Developer options</b> → <b>Device</b> → <b>diamond</b>.</figcaption>
+            </figure>
 
             <h3 class="stage"><span>5</span>Bridge the points and plug in</h3>
             <ol>
@@ -193,18 +314,54 @@
             </ul>
 
             <h2 id="trouble"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>Troubleshooting</h2>
-            <div class="table-scroll">
-                <table>
-                    <thead><tr><th>Problem</th><th>Try</th></tr></thead>
-                    <tbody>
-                        <tr><td data-label="Problem">The app doesn't find the thermostat</td><td data-label="Try">Another cable (one that carries data) and a USB port on the computer itself. On Linux, check the udev rule; on Windows, for the 1st and 2nd generations, that the administrator prompt for the USB driver was accepted.</td></tr>
-                        <tr><td data-label="Problem">2nd or 3rd generation: it doesn't enter USB download mode</td><td data-label="Try">Hold the display in a little longer, until the screen goes dark. If the battery is low, leave the display on its base or on USB for a while and try again.</td></tr>
-                        <tr><td data-label="Problem">1st generation: nothing happens when plugged in</td><td data-label="Try">Check the battery is plugged in, that both tweezer tips touch bare metal at the two points, and that Device is set to diamond. Unplug, bridge again, then plug in.</td></tr>
-                        <tr><td data-label="Problem">The run stopped part way</td><td data-label="Try">Unplug, let the thermostat start, and run the patch again. If it doesn't start, restore your backup from the Backups page, which puts it back as it was.</td></tr>
-                        <tr><td data-label="Problem">Anything else</td><td data-label="Try">The <b>Logs</b> page keeps each run's steps and log. Bring it to an <a href="https://github.com/unfr0zen/unfr0zen/issues" target="_blank" rel="noopener">issue</a> or the <a href="https://discord.gg/4YC7Yj3Tx" target="_blank" rel="noopener">Discord</a>.</td></tr>
-                    </tbody>
-                </table>
-            </div>
+            <h3>The app doesn't find the thermostat</h3>
+            <ul>
+                <li>Use a cable that carries data. Many cables only charge, and they're the most common reason a thermostat isn't found.</li>
+                <li>Plug into the USB port on the back of the display itself, not the power port of a Nest stand or a Heat Link.</li>
+                <li>Plug straight into the computer, not into a hub or a screen.</li>
+                <li><b>Linux:</b> add the USB rule from the <a href="/download/">download page</a>, then unplug the thermostat and plug it in again.</li>
+                <li><b>Windows, 1st or 2nd generation:</b> the app needs its USB driver, installed after the administrator prompt on the first run. Check that prompt was accepted with <b>Yes</b>.</li>
+            </ul>
+
+            <h3>Windows, 3rd generation: the run stops with <code>ACM interface for 18d1:4ee0 did not appear</code></h3>
+            <p>An Android driver installed earlier has taken over the thermostat while it's in recovery. Leave it plugged in, in recovery, and:</p>
+            <ol class="steps">
+                <li>Open <b>Device Manager</b> and find <b>Android Bootloader Interface</b>.</li>
+                <li>Right-click it: <b>Update driver</b> → <b>Browse my computer</b> → <b>Let me pick</b> → <b>Universal Serial Bus devices</b> → <b>USB Composite Device</b>.</li>
+                <li>Run the patch again. Windows keeps the choice.</li>
+            </ol>
+
+            <h3>macOS won't open the app</h3>
+            <p>Allow it once under System Settings → Privacy &amp; Security, as in <a href="#app">Get the app</a>. In Terminal, this does the same:</p>
+            <pre><code>xattr -dr com.apple.quarantine unfr0zen.app</code></pre>
+
+            <h3>2nd or 3rd generation: it doesn't enter USB download mode</h3>
+            <p>Hold the display in a little longer, until the screen goes dark. If the battery is low, leave the display on its base or on USB for a while and try again.</p>
+
+            <h3>1st generation: nothing happens when plugged in</h3>
+            <p>Check the battery is plugged in, that both tweezer tips touch bare metal at the two points, and that <b>Device</b> is set to <b>diamond</b>. Unplug, bridge the points again, then plug in.</p>
+
+            <h3>The run stopped part way</h3>
+            <p>Unplug, let the thermostat start, and run the patch again. If it doesn't start, restore your backup from the <b>Backups</b> page, which puts it back as it was.</p>
+
+            <h3>The thermostat shows error H71 or H74</h3>
+            <p>Some 3rd generation Heat Link models stop on these errors once the Heat Link can no longer connect, which happens with Zigbee or Thread on. Patch again with <b>Works With Nest boiler</b> switched on under <b>Features</b>: the thermostat then heats through its own base. See <a href="/integrations/#zigbee">Zigbee</a> for what changes.</p>
+
+            <h3>Home Assistant shows the thermostat as unavailable</h3>
+            <p>It shows as available only while the thermostat's software is talking to unfr0zen on the thermostat, and unfr0zen is connected to your MQTT broker. Check that:</p>
+            <ul>
+                <li>the thermostat is on Wi-Fi (Settings → Network on the thermostat);</li>
+                <li>the broker address you gave can be reached from that network;</li>
+                <li>the broker's user name and password are right. To change them, run the patch again.</li>
+            </ul>
+
+            <h3>Still stuck?</h3>
+            <p>Open an <a href="https://github.com/unfr0zen/unfr0zen/issues" target="_blank" rel="noopener">issue</a> or ask on the <a href="https://discord.gg/4YC7Yj3Tx" target="_blank" rel="noopener">Discord</a>, with:</p>
+            <ul>
+                <li>how you ran it: the app or the command line (with its options), and your computer's system;</li>
+                <li>the run's full log, from the app's <b>Logs</b> page, which keeps every run's;</li>
+                <li>what the thermostat's screen showed.</li>
+            </ul>
 
             <h2 id="credits"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/></svg>Credits</h2>
             <ul>
@@ -232,7 +389,7 @@
             </div>
         </div>
         <div class="footer-bottom">
-            <p>unfr0zen is not affiliated with Google or Nest.</p>
+            <p>&copy; 2026 unfr0zen team</p>
             <a href="https://github.com/unfr0zen/unfr0zen/blob/main/LICENSE" target="_blank" rel="noopener">Licensed under GPL-3.0</a>
         </div>
     </div>
