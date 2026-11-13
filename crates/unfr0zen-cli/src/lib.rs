@@ -81,6 +81,12 @@ struct Args {
     /// PEM CA certificate to verify the broker against (implies --mqtt-tls)
     #[arg(long, value_name = "FILE", help_heading = "Root filesystem options")]
     mqtt_ca: Option<PathBuf>,
+    /// replaces nestlocal_<serial> in the entity IDs, e.g. nest_famrm gives climate.nest_famrm_thermostat, and <serial> stands for the unit's serial in lowercase; Home Assistant moves the entities to the new IDs with their history and settings, automations and dashboards need updating (default: the unit's)
+    #[arg(long, value_name = "ROOT", help_heading = "Root filesystem options")]
+    ha_entity_root: Option<String>,
+    /// the thermostat's name in Home Assistant (--mqtt) and Matter controllers, e.g. "Nest FamRm", at most 32 characters; <serial> stands for the unit's serial (default: the unit's, at first "Nest Thermostat")
+    #[arg(long, value_name = "NAME", help_heading = "Root filesystem options")]
+    device_name: Option<String>,
     /// serve the unit over Matter, with or without --mqtt; gen 3 turns off its own Bluetooth for Matter, so real Nest Temperature Sensors stop working
     #[arg(long, help_heading = "Root filesystem options")]
     matter: bool,
@@ -186,6 +192,8 @@ impl Args {
             mqtt_password: self.mqtt_password.clone(),
             mqtt_tls: self.mqtt_tls,
             mqtt_ca: self.mqtt_ca.clone(),
+            device_name: self.device_name.clone(),
+            ha_entity_root: self.ha_entity_root.clone(),
             matter: self.matter,
             matter_thread: self.matter_thread,
             matter_code: self.matter_code.clone(),

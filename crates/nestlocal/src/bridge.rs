@@ -14,7 +14,8 @@
 //!                                      (anything the entities don't cover)
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -28,10 +29,16 @@ use crate::liveness::Liveness;
 use crate::occupancy::Occupancy;
 use crate::logf;
 use crate::mqtt;
+use crate::naming::{Names, Naming};
 use crate::store::{Object, Store};
 use crate::weather::Outdoor;
 
+/// How long Home Assistant is given to remove the entities before they are
+/// announced under a new root; announced sooner, it would keep their IDs.
+const RENAME_WAIT: Duration = Duration::from_secs(2);
+
 pub struct Bridge {
+    me: Weak<Bridge>,
     pub serial: String,
     pub base: String,
     discovery: String,
@@ -47,16 +54,21 @@ pub struct Bridge {
     pub occupancy: Arc<Occupancy>,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
+    naming: Mutex<Naming>,
+    /// The entities are removed, waiting out RENAME_WAIT.
+    renaming: AtomicBool,
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
     time_ok: mpsc::Sender<()>,             // Home Assistant answered in time
     time_ok_rx: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 impl Bridge {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(prefix: &str, discovery: &str, serial: &str, store: Arc<Store>, outdoor: Arc<Outdoor>,
-               live: Option<Arc<Liveness>>, wwn_boiler: bool) -> Arc<Bridge> {
+               live: Option<Arc<Liveness>>, wwn_boiler: bool, naming: Naming) -> Arc<Bridge> {
         let (time_ok, time_ok_rx) = mpsc::channel(1);
-        Arc::new(Bridge {
+        Arc::new_cyclic(|me| Bridge {
+            me: me.clone(),
             serial: serial.into(),
             base: format!("{prefix}/{serial}"),
             discovery: discovery.into(),
@@ -68,10 +80,27 @@ impl Bridge {
             occupancy: Arc::new(Occupancy::default()),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
+            naming: Mutex::new(naming),
+            renaming: AtomicBool::new(false),
             time_asked: Mutex::new(None),
             time_ok,
             time_ok_rx: Mutex::new(Some(time_ok_rx)),
         })
+    }
+
+    /// The device's name, for MQTT and Matter alike.
+    pub fn device_name(&self) -> String {
+        self.naming.lock().unwrap().wanted.device.clone()
+    }
+
+    /// The name Matter's NodeLabel is to take, if the install gave a new one.
+    pub fn matter_label_due(&self) -> Option<String> {
+        self.naming.lock().unwrap().matter_label_due()
+    }
+
+    /// Matter's NodeLabel took the name given.
+    pub fn matter_labelled(&self) {
+        self.naming.lock().unwrap().matter_labelled();
     }
 
     /// What regulates, with the stand-in sensor: it, or the backplate.
@@ -180,7 +209,9 @@ impl Bridge {
     fn message(&self, topic: &str, payload: &[u8]) {
         if topic == "homeassistant/status" {
             if payload == b"online" {
-                // Home Assistant restarted: announce again.
+                // Home Assistant restarted: announce again, and rename again
+                // if it may have missed the last.
+                self.naming.lock().unwrap().home_assistant_started();
                 *self.announced.lock().unwrap() = None;
                 self.publish_state();
             }
@@ -258,10 +289,19 @@ impl Bridge {
     /// Publishes Home Assistant discovery, for what this unit's equipment
     /// can do (can_heat, has_fan, ...). Again only when that changes.
     fn announce(&self, dev: &Fields, sh: &Fields) {
-        let id = format!("nestlocal_{}", self.serial.to_lowercase());
+        let connected = self.mqtt.get().is_some_and(|c| c.is_connected());
+        let (names, rename) = {
+            let naming = self.naming.lock().unwrap();
+            (naming.wanted.clone(), naming.rename_due())
+        };
+        if rename && (!connected || self.renaming.load(Ordering::Relaxed)) {
+            return;
+        }
+        let Names { device: name, root } = names;
+        let id = Names::default_for(&self.serial).root;
         let device = fields!{
             "identifiers" => vec![id.clone()],
-            "name" => "Nest Thermostat",
+            "name" => name,
             "manufacturer" => "Google Nest",
             "model" => dev.get("model_version").cloned().unwrap_or(Value::Null),
             "sw_version" => dev.get("current_version").cloned().unwrap_or(Value::Null),
@@ -274,7 +314,7 @@ impl Bridge {
             let mut c = fields!{
                 "name" => if name.is_empty() { Value::Null } else { name.into() }, // null: the device's own name
                 "unique_id" => format!("{id}_{key}"),
-                "default_entity_id" => format!("{component}.{id}_{key}"),
+                "default_entity_id" => format!("{component}.{root}_{key}"),
                 "device" => Value::Object(device.clone()),
                 "availability_topic" => format!("{}/availability", self.base),
                 "state_topic" => st.clone(),
@@ -532,6 +572,10 @@ impl Bridge {
             "icon" => "mdi:calendar-remove",
         });
 
+        if rename {
+            self.rename(configs.into_keys(), root);
+            return;
+        }
         // Publish what changed; remove what the equipment no longer offers.
         let old = self.announced.lock().unwrap().replace(configs.clone()).unwrap_or_default();
         for topic in old.keys().filter(|t| !configs.contains_key(*t)) {
@@ -547,6 +591,36 @@ impl Bridge {
         if n > 0 {
             logf!("mqtt: announced {n} entities");
         }
+        if connected {
+            self.naming.lock().unwrap().announced_as_wanted();
+        }
+    }
+
+    /// Removes the entities, so that Home Assistant takes the new root's IDs
+    /// when they are announced again, after RENAME_WAIT.
+    fn rename(&self, topics: impl Iterator<Item = String>, root: String) {
+        self.renaming.store(true, Ordering::Relaxed);
+        *self.announced.lock().unwrap() = None;
+        if let Some(c) = self.mqtt.get() {
+            for topic in topics {
+                c.publish(&topic, b"", 1, true);
+            }
+        }
+        logf!("mqtt: entity IDs move to {root}_*: entities removed from Home Assistant, announced again shortly");
+        let me = self.me.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(RENAME_WAIT).await;
+            let Some(bridge) = me.upgrade() else {
+                return;
+            };
+            // Disconnected meanwhile, the removal may not have arrived: it
+            // is done again on connecting.
+            if bridge.mqtt.get().is_some_and(|c| c.is_connected()) {
+                bridge.naming.lock().unwrap().renamed();
+            }
+            bridge.renaming.store(false, Ordering::Relaxed);
+            bridge.publish_state();
+        });
     }
 }
 
@@ -759,8 +833,13 @@ pub mod tests {
     use crate::store::tests::temp_store;
     use serde_json::json;
 
+    /// The names of a unit never named: nothing saved, nothing given.
+    fn defaults() -> Naming {
+        Naming::load("/nonexistent/nestlocal-ha.json", "S", None, None)
+    }
+
     pub fn test_bridge() -> Arc<Bridge> {
-        Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false)
+        Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, defaults())
     }
 
     fn obj(v: Value) -> Fields {
@@ -879,12 +958,12 @@ pub mod tests {
 
     #[test]
     fn a_wwn_boiler_unit_heats_without_can_heat() {
-        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, true);
+        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, true, defaults());
         b.store.merge("shared.S", &obj(json!({"can_heat": false, "can_cool": false})), 0, 0, true);
         let shared = &b.buckets()["shared"];
         assert_eq!((shared["can_heat"].clone(), shared["can_cool"].clone()), (json!(true), json!(false)));
         assert_eq!(b.store.get("shared.S").unwrap().value["can_heat"], json!(false), "the store keeps what the unit said");
-        let plain = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false);
+        let plain = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, defaults());
         plain.store.merge("shared.S", &obj(json!({"can_heat": false})), 0, 0, true);
         assert_eq!(plain.buckets()["shared"]["can_heat"], json!(false));
         assert_eq!(test_bridge().buckets().len(), 0);
@@ -1066,6 +1145,71 @@ pub mod tests {
             }
         };
         tokio::time::timeout(Duration::from_secs(5), read).await.expect("no such publish")
+    }
+
+    #[test]
+    fn discovery_takes_the_names_given() {
+        let named = Naming::load("/nonexistent/nestlocal-ha.json", "S", Some("Nest FamRm".into()), Some("nest_famrm".into()));
+        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, named);
+        let (dev, sh) = everything();
+        // Not connected: nothing to remove the old entities from, so nothing is announced.
+        b.announce(&dev, &sh);
+        assert!(b.announced.lock().unwrap().is_none());
+        let wanted = b.naming.lock().unwrap().wanted.clone();
+        b.naming.lock().unwrap().announced = wanted;
+        b.announce(&dev, &sh);
+        let configs = b.announced.lock().unwrap().clone().unwrap();
+        let climate: Value = serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
+        assert_eq!(climate["default_entity_id"], json!("climate.nest_famrm_thermostat"));
+        assert_eq!(climate["unique_id"], json!("nestlocal_s_thermostat"), "Home Assistant's entity stays the same one");
+        assert_eq!(climate["device"]["name"], json!("Nest FamRm"));
+        assert_eq!(climate["device"]["identifiers"], json!(["nestlocal_s"]));
+    }
+
+    #[tokio::test]
+    async fn a_new_root_removes_the_entities_then_announces_them_again() {
+        let dir = std::env::temp_dir().join(format!("nestlocal-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = dir.join("ha.json").to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&store);
+        let named = Naming::load(&store, "S", None, Some("nest_famrm".into()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, named);
+        let (dev, sh) = everything();
+        b.store.merge("device.S", &dev, 0, 0, true);
+        b.store.merge("shared.S", &sh, 0, 0, true);
+        let broker = mqtt::Broker::parse(&format!("tcp://{}", listener.local_addr().unwrap())).unwrap();
+        b.run(&broker, "", "", None);
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let mut buf = bytes::BytesMut::new();
+        crate::mqtt::tests::read_packet(&mut conn, &mut buf).await; // CONNECT
+        tokio::io::AsyncWriteExt::write_all(&mut conn, &[0x20, 2, 0, 0]).await.unwrap();
+
+        let climate = "homeassistant/climate/nestlocal_s/thermostat/config";
+        let (_, payload, retain) = published(&mut conn, &mut buf, |t, _| t == climate).await;
+        assert!(payload.is_empty() && retain, "the old entity is not removed first");
+        assert!(std::fs::read(&store).is_err(), "the new root is saved before Home Assistant has it");
+        let (_, payload, retain) = published(&mut conn, &mut buf, |t, _| t == climate).await;
+        assert!(retain);
+        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"], json!("climate.nest_famrm_thermostat"));
+        let saved: Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+        assert_eq!(saved, json!({"device": "Nest Thermostat", "root": "nest_famrm", "unconfirmed": true, "matter_label": null}));
+
+        // Home Assistant starts: it may have missed that, so it is done again.
+        let set = |topic: &str, payload: &[u8]| crate::mqtt::tests::publish_packet(topic, payload);
+        tokio::io::AsyncWriteExt::write_all(&mut conn, &set("homeassistant/status", b"online")).await.unwrap();
+        let (_, payload, _) = published(&mut conn, &mut buf, |t, _| t == climate).await;
+        assert!(payload.is_empty(), "not removed again for a Home Assistant that may have missed it");
+        let (_, payload, _) = published(&mut conn, &mut buf, |t, _| t == climate).await;
+        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"], json!("climate.nest_famrm_thermostat"));
+        let saved: Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+        assert_eq!(saved["unconfirmed"], json!(false));
+
+        // Once it surely has it, a restart only announces.
+        tokio::io::AsyncWriteExt::write_all(&mut conn, &set("homeassistant/status", b"online")).await.unwrap();
+        let (_, payload, _) = published(&mut conn, &mut buf, |t, _| t == climate).await;
+        assert!(!payload.is_empty(), "removed again after Home Assistant had it");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

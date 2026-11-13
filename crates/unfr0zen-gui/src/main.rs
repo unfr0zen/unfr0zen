@@ -19,7 +19,7 @@ mod patch;
 mod run;
 mod setup;
 use setup::Look;
-pub(crate) use setup::{boxed, boxed_select, card, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{boxed, boxed_select, card, checked_field, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
 #[cfg(test)]
 mod snapshot;
 mod terminal;
@@ -977,6 +977,8 @@ pub(crate) const MUTED: egui::Color32 = egui::Color32::from_rgb(0x9a, 0xa3, 0xb2
 const MAP_ROOT0: egui::Color32 = egui::Color32::from_rgb(0x3f, 0x7f, 0xc4);
 const MAP_ROOT1: egui::Color32 = egui::Color32::from_rgb(0x3f, 0xb5, 0x9f);
 const MAP_SYSTEM_CONFIG: egui::Color32 = egui::Color32::from_rgb(0xb5, 0x8c, 0xf0);
+/// U-Boot in Fledge's orange, as its NAND map draws it.
+const MAP_UBOOT: egui::Color32 = egui::Color32::from_rgb(0xf2, 0x6a, 0x12);
 const MAP_OTHER: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x74, 0x86);
 const MAP_ERASED: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x36, 0x45);
 pub(crate) const DIM: egui::Color32 = egui::Color32::from_rgb(0x5c, 0x65, 0x75);
@@ -1411,7 +1413,7 @@ impl App {
         match entry.device.and_then(|device| self.maps.get(&entry.path, device, ui.ctx())) {
             Some(map) => {
                 let colors = nandmap::Colors {
-                    uboot: ACCENT, env: WARN, system_config: MAP_SYSTEM_CONFIG,
+                    uboot: MAP_UBOOT, env: WARN, system_config: MAP_SYSTEM_CONFIG,
                     root0: MAP_ROOT0, root1: MAP_ROOT1, other: MAP_OTHER, erased: MAP_ERASED, bad: BAD,
                 };
                 nandmap::draw(ui, &map, colors);
@@ -1434,10 +1436,12 @@ impl App {
         ui.add(egui::Label::new(egui::RichText::new(short_path(&entry.path)).size(11.5).color(DIM)).wrap());
         let idle = self.idle();
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            // As wide as the page's other actions, within the pane's margin.
+            // As wide as the page's other actions, within the pane's margin;
+            // laid out in a row, as theirs are, so its label is centred.
             let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
-            if accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)
-                .on_hover_text(tr!("backup.restore_hint"))
+            let restore = ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center),
+                |ui| accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)).inner;
+            if restore.on_hover_text(tr!("backup.restore_hint"))
                 .on_disabled_hover_text(if entry.checksum.is_none() {
                     tr!("backup.restore_disabled_checksum")
                 } else {
@@ -2391,7 +2395,7 @@ mod tests {
 
     /// One unit of `device` on USB, running its application.
     fn on_usb(device: Device) -> Watcher {
-        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }))
+        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -2661,7 +2665,7 @@ mod tests {
             app.show(page);
             shot(&format!("{page:?}").to_lowercase(), &mut app, WINDOW);
         }
-        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030) }));
+        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }));
         let flow = |step| App { bus: gen3(), step, ..App::default() };
         shot("1-connect", &mut flow(setup::Step::Connect), WINDOW);
         shot("1-connect-waiting", &mut App::default(), WINDOW);
@@ -3290,7 +3294,7 @@ mod tests {
 
     #[test]
     fn boot_and_uboot_need_a_diamond3_on_the_bus() {
-        let seen = |device| bus::Seen { device, mode: "app", port: "1".into(), id: (0, 0) };
+        let seen = |device| bus::Seen { device, mode: "app", port: "1".into(), id: (0, 0), serial: None };
         let d3 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::Diamond3))), ..App::default() };
         assert!(d3.diamond3_on_bus(), "a 3rd generation is on the bus");
         let j49 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::J49))), ..App::default() };

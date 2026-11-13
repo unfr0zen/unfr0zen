@@ -244,6 +244,38 @@ fn run(settings: &Settings, nest: Arc<Nest>) -> Result<(), Error> {
     }
 }
 
+/// Gives Matter's NodeLabel, the name controllers show, the name the
+/// install gave, and whether it took it. Bumping ConfigurationVersion stores
+/// the basic information, the label with it, and has controllers read it again.
+fn label_node<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, label: &str) -> bool {
+    struct Unsubscribed; // nothing is subscribed yet
+    impl AttrChangeNotifier for Unsubscribed {
+        fn notify_attr_changed(&self, _: u16, _: u32, _: u32) {}
+        fn notify_cluster_changed(&self, _: u16, _: u32) {}
+        fn notify_endpoint_changed(&self, _: u16) {}
+        fn notify_all_changed(&self) {}
+    }
+    if label.len() > 32 {
+        logf!("matter: device name {label:?} is longer than Matter's 32 bytes");
+        return false;
+    }
+    matter.with_state(|state| {
+        let node_label = &mut state.basic_info_settings.node_label;
+        node_label.clear();
+        let _ = node_label.push_str(label); // fits: checked above
+    });
+    match matter.bump_configuration_version(kv, &Unsubscribed) {
+        Ok(_) => {
+            logf!("matter: device name {label:?}");
+            true
+        }
+        Err(e) => {
+            logf!("matter: device name {label:?}: {e:?}");
+            false
+        }
+    }
+}
+
 fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNotif>(
     settings: &Settings, nest: Arc<Nest>, networks: N, controller: C,
 ) -> Result<(), Error> {
@@ -259,7 +291,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         manufacturing_date: "20151201",
         product_name: "Nest Learning Thermostat",
         vendor_name: "Google Nest",
-        device_name: "Nest Thermostat",
+        device_name: leak(nest.bridge.device_name()),
         ..BasicInfoConfig::new()
     }));
     let comm = BasicCommData {
@@ -278,6 +310,11 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     }
     let kv = matter.kv(DirKvBlobStore::new(settings.storage.clone()));
     matter.startup(&kv)?;
+    if let Some(label) = nest.bridge.matter_label_due() {
+        if label_node(&matter, &kv, &label) {
+            nest.bridge.matter_labelled();
+        }
+    }
     if let Err(e) = crate::settings_ui::matter_codes(&comm, DiscoveryCapabilities::IP) { logf!("matter UI: {e}"); }
 
     let buffers: MatterBuffers = MatterBuffers::new();
@@ -929,5 +966,30 @@ mod tests {
         for bad in [0, 11111111, 12345678, 87654321, 99999999, 100_000_000] {
             assert!(check_passcode(bad).is_err(), "{bad} accepted");
         }
+    }
+
+    #[test]
+    fn the_device_name_becomes_the_node_label_and_stays_after_a_restart() {
+        use rs_matter::dm::devices::test::TEST_DEV_ATT;
+        use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
+        let dir = std::env::temp_dir().join(format!("nestlocal-matter-label-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let comm = || BasicCommData {
+            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(&20202021u32.to_le_bytes())),
+            discriminator: 3840,
+        };
+        let info = BasicInfoConfig::new();
+        let matter = Matter::new(&info, comm(), &TEST_DEV_ATT, MATTER_PORT);
+        let kv = matter.kv(DirKvBlobStore::new(dir.clone()));
+        matter.startup(&kv).unwrap();
+        assert!(label_node(&matter, &kv, "Nest FamRm"));
+        assert!(!label_node(&matter, &kv, &"x".repeat(33)), "past Matter's 32 bytes");
+        assert_eq!(matter.with_state(|state| state.basic_info_settings.node_label.to_string()), "Nest FamRm",
+                   "a name refused leaves the label");
+        let restarted = Matter::new(&info, comm(), &TEST_DEV_ATT, MATTER_PORT);
+        restarted.startup(restarted.kv(DirKvBlobStore::new(dir.clone()))).unwrap();
+        assert_eq!(restarted.with_state(|state| state.basic_info_settings.node_label.to_string()), "Nest FamRm");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

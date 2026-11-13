@@ -16,6 +16,15 @@ pub struct Seen {
     pub mode: &'static str,
     pub port: String,
     pub id: Id,
+    /// The unit's serial, which its firmware reports on USB in the
+    /// application; none in the recovery modes.
+    pub serial: Option<String>,
+}
+
+/// A Nest serial: 16 capital letters and digits, as 09AA01AC25160NMZ.
+fn unit_serial(reported: &str) -> Option<String> {
+    (reported.len() == 16 && reported.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
+        .then(|| reported.to_string())
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -28,9 +37,11 @@ pub enum Bus {
 
 impl Bus {
     fn read() -> Bus {
+        let serials = usb::serial_numbers().unwrap_or_default();
         let mut seen: Vec<Seen> = usb::list().unwrap_or_default().into_iter().filter_map(|(port, id)| {
             let device = device::identify(id)?;
-            Some(Seen { device, mode: device::mode_name(device, id).unwrap_or(crate::tr!("bus.unknown_mode")), port, id })
+            let serial = serials.get(&port).and_then(|reported| unit_serial(reported));
+            Some(Seen { device, mode: device::mode_name(device, id).unwrap_or(crate::tr!("bus.unknown_mode")), port, id, serial })
         }).collect();
         match seen.len() {
             0 => Bus::Nothing,
@@ -98,12 +109,20 @@ mod tests {
 
     #[test]
     fn the_summary_names_the_unit_and_its_mode() {
-        let seen = Seen { device: Device::Diamond3, mode: "USB download (SDP)", port: "20-1".into(), id: (0x15a2, 0x0071) };
+        let seen = Seen { device: Device::Diamond3, mode: "USB download (SDP)", port: "20-1".into(), id: (0x15a2, 0x0071), serial: None };
         assert_eq!(Bus::One(seen.clone()).summary(), "Nest gen 3 (diamond3) · USB download (SDP)");
         let app = Seen { mode: "app", id: (0x2464, 0x0030), ..seen.clone() };
         assert_eq!(Bus::One(app).summary(), "Nest gen 3 (diamond3)", "the usual mode goes unsaid");
         assert_eq!(Bus::Several(vec![seen.clone(), seen]).summary(), "2 units on USB; connect one");
         assert_eq!(Bus::Nothing.summary(), "Disconnected");
         assert_eq!(Watcher::default().current(), Bus::Nothing);
+    }
+
+    #[test]
+    fn only_a_nest_serial_is_taken() {
+        assert_eq!(unit_serial("09AA01AC25160NMZ").as_deref(), Some("09AA01AC25160NMZ"));
+        for other in ["", "0123456789", "09aa01ac25160nmz", "09AA01AC25160NMZ0", "SN: 09AA01AC2516"] {
+            assert_eq!(unit_serial(other), None, "{other:?}");
+        }
     }
 }
