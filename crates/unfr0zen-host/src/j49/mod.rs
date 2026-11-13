@@ -302,9 +302,6 @@ fn unsupported(device: Device, options: &patch::Options) -> Result<()> {
     if options.usb_shell {
         return Err(failure("Diamond needs its own kernel for --usb-shell"));
     }
-    if options.external_temperature {
-        return Err(failure("--external-temperature is not supported on the 1st generation"));
-    }
     if options.dark_theme {
         return Err(failure("--dark-theme is only for the 2nd generation"));
     }
