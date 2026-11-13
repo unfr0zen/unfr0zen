@@ -146,7 +146,8 @@ enum Command {
     },
     /// diamond3: load recovery U-Boot over USB and leave it at its prompt; prints its serial port
     Uboot,
-    /// diamond3: boot the application firmware, through recovery and the stock U-Boot when needed
+    /// Boot the application firmware: diamond3 through recovery and the stock U-Boot when needed,
+    /// diamond and j49 by restarting a flasher an interrupted run left on USB
     Boot,
     // A diamond3's whole 512 MiB NAND as an ECC-corrected image (2048-byte
     // pages, no OOB); the OMAP boards' as raw 2112-byte pages with OOB.
@@ -312,7 +313,7 @@ pub fn main() {
         },
         Some(Command::Nlclient { .. }) => unreachable!("handled before USB setup"),
         Some(Command::Uboot) => boot::uboot(config.wait_usb, config.entry_point, &mut progress),
-        Some(Command::Boot) => boot::boot(config.wait_usb, config.entry_point, &mut progress),
+        Some(Command::Boot) => unfr0zen_host::flow::boot(config.wait_usb, config.entry_point, &mut progress),
         Some(Command::Backup { out }) => {
             let job = Job::Backup(out.clone().unwrap_or_else(nand::default_backup));
             nand::run(&job, config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)

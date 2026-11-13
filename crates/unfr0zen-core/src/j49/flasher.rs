@@ -83,6 +83,12 @@ fn programmable(page: usize) -> bool {
     PROGRAM_SLOTS.contains(&page) || erasable(page / PAGES_PER_BLOCK)
 }
 
+/// The flasher's reset, sent without its hello: to a flasher another run
+/// connected to and left.
+pub fn reset_command(bulk: &mut impl Bulk) -> Result<()> {
+    omap::write(bulk, &[&CMD_RESET[..], &[0; 8]].concat(), Duration::from_secs(2))
+}
+
 /// The flasher on the unit, over x-loader's bulk endpoints.
 pub struct Flasher<B: Bulk> {
     bulk: B,
@@ -183,7 +189,7 @@ impl<B: Bulk> Nand for Flasher<B> {
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.command(CMD_RESET, 0, 0)
+        reset_command(&mut self.bulk)
     }
 
     fn chip(&self) -> &str {

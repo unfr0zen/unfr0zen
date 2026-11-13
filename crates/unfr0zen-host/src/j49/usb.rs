@@ -101,7 +101,7 @@ pub fn open_rom(timeout: Duration) -> Result<(String, Pipe)> {
 }
 
 fn claim(info: &nusb::DeviceInfo) -> Result<Pipe> {
-    let hint = if cfg!(windows) { " (the OMAP boot ROM needs the WinUSB driver: bind it to 0451:d00e with Zadig)" } else { "" };
+    let hint = if cfg!(windows) { " (the OMAP boot ROM needs the WinUSB driver, which the app installs before the run: check Device Manager)" } else { "" };
     let device = info.open().wait().map_err(|e| usb_error(format!("open the OMAP boot ROM: {e}{hint}")))?;
     let interface = match device.claim_interface(0).wait() {
         Ok(interface) => interface,

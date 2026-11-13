@@ -81,7 +81,7 @@
             <p><a href="/download/">Download unfr0zen</a> for your system, then do its one-time setup there:</p>
             <ul>
                 <li><b>macOS:</b> allow the app on first launch (it isn't notarized).</li>
-                <li><b>Windows:</b> for a 1st or 2nd generation, bind the WinUSB driver to the boot ROM (<code>0451:d00e</code>) with Zadig. For a 3rd generation, see the Android driver note if a run can't find the recovery device.</li>
+                <li><b>Windows:</b> for a 1st or 2nd generation, the first run installs the boot ROM's WinUSB driver (<code>0451:d00e</code>): accept the administrator prompt. For a 3rd generation, see the Android driver note if a run can't find the recovery device.</li>
                 <li><b>Linux:</b> add the udev rule, so the app can open the thermostat without root.</li>
             </ul>
             <p>Choose what to install on the Patch page's Integrations and Features steps; each option is described under <a href="/integrations/">Integrations</a>. Everything there is optional, and you can run the patch again later to change it.</p>
@@ -197,7 +197,7 @@
                 <table>
                     <thead><tr><th>Problem</th><th>Try</th></tr></thead>
                     <tbody>
-                        <tr><td data-label="Problem">The app doesn't find the thermostat</td><td data-label="Try">Another cable (one that carries data) and a USB port on the computer itself. On Linux, check the udev rule; on Windows, the Zadig step for the 1st and 2nd generations.</td></tr>
+                        <tr><td data-label="Problem">The app doesn't find the thermostat</td><td data-label="Try">Another cable (one that carries data) and a USB port on the computer itself. On Linux, check the udev rule; on Windows, for the 1st and 2nd generations, that the administrator prompt for the USB driver was accepted.</td></tr>
                         <tr><td data-label="Problem">2nd or 3rd generation: it doesn't enter USB download mode</td><td data-label="Try">Hold the display in a little longer, until the screen goes dark. If the battery is low, leave the display on its base or on USB for a while and try again.</td></tr>
                         <tr><td data-label="Problem">1st generation: nothing happens when plugged in</td><td data-label="Try">Check the battery is plugged in, that both tweezer tips touch bare metal at the two points, and that Device is set to diamond. Unplug, bridge again, then plug in.</td></tr>
                         <tr><td data-label="Problem">The run stopped part way</td><td data-label="Try">Unplug, let the thermostat start, and run the patch again. If it doesn't start, restore your backup from the Backups page, which puts it back as it was.</td></tr>

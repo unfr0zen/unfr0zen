@@ -107,7 +107,10 @@ fn main() -> eframe::Result<()> {
     if let Ok(icon) = eframe::icon_data::from_png_bytes(png) {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[cfg(windows)]
+    prefer_dx12(&mut options);
     let restart = Arc::new(AtomicBool::new(false));
     let result = eframe::run_native("unfr0zen", options, Box::new({
         let restart = restart.clone();
@@ -808,7 +811,7 @@ impl App {
             Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
             Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
-            Task::Boot => Ok(Run::task(move |progress| boot::boot(WAIT_USB, entry_point, progress))),
+            Task::Boot => Ok(Run::task(move |progress| unfr0zen_host::flow::boot(WAIT_USB, entry_point, progress))),
         };
         self.logs = LogContext::default();
         self.task = Some(task);
@@ -1729,28 +1732,33 @@ impl App {
         self.uboot.ui(ui, idle);
     }
 
-    /// A 3rd generation is on USB, in any mode: the only unit the boot and
-    /// recovery U-Boot commands have to act on.
-    fn diamond3_on_bus(&self) -> bool {
-        matches!(self.bus.current(), Bus::One(seen) if seen.device == Device::Diamond3)
+    /// One unit the command acts on is on USB, in any mode: any Nest
+    /// Learning Thermostat to boot, a 3rd generation for recovery U-Boot.
+    fn command_target_on_bus(&self, task: &Task) -> bool {
+        matches!(self.bus.current(), Bus::One(seen) if command_devices(task).contains(&seen.device))
     }
 
     /// An advanced command's page: what it does, its button, and how it went.
     fn command_page(&mut self, ui: &mut egui::Ui, task: Task, about: &str, button: &str) {
         page_header(ui, task.title(), about);
         let bus = self.bus.current();
-        let other = match &bus { Bus::One(seen) if seen.device != Device::Diamond3 => Some(seen.device), _ => None };
+        let devices = command_devices(&task);
+        let other = match &bus { Bus::One(seen) if !devices.contains(&seen.device) => Some(seen.device), _ => None };
+        let disabled = if task == Task::Boot { tr!("command.disabled_learning") } else { tr!("command.disabled") };
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(tr!("command.gen3_only")).color(MUTED));
+        // Boot takes every generation there is to name.
+        if task != Task::Boot {
+            ui.label(egui::RichText::new(tr!("command.gen3_only")).color(MUTED));
+        }
         if let Some(device) = other {
             ui.label(egui::RichText::new(tr!("command.connected_device", device = device.description())).color(WARN));
         }
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            // Only with a 3rd generation on USB, in any mode, is there one to act on.
-            if accent_button(ui, button, self.idle() && self.diamond3_on_bus())
+            // Only with a unit it acts on on USB, in any mode, is there one to act on.
+            if accent_button(ui, button, self.idle() && self.command_target_on_bus(&task))
                 .on_hover_text(about)
-                .on_disabled_hover_text(tr!("command.disabled"))
+                .on_disabled_hover_text(disabled)
                 .clicked() {
                 self.start(task.clone());
             }
@@ -2072,6 +2080,14 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
     }
 }
 
+/// The generations an advanced command acts on.
+fn command_devices(task: &Task) -> &'static [Device] {
+    match task {
+        Task::Boot => &[Device::Diamond3, Device::J49, Device::Diamond],
+        _ => &[Device::Diamond3],
+    }
+}
+
 /// The id of the delete icon on a backup's row.
 fn delete_id(path: &Path) -> egui::Id {
     egui::Id::new(("delete_backup", path))
@@ -2370,6 +2386,27 @@ fn caption_buttons(ui: &mut egui::Ui) {
             }
         }
     });
+}
+
+/// DX12 adapters first, hardware before software, then the rest in wgpu's
+/// order. wgpu's own choice can fall on GL, which under Remote Desktop
+/// draws the undecorated window's frame offset by a caption and a border,
+/// so clicks land off what they show.
+#[cfg(windows)]
+fn prefer_dx12(options: &mut eframe::NativeOptions) {
+    use eframe::egui_wgpu::WgpuSetup;
+    use eframe::wgpu;
+    let WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup else { return };
+    setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
+        let rank = |adapter: &&wgpu::Adapter| {
+            let info = adapter.get_info();
+            (info.backend != wgpu::Backend::Dx12, info.device_type == wgpu::DeviceType::Cpu)
+        };
+        let chosen = adapters.iter().filter(|adapter| surface.is_none_or(|surface| adapter.is_surface_supported(surface)))
+            .min_by_key(rank).cloned().ok_or_else(|| "no graphics adapter can draw to the window".to_string())?;
+        log::info!("Graphics adapter: {:?} on {:?}", chosen.get_info().name, chosen.get_info().backend);
+        Ok(chosen)
+    }));
 }
 
 /// Windows 11 rounds only framed windows' corners by itself; rounds this
@@ -3047,7 +3084,7 @@ mod tests {
     fn main_page_controls_show_hints_on_hover() {
         for (page, label, hint) in [
             (Page::Patch, "Back up and patch", "Patch the connected thermostat with the selected options"),
-            (Page::Boot, "Boot the application", "Connect one 3rd generation thermostat, finish any operation, close file pickers, and disconnect any open console first"),
+            (Page::Boot, "Boot the application", "Connect one Nest Learning Thermostat, finish any operation, close file pickers, and disconnect any open console first"),
         ] {
             let context = egui::Context::default();
             install_fonts(&context);
@@ -3294,14 +3331,17 @@ mod tests {
     }
 
     #[test]
-    fn boot_and_uboot_need_a_diamond3_on_the_bus() {
+    fn boot_takes_any_learning_thermostat_and_uboot_only_a_diamond3() {
         let seen = |device| bus::Seen { device, mode: "app", port: "1".into(), id: (0, 0), serial: None };
-        let d3 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::Diamond3))), ..App::default() };
-        assert!(d3.diamond3_on_bus(), "a 3rd generation is on the bus");
-        let j49 = App { bus: bus::Watcher::fixed(bus::Bus::One(seen(Device::J49))), ..App::default() };
-        assert!(!j49.diamond3_on_bus(), "another generation is not it");
+        let on = |device| App { bus: bus::Watcher::fixed(bus::Bus::One(seen(device))), ..App::default() };
+        for device in [Device::Diamond3, Device::J49, Device::Diamond] {
+            assert!(on(device).command_target_on_bus(&Task::Boot), "{device:?} boots");
+        }
+        assert!(!on(Device::Onyx).command_target_on_bus(&Task::Boot), "the Thermostat E does not");
+        assert!(on(Device::Diamond3).command_target_on_bus(&Task::Uboot));
+        assert!(!on(Device::J49).command_target_on_bus(&Task::Uboot), "recovery U-Boot is the 3rd generation's");
         let none = App { bus: bus::Watcher::fixed(bus::Bus::Nothing), ..App::default() };
-        assert!(!none.diamond3_on_bus(), "nothing on the bus");
+        assert!(!none.command_target_on_bus(&Task::Boot), "nothing on the bus");
     }
 
     #[test]

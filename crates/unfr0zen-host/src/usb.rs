@@ -39,6 +39,10 @@ pub fn serial_numbers() -> Result<BTreeMap<String, String>> {
         .collect())
 }
 
+/// The longest bulk IN request: WinUSB refuses one over the pipe's maximum
+/// transfer size, as nusb reads in RAW_IO mode.
+const MAX_RECEIVE: usize = 256 << 10;
+
 /// A claimed interface's bulk OUT and IN endpoints.
 pub struct Pipe {
     out: nusb::Endpoint<Bulk, Out>,
@@ -80,8 +84,10 @@ impl bulk::Bulk for Pipe {
             .map(drop).map_err(|e| usb_error(format!("{} send: {e}", self.name)))
     }
 
+    /// At most [`MAX_RECEIVE`] at a time: the caller takes a longer reply in
+    /// pieces.
     fn receive(&mut self, max: usize, timeout: Duration) -> Result<Vec<u8>> {
-        let requested = max.max(1).next_multiple_of(self.packet);
+        let requested = max.clamp(1, MAX_RECEIVE).next_multiple_of(self.packet);
         match self.input.transfer_blocking(Buffer::new(requested), timeout).into_result() {
             Ok(buffer) => Ok(buffer.into_vec()),
             Err(nusb::transfer::TransferError::Cancelled) => Err(Error::Timeout(format!("{}: no answer from the unit", self.name))),
@@ -284,6 +290,10 @@ pub fn verify_shell(port: &str, id: Id, timeout: Duration) -> Result<String> {
             log::info!("Confirmed root shell on {name} (uid 0)");
             return Ok(name.clone());
         }
+    }
+    // A check is sent only on a port that opened.
+    if answers.is_empty() {
+        return Err(Error::Timeout("the application's USB serial port did not appear".into()));
     }
     log::info!("No uid-0 answer; the shell said: {:?}", String::from_utf8_lossy(&reply[reply.len().saturating_sub(300)..]));
     Err(Error::Timeout("application USB ACM appeared without a confirmed uid-0 shell".into()))

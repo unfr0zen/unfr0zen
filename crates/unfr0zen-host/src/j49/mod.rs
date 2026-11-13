@@ -11,6 +11,8 @@
 pub mod assets;
 pub mod nand;
 pub mod usb;
+#[cfg(windows)]
+mod winusb;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -37,6 +39,10 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, unit: U
     let Unit { device, port, id } = unit;
     if !matches!(device, Device::Diamond | Device::J49) {
         return Err(failure(format!("this needs an OMAP Nest; the unit on USB is a {}", device.name())));
+    }
+    #[cfg(windows)]
+    if !winusb::installed() {
+        stage(progress, "Install the boot ROM's USB driver", winusb::install)?;
     }
     let app = app_id(device);
     if usb::mode_for(id, app) == Some(Mode::App) {
@@ -224,16 +230,30 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
     let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
                                                                  &mut || stored_pki(&pki_dir),
                                                                  false, &screen_builder(run_dir));
-    let changes = stage(progress, &label, || match patch(&mut volume) {
-        // Too little room beside the old nestlocal or nlclient: again, from
-        // the same read, with the old ones' blocks erased for the new.
-        Err(error) if volume.out_of_room() => {
-            log::info!("{slot}: {error}; patching again with the old nestlocal's and nlclient's blocks erased to make room");
-            volume = jffs2::Slot::load(raw.clone())?;
-            volume.make_room_in_place();
-            patch(&mut volume)
+    let mut whole = false;
+    let changes = stage(progress, &label, || {
+        match patch(&mut volume) {
+            // Too little room beside the old nestlocal or nlclient: again,
+            // from the same read, with the old ones' blocks erased for the new.
+            Err(error) if volume.out_of_room() => {
+                log::info!("{slot}: {error}; patching again with the old nestlocal's and nlclient's blocks erased to make room");
+                volume = jffs2::Slot::load(raw.clone())?;
+                volume.make_room_in_place();
+            }
+            other => return other,
         }
-        other => other,
+        match patch(&mut volume) {
+            // Still too little: the obsolete nodes the unit's JFFS2 spread
+            // over shared blocks are reclaimed only by rewriting the slot.
+            Err(error) if volume.out_of_room() => {
+                log::info!("{slot}: {error}; patching again with the whole slot rewritten from its live files");
+                volume = jffs2::Slot::load(raw.clone())?;
+                volume.rewrite_whole();
+                whole = true;
+                patch(&mut volume)
+            }
+            other => other,
+        }
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
     let upper = stage(progress, "Choose the kernel booted first", || upper_kernel(nand, slot, options))?;
@@ -243,11 +263,16 @@ fn route(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &st
         let plan = volume.programmed()?;
         let (free, used) = volume.usage();
         let pages = plan.before.len() + plan.after.len();
-        let reclaimed = match plan.erase.len() {
-            0 => String::new(),
-            n => format!(" and {n} of old copies, erased to make room"),
-        };
-        progress.status(&format!("{} changes: {pages} pages in {used} blocks, of {free} erased{reclaimed}", changes.len()));
+        if whole {
+            progress.status(&format!("{} changes: the whole slot rewritten, {pages} pages after erasing its {} good blocks",
+                                     changes.len(), plan.erase.len()));
+        } else {
+            let reclaimed = match plan.erase.len() {
+                0 => String::new(),
+                n => format!(" and {n} of old copies, erased to make room"),
+            };
+            progress.status(&format!("{} changes: {pages} pages in {used} blocks, of {free} erased{reclaimed}", changes.len()));
+        }
         stage_with(progress, &format!("Write and verify {slot} in NAND"), |progress| write_slot(nand, progress, slot, &plan))?;
         changed = true;
     }
@@ -305,6 +330,63 @@ fn unsupported(device: Device, options: &patch::Options) -> Result<()> {
         return Err(failure("--dark-theme is only for the 2nd generation"));
     }
     Ok(())
+}
+
+/// Boots the application firmware from whatever the unit was left in. On
+/// 0451:d00e it is nearly always a flasher an interrupted run left behind,
+/// idle or still sending a reply nobody read: the reply is drained and the
+/// flasher told to reset, after which the unit boots its NAND. A hung
+/// x-loader ignores that and stays; only the button resets it.
+pub(crate) fn boot(unit: Unit, progress: &mut dyn Progress, cancel: &CancelFlag) -> Result<String> {
+    let app = app_id(unit.device);
+    if usb::mode_for(unit.id, app) == Some(Mode::App) {
+        return Ok("The application firmware is running".into());
+    }
+    start_log(progress, &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string())?;
+    stage(progress, "Restart the unit", restart)?;
+    stage(progress, "Wait for the application firmware",
+          || usb::wait_device_for(&[Mode::App], seconds(180), Some(&unit.port), app, cancel))?;
+    Ok("The application firmware is running".into())
+}
+
+/// Drains whatever the device on 0451:d00e is sending, sends the flasher's
+/// reset, and waits for the device to leave USB.
+fn restart() -> Result<()> {
+    let (port, mut pipe) = match usb::open_rom(seconds(5)) {
+        Ok(opened) => opened,
+        // Gone already: it restarted by itself.
+        Err(_) if !rom_present()? => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let mut drained = 0;
+    loop {
+        match omap::try_receive(&mut pipe, PAGES_PER_BLOCK * PAGE_RAW, Duration::from_millis(300)) {
+            Ok(chunk) if !chunk.is_empty() => drained += chunk.len(),
+            Ok(_) => break,
+            Err(error) => {
+                log::info!("draining {port}: {error}");
+                break;
+            }
+        }
+    }
+    log::info!("{port}: drained {drained} bytes nobody read");
+    if let Err(error) = flasher::reset_command(&mut pipe) {
+        log::info!("{port}: reset: {error}");
+    }
+    drop(pipe);
+    let until = std::time::Instant::now() + seconds(10);
+    while std::time::Instant::now() < until {
+        if !rom_present()? {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(failure(format!("{} stayed on USB: an x-loader that hangs ignores the reset. Hold the front panel button for \
+                         10 seconds to restart the unit", port)))
+}
+
+fn rom_present() -> Result<bool> {
+    Ok(crate::usb::list()?.values().any(|&id| id == usb::ROM))
 }
 
 /// Refuses a run this build cannot do, before the unit is touched.

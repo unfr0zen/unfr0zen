@@ -1,0 +1,35 @@
+[Version]
+Signature = "$Windows NT$"
+Class = USBDevice
+ClassGUID = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
+Provider = %Provider%
+CatalogFile = unfr0zen-omap-rom.cat
+DriverVer = 11/13/2026,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%Provider% = Devices,NTamd64,NTarm64
+
+[Devices.NTamd64]
+%Device% = Install, USB\VID_0451&PID_D00E
+
+[Devices.NTarm64]
+%Device% = Install, USB\VID_0451&PID_D00E
+
+[Install]
+Include = winusb.inf
+Needs = WINUSB.NT
+
+[Install.Services]
+Include = winusb.inf
+Needs = WINUSB.NT.Services
+
+[Install.HW]
+AddReg = Interface
+
+[Interface]
+HKR,,DeviceInterfaceGUIDs,0x10000,"{6E0B5E2C-7F0A-4B0D-9F5E-3C1D2A4B8E71}"
+
+[Strings]
+Provider = "unfr0zen"
+Device = "Nest OMAP boot ROM (unfr0zen)"

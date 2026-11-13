@@ -19,6 +19,12 @@
 //! cut short leaves the unit running the stock nlclient. The rest of the slot
 //! is as it was.
 //!
+//! When even that does not fit, the slot is rewritten whole
+//! ([`Slot::rewrite_whole`]): the unit's own JFFS2 leaves obsolete nodes
+//! spread over blocks it shares with live ones, and only erasing every block
+//! and writing the patched tree's live files afresh gets that space back. A
+//! write cut short then leaves the slot unmountable until it is written again.
+//!
 //! As a [`Volume`], the patch sees the slot as the initramfs shell shows a
 //! mounted one; [`Slot::programmed`] then gives the pages to program.
 
@@ -107,6 +113,7 @@ struct Inode {
     uid: u16,
     gid: u16,
     isize: u32,
+    mtime: u32,
     offset: u32,
     dsize: u32,
     compr: u8,
@@ -188,6 +195,9 @@ pub struct Slot {
     /// Whether the old blocks of the files replaced in place are erased
     /// whatever their new copies need.
     always_make_room: bool,
+    /// Whether nodes are kept in memory alone, for programmed() to lay the
+    /// live tree out afresh over the whole slot.
+    rewrite: bool,
     /// A stand-in's inode and mode, put back once the new copy is named.
     stand_in: Option<(u32, u32)>,
     out_of_room: bool,
@@ -203,7 +213,7 @@ impl Slot {
         let mut slot = Slot { raw, bad: BTreeSet::new(), free: Vec::new(), inodes: BTreeMap::new(), dirents: BTreeMap::new(),
                               max_version: BTreeMap::new(), next_ino: 2, blocks: Vec::new(), current: None, nodes: Vec::new(), now,
                               held: BTreeMap::new(), erase: Vec::new(), erase_after: 0, always_make_room: false,
-                              stand_in: None, out_of_room: false };
+                              rewrite: false, stand_in: None, out_of_room: false };
         for block in 0..slot.raw.len() / BLOCK_RAW {
             let chunk = &slot.raw[block * BLOCK_RAW..(block + 1) * BLOCK_RAW];
             if nand::factory_bad(chunk) {
@@ -273,7 +283,7 @@ impl Slot {
         let (ino, version) = (u32_at(node, 12), u32_at(node, 16));
         self.inodes.entry(ino).or_default().push(Inode {
             version, mode: u32_at(node, 20), uid: u16_at(node, 24), gid: u16_at(node, 26), isize: u32_at(node, 28),
-            offset: u32_at(node, 44), dsize: u32_at(node, 52), compr: node[56], payload: payload.to_vec(),
+            mtime: u32_at(node, 36), offset: u32_at(node, 44), dsize: u32_at(node, 52), compr: node[56], payload: payload.to_vec(),
         });
         self.note(ino, version);
         Some(ino)
@@ -372,6 +382,10 @@ impl Slot {
     fn place(&mut self, mut node: Vec<u8>) -> Result<()> {
         let size = (node.len() + 3) & !3;
         node.resize(size, 0xff);
+        if self.rewrite {
+            self.scan(&node);
+            return Ok(());
+        }
         if self.current.is_none_or(|(_, used)| used + size > BLOCK) {
             if self.blocks.len() <= SPARE_BLOCKS {
                 self.out_of_room = true;
@@ -522,6 +536,9 @@ impl Slot {
     /// data), split at the erase that makes room. Each page is erased first; a
     /// block's OOB free bytes are kept.
     pub fn programmed(&self) -> Result<Programming> {
+        if self.rewrite {
+            return self.compacted()?.programmed();
+        }
         let mut out = self.raw.clone();
         for &block in &self.erase {
             let at = block * BLOCK_RAW;
@@ -560,6 +577,61 @@ impl Slot {
     /// did not.
     pub fn make_room_in_place(&mut self) {
         self.always_make_room = true;
+    }
+
+    /// Has the slot rewritten whole: the patch changes the tree in memory,
+    /// and the pages to program hold its live files alone, every block but
+    /// the bad ones erased first. For a patch that did not fit even with
+    /// [`Slot::make_room_in_place`].
+    pub fn rewrite_whole(&mut self) {
+        self.rewrite = true;
+    }
+
+    /// The live tree laid out over the whole slot: every block but the bad
+    /// ones erased, and each directory, file and link the root reaches
+    /// written afresh with its inode number, owner, mode and time.
+    fn compacted(&self) -> Result<Slot> {
+        let usable: Vec<usize> = (0..self.raw.len() / BLOCK_RAW).filter(|block| !self.bad.contains(block)).collect();
+        let mut out = Slot { raw: self.raw.clone(), bad: self.bad.clone(), free: usable.clone(), inodes: BTreeMap::new(),
+                             dirents: BTreeMap::new(), max_version: BTreeMap::new(), next_ino: self.next_ino,
+                             blocks: usable.clone(), current: None, nodes: Vec::new(), now: self.now, held: BTreeMap::new(),
+                             erase: usable, erase_after: 0, always_make_room: false, rewrite: false, stand_in: None,
+                             out_of_room: false };
+        let (mut pending, mut written) = (vec![ROOT], BTreeSet::new());
+        while let Some(ino) = pending.pop() {
+            if !written.insert(ino) {
+                continue;
+            }
+            let node = self.latest(ino);
+            if let Some(node) = node {
+                let ids = (node.uid, node.gid);
+                out.now = node.mtime;
+                if node.mode & S_IFMT == S_IFREG {
+                    let data = self.contents(ino)?;
+                    if data.is_empty() {
+                        out.inode(ino, node.mode, ids, 0, 0, &[])?;
+                    }
+                    for (index, chunk) in data.chunks(DATA_CHUNK).enumerate() {
+                        out.inode(ino, node.mode, ids, data.len(), index * DATA_CHUNK, chunk)?;
+                    }
+                } else {
+                    out.inode(ino, node.mode, ids, node.isize as usize, node.offset as usize, &node.data()?)?;
+                }
+            }
+            if ino != ROOT && node.is_none_or(|node| node.mode & S_IFMT != S_IFDIR) {
+                continue;
+            }
+            for ((_, name), entry) in self.dirents.range((ino, Vec::new())..(ino + 1, Vec::new())) {
+                let Some(child) = self.latest(entry.ino) else { continue };
+                let name = std::str::from_utf8(name)
+                    .map_err(|_| crate::Error::Device(format!("a name in directory inode {ino} is not UTF-8")))?;
+                out.now = child.mtime;
+                out.dirent(ino, name, entry.ino, ((child.mode & S_IFMT) >> 12) as u8)?;
+                pending.push(entry.ino);
+            }
+        }
+        out.now = self.now;
+        Ok(out)
     }
 
     /// Whether a node found no erased block left for it.
@@ -646,7 +718,7 @@ impl Volume for Slot {
         let regular = |slot: &Slot, ino: u32| slot.mode(ino).is_some_and(|mode| mode & S_IFMT == S_IFREG);
         let old = self.child(parent, base).filter(|&old| regular(self, old));
         let in_place = REPLACED_IN_PLACE.iter().find(|(path, _)| *path == name.trim_matches('/'));
-        if let (Some(old), Some((_, stand_in))) = (old, in_place) {
+        if let (Some(old), Some((_, stand_in)), false) = (old, in_place, self.rewrite) {
             // nlclient's stock copy, root's, may stand in; without it the old
             // copy stays.
             let stand_in = match stand_in {
@@ -706,7 +778,7 @@ pub(crate) mod tests {
         let raw = b"JFFS2 LZO compatibility block\n".repeat(64);
         let mut inode = Inode {
             version: 1, mode: S_IFREG | 0o644, uid: 0, gid: 0,
-            isize: raw.len() as u32, offset: 0, dsize: raw.len() as u32,
+            isize: raw.len() as u32, mtime: 0, offset: 0, dsize: raw.len() as u32,
             compr: COMPR_LZO, payload: lzokay::compress::compress(&raw).unwrap(),
         };
         assert_eq!(inode.data().unwrap(), raw);
@@ -909,6 +981,50 @@ pub(crate) mod tests {
         assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, nestlocal);
         assert_eq!(back.read(crate::nlclient::BINARY).unwrap().unwrap().2, nlclient);
         assert_eq!(back.read("etc/b").unwrap().unwrap().2, b"kept");
+    }
+
+    #[test]
+    fn a_patch_that_does_not_fit_beside_obsolete_nodes_fits_in_the_slot_rewritten_whole() {
+        // Rewrites of etc/log leave obsolete nodes in blocks shared with live
+        // files; three blocks are free beyond the spare ones.
+        let mut slot = empty(SPARE_BLOCKS + 6);
+        slot.now = 1000;
+        slot.write("nestlabs/sbin/nestlocal", b"old", "0:0", 0o755).unwrap();
+        for i in 0..5 {
+            slot.write("etc/log", &noise(BLOCK / 2, i + 1), "0:0", 0o644).unwrap();
+            slot.write(&format!("etc/keep{i}"), format!("{i}").as_bytes(), "1:2", 0o640).unwrap();
+        }
+        slot.make_directory("usr/share/doom", 0o700).unwrap();
+        let (parent, link) = (slot.lookup("etc", true).unwrap().unwrap(), slot.next_ino);
+        slot.next_ino += 1;
+        slot.dirent(parent, "link", link, 10).unwrap();
+        slot.inode(link, S_IFLNK | 0o777, (0, 0), 5, 0, b"keep3").unwrap();
+        let raw = slot.programmed().unwrap().raw;
+        let new = noise(BLOCK * 7 / 2, 9);
+        let patch = |slot: &mut Slot| slot.write("nestlabs/sbin/nestlocal", &new, "0:0", 0o755);
+        let mut appended = Slot::load(raw.clone()).unwrap();
+        assert!(patch(&mut appended).is_err() && appended.out_of_room());
+        let mut in_place = Slot::load(raw.clone()).unwrap();
+        in_place.make_room_in_place();
+        assert!(patch(&mut in_place).is_err() && in_place.out_of_room());
+        let mut whole = Slot::load(raw).unwrap();
+        whole.rewrite_whole();
+        patch(&mut whole).unwrap();
+        let plan = whole.programmed().unwrap();
+        assert_eq!(plan.erase, (0..SPARE_BLOCKS + 6).collect::<Vec<_>>());
+        assert!(plan.before.is_empty());
+        let mut back = Slot::load(plan.raw).unwrap();
+        assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, new);
+        assert_eq!(back.read("etc/log").unwrap().unwrap().2, noise(BLOCK / 2, 5));
+        for i in 0..5 {
+            assert_eq!(back.read(&format!("etc/keep{i}")).unwrap(), Some(("1:2".into(), 0o640, format!("{i}").into_bytes())));
+        }
+        assert_eq!(back.read("etc/link").unwrap_err().to_string(), "etc/link on the device is a symbolic link");
+        assert_eq!(back.lookup("etc/link", true).unwrap(), back.lookup("etc/keep3", false).unwrap());
+        assert_eq!(back.directory("usr/share/doom").unwrap(), Some("0:0 700".into()));
+        assert_eq!(back.shell_binary().unwrap(), "0 755");
+        let keep = back.lookup("etc/keep0", false).unwrap().unwrap();
+        assert_eq!(back.latest(keep).unwrap().mtime, 1000);
     }
 
     #[test]

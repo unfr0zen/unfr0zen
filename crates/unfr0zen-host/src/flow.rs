@@ -361,6 +361,17 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
     }
 }
 
+/// Boots the application firmware of the unit on USB from whatever mode it
+/// is in, each generation its own way. Returns the final status line.
+pub fn boot(wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Progress) -> Result<String> {
+    let cancel = device::CancelFlag::default();
+    let unit = device::detect(progress, wait_usb, None, &cancel)?;
+    match unit.device {
+        Device::Diamond | Device::J49 => j49::boot(unit, progress, &cancel),
+        _ => diamond3::boot::boot_unit(unit, wait_usb, entry_point, progress, &cancel),
+    }
+}
+
 #[cfg(test)]
 mod describe_tests {
     use super::*;

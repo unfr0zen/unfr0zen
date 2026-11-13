@@ -78,7 +78,7 @@
                 <li>Unzip and run <code>unfr0zen.exe</code>.</li>
                 <li>It isn't signed, so SmartScreen may warn you: More info, then Run anyway.</li>
             </ol>
-            <div class="note">1st and 2nd gen thermostats: the boot ROM (<code>0451:d00e</code>) needs the WinUSB driver, bound once with <a href="https://zadig.akeo.ie" target="_blank" rel="noopener">Zadig</a>.</div>
+            <div class="note">1st and 2nd gen thermostats: the first run installs the boot ROM's WinUSB driver (<code>0451:d00e</code>), after an administrator prompt.</div>
             <div class="note">3rd gen: if a run stops with <code>ACM interface for 18d1:4ee0 did not appear</code>, an Android driver installed earlier has claimed the recovery device. While the thermostat is in recovery, open Device Manager, find <b>Android Bootloader Interface</b>, choose Update driver → Browse my computer → Let me pick → Universal Serial Bus devices → <b>USB Composite Device</b>. The choice persists; run again.</div>
         </div>
     </section>

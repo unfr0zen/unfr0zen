@@ -87,8 +87,8 @@ keeps the stock nlclient beside the run log. Running a version not listed here?
 ## Install
 Download the latest build from the [releases page](https://github.com/unfr0zen/unfr0zen/releases).
 
-- **Windows:** unzip and run `unfr0zen.exe`. 1st and 2nd generation: bind the WinUSB
-  driver to the boot ROM (`0451:d00e`) once with [Zadig](https://zadig.akeo.ie).
+- **Windows:** unzip and run `unfr0zen.exe`. 1st and 2nd generation: the first run
+  installs the boot ROM's WinUSB driver (`0451:d00e`), after an administrator prompt.
 - **macOS:** unzip and open `unfr0zen.app`. It is signed ad hoc, not notarized: run
   `xattr -dr com.apple.quarantine unfr0zen.app`, or allow it under System Settings → Privacy & Security.
 - **Linux:** `tar xf unfr0zen-linux-x86_64-vX.Y.Z.tar.gz && ./unfr0zen`, after the one-time USB setup below.
@@ -155,7 +155,7 @@ Commands:
   backup    Back up the whole NAND to a file, with its SHA-256
   verify    Compare a NAND backup with the NAND
   restore   Write a verified NAND backup back to the NAND
-  boot      Boot the application firmware (3rd generation)
+  boot      Boot the application firmware
   uboot     Load recovery U-Boot over USB and leave it at its prompt (3rd generation)
   nlclient  Patch a local stock nlclient, or restore it from its undo journal
 
@@ -194,8 +194,8 @@ commits past a tag, or local changes) never update.
 **The app doesn't see the thermostat.** Use a USB cable that carries data:
 charge-only cables are the usual cause. Connect to the USB port on the back of
 the detached display, not the power-only USB port on a European stand or Heat
-Link base. On Windows, the 1st and 2nd generation need the WinUSB driver bound
-to `0451:d00e` with [Zadig](https://zadig.akeo.ie). On Linux, add the
+Link base. On Windows, the 1st and 2nd generation need the WinUSB driver the
+app installs for `0451:d00e`: accept its administrator prompt. On Linux, add the
 [udev rule](#install) and reconnect the unit.
 
 **Windows stops with `ACM interface for 18d1:4ee0 did not appear` (3rd generation).**

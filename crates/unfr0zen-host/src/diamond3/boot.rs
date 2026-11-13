@@ -47,7 +47,7 @@ pub fn boot(wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Prog
 
 /// [`boot`] for the unit found. One already running its application firmware
 /// is left alone, with no run log.
-fn boot_unit(unit: Unit, wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Progress,
+pub(crate) fn boot_unit(unit: Unit, wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Progress,
              cancel: &CancelFlag) -> Result<String> {
     let (port, id) = find_unit(progress, wait_usb, true, unit, cancel)?;
     if usb::mode(id) == Some(Mode::App) {

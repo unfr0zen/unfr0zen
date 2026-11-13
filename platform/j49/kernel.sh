@@ -3,9 +3,12 @@
 # 5.9.4 source (2.6.37), configured as its release build is
 # (configs/j49/release_defconfig, which gives the units' /proc/config.gz)
 # plus CONFIG_USB_DYNAMIC_ACM. The built-in dynamic gadget then offers ACM
-# beside mass storage: ttyGS0 on the unit. Nothing else changes, so the
-# symbol versions the unit's own modules (wl12xx) were built against stay
-# the same.
+# beside mass storage: ttyGS0 on the unit. ACM's bind marks the whole device
+# as CDC, which Windows takes for one function and gives mass storage's driver
+# alone, so it is patched to mark a composite with interface associations
+# (EF/02/01), as the gadget's own update_dev_desc does. Nothing else changes,
+# so the symbol versions the unit's own modules (wl12xx) were built against
+# stay the same.
 #
 # Built with Ubuntu 14.04's arm-linux-gnueabihf-gcc 4.8 (the units' kernel
 # reports gcc 4.8.2) in Docker, inside a volume: the tree has file names that
@@ -47,6 +50,9 @@ docker run --rm -v "$volume:/vol" -v "$out:/out" -v "$module:/zbwake/zbwake.c:ro
     apt-get update -qq > /dev/null
     apt-get install -y -qq gcc-arm-linux-gnueabihf gcc make bc perl u-boot-tools > /dev/null 2>&1
     k="make -C /vol/src/linux O=/vol/out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-"
+    acm=/vol/src/linux/drivers/usb/gadget/f_acm.c
+    perl -0pi -e "s/desc->bDeviceClass = USB_CLASS_COMM;\s*desc->bDeviceSubClass = USB_CDC_SUBCLASS_ACM;/desc->bDeviceClass = USB_CLASS_MISC;\n\t\tdesc->bDeviceSubClass = 0x02;\n\t\tdesc->bDeviceProtocol = 0x01;/" $acm
+    grep -q "desc->bDeviceClass = USB_CLASS_MISC;" $acm
     sed "s/^# CONFIG_USB_DYNAMIC_ACM is not set\$/CONFIG_USB_DYNAMIC_ACM=y/" /vol/src/configs/j49/release_defconfig > /vol/out/.config
     yes "" | $k oldconfig > /vol/out/oldconfig.log
     grep -q "^CONFIG_USB_DYNAMIC_ACM=y\$" /vol/out/.config
