@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build what the app installs on the thermostat, into build/: the diamond3's
-# ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loader, NAND
+# ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loaders, NAND
 # flasher, dropbear and kernel with a USB serial port, the radio's firmware and zbwake.ko for each
 # gen3 release, nestlocal for ARMv7 carrying them, Doom, and the UNFR0ZEN
 # screen's object for the app to link into the unit's nlclient. The build logs
@@ -64,16 +64,22 @@ run python3 platform/diamond3/bootstrap/build_bootstrap.py
 step recovery sh platform/diamond3/uboot/build_uboot.sh
 step j49 sh platform/j49/build.sh build/j49
 step j49-dropbear sh platform/j49/dropbear.sh build/j49
-# The OMAP boards' x-loader (the j49's, which serves the Diamond too) and the
-# j49's kernel with a USB serial port build in Docker containers of their own,
-# from the host. Without Docker (and no build of them already) the app is
-# built without them: it reaches no OMAP unit without the x-loader, and
-# --usb-shell is unavailable on a j49 without the kernel.
+# The j49's and the gen 1's x-loaders and the j49's kernel with a USB serial
+# port build in Docker containers of their own, from the host. Without Docker
+# (and no build of them already) the app is built without them: it reaches
+# no OMAP unit of a generation without its x-loader, and --usb-shell is
+# unavailable on a j49 without the kernel.
 if command -v docker > /dev/null || [ -f build/j49/x-load.bin ]; then
     echo "Building j49-xloader; log: .work/build-j49-xloader.log"
     sh platform/j49/xloader.sh build/j49 > .work/build-j49-xloader.log 2>&1 || { tail -n 40 .work/build-j49-xloader.log >&2; exit 1; }
 else
-    echo "Skipping the OMAP x-loader: it needs Docker; the app will reach no gen 1 or gen 2" >&2
+    echo "Skipping the OMAP x-loader: it needs Docker; the app will reach no gen 2" >&2
+fi
+if command -v docker > /dev/null || [ -f build/diamond/x-load.bin ]; then
+    echo "Building diamond-xloader; log: .work/build-diamond-xloader.log"
+    sh platform/diamond/xloader.sh build/diamond > .work/build-diamond-xloader.log 2>&1 || { tail -n 40 .work/build-diamond-xloader.log >&2; exit 1; }
+else
+    echo "Skipping the gen 1's x-loader: it needs Docker; the app will reach no gen 1" >&2
 fi
 if command -v docker > /dev/null || [ -f build/j49/uImage ]; then
     echo "Building j49-kernel; log: .work/build-j49-kernel.log"
@@ -99,4 +105,4 @@ step doom sh platform/common/doom/build.sh build/doom-armv7
 # One relocatable object for every firmware build: the app links it at the
 # addresses and layouts discovered in the unit's nlclient.
 step custom-screen sh platform/common/nlclient/build.sh build
-echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loader and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom and the screen object under build/."
+echo "Built the ROM bootstrap, boot wrapper, recovery U-Boot, the OMAP x-loaders and flasher, the radio's firmware, zbwake.ko, nestlocal, Doom and the screen object under build/."

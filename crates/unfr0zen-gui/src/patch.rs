@@ -489,10 +489,10 @@ impl Form {
         rows
     }
 
-    /// Whether the external temperature option applies: to a gen 2 or 3, and
-    /// to any unit while none is known.
+    /// Whether the external temperature option applies: to every generation,
+    /// and to any unit while none is known.
     fn supports_external_temperature(&self) -> bool {
-        matches!(self.device.or(self.last_device), None | Some(Device::Diamond3 | Device::J49))
+        matches!(self.device.or(self.last_device), None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
     }
 
     /// Whether the external temperature switch can be turned on: a unit that
@@ -786,7 +786,7 @@ mod tests {
         let plain = crate::tr!("patch.external_temperature").to_string();
         let ble = crate::tr!("patch.external_temperature_ble").to_string();
         for (device, shown, enabled) in [(None, &plain, true), (Some(Device::J49), &plain, true), (Some(Device::Diamond3), &ble, true),
-                                         (Some(Device::Diamond), &plain, false), (Some(Device::Onyx), &plain, false)] {
+                                         (Some(Device::Diamond), &plain, true), (Some(Device::Onyx), &plain, false)] {
             let mut form = Form { mqtt: Toggle { on: true, value: "tcp://broker:1883".into() }, last_device: device, ..Form::default() };
             let texts: Vec<String> = integrations_texts(&mut form).into_iter().map(|(t, _)| t).collect();
             assert_eq!([&plain, &ble].into_iter().find(|label| texts.contains(label)), Some(shown), "{device:?}");
@@ -807,8 +807,10 @@ mod tests {
                    crate::tr!("patch.external_temperature_needs_integration_hint"));
         assert!(!hint(Form { last_device: Some(Device::J49), ..Form::default() }).contains("Bluetooth"));
         assert_eq!(hint(Form::default()), crate::tr!("patch.external_temperature_needs_integration_any_hint"));
-        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
+        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Onyx), ..Form::default() }),
                    crate::tr!("patch.external_temperature_unsupported_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
+                   crate::tr!("patch.external_temperature_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond3), ..Form::default() }),
                    crate::tr!("patch.external_temperature_ble_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::J49), ..Form::default() }),
@@ -818,7 +820,7 @@ mod tests {
 
     #[test]
     fn external_temperature_reaches_the_run_only_for_a_unit_that_takes_it() {
-        for (device, sent) in [(None, true), (Some(Device::Diamond3), true), (Some(Device::J49), true), (Some(Device::Diamond), false), (Some(Device::Onyx), false)] {
+        for (device, sent) in [(None, true), (Some(Device::Diamond3), true), (Some(Device::J49), true), (Some(Device::Diamond), true), (Some(Device::Onyx), false)] {
             let form = Form { mqtt: Toggle { on: true, value: "tcp://broker:1883".into() }, external_temperature: true, last_device: device, ..Form::default() };
             assert_eq!(form.inputs().external_temperature, sent, "{device:?}");
         }

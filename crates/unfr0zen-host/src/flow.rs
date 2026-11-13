@@ -348,8 +348,6 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
             Err(failure("--dark-theme is only for the 2nd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
-        Device::Diamond if config.options.external_temperature =>
-            Err(failure("--external-temperature is not supported on the 1st generation")),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }

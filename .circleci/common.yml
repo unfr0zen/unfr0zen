@@ -139,6 +139,9 @@ commands:
             - module-j49-kernel-v2-{{ checksum ".work/keys/j49-kernel" }}
       - restore_cache:
           keys:
+            - module-diamond-xloader-v2-{{ checksum ".work/keys/diamond-xloader" }}
+      - restore_cache:
+          keys:
             - module-zbwake-v2-{{ checksum ".work/keys/zbwake" }}
       - restore_cache:
           keys:
@@ -158,7 +161,7 @@ commands:
       - run:
           name: Unpack the firmware
           command: |
-            for module in recovery j49 j49-kernel zbwake radio thread doom nlclient nestlocal; do
+            for module in recovery j49 j49-kernel diamond-xloader zbwake radio thread doom nlclient nestlocal; do
               tar xf .work/cache/$module.tar || { echo "$module is not in the cache"; exit 1; }
             done
             find build -type f | sort

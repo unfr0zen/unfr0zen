@@ -23,6 +23,7 @@
     <div class="wrap">
         <a href="/" class="brand" aria-label="unfr0zen home"><img src="/assets/logo.png" alt="" width="30" height="30"><span>unfr<span class="zero">0</span>zen</span></a>
         <nav>
+            <a href="/install/">Install</a>
             <a href="/integrations/">Integrations</a>
             <a href="/protocols/">Protocols</a>
             <a href="https://github.com/unfr0zen" class="icon" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
@@ -113,23 +114,15 @@ sudo udevadm control --reload-rules && sudo udevadm trigger</code></pre>
         <div class="wrap">
             <h2>You'll need</h2>
             <ul>
-                <li>A Nest Learning Thermostat, 2nd or 3rd generation, or a 1st generation Diamond for experimental recovery.</li>
+                <li>A Nest Learning Thermostat, 1st, 2nd or 3rd generation. The 1st has to be opened up: see the <a href="/install/#gen1">install guide</a>.</li>
                 <li>A USB data cable: mini-USB for 1st gen, micro-USB for 2nd and 3rd gen. A charge-only cable won't work.</li>
                 <li>For MQTT: an MQTT broker (for example the Mosquitto add-on) and Home Assistant's MQTT integration.</li>
                 <li>For Matter: Home Assistant's Matter integration.</li>
                 <li>For Zigbee: a Zigbee coordinator. Zigbee2MQTT 2.12.1 or later with the <a href="https://github.com/unfr0zen/unfr0zen/tree/main/integrations/zigbee2mqtt" target="_blank" rel="noopener">unfr0zen converter</a> is recommended; ZHA works too.</li>
             </ul>
             <h2>Install</h2>
-            <div class="note">Optional: a NAND backup lets you restore the thermostat as it was, should you want that one day. The Patch page offers one just before patching (<b>Back up, then patch</b>, on its Review step), or run <code>unfr0zen backup</code>; the USB steps are the same as below. See <a href="/integrations/#backup">Backup &amp; restore</a>.</div>
-            <ol>
-                <li>Open unfr0zen. On <b>Patch</b>, take the display off its base and connect its USB port to the computer. The generation is detected automatically.</li>
-                <li>On Integrations, turn on MQTT (<code>host</code> or <code>host:port</code>, with user, password and TLS as needed), Matter, Zigbee, or several, or skip it. Any of them replaces the thermostat's Nest cloud connection: the Nest and Google Home apps no longer control it.</li>
-                <li>On Features, optionally block Nest's and Google's servers, set a time server, and turn on SSH (root password <code>unfr0zen</code> by default).</li>
-                <li>On Review, choose whether to back up first, then click <b>Back up and patch</b> (or <b>Patch</b>).</li>
-                <li>When the app asks, hold the front button for 10 seconds.</li>
-                <li>Wait a few minutes until it's done, then put the display back on its base.</li>
-                <li>For MQTT or Matter, join the thermostat to Wi-Fi from its own menu (Settings → Network) if it isn't already. The network doesn't need internet access.</li>
-            </ol>
+            <p>The <a href="/install/">install guide</a> goes through every step for each generation, from taking the display off its base to the 1st generation's teardown.</p>
+            <p><a class="link" href="/install/">→ Install guide</a></p>
             <p><a class="link" href="/integrations/">→ Set up Home Assistant, Matter and Zigbee</a></p>
             <p><a class="link" href="https://github.com/unfr0zen/unfr0zen/releases" target="_blank" rel="noopener">→ All releases</a></p>
         </div>

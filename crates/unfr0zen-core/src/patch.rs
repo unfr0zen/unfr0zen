@@ -524,7 +524,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // upgrades take it back with the screen.
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
-        let external_temperature = target == Device::J49 && options.external_temperature;
+        let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
         let dark_theme = target == Device::J49 && options.dark_theme;
         if !options.block_cloud && !external_temperature && !dark_theme {
             return Ok(journal);
@@ -651,7 +651,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
 
     let screen = volume.inspect(crate::nlclient::BINARY)?;
-    if target == Device::J49 && options.external_temperature && screen.is_none() {
+    if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && screen.is_none() {
         return device("j49 external temperature requires nlclient");
     }
     if target == Device::J49 && options.dark_theme && screen.is_none() {
@@ -689,7 +689,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             if previous.output_sha == *sha { source = previous.apply(&source, true)?; }
             else if previous.stock_sha != *sha { return device("nlclient undo journal does not match the executable"); }
         }
-        if target == Device::J49 && options.external_temperature && !source.starts_with(b"\x7fELF") {
+        if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && !source.starts_with(b"\x7fELF") {
             return device("j49 external temperature requires an ARM ELF nlclient");
         }
         if target == Device::J49 && options.dark_theme && !source.starts_with(b"\x7fELF") {
@@ -1259,14 +1259,15 @@ mod tests {
     #[test]
     fn j49_external_temperature_requires_nlclient_before_any_writes() {
         let pki = nestlocal::generate_pki().unwrap();
-        for binary in [None, Some(b"not an ELF".to_vec()), Some(b"\x7fELF unreviewed".to_vec())] {
+        let binaries = [None, Some(b"not an ELF".to_vec()), Some(b"\x7fELF unreviewed".to_vec())];
+        for (target, binary) in [Device::Diamond, Device::J49].into_iter().flat_map(|t| binaries.iter().cloned().map(move |b| (t, b))) {
             let mut volume = nestlocal_unit(Some(&pki));
             volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
             if let Some(binary) = binary {
                 volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, binary));
             }
             let before = volume.files.clone();
-            let error = patch_on_device(&mut volume, Device::J49,
+            let error = patch_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
                 &BTreeSet::new(), false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
             assert!(error.to_string().contains("j49 external temperature"), "{error}");

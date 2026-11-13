@@ -66,6 +66,9 @@ jobs:
             - module-j49-kernel-v2-{{ checksum ".work/keys/j49-kernel" }}
       - restore_cache:
           keys:
+            - module-diamond-xloader-v2-{{ checksum ".work/keys/diamond-xloader" }}
+      - restore_cache:
+          keys:
             - module-zbwake-v2-{{ checksum ".work/keys/zbwake" }}
       - restore_cache:
           keys:

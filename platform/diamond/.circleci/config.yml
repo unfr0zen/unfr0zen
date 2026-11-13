@@ -1,0 +1,24 @@
+version: 2.1
+
+# The gen 1: its x-loader.
+
+jobs:
+  # Builds in an Ubuntu 14.04 container of its own, as the j49's x-loader
+  # does: on a machine, with Docker, x86. Needs no build image.
+  diamond-xloader:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: medium
+    # Where the build image's jobs find its module (.circleci/common.yml).
+    working_directory: /tmp/project
+    steps:
+      - checkout
+      - keys
+      - module-restore:
+          module: diamond-xloader
+      - module-build:
+          module: diamond-xloader
+          command: sh platform/diamond/xloader.sh build/diamond
+      - module-store:
+          module: diamond-xloader
+          outputs: build/diamond/x-load.bin

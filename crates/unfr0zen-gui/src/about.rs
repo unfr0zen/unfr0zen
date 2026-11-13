@@ -17,7 +17,7 @@ fn licenses() -> [&'static str; 5] {
 
 /// The projects and research unfr0zen is built on, each as "what — author":
 /// the description, then the author whose name carries the link.
-fn credits() -> [(&'static str, &'static str, &'static str); 10] {
+fn credits() -> [(&'static str, &'static str, &'static str); 11] {
     [
         ("U-Boot (i.MX) —", "NXP", "https://github.com/nxp-imx/uboot-imx"),
         ("BusyBox —", "the BusyBox project", "https://busybox.net"),
@@ -29,6 +29,7 @@ fn credits() -> [(&'static str, &'static str, &'static str); 10] {
         ("CVE-2017-7932 and CVE-2017-7936 —", "Quarkslab", "https://quarkslab.com"),
         (crate::tr!("about.credit.diamond3_loader"), "@evan-hoddinott", "https://github.com/evan-hoddinott"),
         (crate::tr!("about.credit.cuckoo_loader"), "@ajb142", "https://github.com/ajb142"),
+        (crate::tr!("about.credit.cuckoo_loader_gen1"), "@guyman70718", "https://github.com/guyman70718"),
     ]
 }
 

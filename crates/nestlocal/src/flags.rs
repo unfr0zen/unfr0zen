@@ -18,7 +18,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("discovery", Kind::Text, "homeassistant", "Home Assistant discovery prefix"),
     ("device-name-file", Kind::Text, "", "file holding the unit's name in Home Assistant and Matter (its NodeLabel), <serial> standing for the unit's serial; empty keeps the last, at first \"Nest Thermostat\""),
     ("doom", Kind::Bool, "false", "offer Doom on the UNFR0ZEN screen and launch it from there (doom.rs)"),
-    ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 2 needs the nlclient RCS input patch"),
+    ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 1 and gen 2 need the nlclient RCS input patch"),
     ("external-temperature-store", Kind::Text, "/media/data/nestlocal-sensor.json", "where the stand-in sensor's identity is kept"),
     ("external-temperature-timeout", Kind::Duration, "30m", "how long the last reading counts; nlclient goes back to the backplate about 11.5 minutes after that"),
     ("ha-entity-root", Kind::Text, "", "root of the Home Assistant entity IDs (climate.<root>_thermostat), <serial> standing for the unit's in lowercase; empty keeps the one last announced, at first nestlocal_<serial>"),

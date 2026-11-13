@@ -3035,7 +3035,7 @@ mod tests {
         let shown = texts(&frame(&mut app, Vec::new()));
         for text in ["About unfr0zen", "Licenses", "unfr0zen (GPLv3)", "https://github.com/unfr0zen",
                      "Credits", "BusyBox —", "the BusyBox project",
-                     "CVE-2017-7932 and CVE-2017-7936 —", "Quarkslab"] {
+                     "CVE-2017-7932 and CVE-2017-7936 —", "Quarkslab", "cuckoo loader gen 1 —", "@guyman70718"] {
             assert!(shown.iter().any(|t| t == text), "{text}: {shown:?}");
         }
         assert!(!shown.iter().any(|t| t == "Close"), "{shown:?}");
