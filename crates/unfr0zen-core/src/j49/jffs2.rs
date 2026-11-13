@@ -624,7 +624,7 @@ impl Volume for Slot {
         Ok(String::new())
     }
 
-    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, _payload: &BTreeSet<String>) -> Result<()> {
+    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()> {
         let parse = |id: &str| id.parse::<u16>().map_err(|_| crate::Error::Device(format!("{name}: owner {owner:?}")));
         let (uid, gid) = owner.split_once(':').ok_or_else(|| crate::Error::Device(format!("{name}: owner {owner:?}")))?;
         let ids = (parse(uid)?, parse(gid)?);
@@ -722,7 +722,7 @@ pub(crate) mod tests {
     /// An empty slot of `blocks` erased blocks, with a root-owned busybox.
     pub(crate) fn empty(blocks: usize) -> Slot {
         let mut slot = Slot::load(vec![0xff; blocks * BLOCK_RAW]).unwrap();
-        slot.write("bin/busybox", b"\x7fELF", "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("bin/busybox", b"\x7fELF", "0:0", 0o755).unwrap();
         slot
     }
 
@@ -740,8 +740,8 @@ pub(crate) mod tests {
     fn written_files_read_back_from_programmed_pages() {
         let mut slot = empty(20);
         let big: Vec<u8> = (0..10_000u32).map(|i| (i * 7 % 251) as u8).collect();
-        slot.write("etc/nestlocal/options", b"--mqtt x\n", "0:0", 0o600, &BTreeSet::new()).unwrap();
-        slot.write("nestlabs/sbin/nestlocal", &big, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("etc/nestlocal/options", b"--mqtt x\n", "0:0", 0o600).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &big, "0:0", 0o755).unwrap();
         let mut back = reload(&slot);
         assert_eq!(back.read("etc/nestlocal/options").unwrap(), Some(("0:0".into(), 0o600, b"--mqtt x\n".to_vec())));
         assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, big);
@@ -752,12 +752,12 @@ pub(crate) mod tests {
     #[test]
     fn a_rewrite_is_a_new_inode_named_after_its_data() {
         let mut slot = empty(20);
-        slot.write("etc/x", &[b'a'; 9000], "0:0", 0o644, &BTreeSet::new()).unwrap();
+        slot.write("etc/x", &[b'a'; 9000], "0:0", 0o644).unwrap();
         let mut slot = reload(&slot);
         let old = slot.lookup("etc/x", false).unwrap().unwrap();
         let mut x = 7u32;
         let noise: Vec<u8> = (0..7000).map(|_| { x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345); (x >> 16) as u8 }).collect();
-        slot.write("etc/x", &noise, "0:0", 0o600, &BTreeSet::new()).unwrap();
+        slot.write("etc/x", &noise, "0:0", 0o600).unwrap();
         assert_ne!(slot.lookup("etc/x", false).unwrap(), Some(old));
         let mut back = reload(&slot);
         assert_eq!(back.read("etc/x").unwrap(), Some(("0:0".into(), 0o600, noise)));
@@ -775,7 +775,7 @@ pub(crate) mod tests {
     #[test]
     fn removal_and_directories() {
         let mut slot = empty(20);
-        slot.write("etc/a", b"1", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        slot.write("etc/a", b"1", "0:0", 0o644).unwrap();
         slot.make_directory("usr/share/doom", 0o755).unwrap();
         let mut slot = reload(&slot);
         slot.remove("etc/a").unwrap();
@@ -790,7 +790,7 @@ pub(crate) mod tests {
     #[test]
     fn symbolic_links_are_followed_on_the_way() {
         let mut slot = empty(20);
-        slot.write("var/real/f", b"x", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        slot.write("var/real/f", b"x", "0:0", 0o644).unwrap();
         let (parent, ino) = (slot.lookup("var", true).unwrap().unwrap(), slot.next_ino);
         slot.next_ino += 1;
         slot.dirent(parent, "link", ino, 10).unwrap();
@@ -810,7 +810,7 @@ pub(crate) mod tests {
             x ^= x << 5;
             x as u8
         }).collect();
-        let error = slot.write("big", &noise, "0:0", 0o644, &BTreeSet::new()).unwrap_err();
+        let error = slot.write("big", &noise, "0:0", 0o644).unwrap_err();
         assert!(error.to_string().contains("too few erased blocks"), "{error}");
     }
 
@@ -823,11 +823,11 @@ pub(crate) mod tests {
         // Blocks 0-2: busybox, nestlocal across all three, and etc/b in the
         // last; one block free beyond the spare ones.
         let mut slot = empty(SPARE_BLOCKS + 4);
-        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 5 / 2, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
-        slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 5 / 2, 1), "0:0", 0o755).unwrap();
+        slot.write("etc/b", b"kept", "0:0", 0o644).unwrap();
         let mut slot = reload(&slot);
         let new = noise(BLOCK * 9 / 5, 2);
-        slot.write("nestlabs/sbin/nestlocal", &new, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &new, "0:0", 0o755).unwrap();
         let plan = slot.programmed().unwrap();
         assert_eq!(plan.erase, [1], "block 1 alone held nothing but the old nestlocal");
         assert_eq!(plan.before.len(), 1, "the name's removal, programmed before the erase");
@@ -837,7 +837,7 @@ pub(crate) mod tests {
         assert_eq!(back.read("etc/b").unwrap().unwrap().2, b"kept");
         // Anything else that does not fit still fails.
         let mut slot = reload(&slot);
-        assert!(slot.write("etc/big", &noise(3 * BLOCK, 3), "0:0", 0o644, &BTreeSet::new()).is_err());
+        assert!(slot.write("etc/big", &noise(3 * BLOCK, 3), "0:0", 0o644).is_err());
     }
 
     #[test]
@@ -848,18 +848,18 @@ pub(crate) mod tests {
         let build = |with_original: bool| {
             let mut slot = empty(SPARE_BLOCKS + 4);
             if with_original {
-                slot.write(crate::nlclient::ORIGINAL, &original, "0:0", 0o600, &BTreeSet::new()).unwrap();
+                slot.write(crate::nlclient::ORIGINAL, &original, "0:0", 0o600).unwrap();
             }
-            slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
-            slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+            slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 1), "0:0", 0o755).unwrap();
+            slot.write("etc/b", b"kept", "0:0", 0o644).unwrap();
             reload(&slot)
         };
         let new = noise(BLOCK * 9 / 5, 2);
         let mut alone = build(false);
-        assert!(alone.write(crate::nlclient::BINARY, &new, "0:0", 0o755, &BTreeSet::new()).is_err(),
+        assert!(alone.write(crate::nlclient::BINARY, &new, "0:0", 0o755).is_err(),
                 "without the stock copy, the old nlclient stays");
         let mut slot = build(true);
-        slot.write(crate::nlclient::BINARY, &new, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::BINARY, &new, "0:0", 0o755).unwrap();
         let plan = slot.programmed().unwrap();
         assert_eq!(plan.erase, [1], "block 1 alone held nothing but the old nlclient");
         let mut back = Slot::load(plan.raw.clone()).unwrap();
@@ -884,15 +884,15 @@ pub(crate) mod tests {
         // nlclient across the next three, etc/b in the last; one block free
         // beyond the spare ones.
         let mut slot = empty(SPARE_BLOCKS + 7);
-        slot.write(crate::nlclient::ORIGINAL, &noise(BLOCK / 8, 4), "0:0", 0o600, &BTreeSet::new()).unwrap();
-        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 9 / 4, 1), "0:0", 0o755, &BTreeSet::new()).unwrap();
-        slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 5), "0:0", 0o755, &BTreeSet::new()).unwrap();
-        slot.write("etc/b", b"kept", "0:0", 0o644, &BTreeSet::new()).unwrap();
+        slot.write(crate::nlclient::ORIGINAL, &noise(BLOCK / 8, 4), "0:0", 0o600).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &noise(BLOCK * 9 / 4, 1), "0:0", 0o755).unwrap();
+        slot.write(crate::nlclient::BINARY, &noise(BLOCK * 9 / 4, 5), "0:0", 0o755).unwrap();
+        slot.write("etc/b", b"kept", "0:0", 0o644).unwrap();
         let mut slot = reload(&slot);
         slot.make_room_in_place();
         let (nestlocal, nlclient) = (noise(BLOCK * 9 / 5, 2), noise(BLOCK * 9 / 5, 3));
-        slot.write("nestlabs/sbin/nestlocal", &nestlocal, "0:0", 0o755, &BTreeSet::new()).unwrap();
-        slot.write(crate::nlclient::BINARY, &nlclient, "0:0", 0o755, &BTreeSet::new()).unwrap();
+        slot.write("nestlabs/sbin/nestlocal", &nestlocal, "0:0", 0o755).unwrap();
+        slot.write(crate::nlclient::BINARY, &nlclient, "0:0", 0o755).unwrap();
         let plan = slot.programmed().unwrap();
         assert!(plan.erase.len() >= 2, "both old copies' blocks are reclaimed: {:?}", plan.erase);
         for &page in &plan.before {

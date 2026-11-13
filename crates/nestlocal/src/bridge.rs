@@ -12,6 +12,10 @@
 //!   <prefix>/<serial>/set/<command>    Home Assistant's commands
 //!   <prefix>/<serial>/set/raw/<bucket> merge a JSON object into a bucket
 //!                                      (anything the entities don't cover)
+//!   <prefix>/<serial>/update           unfr0zen's installed and latest
+//!                                      versions (retained, update.rs)
+//!   <prefix>/<serial>/set/update       install installs the latest; an
+//!                                      http(s) URL, the bundle there
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,6 +54,8 @@ pub struct Bridge {
     wwn_boiler: bool,
     /// The stand-in sensor, with -external-temperature (sensor/).
     pub sensor: OnceLock<Arc<crate::sensor::Sensor>>,
+    /// unfr0zen's versions and updates (update.rs).
+    updates: OnceLock<Arc<crate::update::Updates>>,
     /// Motion seen lately, from nlclient's event log (occupancy.rs).
     pub occupancy: Arc<Occupancy>,
     mqtt: OnceLock<mqtt::Client>,
@@ -77,6 +83,7 @@ impl Bridge {
             live,
             wwn_boiler,
             sensor: OnceLock::new(),
+            updates: OnceLock::new(),
             occupancy: Arc::new(Occupancy::default()),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
@@ -111,6 +118,22 @@ impl Bridge {
     }
 
     /// Takes readings for the sensor and shows what it does.
+    pub fn attach_updates(self: &Arc<Self>, updates: Arc<crate::update::Updates>) {
+        let bridge = Arc::downgrade(self);
+        updates.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_update();
+            }
+        });
+        let _ = self.updates.set(updates);
+    }
+
+    fn publish_update(&self) {
+        if let Some(updates) = self.updates.get() {
+            self.publish(&format!("{}/update", self.base), true, updates.state().to_string().as_bytes());
+        }
+    }
+
     pub fn attach_sensor(self: &Arc<Self>, sensor: Arc<crate::sensor::Sensor>) {
         let bridge = Arc::downgrade(self);
         sensor.on_change(move || {
@@ -204,6 +227,7 @@ impl Bridge {
             self.publish_raw(&o);
         }
         self.publish_state();
+        self.publish_update();
     }
 
     fn message(&self, topic: &str, payload: &[u8]) {
@@ -214,6 +238,12 @@ impl Bridge {
                 self.naming.lock().unwrap().home_assistant_started();
                 *self.announced.lock().unwrap() = None;
                 self.publish_state();
+            }
+        } else if topic == format!("{}/set/update", self.base) {
+            let text = String::from_utf8_lossy(payload);
+            match (self.updates.get(), crate::update::request(&text)) {
+                (Some(updates), Some(request)) => updates.install(request),
+                _ => logf!("mqtt: update {text:?}: install, or a bundle's http(s) URL"),
             }
         } else if topic.starts_with(&format!("{}/set/", self.base)) {
             self.command(topic, payload);
@@ -571,6 +601,17 @@ impl Bridge {
             "entity_category" => "config",
             "icon" => "mdi:calendar-remove",
         });
+        if let Some(updates) = self.updates.get() {
+            // Install only on a unit that installs updates itself.
+            add("update", "unfr0zen", "unfr0zen", fields!{
+                "state_topic" => format!("{}/update", self.base),
+                "device_class" => "firmware",
+                "entity_category" => "config",
+                "title" => "unfr0zen",
+                "command_topic" => if updates.can_install() { format!("{set}update").into() } else { Value::Null },
+                "payload_install" => "install",
+            });
+        }
 
         if rename {
             self.rename(configs.into_keys(), root);

@@ -101,6 +101,13 @@
             <ul class="chips">
                 <li>Filter reminder and its reset</li><li>Hot water state, schedule and boost</li><li>Humidifier and dehumidifier state</li><li>Humidity control</li>
             </ul>
+            <h3>Updates</h3>
+            <p>An <b>unfr0zen</b> update entity shows the version the thermostat runs and, when it can reach GitHub, the latest release, checked every 6 hours. On a 3rd generation unit <b>Install</b> downloads that release's bundle, checks it against its manifest and unfr0zen's release key, installs it and restarts the thermostat. Only official releases install, and never one older than the installed version, unless <b>Allow unsigned updates</b> was on when the unit was patched. 1st and 2nd generation units show the versions; update them with the app. An install that fails says why in the thermostat's log and leaves it running; one that does not come back after the restart is fixed by patching it again with the app over USB.</p>
+            <p>A thermostat that can't reach GitHub installs a release's bundle (<code>unfr0zen-diamond3-&lt;version&gt;.tgz</code>, from the release's assets) from your own network: put it on any web server the thermostat reaches and publish its URL, for example from a Home Assistant script:</p>
+<pre><code>action: mqtt.publish
+data:
+  topic: nestlocal/&lt;serial&gt;/set/update
+  payload: http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz</code></pre>
             <h3>Weather and clock</h3>
             <p>Two Home Assistant blueprints replace what Google supplied. Both need MQTT; on Zigbee, see <a href="#zigbee">Zigbee</a>.</p>
             <div class="cards cards-wide">
@@ -218,7 +225,7 @@
             </ul>
 
             <h2 id="options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Other options</h2>
-            <p>The app's <b>Patch</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread), Block Nest and Google servers, the time server, SSH, the USB console, Doom and Dark theme are on Features; Device, Entry point and Backplate simulator under <b>Developer options</b> on Review, which also offers a NAND backup before the patch.</p>
+            <p>The app's <b>Patch</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread), Block Nest and Google servers, the time server, SSH, the USB console, Doom and Dark theme are on Features; Device, Entry point, Backplate simulator and Allow unsigned updates under <b>Developer options</b> on Review, which also offers a NAND backup before the patch.</p>
             <div class="table-scroll">
                 <table>
                     <thead><tr><th>App</th><th>CLI</th><th>What it does</th></tr></thead>
@@ -231,6 +238,7 @@
                         <tr><td data-label="App">Allow password login, turned off</td><td data-label="CLI"><code>--ssh-key-only</code></td><td data-label="What it does">Requires <code>--ssh-public-key</code>. SSH takes the key only: root's password is refused over SSH.</td></tr>
                         <tr><td data-label="App">Root password</td><td data-label="CLI"><code>--root-password PASSWORD</code></td><td data-label="What it does">For SSH and the USB shell (default <code>unfr0zen</code>).</td></tr>
                         <tr><td data-label="App">Backplate simulator (1H1C)</td><td data-label="CLI"><code>--backplate-sim</code></td><td data-label="What it does">1H1C with a simulated temperature, for testing off the wall.</td></tr>
+                        <tr><td data-label="App">Allow unsigned updates</td><td data-label="CLI"><code>--allow-unsigned-updates</code></td><td data-label="What it does">The unit installs updates that unfr0zen's release key does not sign, such as your own builds, and older versions than the one it runs. Off, it installs only official releases, never going back.</td></tr>
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>--nand-image FILE</code></td><td data-label="What it does">1st or 2nd generation: patches a raw NAND image (2112-byte pages) in place instead of a unit.</td></tr>
                         <tr><td data-label="App">Entry point</td><td data-label="CLI"><code>--entry-point ENTRY_POINT</code></td><td data-label="What it does">3rd generation: how its boot ROM is entered for recovery: <code>auto</code> (default) tries the official loader, then CVE-2017-7932, then CVE-2017-7936; or <code>official-loader</code>, <code>cve-2017-7932</code>, <code>cve-2017-7936</code>. It applies to a patch, backup, restore and booting the application, in the app and the CLI.</td></tr>
                         <tr><td data-label="App">Device</td><td data-label="CLI"><code>--device diamond|j49|diamond3</code></td><td data-label="What it does">The generation (1st, 2nd, 3rd) to expect instead of the one identified on USB. The app applies it to a patch only.</td></tr>

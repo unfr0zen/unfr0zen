@@ -1,6 +1,6 @@
 //! The unfr0zen initramfs: a gzipped newc cpio with a static ARMv7 busybox,
-//! scripts/initramfs-init as /init, and a payload of contents the patch can
-//! copy on the unit. Port of build_initramfs in unfr0zen.py.
+//! scripts/initramfs-init as /init, and the files the run brings at its root
+//! (the patch bundle and its options). Port of build_initramfs in unfr0zen.py.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -50,16 +50,16 @@ pub fn cpio(entries: &[Entry]) -> Vec<u8> {
     output
 }
 
-/// The gzipped initramfs. payload: {sha256: contents}, as /payload/<sha256>.
-pub fn build(busybox: &[u8], payload: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
-    let mut entries: Vec<Entry> = ["bin", "dev", "lib", "mnt", "payload", "proc", "sys"].iter()
+/// The gzipped initramfs. files: {name: contents}, each as /name.
+pub fn build(busybox: &[u8], files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut entries: Vec<Entry> = ["bin", "dev", "lib", "mnt", "proc", "sys"].iter()
         .map(|name| Entry::new(name, DIRECTORY | 0o755, b"")).collect();
     // The kernel opens /dev/console for /init before devtmpfs is mounted.
     entries.push(Entry { rdev: (5, 1), ..Entry::new("dev/console", CHARACTER | 0o600, b"") });
     entries.push(Entry::new("bin/busybox", REGULAR | 0o755, busybox));
     entries.push(Entry::new("bin/sh", SYMLINK | 0o777, b"busybox"));
     entries.push(Entry::new("init", REGULAR | 0o755, INIT));
-    entries.extend(payload.iter().map(|(sha, data)| Entry::new(&format!("payload/{sha}"), REGULAR | 0o644, data)));
+    entries.extend(files.iter().map(|(name, data)| Entry::new(name, REGULAR | 0o644, data)));
     // No name and a zero mtime: the same inputs give the same bytes.
     let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
     gzip.write_all(&cpio(&entries)).expect("writing to memory");
@@ -96,16 +96,16 @@ mod tests {
 
     #[test]
     fn initramfs_layout() {
-        let payload = BTreeMap::from([("ab".repeat(32), b"blob".to_vec())]);
+        let files = BTreeMap::from([("bundle.tgz".to_string(), b"blob".to_vec())]);
         let mut archive = Vec::new();
-        GzDecoder::new(&build(b"\x7fELF busybox", &payload)[..]).read_to_end(&mut archive).unwrap();
+        GzDecoder::new(&build(b"\x7fELF busybox", &files)[..]).read_to_end(&mut archive).unwrap();
         let members = members(&archive);
         assert_eq!(members["init"].1, INIT);
         assert_eq!(members["init"].0, REGULAR | 0o755);
         assert_eq!((members["bin/sh"].0, &members["bin/sh"].1[..]), (SYMLINK | 0o777, &b"busybox"[..]));
         assert_eq!((members["dev/console"].0, members["dev/console"].2), (CHARACTER | 0o600, (5, 1)));
-        assert_eq!(members[&format!("payload/{}", "ab".repeat(32))].1, b"blob");
-        for name in ["lib", "mnt", "payload", "proc", "sys"] {
+        assert_eq!(members["bundle.tgz"], (REGULAR | 0o644, b"blob".to_vec(), (0, 0)));
+        for name in ["lib", "mnt", "proc", "sys"] {
             assert_eq!(members[name].0, DIRECTORY | 0o755, "{name}");
         }
     }

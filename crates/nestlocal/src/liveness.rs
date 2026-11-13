@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 
 use crate::logf;
 
+/// How long nlclient may take to call in for the first time before the log
+/// says so: without it nothing nestlocal offers gets the thermostat's state.
+const FIRST_CALL: Duration = Duration::from_secs(180);
+
 type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 type OnChange = Arc<dyn Fn(bool) + Send + Sync>;
 
@@ -20,6 +24,8 @@ struct State {
     last: Option<Instant>,
     alive: bool,
     on_change: Option<OnChange>,
+    started: Instant,
+    warned: bool,
 }
 
 pub struct Liveness {
@@ -43,7 +49,9 @@ impl Liveness {
     }
 
     fn with_clock(stale: Duration, now: Clock) -> Arc<Liveness> {
-        Arc::new(Liveness { stale, now, state: Mutex::new(State { in_flight: 0, last: None, alive: false, on_change: None }) })
+        let started = now();
+        Arc::new(Liveness { stale, now, state: Mutex::new(State { in_flight: 0, last: None, alive: false, on_change: None,
+                                                                 started, warned: false }) })
     }
 
     /// What to call when the unit comes or goes.
@@ -81,6 +89,12 @@ impl Liveness {
             let alive = s.in_flight > 0 || s.last.is_some_and(|last| now.duration_since(last) < self.stale);
             let changed = alive != s.alive;
             s.alive = alive;
+            if s.last.is_none() && !s.warned && now.duration_since(s.started) >= FIRST_CALL {
+                s.warned = true;
+                logf!("nestlocal: nlclient has not called in after {}: Zigbee, Matter and the external temperature \
+                       wait for it. nlclient reaches nestlocal with /nestlabs/lib/liblocalcloud.so preloaded (patch the \
+                       unit with unfr0zen again), or otherwise only once on a network", crate::logger::duration(FIRST_CALL));
+            }
             (changed, alive, s.on_change.clone())
         };
         if changed {
@@ -129,6 +143,26 @@ mod tests {
         drop(l.request());
         assert!(l.alive());
         assert_eq!(*seen.lock().unwrap(), vec![true, false, true]);
+    }
+
+    #[test]
+    fn a_unit_nlclient_never_calls_is_logged_once_after_the_first_call_deadline() {
+        let now = Arc::new(Mutex::new(Instant::now()));
+        let clock = now.clone();
+        let l = Liveness::with_clock(Duration::from_secs(300), Arc::new(move || *clock.lock().unwrap()));
+        let warned = || l.state.lock().unwrap().warned;
+        *now.lock().unwrap() += FIRST_CALL - Duration::from_secs(1);
+        l.update(0);
+        assert!(!warned());
+        *now.lock().unwrap() += Duration::from_secs(1);
+        l.update(0);
+        assert!(warned());
+        // One that called in never warns.
+        let l = Liveness::with_clock(Duration::from_secs(300), Arc::new(Instant::now));
+        drop(l.request());
+        l.state.lock().unwrap().started -= FIRST_CALL;
+        l.update(0);
+        assert!(!l.state.lock().unwrap().warned);
     }
 
     #[test]

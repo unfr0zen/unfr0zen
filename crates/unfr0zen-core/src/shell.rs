@@ -2,7 +2,7 @@
 //! a raw tty without echo or prompt, the slot mounted at /mnt. Port of
 //! InitramfsShell in unfr0zen.py.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -46,15 +46,15 @@ pub trait Volume {
     }
     /// "uid mode" of bin/busybox or bin/toybox; empty if it has neither.
     fn shell_binary(&mut self) -> Result<String>;
-    /// Replaces or creates a file by a rename, copying payload contents on the unit.
-    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, payload: &BTreeSet<String>) -> Result<()>;
+    /// Replaces or creates a file by a rename.
+    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()>;
     /// Replace a verified binary via an atomic staged copy. Implementations
     /// can transfer just the patch bytes rather than the entire executable.
     fn patch_nlclient(&mut self, patch: &crate::nlclient::Patch) -> Result<()> {
         let (owner, mode, source) = self.read(crate::nlclient::BINARY)?
             .ok_or_else(|| crate::Error::Device("missing nlclient".into()))?;
         let data = patch.apply(&source, false)?;
-        self.write(crate::nlclient::BINARY, &data, &owner, mode, &BTreeSet::new())
+        self.write(crate::nlclient::BINARY, &data, &owner, mode)
     }
     fn make_directory(&mut self, name: &str, mode: u32) -> Result<()>;
     fn remove(&mut self, name: &str) -> Result<()>;
@@ -168,33 +168,13 @@ impl<S: Serial> InitramfsShell<S> {
         device(format!("{name}: chunk {index} kept arriving damaged"))
     }
 
-    /// Restarts the unit from Linux: it boots its installed firmware, or lands in SDP.
-    pub fn restart(mut self) -> Result<()> {
-        self.port.write_all(b"sync; mount -o remount,ro /mnt; reboot -f\n")?;
-        self.port.flush()?;
-        Ok(())
-    }
-}
-
-/// The owner and mode line stat printed, or the error for a non-file.
-fn file_header(name: &str, first: &str) -> Result<Option<(String, u32)>> {
-    match first {
-        "absent" => Ok(None),
-        "link" => device(format!("{name} on the device is a symbolic link")),
-        _ => {
-            let (owner, mode) = first.split_once(' ').map_or_else(|| device(format!("{name}: unexpected stat {first:?}")), Ok)?;
-            let mode = u32::from_str_radix(mode, 8).or_else(|_| device(format!("{name}: unexpected mode {mode:?}")))?;
-            Ok(Some((owner.to_string(), mode)))
-        }
-    }
-}
-
-impl<S: Serial> Volume for InitramfsShell<S> {
-    /// The file in chunks, each checked against the hash the unit takes of
-    /// it and read again when it arrives damaged; a serial link can drop
-    /// whole lines of a large transfer and still leave valid base64.
-    fn read(&mut self, name: &str) -> Result<Option<File<Vec<u8>>>> {
-        let path = quote(&format!("/mnt/{name}"));
+    /// Owner, mode and contents of the regular file at an absolute path on the
+    /// unit; None if it is absent. It moves in chunks, each checked against
+    /// the hash the unit takes of it and read again when it arrives damaged;
+    /// a serial link can drop whole lines of a large transfer and still
+    /// leave valid base64.
+    pub fn read_file(&mut self, name: &str) -> Result<Option<File<Vec<u8>>>> {
+        let path = quote(name);
         let output = self.run(&format!("if [ -L {path} ]; then echo link; elif [ -f {path} ]; then \
                                         stat -c '%u:%g %a' {path}; stat -c %s {path}; sha256sum {path}; else echo absent; fi"))?;
         let mut lines = output.trim().lines();
@@ -213,108 +193,24 @@ impl<S: Serial> Volume for InitramfsShell<S> {
         Ok(Some((owner, mode, data)))
     }
 
-    fn inspect(&mut self, name: &str) -> Result<Option<File<String>>> {
-        let path = quote(&format!("/mnt/{name}"));
-        let output = self.run(&format!("if [ -L {path} ]; then echo link; elif [ -f {path} ]; then \
-                                        stat -c '%u:%g %a' {path}; sha256sum {path}; else echo absent; fi"))?;
-        let mut lines = output.trim().lines();
-        let Some((owner, mode)) = file_header(name, lines.next().unwrap_or(""))? else { return Ok(None) };
-        let sha = lines.next().and_then(|line| line.split_whitespace().next())
-            .map_or_else(|| device(format!("{name}: no sha256sum from the unit")), Ok)?;
-        Ok(Some((owner, mode, sha.to_string())))
+    /// Restarts the unit from Linux: it boots its installed firmware, or lands in SDP.
+    pub fn restart(mut self) -> Result<()> {
+        self.port.write_all(b"sync; mount -o remount,ro /mnt; reboot -f\n")?;
+        self.port.flush()?;
+        Ok(())
     }
+}
 
-    fn file_size(&mut self, name: &str) -> Result<u64> {
-        let path = quote(&format!("/mnt/{name}"));
-        self.run(&format!("stat -c %s {path}"))?.trim().parse()
-            .map_err(|_| Error::Device(format!("{name}: no size from the unit")))
-    }
-
-    fn directory(&mut self, name: &str) -> Result<Option<String>> {
-        let path = quote(&format!("/mnt/{name}"));
-        let output = self.run(&format!("if [ -d {path} ] && [ ! -L {path} ]; then stat -c '%u:%g %a' {path}; \
-                                        elif [ -e {path} ]; then echo other; else echo absent; fi"))?;
-        match output.trim() {
-            "other" => device(format!("{name} on the device is not a directory")),
-            "absent" => Ok(None),
-            found => Ok(Some(found.to_string())),
+/// The owner and mode line stat printed, or the error for a non-file.
+fn file_header(name: &str, first: &str) -> Result<Option<(String, u32)>> {
+    match first {
+        "absent" => Ok(None),
+        "link" => device(format!("{name} on the device is a symbolic link")),
+        _ => {
+            let (owner, mode) = first.split_once(' ').map_or_else(|| device(format!("{name}: unexpected stat {first:?}")), Ok)?;
+            let mode = u32::from_str_radix(mode, 8).or_else(|_| device(format!("{name}: unexpected mode {mode:?}")))?;
+            Ok(Some((owner.to_string(), mode)))
         }
-    }
-
-    fn free_bytes(&mut self) -> Result<u64> {
-        let output = self.run("df -Pk /mnt | tail -n 1")?;
-        output.split_whitespace().nth(3).and_then(|kib| kib.parse::<u64>().ok()).map(|kib| kib * 1024)
-            .map_or_else(|| device(format!("unexpected df output: {}", output.trim())), Ok)
-    }
-
-    fn shell_binary(&mut self) -> Result<String> {
-        Ok(self.run("for f in /mnt/bin/busybox /mnt/bin/toybox; do \
-                     if [ -f $f ]; then stat -L -c '%u %a' $f; break; fi; done")?.trim().to_string())
-    }
-
-    fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, payload: &BTreeSet<String>) -> Result<()> {
-        let path = format!("/mnt/{name}");
-        let parent = format!("mkdir -p {}", quote(path.rsplit_once('/').map_or("/mnt", |(parent, _)| parent)));
-        let (path, staged) = (quote(&path), quote(&format!("{path}.unfr0zen")));
-        let finish = format!("chown {owner} {staged} && chmod {mode:o} {staged} && mv -f {staged} {path}");
-        let sha = sha256_hex(data);
-        if payload.contains(&sha) {
-            self.run(&format!("{parent} && cat /payload/{sha} > {staged} && {finish}"))?;
-            return Ok(());
-        }
-        // Through the shell: base64 at a few hundred KiB/s, so allow for size.
-        let encoded = STANDARD.encode(data);
-        let lines: String = encoded.as_bytes().chunks(76).map(|line| format!("{}\n", String::from_utf8_lossy(line))).collect();
-        // The delimiter has a character base64 never does, so no line of data ends it.
-        self.run_with(&format!("{parent} && base64 -d > {staged} <<'UNFR0ZEN_EOF' && {finish}\n{lines}UNFR0ZEN_EOF"),
-                      Duration::from_secs(60 + data.len() as u64 / 50_000), false)?;
-        Ok(())
-    }
-
-    fn patch_nlclient(&mut self, patch: &crate::nlclient::Patch) -> Result<()> {
-        let path = format!("/mnt/{}", crate::nlclient::BINARY);
-        let (path, staged) = (quote(&path), quote(&format!("{path}.unfr0zen")));
-        self.run(&format!("test \"$(sha256sum {path} | cut -d' ' -f1)\" = {} && cp -p {path} {staged}", patch.stock_sha))?;
-        for edit in &patch.edits {
-            let encoded = STANDARD.encode(&edit.after);
-            let lines: String = encoded.as_bytes().chunks(76)
-                .map(|line| format!("{}\n", String::from_utf8_lossy(line))).collect();
-            // dd bs=1 makes a system call per byte, so allow for size.
-            self.run_with(&format!("base64 -d <<'NLCLIENT_PATCH' | dd of={staged} bs=1 seek={} conv=notrunc\n{lines}NLCLIENT_PATCH", edit.offset),
-                          Duration::from_secs(60 + edit.after.len() as u64 / 10_000), true)?;
-        }
-        self.run(&format!("truncate -s {} {staged} && test \"$(sha256sum {staged} | cut -d' ' -f1)\" = {} && mv -f {staged} {path}", patch.output_len, patch.output_sha))?;
-        Ok(())
-    }
-    fn make_directory(&mut self, name: &str, mode: u32) -> Result<()> {
-        let path = quote(&format!("/mnt/{name}"));
-        self.run(&format!("mkdir -p {path} && chown 0:0 {path} && chmod {mode:o} {path}"))?;
-        Ok(())
-    }
-
-    fn remove(&mut self, name: &str) -> Result<()> {
-        self.run(&format!("rm -f {}", quote(&format!("/mnt/{name}"))))?;
-        Ok(())
-    }
-
-    fn remount(&mut self, writable: bool) -> Result<()> {
-        // Remounting read-only commits the UBIFS journal.
-        self.run(if writable { "mount -o remount,rw /mnt" } else { "sync; mount -o remount,ro /mnt" })?;
-        Ok(())
-    }
-
-    fn digests(&mut self, names: &[String]) -> Result<Digests> {
-        let paths: Vec<String> = names.iter().map(|name| quote(&format!("/mnt/{name}"))).collect();
-        let paths = paths.join(" ");
-        self.run("sync; echo 3 > /proc/sys/vm/drop_caches")?;
-        let sums: BTreeMap<String, String> = self.run(&format!("sha256sum {paths}"))?.lines()
-            .filter_map(|line| line.split_once("  ").map(|(sha, path)| (path.to_string(), sha.to_string()))).collect();
-        let modes: BTreeMap<String, String> = self.run(&format!("stat -c '%n %u:%g %a' {paths}"))?.lines()
-            .filter_map(|line| line.split_once(' ').map(|(path, rest)| (path.to_string(), rest.to_string()))).collect();
-        Ok(names.iter().map(|name| {
-            let path = format!("/mnt/{name}");
-            (name.clone(), (sums.get(&path).cloned(), modes.get(&path).cloned()))
-        }).collect())
     }
 }
 
@@ -427,7 +323,7 @@ mod tests {
             ("if [ -L \'/mnt/etc/shadow\' ]", leak(format!("0:0 640\n6\n{sha}  /mnt/etc/shadow")), 0),
             ("dd if=\'/mnt/etc/shadow\' bs=262144 skip=0 count=1", leak(format!("{sha}  -\nc2VjcmV0")), 0),
         ]);
-        assert_eq!(shell.read("etc/shadow").unwrap(), Some(("0:0".into(), 0o640, b"secret".to_vec())));
+        assert_eq!(shell.read_file("/mnt/etc/shadow").unwrap(), Some(("0:0".into(), 0o640, b"secret".to_vec())));
         let log = LOG.0.lock().unwrap();
         assert!(log.contains("etc/shadow"));
         assert!(!log.contains("c2VjcmV0"));
@@ -436,14 +332,14 @@ mod tests {
     #[test]
     fn absent_files_and_links() {
         let mut shell = shell(vec![("if [ -L \'/mnt/missing\' ]", "absent", 0), ("if [ -L \'/mnt/link\' ]", "link", 0)]);
-        assert_eq!(shell.read("missing").unwrap(), None);
-        assert!(shell.read("link").unwrap_err().to_string().contains("symbolic link"));
+        assert_eq!(shell.read_file("/mnt/missing").unwrap(), None);
+        assert!(shell.read_file("/mnt/link").unwrap_err().to_string().contains("symbolic link"));
     }
 
     #[test]
     fn failing_commands_are_errors() {
         let mut shell = shell(vec![("rm -f", "rm: busy", 1)]);
-        assert!(shell.remove("etc/x").unwrap_err().to_string().contains("rm: busy"));
+        assert!(shell.run("rm -f /x").unwrap_err().to_string().contains("rm: busy"));
     }
 
     struct RejectingPort;
@@ -473,7 +369,7 @@ mod tests {
     fn a_reply_that_stalls_short_of_its_marker_is_nudged_through() {
         let mut shell = shell(vec![("rm -f", "", 0)]);
         shell.port.stall = true;
-        shell.remove("etc/x").unwrap();
+        shell.run("rm -f /x").unwrap();
         // The nudge's blank line, left behind, stays out of the next reply.
         shell.port.output.extend(b"\n");
         assert_eq!(shell.run("true").unwrap(), "");
@@ -482,120 +378,9 @@ mod tests {
     #[test]
     fn a_rejected_send_names_the_command_and_its_size() {
         let mut shell = InitramfsShell { port: RejectingPort };
-        let error = shell.write("etc/x", &[0; 3000], "0:0", 0o644, &BTreeSet::new()).unwrap_err().to_string();
-        assert!(error.starts_with("sending \"mkdir -p '/mnt/etc' && base64 -d > '/mnt/etc/x.unfr0zen'"), "{error}");
+        let error = shell.run("rm -f /x").unwrap_err().to_string();
+        assert!(error.starts_with("sending \"rm -f /x\" ("), "{error}");
         assert!(error.contains(" bytes): "), "{error}");
-    }
-
-    #[test]
-    fn writes_go_by_rename_from_the_payload_or_through_base64() {
-        let mut shell = shell(vec![]);
-        let blob = vec![0x5au8; 100];
-        let payload = BTreeSet::from([sha256_hex(&blob)]);
-        shell.write("nestlabs/sbin/nestlocal", &blob, "0:0", 0o755, &payload).unwrap();
-        shell.write("etc/shadow", b"root:x\n", "0:42", 0o640, &payload).unwrap();
-        let scripts = &shell.port.scripts;
-        assert_eq!(scripts[1], format!("mkdir -p '/mnt/nestlabs/sbin' && cat /payload/{} > \
-            '/mnt/nestlabs/sbin/nestlocal.unfr0zen' && chown 0:0 '/mnt/nestlabs/sbin/nestlocal.unfr0zen' && \
-            chmod 755 '/mnt/nestlabs/sbin/nestlocal.unfr0zen' && mv -f '/mnt/nestlabs/sbin/nestlocal.unfr0zen' \
-            '/mnt/nestlabs/sbin/nestlocal'", sha256_hex(&blob)));
-        assert_eq!(scripts[2], "mkdir -p '/mnt/etc' && base64 -d > '/mnt/etc/shadow.unfr0zen' <<'UNFR0ZEN_EOF' && \
-            chown 0:42 '/mnt/etc/shadow.unfr0zen' && chmod 640 '/mnt/etc/shadow.unfr0zen' && \
-            mv -f '/mnt/etc/shadow.unfr0zen' '/mnt/etc/shadow'\ncm9vdDp4Cg==\nUNFR0ZEN_EOF");
-    }
-
-    #[test]
-    fn native_patch_checks_hash_before_writing_and_before_rename() {
-        let patch = crate::nlclient::Patch {
-            stock_len: 3, output_len: 6, stock_sha: sha256_hex(b"abc"),
-            output_sha: sha256_hex(b"ayc123"), edits: vec![
-                crate::nlclient::Edit { offset: 1, before: b"b".to_vec(), after: b"y".to_vec() },
-                crate::nlclient::Edit { offset: 3, before: vec![], after: b"123".to_vec() },
-            ],
-        };
-        let mut connection = shell(vec![]);
-        connection.patch_nlclient(&patch).unwrap();
-        let scripts = &connection.port.scripts;
-        assert!(scripts.iter().any(|s| s.contains("cp -p '/mnt/nestlabs/sbin/nlclient'")));
-        assert!(scripts.last().unwrap().contains(&patch.output_sha));
-        assert!(scripts.last().unwrap().contains("mv -f"));
-        let mut wrong = shell(vec![("test", "wrong hash", 1)]);
-        assert!(wrong.patch_nlclient(&patch).is_err());
-        assert_eq!(wrong.port.scripts.len(), 2); // connect + failed precondition
-    }
-
-    /// The data a script's quoted here-document carries, base64 lines decoded.
-    fn here_document(script: &str, delimiter: &str) -> Vec<u8> {
-        let body = script.split_once('\n').unwrap().1.strip_suffix(delimiter).unwrap();
-        assert!(body.lines().all(|line| line.len() <= 76), "{body}");
-        STANDARD.decode(body.lines().collect::<String>()).unwrap()
-    }
-
-    #[test]
-    fn native_patch_sends_each_edit_at_its_offset_then_truncates_and_checks() {
-        let payload: Vec<u8> = (0..200u32).map(|i| (i * 31) as u8).collect();
-        let patch = crate::nlclient::Patch {
-            stock_len: 4096, output_len: 4096 + payload.len(), stock_sha: "a".repeat(64), output_sha: "b".repeat(64),
-            edits: vec![crate::nlclient::Edit { offset: 7, before: b"b".to_vec(), after: b"y".to_vec() },
-                        crate::nlclient::Edit { offset: 4096, before: vec![], after: payload.clone() }],
-        };
-        let mut connection = shell(vec![]);
-        connection.patch_nlclient(&patch).unwrap();
-        let scripts = &connection.port.scripts[1..];
-        assert_eq!(scripts.len(), 4);
-        let staged = "'/mnt/nestlabs/sbin/nlclient.unfr0zen'";
-        for (script, (seek, data)) in scripts[1..3].iter().zip([(7, &b"y"[..]), (4096, &payload[..])]) {
-            assert!(script.starts_with(&format!("base64 -d <<'NLCLIENT_PATCH' | dd of={staged} bs=1 seek={seek} conv=notrunc\n")));
-            assert_eq!(here_document(script, "NLCLIENT_PATCH"), data);
-        }
-        assert_eq!(scripts[3], format!("truncate -s 4296 {staged} && test \"$(sha256sum {staged} | cut -d' ' -f1)\" = {} \
-                                        && mv -f {staged} '/mnt/nestlabs/sbin/nlclient'", "b".repeat(64)));
-    }
-
-    #[test]
-    fn a_failed_edit_never_reaches_the_live_nlclient() {
-        let patch = crate::nlclient::Patch {
-            stock_len: 3, output_len: 3, stock_sha: sha256_hex(b"abc"), output_sha: sha256_hex(b"ayc"),
-            edits: vec![crate::nlclient::Edit { offset: 1, before: b"b".to_vec(), after: b"y".to_vec() }],
-        };
-        let mut connection = shell(vec![("base64 -d <<'NLCLIENT_PATCH'", "dd: can't open: No space left", 1)]);
-        assert!(connection.patch_nlclient(&patch).is_err());
-        assert!(!connection.port.scripts.iter().any(|s| s.contains("mv -f")));
-    }
-
-    #[test]
-    fn large_writes_go_as_76_column_base64_that_decodes_back() {
-        let data: Vec<u8> = (0..5000u32).map(|i| (i * 7 + i / 256) as u8).collect();
-        let mut connection = shell(vec![]);
-        connection.write("etc/nestlocal/server.key", &data, "0:0", 0o600, &BTreeSet::new()).unwrap();
-        let script = &connection.port.scripts[1];
-        assert!(script.ends_with("\nUNFR0ZEN_EOF"));
-        assert_eq!(here_document(script, "UNFR0ZEN_EOF"), data);
-    }
-
-    #[test]
-    fn no_line_of_data_ends_the_here_document_early() {
-        // The second base64 line reads UNFR0ZEN.
-        let data = [vec![0u8; 57], STANDARD.decode("UNFR0ZEN").unwrap()].concat();
-        let mut connection = shell(vec![]);
-        connection.write("etc/x", &data, "0:0", 0o644, &BTreeSet::new()).unwrap();
-        let script = &connection.port.scripts[1];
-        let delimiter = script.split_once("<<'").unwrap().1.split_once('\'').unwrap().0;
-        let body: Vec<&str> = script.lines().skip(1).collect();
-        assert_eq!(body.iter().position(|line| *line == delimiter), Some(body.len() - 1));
-        assert_eq!(here_document(script, delimiter), data);
-    }
-
-    #[test]
-    fn paths_reach_the_shell_as_single_words() {
-        let mut connection = shell(vec![]);
-        connection.remove("etc/a;reboot").unwrap();
-        connection.write("etc/$(x)/*", b"x", "0:0", 0o644, &BTreeSet::new()).unwrap();
-        connection.remove("etc/it's").unwrap();
-        let scripts = &connection.port.scripts[1..];
-        assert_eq!(scripts[0], "rm -f '/mnt/etc/a;reboot'");
-        assert!(scripts[1].starts_with("mkdir -p '/mnt/etc/$(x)' && base64 -d > '/mnt/etc/$(x)/*.unfr0zen' <<"), "{}", scripts[1]);
-        assert_eq!(scripts[2], r"rm -f '/mnt/etc/it'\''s'");
     }
 
     #[test]
@@ -610,10 +395,10 @@ mod tests {
             ("if [ -L \'/mnt/etc/odd\' ]", "0:0 rw-r--r--\n1\nabcd  /mnt/etc/odd", 0),
             ("if [ -L \'/mnt/etc/nosize\' ]", "0:0 644\n\nabcd  /mnt/etc/nosize", 0),
         ]);
-        assert_eq!(connection.read("bin/big").unwrap(), Some(("0:0".into(), 0o755, big)));
-        assert!(connection.read("etc/garbled").unwrap_err().to_string().contains("kept arriving damaged"));
-        assert!(connection.read("etc/odd").unwrap_err().to_string().contains("unexpected mode"));
-        assert!(connection.read("etc/nosize").unwrap_err().to_string().contains("no size"));
+        assert_eq!(connection.read_file("/mnt/bin/big").unwrap(), Some(("0:0".into(), 0o755, big)));
+        assert!(connection.read_file("/mnt/etc/garbled").unwrap_err().to_string().contains("kept arriving damaged"));
+        assert!(connection.read_file("/mnt/etc/odd").unwrap_err().to_string().contains("unexpected mode"));
+        assert!(connection.read_file("/mnt/etc/nosize").unwrap_err().to_string().contains("no size"));
     }
 
     #[test]
@@ -631,7 +416,7 @@ mod tests {
             ("dd if=\'/mnt/nestlabs/sbin/nlclient\' bs=262144 skip=0 ", leak(chunk(first)), 0),
             ("dd if=\'/mnt/nestlabs/sbin/nlclient\' bs=262144 skip=1 ", leak(chunk(second)), 0),
         ]);
-        assert_eq!(connection.read("nestlabs/sbin/nlclient").unwrap().unwrap().2, data);
+        assert_eq!(connection.read_file("/mnt/nestlabs/sbin/nlclient").unwrap().unwrap().2, data);
         let reads: Vec<&String> = connection.port.scripts.iter().filter(|s| s.starts_with("dd ")).collect();
         assert_eq!(reads.len(), 3);
         assert!(reads[2].contains("skip=1 count=1"), "{}", reads[2]);
@@ -643,48 +428,18 @@ mod tests {
             ("if [ -L \'/mnt/etc/a\' ]", leak(format!("0:0 644\n6\n{}  /mnt/etc/a", sha256_hex(b"before"))), 0),
             ("dd if=\'/mnt/etc/a\'", leak(format!("{}  -\n{}", sha256_hex(b"after!"), STANDARD.encode(b"after!"))), 0),
         ]);
-        assert!(connection.read("etc/a").unwrap_err().to_string().contains("changed while it was read"));
+        assert!(connection.read_file("/mnt/etc/a").unwrap_err().to_string().contains("changed while it was read"));
+    }
+
+    #[test]
+    fn paths_reach_the_shell_as_single_words() {
+        let mut connection = shell(vec![("if [ -L", "absent", 0)]);
+        assert_eq!(connection.read_file("/mnt/etc/it's;reboot").unwrap(), None);
+        assert!(connection.port.scripts[1].starts_with(r"if [ -L '/mnt/etc/it'\''s;reboot' ]"), "{}", connection.port.scripts[1]);
     }
 
     fn leak(text: String) -> &'static str {
         Box::leak(text.into_boxed_str())
     }
 
-    #[test]
-    fn inspect_and_directory_report_only_what_stat_says() {
-        let mut connection = shell(vec![
-            ("if [ -L \'/mnt/etc/a\' ]", "0:0 644\nabcd  /mnt/etc/a", 0),
-            ("if [ -L \'/mnt/etc/b\' ]", "0:0 644", 0),
-            ("if [ -d \'/mnt/etc/c\' ]", "other", 0),
-            ("if [ -d \'/mnt/etc/d\' ]", "absent", 0),
-            ("if [ -d \'/mnt/etc/e\' ]", "0:0 755", 0),
-        ]);
-        assert_eq!(connection.inspect("etc/a").unwrap(), Some(("0:0".into(), 0o644, "abcd".into())));
-        assert!(connection.inspect("etc/b").unwrap_err().to_string().contains("no sha256sum"));
-        assert!(connection.directory("etc/c").unwrap_err().to_string().contains("not a directory"));
-        assert_eq!(connection.directory("etc/d").unwrap(), None);
-        assert_eq!(connection.directory("etc/e").unwrap(), Some("0:0 755".into()));
-    }
-
-    #[test]
-    fn digests_pair_hashes_and_modes_by_path() {
-        let mut shell = shell(vec![("sha256sum", "aa  /mnt/etc/a\nbb  /mnt/etc/b", 0),
-                                   ("stat -c", "/mnt/etc/a 0:0 644\n/mnt/etc/b 0:0 600", 0)]);
-        let found = shell.digests(&["etc/a".into(), "etc/b".into()]).unwrap();
-        assert_eq!(found["etc/b"], (Some("bb".into()), Some("0:0 600".into())));
-    }
-
-    #[test]
-    fn file_size_comes_from_stat() {
-        let mut connection = shell(vec![("stat -c %s", "4199955", 0)]);
-        assert_eq!(connection.file_size("boot/kernel_fdt.itb").unwrap(), 4_199_955);
-        let mut connection = shell(vec![("stat -c %s", "invalid", 0)]);
-        assert!(connection.file_size("boot/kernel_fdt.itb").is_err());
-    }
-
-    #[test]
-    fn free_space_comes_from_df() {
-        let mut shell = shell(vec![("df -Pk", "ubi0:root0 102400 61440 40960 60% /mnt", 0)]);
-        assert_eq!(shell.free_bytes().unwrap(), 40960 * 1024);
-    }
 }

@@ -136,7 +136,11 @@ jobs:
       - cargo-registry-store
       # Linux binaries in tarballs, which keep them executable; Windows and the
       # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
-      # without compression or extra fields so every unzipper reads them.
+      # without compression or extra fields so every unzipper reads them. The
+      # x86_64 Linux job adds the patch bundles, the gen 3's and the gen 1's
+      # and gen 2's. A release signs them with UNFR0ZEN_BUNDLE_KEY, from the
+      # bundle-signing context, which only tag pipelines can read; elsewhere
+      # they are unsigned.
       - run:
           name: Package
           command: |
@@ -144,7 +148,17 @@ jobs:
             mkdir -p dist
             case $PLATFORM in
               linux-*)
-                tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen ;;
+                tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen
+                if [ "$PLATFORM" = linux-x86_64 ]; then
+                  if [ -n "${CIRCLE_TAG:-}" ] && [ -z "${UNFR0ZEN_BUNDLE_KEY:-}" ]; then
+                    echo "a release signs its patch bundles: UNFR0ZEN_BUNDLE_KEY is not set" >&2
+                    exit 1
+                  fi
+                  for device in diamond3 j49; do
+                    cargo run --locked -p unfr0zen-host --bin unfr0zen-bundle -- \
+                      pack $device "$VERSION" "dist/unfr0zen-$device-$VERSION.tgz"
+                  done
+                fi ;;
               windows-*)
                 zip -0 -jqX dist/unfr0zen-$PLATFORM-$VERSION.zip "$out/unfr0zen.exe" ;;
               macos)

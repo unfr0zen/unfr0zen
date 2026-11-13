@@ -117,6 +117,9 @@ struct Args {
     /// run nlclient's backplate simulator: 1H1C, simulated temperature
     #[arg(long, help_heading = "Root filesystem options")]
     backplate_sim: bool,
+    /// let the unit install updates the release key does not sign (a developer's own builds), and older versions
+    #[arg(long, help_heading = "Root filesystem options")]
+    allow_unsigned_updates: bool,
     /// resolve Nest's and Google's servers to nowhere in /etc/hosts, and check for the internet at Cloudflare (implies --ntp-server)
     #[arg(long, help_heading = "Root filesystem options")]
     block_cloud: bool,
@@ -186,6 +189,7 @@ impl Args {
             root_password: self.root_password.clone(),
             ntp_server: self.ntp_server.clone(),
             backplate_sim: self.backplate_sim,
+            allow_unsigned_updates: self.allow_unsigned_updates,
             block_cloud: self.block_cloud,
             mqtt: self.mqtt.clone(),
             mqtt_user: self.mqtt_user.clone(),

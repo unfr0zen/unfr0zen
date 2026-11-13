@@ -3,10 +3,13 @@
 
 pub mod boot_branding;
 pub mod bulk;
+pub mod bundle;
 pub mod console;
 mod device;
 pub mod diamond3;
 pub mod j49;
+#[cfg(unix)]
+pub mod local;
 pub mod nestlocal;
 pub mod nlclient;
 pub mod patch;
@@ -14,6 +17,7 @@ pub mod shell;
 mod slot;
 
 pub use device::Device;
+pub use ed25519_dalek;
 pub use slot::Slot;
 
 use std::fmt;

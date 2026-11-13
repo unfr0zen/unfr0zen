@@ -2,7 +2,7 @@
 //! the files it edits: only the differences reach the unit. Port of
 //! scripts/patch_root0.py's edits and unfr0zen.py's patch_on_device.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
@@ -117,6 +117,38 @@ const WAKE_FILTER: &str = "nestlabs/lib/libwakefilter.so";
 const NLSLEEPD_START: (&str, &str) = (
     "\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ",
     "\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} ");
+
+/// The last run's settings (bundle::Settings), for a run without the host.
+pub const RECORD: &str = "etc/unfr0zen/options.json";
+/// unfr0zen-apply, kept on a unit that patches itself (the gen 3) to install
+/// updates: the trusted code that checks a new bundle before running it.
+pub const APPLY: &str = "nestlabs/sbin/unfr0zen-apply";
+
+/// nlclient's init script, the same on the gen 2 and the gen 3.
+const NESTLABS: &str = "etc/init.d/nestlabs";
+/// Where the start line below preloads the library from.
+const LOCAL_CLOUD: &str = "nestlabs/lib/liblocalcloud.so";
+/// How the script starts nlclient, and the same with the library that has
+/// nlclient's network count as connected (platform/common/localcloud), so it
+/// reaches nestlocal, its cloud on 127.0.0.1, with or without Wi-Fi.
+const NLCLIENT_START: (&str, &str) = (
+    "\n ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
+    "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
+
+/// nlclient started with the local cloud library on a unit running
+/// nestlocal; as stock without.
+fn patch_local_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
+    let (stock, preloaded) = NLCLIENT_START;
+    let mut script = text(tree, NESTLABS)?.replace(preloaded, stock);
+    if enabled {
+        if script.matches(stock).count() != 1 {
+            return device(format!("expected one line starting nlclient in {NESTLABS}"));
+        }
+        script = script.replace(stock, preloaded);
+    }
+    put(tree, NESTLABS, script);
+    Ok(())
+}
 
 /// nlsleepd started with the wake pattern library for a unit with Matter, so
 /// that a controller looking the sleeping unit up wakes it; as stock without.
@@ -414,6 +446,19 @@ pub struct Options {
     /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
     /// installed with Matter on a gen 2 or gen 3, removed without.
     pub wake_filter: Vec<u8>,
+    /// The library preloaded into nlclient on a unit running nestlocal
+    /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
+    pub local_cloud: Vec<u8>,
+    /// unfr0zen-apply for a unit that installs updates; empty for one that
+    /// cannot (the gen 1 and gen 2, patched from the host).
+    pub apply: Vec<u8>,
+    /// The unit installs updates whatever signs them, not only those the
+    /// release key signs: a developer's. Kept in the record; the patch
+    /// itself does nothing with it.
+    pub unsigned_updates: bool,
+    /// The run's settings as etc/unfr0zen/options.json keeps them (mode 600:
+    /// they hold the broker's credentials); empty leaves the file as it is.
+    pub record: Vec<u8>,
     /// Files for the optional onboard Thread transport.
     pub thread: Option<Overlay>,
     /// nestlocal joins a Zigbee network through the unit's radio, which it
@@ -497,12 +542,12 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 /// the unit and verifies them on flash. The host never parses UBIFS.
 ///
 /// nestlocal: the ARMv7 binary --mqtt and --matter install. new_pki: a key set for a
-/// unit without its own. payload: SHA-256 of contents the initramfs carries.
+/// unit without its own.
 /// build_screen: the settings screen's undo journal for the unit's stock
 /// nlclient, as nlclient::build makes it.
 #[allow(clippy::too_many_arguments)]
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
-                       new_pki: &mut dyn FnMut() -> Result<Pki>, payload: &BTreeSet<String>,
+                       new_pki: &mut dyn FnMut() -> Result<Pki>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
@@ -641,6 +686,30 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             patch_wake_patterns(&mut tree, wake)?;
         }
     }
+    if !options.record.is_empty() {
+        fetch(volume, &mut tree, &mut originals, &[RECORD], false, true)?;
+        tree.insert(RECORD.into(), (options.record.clone(), 0o600));
+        directories.push(("etc/unfr0zen".into(), 0o755));
+    }
+    // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
+    fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
+    fetch(volume, &mut tree, &mut originals, &[LOCAL_CLOUD], false, false)?;
+    // Updates come through nestlocal: the engine stays with it.
+    fetch(volume, &mut tree, &mut originals, &[APPLY], false, false)?;
+    if overlay.is_some() && !options.apply.is_empty() {
+        tree.insert(APPLY.into(), (options.apply.clone(), 0o755));
+    }
+    if overlay.is_some() {
+        if options.local_cloud.is_empty() {
+            return device("nestlocal needs the local cloud library for nlclient");
+        }
+        tree.insert(LOCAL_CLOUD.into(), (options.local_cloud.clone(), 0o755));
+    }
+    if tree.contains_key(NESTLABS) {
+        patch_local_cloud(&mut tree, overlay.is_some())?;
+    } else if overlay.is_some() {
+        return device(format!("{NESTLABS} is missing: nlclient could not reach nestlocal"));
+    }
     patch_root_rw(&mut tree, true)?;
     patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
     (rootfs.patch)(&mut tree, options)?;
@@ -741,7 +810,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER])
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER, LOCAL_CLOUD, APPLY])
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -800,7 +869,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // Boot originals must reach flash before any artwork or kernel replacement.
     for (name, data, owner, mode) in writes.iter().filter(|(name, _, _, _)| is_boot_backup(name)) {
         check_staging_space(volume, data.len() as u64)?;
-        volume.write(name, data, owner, *mode, payload)?;
+        volume.write(name, data, owner, *mode)?;
         if volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data))) {
             return device(format!("{name}: boot artwork backup did not read back correctly from flash"));
         }
@@ -808,7 +877,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     for (name, data, owner, mode) in &writes {
         if name != crate::nlclient::JOURNAL && !is_boot_backup(name) {
             check_staging_space(volume, data.len() as u64)?;
-            volume.write(name, data, owner, *mode, payload)?;
+            volume.write(name, data, owner, *mode)?;
             // Confirm the full backup reached flash before replacing nlclient.
             if name == crate::nlclient::ORIGINAL && volume.inspect(name)? !=
                 Some((owner.clone(), *mode, sha256_hex(data))) {
@@ -833,7 +902,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     for (name, data, owner, mode) in &writes {
         if name == crate::nlclient::JOURNAL {
             check_staging_space(volume, data.len() as u64)?;
-            volume.write(name, data, owner, *mode, payload)?;
+            volume.write(name, data, owner, *mode)?;
         }
     }
     volume.remount(false)?;
@@ -964,6 +1033,7 @@ fn patch_boot_artwork(volume: &mut impl Volume, tree: &mut Tree, originals: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use crate::diamond3::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
     use crate::shell::{Digests, File};
     use std::io::Read;
@@ -991,8 +1061,12 @@ mod tests {
             ("etc/init.d/sshd", 0o750, "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\n    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n".into()),
             ("etc/nestlabs/client.config", 0o644, BACKPLATE_SIM.iter().map(|k| format!("<a key=\"{k}\" value=\"0\"/>\n")).collect()),
             ("etc/init.d/usb-gadget", 0o750, format!("if [ `unlocked` -eq \"1\" ]; then\n{}else\n  USB_GADGET_MOD=g_mass_storage\nfi\n", GADGET_LINES.0)),
+            ("etc/init.d/nestlabs", 0o755, NESTLABS_SCRIPT.into()),
         ]
     }
+
+    const NESTLABS_SCRIPT: &str = "'monit_start')\n log_info \"Service initiation\"\n ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" \
+                                   -a \"${NLCLIENTAPP}\" -- `find_configs ${NESTLABSCONFDIR} ${CONFFILENAMES}`\n ;;\n";
 
     impl FakeVolume {
         fn new(files: Vec<(&str, u32, String)>) -> Self {
@@ -1024,9 +1098,8 @@ mod tests {
         fn shell_binary(&mut self) -> Result<String> {
             Ok(self.binary.clone())
         }
-        fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32, payload: &BTreeSet<String>) -> Result<()> {
-            let source = if payload.contains(&sha256_hex(data)) { "payload" } else { "shell" };
-            self.commands.push(format!("write {name} from {source}"));
+        fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()> {
+            self.commands.push(format!("write {name} {mode:o}"));
             if self.failing == Some(name) {
                 return device(format!("{name}: no space left on device"));
             }
@@ -1059,7 +1132,7 @@ mod tests {
     fn onyx_is_rejected_before_patching() {
         let mut volume = FakeVolume::new(Vec::new());
         let error = patch_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
-            &mut || panic!("unsupported device must not create keys"), &BTreeSet::new(), false,
+            &mut || panic!("unsupported device must not create keys"), false,
             &|_| panic!("unsupported device must not build a screen")).unwrap_err();
         assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
         assert!(volume.commands.is_empty());
@@ -1118,7 +1191,7 @@ mod tests {
                     ssh_server: Some(Overlay { directories: vec![], files: vec![
                         ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
                 let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
-                    volume, target, options, b"", &mut no_pki, &BTreeSet::new(), dry_run,
+                    volume, target, options, b"", &mut no_pki, dry_run,
                     &|source| crate::nlclient::build(source, b""));
                 let before = volume.files.clone();
                 let before_directories = volume.directories.clone();
@@ -1186,7 +1259,7 @@ mod tests {
     }
 
     fn options() -> Options {
-        Options { root_hash: "$6$salt$hash".into(), ..Options::default() }
+        Options { root_hash: "$6$salt$hash".into(), local_cloud: b"\x7fELF local cloud".to_vec(), ..Options::default() }
     }
 
     fn no_pki() -> Result<Pki> {
@@ -1194,7 +1267,7 @@ mod tests {
     }
 
     fn patch(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run, &|source| {
+        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o")))?;
             crate::nlclient::build(source, &object)
@@ -1245,6 +1318,59 @@ mod tests {
     }
 
     #[test]
+    fn a_unit_running_nestlocal_keeps_the_update_engine_and_one_without_it_does_not() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
+        let changes = patch(&mut volume, &updates, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "create"));
+        assert_eq!((volume.files[APPLY].1, volume.files[APPLY].2.as_slice()), (0o755, &b"\x7fELF apply"[..]));
+        // A host-patched unit (no engine in its bundle) loses one an earlier run left.
+        let changes = patch(&mut volume, &Options { apply: Vec::new(), ..updates }, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "remove"));
+    }
+
+    #[test]
+    fn the_runs_settings_stay_on_the_unit_readable_by_root_alone() {
+        let mut volume = FakeVolume::new(stock());
+        patch(&mut volume, &options(), false).unwrap();
+        assert!(!volume.files.contains_key(RECORD));
+        let record = Options { record: b"{\"zigbee\": true}\n".to_vec(), ..options() };
+        let changes = patch(&mut volume, &record, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == RECORD && c.action == "create"));
+        assert_eq!((volume.files[RECORD].1, volume.files[RECORD].2.as_slice()), (0o600, &b"{\"zigbee\": true}\n"[..]));
+        assert_eq!(volume.directories["etc/unfr0zen"], "0:0 755");
+        assert!(!names(&patch(&mut volume, &record, false).unwrap()).contains(RECORD));
+    }
+
+    #[test]
+    fn nestlocal_has_nlclient_reach_it_without_wifi_and_a_unit_without_it_starts_nlclient_as_stock() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let zigbee = Options { zigbee: true, ..options() };
+        let changes = patch(&mut volume, &zigbee, false).unwrap();
+        assert!(names(&changes).contains(LOCAL_CLOUD) && names(&changes).contains(NESTLABS));
+        assert_eq!((volume.files[LOCAL_CLOUD].1, volume.files[LOCAL_CLOUD].2.as_slice()), (0o755, &b"\x7fELF local cloud"[..]));
+        assert!(volume.text(NESTLABS).contains("\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a "));
+        // Again changes neither, and turning every integration off keeps nestlocal, nlclient's cloud.
+        let again = names(&patch(&mut volume, &zigbee, false).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
+        assert!(!again.iter().any(|name| name == LOCAL_CLOUD || name == NESTLABS), "{again:?}");
+        patch(&mut volume, &Options { zigbee: false, ..zigbee.clone() }, false).unwrap();
+        assert!(volume.text(NESTLABS).contains("LD_PRELOAD=/nestlabs/lib/liblocalcloud.so"));
+        let error = patch(&mut volume, &Options { local_cloud: Vec::new(), ..zigbee }, false).unwrap_err();
+        assert!(error.to_string().contains("local cloud library"), "{error}");
+
+        // A unit without nestlocal: the library goes and nlclient starts as stock.
+        let mut volume = FakeVolume::new(stock());
+        volume.files.insert(NESTLABS.into(), ("0:0".into(), 0o755,
+            NESTLABS_SCRIPT.replace(" ${STARTDAEMON} -q -b -p", " LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p").into_bytes()));
+        volume.files.insert(LOCAL_CLOUD.into(), ("0:0".into(), 0o755, b"\x7fELF old".to_vec()));
+        let changes = patch(&mut volume, &options(), false).unwrap();
+        assert!(changes.iter().any(|c| c.name == LOCAL_CLOUD && c.action == "remove"));
+        assert_eq!(volume.text(NESTLABS), NESTLABS_SCRIPT);
+    }
+
+    #[test]
     fn the_external_temperature_is_an_option_of_nestlocal_with_nlclients_ble_on() {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
@@ -1269,7 +1395,7 @@ mod tests {
             let before = volume.files.clone();
             let error = patch_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
-                &BTreeSet::new(), false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
+                false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
             assert!(error.to_string().contains("j49 external temperature"), "{error}");
             assert_eq!(volume.files, before);
             assert!(volume.commands.is_empty());
@@ -1296,7 +1422,7 @@ mod tests {
             volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
             volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source.clone()));
             let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
-                volume, Device::J49, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+                volume, Device::J49, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| crate::nlclient::build(source, &object));
             let off = Options { block_cloud, external_temperature_screen: rcs_object.clone(),
                 mqtt: Some(Mqtt { url: "broker".into(), ..Mqtt::default() }), ..options() };
@@ -1538,7 +1664,7 @@ mod tests {
         let mut fresh = nestlocal_unit(None);
         let mut made = 0;
         patch_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
-                        &mut || { made += 1; Ok(pki.clone()) }, &BTreeSet::new(), false,
+                        &mut || { made += 1; Ok(pki.clone()) }, false,
                         &|source| crate::nlclient::build(source, b"")).unwrap();
         assert_eq!(made, 1);
         // As Python's with_ca: the empty bundle's newline, then the CA.
@@ -1868,7 +1994,7 @@ mod tests {
             journal
         }
         fn patch(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, &BTreeSet::new(), dry_run,
+            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| {
                     if source != self.stock() { return device("fake screen builder received different firmware"); }
                     Ok(self.0.borrow().clone())

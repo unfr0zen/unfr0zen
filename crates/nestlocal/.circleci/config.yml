@@ -2,7 +2,8 @@ version: 2.1
 
 # nestlocal and thread-rcp for the thermostat, carrying the radio images and
 # every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
-# from the cache, where the jobs upstream in the workflow stored them.
+# from the cache, where the jobs upstream in the workflow stored them. The
+# patch bundle's unfr0zen-apply builds here too, with the same toolchain.
 
 jobs:
   nestlocal:
@@ -26,11 +27,11 @@ jobs:
       - module-build:
           module: nestlocal
           # The j49's zbwake.ko beside the gen 3's.
-          command: cp build/j49/zbwake.ko build/zbwake/j49.ko && sh platform/common/radio/thread/nestlocal.sh
+          command: cp build/j49/zbwake.ko build/zbwake/j49.ko && sh platform/common/radio/thread/nestlocal.sh && sh crates/unfr0zen-apply/build.sh
       - cargo-registry-store
       - cargo-target-store:
           cache: nestlocal
           path: .work/nestlocal-target
       - module-store:
           module: nestlocal
-          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so
+          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so build/localcloud/liblocalcloud.so build/unfr0zen-apply-armv7

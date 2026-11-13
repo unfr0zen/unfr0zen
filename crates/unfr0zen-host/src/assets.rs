@@ -1,6 +1,6 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
-//! nestlocal for --mqtt, and Doom with its WAD for --doom. Each device's own
-//! firmware is in its module.
+//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, and Doom with
+//! its WAD for --doom. Each device's own firmware is in its module.
 
 use std::io::Read;
 
@@ -8,12 +8,15 @@ use unfr0zen_core::nestlocal::Overlay;
 
 const BUSYBOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/busybox.gz"));
 const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"));
+const APPLY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unfr0zen-apply.gz"));
 /// The UNFR0ZEN screen, compiled once, for linking into the unit's nlclient.
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
 /// The j49 Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
 /// The library nlsleepd preloads for Matter, either generation's.
 pub const WAKE_FILTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libwakefilter.so"));
+/// The library nlclient preloads beside nestlocal, so it reaches nestlocal without Wi-Fi.
+pub const LOCAL_CLOUD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/liblocalcloud.so"));
 
 fn gunzip(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::new();
@@ -29,6 +32,11 @@ pub fn busybox() -> Vec<u8> {
 /// The static ARMv7 nestlocal.
 pub fn nestlocal() -> Vec<u8> {
     gunzip(NESTLOCAL)
+}
+
+/// The static ARMv7 unfr0zen-apply, for the patch bundle.
+pub fn apply() -> Vec<u8> {
+    gunzip(APPLY)
 }
 
 /// Doom for --doom: the game, its launcher, the shareware WAD and the title

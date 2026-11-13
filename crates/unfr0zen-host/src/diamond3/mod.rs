@@ -7,7 +7,7 @@ pub mod boot;
 pub mod nand;
 pub mod usb;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -16,12 +16,13 @@ use unfr0zen_core::console::UBoot;
 use unfr0zen_core::diamond3::fastboot::Protocol;
 use unfr0zen_core::diamond3::initramfs;
 use unfr0zen_core::diamond3::recovery::Recovery;
-use unfr0zen_core::patch::{self, changes_text};
-use unfr0zen_core::shell::{sha256_hex, InitramfsShell};
+use unfr0zen_core::bundle::{self, Settings};
+use unfr0zen_core::patch;
+use unfr0zen_core::shell::InitramfsShell;
 use unfr0zen_core::{Error, Result};
 
 use crate::device::{CancelFlag, Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
-use crate::flow::{failure, private_dir, screen_builder, seconds, start_log, stored_pki, Config, HandBack};
+use crate::flow::{failure, private_dir, seconds, start_log, stored_pki, Config, HandBack};
 use crate::progress::{stage, Phase, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
 use usb::Mode;
@@ -144,6 +145,49 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     route(progress, config, board, &port, &run_dir)
 }
 
+/// Where the initramfs holds the bundle, the run's options, and what
+/// unfr0zen-apply leaves for the host.
+const BUNDLE: &str = "bundle.tgz";
+const OPTIONS: &str = "options.json";
+const OUT: &str = "/unfr0zen";
+
+/// Runs the bundle's unfr0zen-apply on the volume the initramfs mounted, and
+/// keeps what it reports in the run directory: nlclient.json, and the unit's
+/// stock nlclient when no review covers it. Returns initramfs-changes.txt.
+fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path) -> Result<String> {
+    // No input: the shell's own (the host's nudges among it) stays out of the hook scripts.
+    let run = shell.run_with(&format!("tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT} < /dev/null 2>&1",
+                                      bundle::APPLY, bundle::APPLY), seconds(600), false);
+    match &run {
+        Ok(output) => output.lines().for_each(|line| log::info!("unit: {line}")),
+        Err(error) => log::error!("unfr0zen-apply failed: {error}"),
+    }
+    let stock = shell.read_file(&format!("{OUT}/nlclient.stock"))?.map(|(_, _, data)| data);
+    if let Some(data) = &stock {
+        fs::write(run_dir.join("nlclient.stock"), data)?;
+    }
+    let saved = || format!("The unit's stock nlclient is saved as {}: attach it to a bug report",
+                           run_dir.join("nlclient.stock").display());
+    if let Err(error) = run {
+        return Err(if stock.is_some() { failure(format!("{error}. {}", saved())) } else { error });
+    }
+    let (_, _, result) = shell.read_file(&format!("{OUT}/result.json"))?
+        .ok_or_else(|| failure("unfr0zen-apply left no result.json"))?;
+    let result: serde_json::Value = serde_json::from_slice(&result)
+        .map_err(|e| failure(format!("unfr0zen-apply's result.json: {e}")))?;
+    if !result["nlclient"].is_null() {
+        fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", result["nlclient"]))?;
+    }
+    if stock.is_some() {
+        log::info!("{}", saved());
+    }
+    let changes = result["changes"].as_array().ok_or_else(|| failure("unfr0zen-apply's result.json lists no changes"))?;
+    Ok(changes.iter().map(|change| {
+        let field = |key: &str| change[key].as_str().unwrap_or("-").to_string();
+        format!("{} {}: {} -> {}\n", field("action"), field("name"), field("old"), field("new"))
+    }).collect())
+}
+
 /// From recovery U-Boot to the confirmed root shell.
 fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &str, run_dir: &Path) -> Result<String> {
     let options = &patch::Options {
@@ -161,22 +205,19 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     progress.status(&format!("Application root volume: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
 
-    // Contents known before boot travel in the initramfs, over fastboot.
+    // The patch bundle and the run's options travel in the initramfs, over
+    // fastboot; unfr0zen-apply patches the volume from them on the unit.
     progress.phase(Phase::Prepare);
-    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
-        crate::assets::nestlocal()
-    } else {
-        Vec::new()
-    };
-    let mut payload: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    for bundle in options.thread.iter().chain(&options.doom) {
-        for (_, _, data) in &bundle.files { payload.insert(sha256_hex(data), data.clone()); }
-    }
-    if !nestlocal_binary.is_empty() {
-        payload.insert(sha256_hex(&nestlocal_binary), nestlocal_binary.clone());
-    }
-    let initramfs = stage(progress, "Build the initramfs", || -> Result<Vec<u8>> {
-        let image = initramfs::build(&crate::assets::busybox(), &payload);
+    let initramfs = stage(progress, "Build the patch bundle and the initramfs", || -> Result<Vec<u8>> {
+        let nestlocal = options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
+            || options.external_temperature;
+        let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
+        let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");
+        let files = BTreeMap::from([
+            (BUNDLE.to_string(), crate::bundle::pack(Device::Diamond3, &options.version, None)?),
+            (OPTIONS.to_string(), settings),
+        ]);
+        let image = initramfs::build(&crate::assets::busybox(), &files);
         fs::write(run_dir.join("initramfs.cpio.gz"), &image)?;
         Ok(image)
     })?;
@@ -199,14 +240,8 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         log::info!("Firmware {firmware} (kernel release {release})");
     }
     progress.phase(Phase::Patch);
-    let label = format!("Patch {slot} in place");
-    let payload: BTreeSet<String> = payload.into_keys().collect();
-    let pki_dir = config.data_dir.join("nestlocal-pki");
-    let changes = stage(progress, &label, || {
-        patch::patch_on_device(&mut shell, Device::Diamond3, options, &nestlocal_binary, &mut || stored_pki(&pki_dir), &payload,
-                               false, &screen_builder(run_dir))
-    })?;
-    fs::write(run_dir.join("initramfs-changes.txt"), changes_text(&changes))?;
+    let changes = stage(progress, &format!("Patch {slot} on the unit"), || apply(&mut shell, run_dir))?;
+    fs::write(run_dir.join("initramfs-changes.txt"), changes)?;
     progress.phase(Phase::Restart);
     shell.restart()?;
 

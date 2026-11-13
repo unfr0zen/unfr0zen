@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/unfr0zen-core", "crates/unfr0zen-host", "crates/unfr0zen-cli", "crates/unfr0zen-gui", "crates/nestlocal"]
+members = ["crates/unfr0zen-core", "crates/unfr0zen-apply", "crates/unfr0zen-host", "crates/unfr0zen-cli", "crates/unfr0zen-gui", "crates/nestlocal"]
 
 [workspace.package]
 edition = "2021"

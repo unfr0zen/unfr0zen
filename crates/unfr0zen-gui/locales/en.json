@@ -105,6 +105,8 @@
   "patch.auto": "auto",
   "patch.backplate_sim": "Backplate simulator (1H1C)",
   "patch.backplate_sim_hint": "nlclient drives a simulated backplate (1H1C) with a simulated temperature",
+  "patch.unsigned_updates": "Allow unsigned updates",
+  "patch.unsigned_updates_hint": "The unit installs updates that unfr0zen's release key does not sign, such as your own builds, and older versions than it runs.",
   "patch.block_cloud": "Block Nest and Google servers",
   "patch.device": "Device",
   "patch.device_hint": "Override the detected thermostat generation; leave on auto for USB detection",

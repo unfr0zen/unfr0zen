@@ -4,6 +4,7 @@
 //! a [`Progress`] so a terminal and a window can drive the same run.
 
 pub mod assets;
+pub mod bundle;
 pub mod device;
 mod diamond;
 pub mod diamond3;
