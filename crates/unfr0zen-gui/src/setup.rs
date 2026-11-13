@@ -149,9 +149,22 @@ impl App {
     /// Back to the first step, for another unit; the choices stay.
     fn restart_flow(&mut self) {
         self.flow_epoch += 1;
-        self.flow_run = false;
+        self.leave_flow_run();
         self.flow_backup = None;
         self.step = Step::Connect;
+    }
+
+    /// Back to the review step from a failed run.
+    pub(crate) fn back_to_review(&mut self) {
+        self.leave_flow_run();
+        self.step = Step::Review;
+    }
+
+    /// The flow's run, once left, is no task of the window's own: its card
+    /// never comes up over the steps.
+    fn leave_flow_run(&mut self) {
+        self.flow_run = false;
+        self.popup_dismissed = true;
     }
 
     fn step_page(&mut self, ui: &mut egui::Ui, step: Step) {
@@ -354,7 +367,8 @@ impl App {
     }
 
     /// The run in place of the steps: a ring with what it does and how far
-    /// it is, the steps so far beside it; a failure says why and offers the
+    /// it is, still and blank while the download mode popup counts down, the
+    /// steps so far beside it; a failure says why and offers the
     /// way back.
     fn running_page(&mut self, ui: &mut egui::Ui, error: Option<String>) {
         let backing_up = self.backing_up();
@@ -369,6 +383,9 @@ impl App {
                 let under = left.map_or_else(String::new, |m| tr!("setup.minutes_left", minutes = m.max(1)));
                 let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
                 (Some(fraction), label, format!("{}", (fraction * 100.0).floor() as u32), under)
+            } else if self.sdp_wait.is_some() {
+                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
+                (Some(0.0), label, String::new(), String::new())
             } else {
                 let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
                 let seconds = self.logs.rows.first().map_or(0, |r| r.started.elapsed().as_secs());
@@ -416,8 +433,7 @@ impl App {
                     if error.is_some() {
                         ui.add_space(16.0);
                         if pill_button(ui, tr!("setup.back_to_review"), true, self.idle()).clicked() {
-                            self.flow_run = false;
-                            self.step = Step::Review;
+                            self.back_to_review();
                         }
                     }
                 });
@@ -930,9 +946,9 @@ pub(crate) fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
 fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
     let (text, fg, bg, dot) = match bus {
         Bus::Nothing => (tr!("setup.waiting_for_unit"), TEXT, CARD, DIM),
-        Bus::One(seen) if seen.device == Device::Onyx => (tr!("setup.unsupported_short"), WARN, egui::Color32::from_rgb(0x2a, 0x24, 0x14), WARN),
+        Bus::One(seen) if seen.device == Device::Onyx => (tr!("setup.unsupported_short"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
         Bus::One(_) => (tr!("setup.found_unit"), OK_LIGHT, OK_FILL, OK),
-        Bus::Several(_) => (tr!("setup.several_units"), WARN, egui::Color32::from_rgb(0x2a, 0x24, 0x14), WARN),
+        Bus::Several(_) => (tr!("setup.several_units"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
     };
     let waiting = matches!(bus, Bus::Nothing);
     // Painted at its own size, so a centred column centres it; a frame
@@ -996,7 +1012,7 @@ fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &st
         }
     }
     painter.text(c - egui::vec2(0.0, 50.0), egui::Align2::CENTER_CENTER, label.to_uppercase(), medium(12.0), ACCENT);
-    let percent = fraction.is_some();
+    let percent = fraction.is_some() && !big.is_empty();
     let number = painter.layout_no_wrap(big.to_string(), crate::display(if percent { 72.0 } else { 54.0 }), TEXT);
     let at = c - number.size() * 0.5 + egui::vec2(if percent { -10.0 } else { 0.0 }, 4.0);
     let right = at.x + number.size().x;

@@ -172,6 +172,7 @@
   "run.disabled_busy": "Finish the current operation, close any file picker, and disconnect any open console first",
   "run.done": "Done",
   "run.elapsed": "{seconds}s",
+  "run.failed_title": "Failed",
   "run.logs_link": "Logs ›",
   "run.starting": "Starting",
   "setup.fix_fields": "Correct the fields marked in red, or turn their integration off, to continue.",

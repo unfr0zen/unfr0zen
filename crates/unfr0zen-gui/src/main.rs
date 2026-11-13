@@ -963,7 +963,7 @@ pub(crate) const ACCENT: egui::Color32 = LOGO_BLUE;
 pub(crate) const ON_ACCENT: egui::Color32 = egui::Color32::from_rgb(0x0b, 0x12, 0x1e);
 pub(crate) const OK: egui::Color32 = egui::Color32::from_rgb(0x2e, 0xa0, 0x43);
 pub(crate) const BAD: egui::Color32 = egui::Color32::from_rgb(0xd0, 0x33, 0x2e);
-pub(crate) const WARN: egui::Color32 = egui::Color32::from_rgb(0xf3, 0xc5, 0x65);
+pub(crate) const WARN: egui::Color32 = egui::Color32::from_rgb(0xf2, 0x6a, 0x12);
 // The shell's surfaces: the page, the sidebar, the title bar, the status bar.
 const BG: egui::Color32 = egui::Color32::from_rgb(0x18, 0x1b, 0x21);
 pub(crate) const SIDE: egui::Color32 = egui::Color32::from_rgb(0x14, 0x17, 0x1c);
@@ -982,6 +982,7 @@ const MAP_ROOT1: egui::Color32 = egui::Color32::from_rgb(0x3f, 0xb5, 0x9f);
 const MAP_SYSTEM_CONFIG: egui::Color32 = egui::Color32::from_rgb(0xb5, 0x8c, 0xf0);
 /// U-Boot in Fledge's orange, as its NAND map draws it.
 const MAP_UBOOT: egui::Color32 = egui::Color32::from_rgb(0xf2, 0x6a, 0x12);
+const MAP_ENV: egui::Color32 = egui::Color32::from_rgb(0xf3, 0xc5, 0x65);
 const MAP_OTHER: egui::Color32 = egui::Color32::from_rgb(0x6b, 0x74, 0x86);
 const MAP_ERASED: egui::Color32 = egui::Color32::from_rgb(0x2a, 0x36, 0x45);
 pub(crate) const DIM: egui::Color32 = egui::Color32::from_rgb(0x5c, 0x65, 0x75);
@@ -1416,7 +1417,7 @@ impl App {
         match entry.device.and_then(|device| self.maps.get(&entry.path, device, ui.ctx())) {
             Some(map) => {
                 let colors = nandmap::Colors {
-                    uboot: MAP_UBOOT, env: WARN, system_config: MAP_SYSTEM_CONFIG,
+                    uboot: MAP_UBOOT, env: MAP_ENV, system_config: MAP_SYSTEM_CONFIG,
                     root0: MAP_ROOT0, root1: MAP_ROOT1, other: MAP_OTHER, erased: MAP_ERASED, bad: BAD,
                 };
                 nandmap::draw(ui, &map, colors);
@@ -1794,7 +1795,9 @@ impl App {
         if !self.running() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
-        let (doing, nand, failed) = (task.doing(), task.is_nand(), matches!(outcome, Some(Err(_))));
+        let (nand, failed) = (task.is_nand(), matches!(outcome, Some(Err(_))));
+        // A failed run's card says so where a running one says what it does.
+        let doing = if failed { tr!("run.failed_title") } else { task.doing() };
         let mut close = false;
         let mut to_logs = false;
         let response = backdrop::modal(ctx, "run_popup").show(ctx, |ui| {
@@ -3035,6 +3038,20 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_flow_run_left_for_the_review_brings_up_no_card() {
+        let mut app = App { task: Some(Task::Patch), page: Page::Patch, flow_run: true, finished_at: Some(Instant::now()),
+                            logged: true, step: setup::Step::Review, ..App::default() };
+        app.logs.outcome = Some(Err("endpoint stalled".into()));
+        app.on_event(Event::Device("Nest gen 2 (j49)".into()));
+        assert_eq!(app.screen_name(), "Failed");
+        app.back_to_review();
+        assert_eq!(app.screen_name(), "Step(Review)");
+        let drawn = |app: &mut App| render_frames(app, WINDOW, 4).shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::epaint::Shape::Text(t) if t.galley.job.text == "Failed"));
+        assert!(!drawn(&mut app), "the failed run's card stays down");
+    }
+
+    #[test]
     fn a_failed_run_cards_logs_link_lines_up_with_its_title() {
         let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, finished_at: Some(Instant::now()), logged: true, ..App::default() };
         app.logs.outcome = Some(Err("no unit".into()));
@@ -3043,7 +3060,7 @@ mod tests {
             egui::epaint::Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
             _ => None,
         }).unwrap_or_else(|| panic!("{text} is drawn"));
-        assert_eq!(left("Logs ›"), left("Backing up"));
+        assert_eq!(left("Logs ›"), left("Failed"));
     }
 
     #[test]
