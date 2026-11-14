@@ -1,6 +1,6 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
-//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, and Doom with
-//! its WAD for --doom. Each device's own firmware is in its module.
+//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, Doom with its
+//! WAD for --doom, and the gen 3's customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
 
@@ -49,6 +49,20 @@ pub fn doom() -> Overlay {
             ("nestlabs/sbin/unfr0zen-doom".into(), 0o755, include_bytes!("../../nestlocal/rootfs/doom.sh").to_vec()),
             ("usr/share/doom/doom1.wad".into(), 0o644, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom1.wad.gz")))),
             ("nestlabs/share/images/G_unfr0zen_doom.png".into(), 0o644, include_bytes!(concat!(env!("OUT_DIR"), "/doom-logo.png")).to_vec()),
+        ],
+    }
+}
+
+/// Customizable home screen themes for the gen 3: the library preloaded into
+/// nlclient, and nestlocal's theme library it draws the themes with.
+pub fn theme() -> Overlay {
+    Overlay {
+        directories: Vec::new(),
+        files: vec![
+            (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
+             gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
+            (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
+             gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
         ],
     }
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Integrations · unfr0zen</title>
-    <meta name="description" content="Set up unfr0zen's MQTT, Matter, Thread, Zigbee and Doom on a Nest Learning Thermostat, from the app or the command line.">
+    <meta name="description" content="Set up unfr0zen's MQTT, Matter, Thread, Zigbee, home screen themes and Doom on a Nest Learning Thermostat, from the app or the command line.">
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
     <link rel="icon" type="image/png" href="/assets/logo.png" sizes="256x256">
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -46,6 +46,7 @@
                 <li><a href="#external-temperature">External temperature</a></li>
                 <li><a href="#options">Other options</a></li>
                 <li><a href="#backup">Backup &amp; restore</a></li>
+                <li><a href="#themes">Home screen themes</a></li>
                 <li><a href="#doom">Doom</a></li>
             </ul>
             <p class="lede">Integrations are chosen at install: tick them in the app, or pass them to the <code>unfr0zen</code> command-line tool. To change them, run the install again.</p>
@@ -59,7 +60,7 @@
                 <p><b>nestlocal replaces the thermostat's connection to Nest's cloud.</b> Nest's own <code>nlclient</code> keeps running the screen and the heating, pointed at nestlocal on the unit instead of Nest's servers. The Nest and Google Home apps no longer control the thermostat; Home Assistant does, over your network. Remaining traffic to Nest's and Google's servers, NTP for example, stops with <a href="#options">Block Nest and Google servers</a>.</p>
             </div>
             <ul>
-                <li><b>nestlocal.</b> MQTT, Matter, Zigbee and Doom are served by nestlocal, which any of them installs on the thermostat.</li>
+                <li><b>nestlocal.</b> MQTT, Matter, Zigbee, home screen themes and Doom are served by nestlocal, which any of them installs on the thermostat.</li>
                 <li><b>Wi-Fi.</b> MQTT and Matter use Wi-Fi, joined from the thermostat's Settings → Network. The network doesn't need internet access.</li>
                 <li><b>Generations.</b> 1st, 2nd and 3rd generation. The 1st has MQTT, Matter over Wi-Fi and the external temperature: no Zigbee or Matter over Thread (its radio is on a UART), and no USB shell. The Nest Thermostat E is detected and refused.</li>
                 <li><b>Command line.</b> On Linux and macOS, the app's executable run with arguments; Windows has the app only.</li>
@@ -68,7 +69,7 @@
             </ul>
 
             <h2 id="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>UNFR0ZEN menu</h2>
-            <p>The install replaces the thermostat's <b>NEST APP</b> settings entry with <b>UNFR0ZEN</b>. It shows Matter pairing, Zigbee pairing with a 30-second countdown, and Doom. An integration's entry appears only when it was installed.</p>
+            <p>The install replaces the thermostat's <b>NEST APP</b> settings entry with <b>UNFR0ZEN</b>. It shows Matter pairing, Zigbee pairing with a 30-second countdown, the home screen themes, and Doom. An integration's entry appears only when it was installed.</p>
             <p>The menu is linked into the unit's own <code>nlclient</code>; the original is kept at <code>/etc/unfr0zen/nlclient.original</code> across installs. Supported versions and undo: <a href="https://github.com/unfr0zen/unfr0zen/blob/main/platform/common/nlclient/README.md" target="_blank" rel="noopener">platform/common/nlclient/README.md</a>.</p>
 
             <h2 id="mqtt"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>MQTT</h2>
@@ -225,7 +226,7 @@ data:
             </ul>
 
             <h2 id="options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Other options</h2>
-            <p>The app's <b>Patch</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread), Block Nest and Google servers, the time server, SSH, the USB console, Doom and Dark theme are on Features; Device, Entry point, Backplate simulator and Allow unsigned updates under <b>Developer options</b> on Review, which also offers a NAND backup before the patch.</p>
+            <p>The app's <b>Patch</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread), Block Nest and Google servers, the time server, SSH, the USB console, Customizable home screen themes, Doom and Dark theme are on Features; Device, Entry point, Backplate simulator and Allow unsigned updates under <b>Developer options</b> on Review, which also offers a NAND backup before the patch.</p>
             <div class="table-scroll">
                 <table>
                     <thead><tr><th>App</th><th>CLI</th><th>What it does</th></tr></thead>
@@ -268,6 +269,21 @@ data:
                 <li><b>Backup.</b> The whole NAND as an image with a <code>.sha256</code> beside it. On the 3rd generation: 512 MiB, ECC-corrected, with a <code>.bad</code> list of its bad and unreadable blocks. On the 1st and 2nd: raw pages with OOB, unclean blocks read until two reads agree. Nothing is written during a backup.</li>
                 <li><b>Resume.</b> <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file.</li>
                 <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again.</li>
+            </ul>
+
+            <h2 id="themes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Home screen themes</h2>
+            <div class="table-scroll">
+                <table>
+                    <thead><tr><th>App</th><th>CLI</th></tr></thead>
+                    <tbody>
+                        <tr><td data-label="App"><b>Customizable home screen themes</b>, under Patch → Features</td><td data-label="CLI"><code>--themes</code></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p>3rd generation, on the firmware versions the themes support; another is refused at install. Pick how the home screen's dial looks from <b>UNFR0ZEN → Themes</b>. The choice is kept across restarts.</p>
+            <ul>
+                <li>The ring, the button and the menus work as stock: the theme only draws the dial, on the thermostat's GPU, at up to 60 frames a second while it moves.</li>
+                <li>Install again without the option to remove it.</li>
             </ul>
 
             <h2 id="doom"><svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>Doom</h2>

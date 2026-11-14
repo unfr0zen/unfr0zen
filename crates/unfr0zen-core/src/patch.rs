@@ -128,23 +128,29 @@ pub const APPLY: &str = "nestlabs/sbin/unfr0zen-apply";
 const NESTLABS: &str = "etc/init.d/nestlabs";
 /// Where the start line below preloads the library from.
 const LOCAL_CLOUD: &str = "nestlabs/lib/liblocalcloud.so";
-/// How the script starts nlclient, and the same with the library that has
+/// Where the theme preload (platform/common/theme) and nestlocal's theme
+/// library it loads are installed for customizable themes.
+pub const THEME_PRELOAD: &str = "nestlabs/lib/libunfr0zen-theme.so";
+pub const THEME_LIBRARY: &str = "nestlabs/lib/libnestlocal_theme.so";
+/// How the script starts nlclient; the same with the library that has
 /// nlclient's network count as connected (platform/common/localcloud), so it
-/// reaches nestlocal, its cloud on 127.0.0.1, with or without Wi-Fi.
-const NLCLIENT_START: (&str, &str) = (
+/// reaches nestlocal, its cloud on 127.0.0.1, with or without Wi-Fi; and with
+/// the theme preload as well, for customizable themes.
+const NLCLIENT_START: (&str, &str, &str) = (
     "\n ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
-    "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
+    "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
+    "\n LD_PRELOAD=\"/nestlabs/lib/liblocalcloud.so /nestlabs/lib/libunfr0zen-theme.so\" ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
 
 /// nlclient started with the local cloud library on a unit running
-/// nestlocal; as stock without.
-fn patch_local_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
-    let (stock, preloaded) = NLCLIENT_START;
-    let mut script = text(tree, NESTLABS)?.replace(preloaded, stock);
+/// nestlocal, and the theme preload too with `theme`; as stock without.
+fn patch_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()> {
+    let (stock, preloaded, with_theme) = NLCLIENT_START;
+    let mut script = text(tree, NESTLABS)?.replace(with_theme, stock).replace(preloaded, stock);
     if enabled {
         if script.matches(stock).count() != 1 {
             return device(format!("expected one line starting nlclient in {NESTLABS}"));
         }
-        script = script.replace(stock, preloaded);
+        script = script.replace(stock, if theme { with_theme } else { preloaded });
     }
     put(tree, NESTLABS, script);
     Ok(())
@@ -469,6 +475,11 @@ pub struct Options {
     pub wwn_boiler: bool,
     /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
+    /// Customizable home screen themes (the gen 3): the theme preload and
+    /// nestlocal's theme library (THEME_PRELOAD, THEME_LIBRARY), preloaded into
+    /// nlclient, bound to the unit's nlclient (nlclient::theme), and offered
+    /// by nestlocal on the UNFR0ZEN screen.
+    pub theme: Option<Overlay>,
     /// Regulate from nestlocal's virtual sensor: BLE on gen 3, or the
     /// reviewed native RCS input and Sensors selector patch on gen 2.
     pub external_temperature: bool,
@@ -559,6 +570,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
     }
+    if options.theme.is_some() && target != Device::Diamond3 {
+        return device("customizable home screen themes are for the gen 3");
+    }
     let public_key = options.ssh_public_key.as_deref().map(|key| ssh_public_key(key.as_bytes())).transpose()?;
     // What patch_root0.check_source asks of an extracted tree: here, that the
     // mount is a real application root before anything is written into it.
@@ -604,7 +618,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // integration rewrites its files with them all off, which also puts
     // Nest's Thread radio set-up back after Zigbee.
     let turn_off = volume.inspect(nestlocal::OPTIONS)?.is_some();
-    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || options.external_temperature || turn_off {
+    if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() || options.theme.is_some() || options.external_temperature || turn_off {
         fetch(volume, &mut tree, &mut originals, &nestlocal::STOCK_FILES, true, true)?;
         fetch(volume, &mut tree, &mut originals, &[nestlocal::UNLOCK_BUNDLE], false, true)?;
         if options.matter.is_some() {
@@ -644,6 +658,14 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             line.extend_from_slice(b" -doom\n");
             overlay.files.extend(doom.files.clone());
             overlay.directories.extend(doom.directories.clone());
+        }
+        if let Some(theme) = &options.theme {
+            let overlay = overlay.as_mut().unwrap();
+            let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
+            line.pop();
+            line.extend_from_slice(b" -themes\n");
+            overlay.files.extend(theme.files.clone());
+            overlay.directories.extend(theme.directories.clone());
         }
         if options.external_temperature {
             let overlay = overlay.as_mut().unwrap();
@@ -694,6 +716,8 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
     fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
     fetch(volume, &mut tree, &mut originals, &[LOCAL_CLOUD], false, false)?;
+    // Themes' libraries come in with nestlocal's overlay, and go without it.
+    fetch(volume, &mut tree, &mut originals, &[THEME_PRELOAD, THEME_LIBRARY], false, false)?;
     // Updates come through nestlocal: the engine stays with it.
     fetch(volume, &mut tree, &mut originals, &[APPLY], false, false)?;
     if overlay.is_some() && !options.apply.is_empty() {
@@ -706,7 +730,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         tree.insert(LOCAL_CLOUD.into(), (options.local_cloud.clone(), 0o755));
     }
     if tree.contains_key(NESTLABS) {
-        patch_local_cloud(&mut tree, overlay.is_some())?;
+        patch_local_cloud(&mut tree, overlay.is_some(), options.theme.is_some())?;
     } else if overlay.is_some() {
         return device(format!("{NESTLABS} is missing: nlclient could not reach nestlocal"));
     }
@@ -720,6 +744,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
 
     let screen = volume.inspect(crate::nlclient::BINARY)?;
+    if options.theme.is_some() && screen.is_none() {
+        return device("customizable home screen themes need nlclient");
+    }
     if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && screen.is_none() {
         return device("j49 external temperature requires nlclient");
     }
@@ -773,6 +800,13 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
                     return device("nlclient original backup does not match this firmware; leaving it untouched");
                 }
             }
+            // The theme preload's bindings, for this stock nlclient; none without themes.
+            fetch(volume, &mut tree, &mut originals, &[crate::nlclient::theme::BINDINGS], false, false)?;
+            if options.theme.is_some() {
+                tree.insert(crate::nlclient::theme::BINDINGS.into(), (crate::nlclient::theme::bindings(&source)?, 0o644));
+            } else {
+                tree.remove(crate::nlclient::theme::BINDINGS);
+            }
             let journal = match rebuilt { Some(journal) => journal, None => build_screen(&source)? };
             let current = crate::nlclient::Patch::parse(&journal)?;
             let patch = if let Some(previous) = previous.filter(|p| p.output_sha == *sha) {
@@ -791,6 +825,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             directories.push(("etc/unfr0zen".into(), 0o755));
             screen_patch = Some(patch);
         } else {
+            if options.theme.is_some() {
+                return device("customizable home screen themes need an ARM ELF nlclient");
+            }
             tree.remove(crate::nlclient::JOURNAL);
             log::warn!("UNFR0ZEN screen skipped: nlclient is not an ELF executable");
         }
@@ -810,7 +847,8 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain([WAKE_FILTER, LOCAL_CLOUD, APPLY])
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied()
+        .chain([WAKE_FILTER, LOCAL_CLOUD, APPLY, THEME_PRELOAD, THEME_LIBRARY, crate::nlclient::theme::BINDINGS])
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -1341,6 +1379,42 @@ mod tests {
         assert_eq!((volume.files[RECORD].1, volume.files[RECORD].2.as_slice()), (0o600, &b"{\"zigbee\": true}\n"[..]));
         assert_eq!(volume.directories["etc/unfr0zen"], "0:0 755");
         assert!(!names(&patch(&mut volume, &record, false).unwrap()).contains(RECORD));
+    }
+
+    #[test]
+    fn themes_preload_into_nlclient_bound_to_its_build_and_are_withdrawn_when_off() {
+        let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.work/firmware"));
+        let Ok(stock_nlclient) = std::fs::read(firmware.join("nlclient-gen3-6.5-14")) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            return;
+        };
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, stock_nlclient.clone()));
+        let theme = Overlay { files: vec![(THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec()),
+                                         (THEME_LIBRARY.into(), 0o755, b"\x7fELF library".to_vec())],
+                             directories: Vec::new() };
+        let on = Options { theme: Some(theme), ..options() };
+        patch(&mut volume, &on, false).unwrap();
+        assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -themes"));
+        assert!(volume.text(NESTLABS).contains(NLCLIENT_START.2));
+        assert_eq!(volume.files[THEME_PRELOAD].2, b"\x7fELF preload");
+        assert_eq!(volume.files[THEME_LIBRARY].2, b"\x7fELF library");
+        let bindings = &volume.files[crate::nlclient::theme::BINDINGS];
+        assert_eq!((bindings.1, &bindings.2), (0o644, &crate::nlclient::theme::bindings(&stock_nlclient).unwrap()));
+        assert!(names(&patch(&mut volume, &on, false).unwrap()).is_empty(), "a second run changes nothing");
+        // Off: nlclient starts without the preload, unbound, and its libraries go.
+        let changes = patch(&mut volume, &Options { theme: None, ..on.clone() }, false).unwrap();
+        for name in [THEME_PRELOAD, THEME_LIBRARY, crate::nlclient::theme::BINDINGS] {
+            assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name}");
+        }
+        assert!(!volume.text(nestlocal::OPTIONS).contains("-themes"));
+        assert!(volume.text(NESTLABS).contains(NLCLIENT_START.1) && !volume.text(NESTLABS).contains("libunfr0zen-theme"));
+        assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
+        let error = patch_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_| unreachable!())
+            .unwrap_err();
+        assert!(error.to_string().contains("gen 3"), "{error}");
     }
 
     #[test]
