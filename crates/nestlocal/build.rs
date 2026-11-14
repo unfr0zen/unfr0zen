@@ -3,6 +3,8 @@
 //! and NESTLOCAL_RADIO_EM357 (the gen2's Zigbee image) name. Without one,
 //! -zigbee runs a radio that already has the firmware but cannot install it.
 //!
+//! Embeds client-ng's themes (themes/), which -themes draws the dial with.
+//!
 //! Embeds the zbwake.ko builds (platform/diamond3/zbwake/, one per gen3 release) found in the
 //! directory NESTLOCAL_ZBWAKE names, each distinct one once. Without them,
 //! -zigbee cannot wake the sleeping unit.
@@ -51,4 +53,28 @@ fn main() {
     }
     list.push(']');
     std::fs::write(out.join("zbwake.rs"), list).unwrap();
+
+    let themes = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("themes");
+    println!("cargo:rerun-if-changed={}", themes.display());
+    let mut files = Vec::new();
+    let mut dirs = vec![themes.clone()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            println!("cargo:rerun-if-changed={}", path.display());
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut list = String::from("&[");
+    for path in files {
+        let name = path.strip_prefix(&themes).unwrap().to_str().unwrap().to_string();
+        write!(list, "({name:?}, include_bytes!({:?})),", path.display().to_string()).unwrap();
+    }
+    list.push(']');
+    std::fs::write(out.join("themes.rs"), list).unwrap();
 }

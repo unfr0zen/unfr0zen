@@ -11,6 +11,7 @@ mod commands;
 mod device;
 mod doom;
 mod entropy;
+mod theme;
 mod fetch;
 mod flags;
 mod heatlink;
@@ -283,9 +284,12 @@ async fn run(config: flags::Config) {
         wake::start(broker_port, config.matter, config.zigbee,
                     config.wake_iface.clone(), move || if let Some(bridge) = &bridge { bridge.woke() });
     }
-    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom) { logf!("settings UI: {e}"); }
+    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) { logf!("settings UI: {e}"); }
     if config.doom {
         doom::start();
+    }
+    if config.themes {
+        theme::start(store.clone(), config.serial.clone());
     }
     if let (true, Some(bridge)) = (config.zigbee, &bridge) {
         zigbee::start(bridge.clone(), config.zigbee_store.clone().into());

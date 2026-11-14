@@ -1,6 +1,9 @@
 #!/bin/sh
-# nestlocal and thread-rcp for the thermostat, static ARMv7 binaries into
-# build/thread, with nestlocal copied to build/nestlocal-armv7 for the app.
+# nestlocal and thread-rcp for the thermostat, ARMv7 binaries against the
+# gen 2's glibc 2.19 (which the gen 3's 2.31 also runs; the gen 3's GPU
+# libraries, which nestlocal loads at run time for the theme, are glibc
+# shared objects) into build/thread, with nestlocal copied to
+# build/nestlocal-armv7 for the app.
 # nestlocal carries the radio images (radio.sh) and zbwake.ko for each release
 # (platform/diamond3/zbwake/build.sh, the j49's beside them as j49.ko): their
 # paths are NESTLOCAL_RADIO, NESTLOCAL_RADIO_EM357 and NESTLOCAL_ZBWAKE.
@@ -19,8 +22,15 @@ nestlocal_target_dir=${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}
 mkdir -p build/thread
 sh platform/common/wakefilter/build.sh build/wakefilter
 sh platform/common/localcloud/build.sh build/localcloud
+# For the Cortex-A8 (the gen 2's; the gen 3's A9 runs it too). A
+# fixed-address executable, bound lazily: the gen 2's glibc 2.19 loader
+# crashes binding a Rust binary now, and its 2.6.37 kernel maps a PIE among
+# the libraries, where the loader crashes now and then (client-ng's
+# findings, whose build this follows).
+target=armv7-unknown-linux-gnueabihf
+export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C link-arg=-Wl,-z,lazy -C relocation-model=static -C link-arg=-no-pie -C target-cpu=cortex-a8"
 cargo zigbuild --locked -p nestlocal --bin nestlocal --bin thread-rcp --profile thermostat \
-  --target armv7-unknown-linux-musleabihf --target-dir "$nestlocal_target_dir"
-cp "$nestlocal_target_dir"/armv7-unknown-linux-musleabihf/thermostat/thread-rcp build/thread/
-cp "$nestlocal_target_dir"/armv7-unknown-linux-musleabihf/thermostat/nestlocal build/thread/
+  --target $target.2.19 --target-dir "$nestlocal_target_dir"
+cp "$nestlocal_target_dir"/$target/thermostat/thread-rcp build/thread/
+cp "$nestlocal_target_dir"/$target/thermostat/nestlocal build/thread/
 cp build/thread/nestlocal build/nestlocal-armv7

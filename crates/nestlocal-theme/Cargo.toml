@@ -1,0 +1,30 @@
+[package]
+name = "nestlocal-theme"
+version = "0.1.0"
+edition.workspace = true
+description = "The gen 3's customizable home screen themes: nestlocal's Lua themes, drawn in nlclient's GPU context through the theme preload"
+
+[lib]
+name = "nestlocal_theme"
+crate-type = ["cdylib"]
+
+[features]
+default = ["lua51"]
+# PUC Lua 5.1 for host tests; the unit's build (platform/common/theme) takes
+# LuaJIT, for animated themes.
+lua51 = ["mlua/lua51"]
+luajit = ["mlua/luajit"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# client-ng's GPU painter: femtovg on GLES2, through nlclient's own context.
+femtovg = { version = "0.27", default-features = false, features = ["textlayout", "image-loading"] }
+fontdue = "0.9"
+glow = "0.18"
+# femtovg decodes images through this; without its formats it decodes none.
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+mlua = { version = "0.12", features = ["vendored"] }
+png = "0.17"
+serde_json = "1"
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
