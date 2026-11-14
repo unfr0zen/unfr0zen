@@ -15,24 +15,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::fields;
-use crate::json::{num, Fields};
+use crate::json::Fields;
 use crate::logf;
+use crate::schedule::{day_bit, from_bucket, half_degree, to_bucket, MINUTES_PER_DAY};
+pub use crate::schedule::{Mode, Transition, PER_DAY};
 
 /// The Schedules attribute, the one AtomicRequest takes.
 pub const SCHEDULES: u32 = 0x0051;
 pub const NUMBER_OF_SCHEDULES: u8 = 4;
 /// Transitions in one schedule; each may cover several days.
 pub const TRANSITIONS: u8 = 56;
-/// Transitions on one day, as the unit's schedule screen fits them.
-pub const PER_DAY: u8 = 8;
 /// The longest atomic write a client is given, ms.
 pub const MAX_TIMEOUT_MS: u16 = 30_000;
 
 /// ScheduleDayOfWeekBitmap's Away: no away days here.
 const AWAY: u8 = 0x80;
-const MINUTES_PER_DAY: u16 = 1440;
-/// As commands.rs marks the owner's own changes.
-const TOUCHED_BY_LOCAL: i64 = 4;
 
 /// Interaction model status codes, as AtomicResponse carries them.
 pub mod status {
@@ -46,44 +43,6 @@ pub mod status {
 }
 
 pub const INVALID_COMMAND: u8 = 0x85;
-
-/// A schedule's system mode: the unit's schedule_mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Mode {
-    Heat,
-    Cool,
-    /// The unit's RANGE: a low and a high.
-    Auto,
-}
-
-impl Mode {
-    fn nest(self) -> &'static str {
-        match self {
-            Mode::Heat => "HEAT",
-            Mode::Cool => "COOL",
-            Mode::Auto => "RANGE",
-        }
-    }
-
-    fn from_nest(s: &str) -> Option<Self> {
-        match s {
-            "HEAT" => Some(Mode::Heat),
-            "COOL" => Some(Mode::Cool),
-            "RANGE" => Some(Mode::Auto),
-            _ => None,
-        }
-    }
-}
-
-/// One transition: from `minutes` after local midnight on `days` (Matter's
-/// day bits, Sunday 0x1), the setpoints. Temperatures in 0.01 °C.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Transition {
-    pub days: u8,
-    pub minutes: u16,
-    pub heat: Option<i16>,
-    pub cool: Option<i16>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Schedule {
@@ -127,113 +86,6 @@ pub enum Write {
 
 /// Who holds an atomic write: fabric index and node id.
 pub type Owner = (u8, u64);
-
-/// The unit's Nest day (0, Monday, to 6) as Matter's day bit.
-pub fn day_bit(day: usize) -> u8 {
-    1 << ((day + 1) % 7)
-}
-
-fn centi(celsius: f64) -> i16 {
-    (celsius * 100.0).round() as i16
-}
-
-/// To the unit's half degrees.
-fn half_degree(centi: i16) -> i16 {
-    ((f64::from(centi) / 50.0).round() * 50.0) as i16
-}
-
-fn celsius(centi: i16) -> Value {
-    num(f64::from(centi) / 100.0)
-}
-
-/// A bucket entry as a transition on no day yet.
-fn entry_transition(e: &Value) -> Option<Transition> {
-    if e.get("entry_type").and_then(Value::as_str).is_some_and(|t| t != "setpoint") {
-        return None;
-    }
-    let minutes = (e.get("time")?.as_f64()? / 60.0).floor();
-    if !(0.0..f64::from(MINUTES_PER_DAY)).contains(&minutes) {
-        return None;
-    }
-    let temp = |key: &str| e.get(key).and_then(Value::as_f64).map(centi);
-    let (heat, cool) = match Mode::from_nest(e.get("type")?.as_str()?)? {
-        Mode::Heat => (Some(temp("temp")?), None),
-        Mode::Cool => (None, Some(temp("temp")?)),
-        Mode::Auto => (Some(temp("temp-min")?), Some(temp("temp-max")?)),
-    };
-    Some(Transition { days: 0, minutes: minutes as u16, heat, cool })
-}
-
-/// The schedule bucket as one schedule's mode and transitions, a transition
-/// for each time and setpoint with every day that has it.
-pub fn from_bucket(bucket: &Fields) -> Option<(Mode, Vec<Transition>)> {
-    let mode = bucket.get("schedule_mode").and_then(Value::as_str).and_then(Mode::from_nest).unwrap_or(Mode::Heat);
-    let days = bucket.get("days")?.as_object()?;
-    let mut transitions: Vec<Transition> = Vec::new();
-    for day in 0..7 {
-        let Some(entries) = days.get(&day.to_string()).and_then(Value::as_object) else { continue };
-        for t in entries.values().filter_map(entry_transition) {
-            match transitions.iter_mut().find(|o| (o.minutes, o.heat, o.cool) == (t.minutes, t.heat, t.cool)) {
-                Some(o) => o.days |= day_bit(day),
-                None => transitions.push(Transition { days: day_bit(day), ..t }),
-            }
-        }
-    }
-    transitions.sort_by_key(|t| (t.minutes, t.heat, t.cool));
-    Some((mode, transitions))
-}
-
-fn new_entry(mode: Mode, t: &Transition, now: i64) -> Value {
-    let mut e = fields! {
-        "entry_type" => "setpoint",
-        "time" => num(f64::from(t.minutes) * 60.0),
-        "touched_at" => num(now as f64),
-        "touched_by" => num(TOUCHED_BY_LOCAL as f64),
-        "touched_tzo" => num(0.0),
-        "type" => mode.nest(),
-    };
-    match mode {
-        Mode::Heat => {
-            e.insert("temp".into(), celsius(t.heat.unwrap_or_default()));
-        }
-        Mode::Cool => {
-            e.insert("temp".into(), celsius(t.cool.unwrap_or_default()));
-        }
-        Mode::Auto => {
-            e.insert("temp-min".into(), celsius(t.heat.unwrap_or_default()));
-            e.insert("temp-max".into(), celsius(t.cool.unwrap_or_default()));
-        }
-    }
-    Value::Object(e)
-}
-
-/// The schedule bucket's fields for a schedule: every day's entries, the
-/// ones it already had kept as they were (their touched_ marks with them).
-pub fn to_bucket(mode: Mode, transitions: &[Transition], current: Option<&Fields>, now: i64) -> Fields {
-    let old_days = current.and_then(|b| b.get("days")).and_then(Value::as_object);
-    let mut days = Fields::new();
-    for day in 0..7 {
-        let mut mine: Vec<&Transition> = transitions.iter().filter(|t| t.days & day_bit(day) != 0).collect();
-        mine.sort_by_key(|t| t.minutes);
-        let old: Vec<&Value> = old_days
-            .and_then(|d| d.get(&day.to_string()))
-            .and_then(Value::as_object)
-            .map(|o| o.values().collect())
-            .unwrap_or_default();
-        let mut entries = Fields::new();
-        for (i, t) in mine.into_iter().enumerate() {
-            let want = Transition { days: 0, ..t.clone() };
-            let kept = old.iter().find(|e| {
-                e.get("type").and_then(Value::as_str) == Some(mode.nest())
-                    && entry_transition(e).as_ref() == Some(&want)
-            });
-            let entry = kept.map_or_else(|| new_entry(mode, t, now), |e| (*e).clone());
-            entries.insert(i.to_string(), entry);
-        }
-        days.insert(day.to_string(), Value::Object(entries));
-    }
-    fields! {"days" => Value::Object(days), "schedule_mode" => mode.nest()}
-}
 
 /// A pending list as the unit would keep it: setpoints to its half degrees.
 fn normalized(mut schedules: Vec<Schedule>) -> Vec<Schedule> {
@@ -635,14 +487,20 @@ mod tests {
     fn new_transitions_become_entries_by_day_in_time_order() {
         let b = bucket();
         let back = to_bucket(Mode::Heat, &[heat(TUE | SUN, 1200, 2050), heat(TUE, 360, 1900)], Some(&b), 42);
+        // Each day opens with a continuation: no day here starts at midnight.
         let tue = &back["days"]["1"];
-        assert_eq!((tue["0"]["time"].clone(), tue["0"]["temp"].clone()), (json!(21600), json!(19)));
         assert_eq!(
-            (tue["1"]["time"].clone(), tue["1"]["temp"].clone(), tue["1"]["touched_by"].clone()),
+            (tue["0"]["entry_type"].clone(), tue["0"]["time"].clone(), tue["0"]["temp"].clone()),
+            (json!("continuation"), json!(0), json!(20.5))
+        );
+        assert_eq!((tue["1"]["time"].clone(), tue["1"]["temp"].clone()), (json!(21600), json!(19)));
+        assert_eq!(
+            (tue["2"]["time"].clone(), tue["2"]["temp"].clone(), tue["2"]["touched_by"].clone()),
             (json!(72000), json!(20.5), json!(4))
         );
-        assert_eq!(back["days"]["6"]["0"]["time"], json!(72000));
-        assert_eq!(back["days"]["0"], json!({}));
+        assert_eq!(back["days"]["6"]["1"]["time"], json!(72000));
+        let mon = back["days"]["0"].as_object().unwrap();
+        assert_eq!((mon.len(), mon["0"]["entry_type"].clone()), (1, json!("continuation")), "an empty day");
     }
 
     #[test]
