@@ -148,7 +148,7 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
         "payload_address":address,"payload_offset":offset,"payload_size":linked.bytes.len(),"entry":linked.entry,
         "symbols":linked.symbols,"native_api":discovery.native_api,"discovery":discovery,
         "image":"/nestlabs/share/images/G_unfr0zen_192px.png","runtime_directory":"/var/run/unfr0zen","wheel_trace":false,
-        "handover":handover,"swap_call":discovery.anchors.get("swap_call_slot"),"settings_menu":{"address":menu_address,"file_offset":menu_offset,"original":menu_names,"unfr0zen_index":1}
+        "handover":handover,"dial":discovery.dial,"swap_call":discovery.anchors.get("swap_call_slot"),"settings_menu":{"address":menu_address,"file_offset":menu_offset,"original":menu_names,"unfr0zen_index":1}
     });
     let journal = Patch::journal(source, &output)?;
     if Patch::parse(&journal)?.apply(source, false)? != output {

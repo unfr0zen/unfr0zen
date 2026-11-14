@@ -88,6 +88,15 @@ nlclient leaves its pid in `/var/run/unfr0zen/keeper.pid` (kind 2: and its
 globals) at its first bucket commit or click on this screen; a launcher
 whose nlclient is not that pid stops nlclient instead.
 
+## The dial's theme
+
+With customizable themes installed (gen 3), nestlocal's options carry
+`-themes` and this screen offers a Themes page: its choices are
+`/var/run/unfr0zen/theme.catalog` (`id<TAB>label` lines), the current one
+`theme.status`, and a choice is written to `theme.request` for nestlocal. The
+theme itself is drawn in nlclient's own GPU context by a preloaded library
+(`platform/common/theme`); the screen patch does not touch the dial.
+
 ## Gen 2 external temperature input
 
 Selecting external temperature on j49 enables the native RCS input and
