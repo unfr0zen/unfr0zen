@@ -684,7 +684,10 @@ impl Painter for GpuPainter<'_> {
         let (a0, a1) = (from - FRAC_PI_2, to - FRAC_PI_2);
         let mut path = Shape::new();
         path.arc(x, y, r, a0, a1, if a1 >= a0 { Solidity::Hole } else { Solidity::Solid });
-        self.stroke(&path, Paint::color(rgba(color)).with_line_width(width).with_line_cap(LineCap::Butt), color);
+        let mut paint = Paint::color(rgba(color)).with_line_width(width).with_line_cap(LineCap::Butt);
+        // Less than a turn, no wider than its radius: never over a pixel twice.
+        if (to - from).abs() < std::f32::consts::TAU && width <= r { paint.set_stencil_strokes(false); }
+        self.stroke(&path, paint, color);
     }
 
     fn gradient_arc(&mut self, x: f32, y: f32, r: f32, from: f32, to: f32, start: Color, end: Color, width: f32) {
@@ -707,8 +710,10 @@ impl Painter for GpuPainter<'_> {
             let lo = a0.min(a1) - 0.3_f32.to_radians();
             let hi = a0.max(a1) + 0.3_f32.to_radians();
             path.arc(x, y, r, lo - FRAC_PI_2, hi - FRAC_PI_2, Solidity::Hole);
-            let paint = Paint::linear_gradient(x0, y0, x1, y1, rgba(color(t0)), rgba(color(t1)))
+            let mut paint = Paint::linear_gradient(x0, y0, x1, y1, rgba(color(t0)), rgba(color(t1)))
                 .with_line_width(width).with_line_cap(LineCap::Butt);
+            // A sixth of a turn at most: one pass, as for arc.
+            if width <= r { paint.set_stencil_strokes(false); }
             self.stroke(&path, paint, Color { a: start.a.min(end.a), ..Color::WHITE });
         }
     }
@@ -730,7 +735,10 @@ impl Painter for GpuPainter<'_> {
         path.move_to(x1, y1);
         path.line_to(x2, y2);
         let cap = if round { LineCap::Round } else { LineCap::Butt };
-        self.stroke(&path, Paint::color(rgba(color)).with_line_width(width).with_line_cap(cap), color);
+        // One segment never crosses itself.
+        let mut paint = Paint::color(rgba(color)).with_line_width(width).with_line_cap(cap);
+        paint.set_stencil_strokes(false);
+        self.stroke(&path, paint, color);
     }
 
     fn lines(&mut self, segments: &[[f32; 4]], color: Color, width: f32) {

@@ -10,8 +10,9 @@
 # libwakefilter.so (platform/common/wakefilter), which the app installs beside
 # nestlocal for Matter, builds here too, into build/wakefilter, and so does
 # liblocalcloud.so (platform/common/localcloud), preloaded into nlclient
-# beside nestlocal, into build/localcloud. Run inside the
-# build image, with the repository mounted at its host path.
+# beside nestlocal, into build/localcloud, and what draws customizable themes
+# on the gen 3 (platform/common/theme) into build/theme. Run inside the build
+# image, with the repository mounted at its host path.
 set -eu
 thread_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
 cd "$thread_root"
@@ -22,6 +23,7 @@ nestlocal_target_dir=${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}
 mkdir -p build/thread
 sh platform/common/wakefilter/build.sh build/wakefilter
 sh platform/common/localcloud/build.sh build/localcloud
+sh platform/common/theme/build.sh build/theme
 # For the Cortex-A8 (the gen 2's; the gen 3's A9 runs it too). A
 # fixed-address executable, bound lazily: the gen 2's glibc 2.19 loader
 # crashes binding a Rust binary now, and its 2.6.37 kernel maps a PIE among

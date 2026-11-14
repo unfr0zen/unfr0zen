@@ -11,7 +11,8 @@
 //! ```
 //!
 //! A theme not animating can ask for its next frame later with
-//! `gfx:wake(seconds)`.
+//! `gfx:wake(seconds)`; one showing `ui.clock.second` asks for it so, since
+//! the second changing alone draws no frame.
 //!
 //! Lua runs sandboxed: the table, string, math and utf8 libraries, `log`,
 //! and a `require` that only loads `.lua` files of the theme, or of the themes

@@ -93,3 +93,9 @@ ENV CFLAGS_x86_64_unknown_linux_gnu="-isystem /opt/libudev" \
     SDKROOT=/opt/MacOSX.sdk \
     MACOSX_DEPLOYMENT_TARGET=13.0 \
     CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-Wl,-headerpad,0x4000"
+# The theme library's LuaJIT (platform/common/theme/build.sh) links with the ARM
+# GNU toolchain's libgcc; on arm64 hosts its 32-bit build tools run under
+# qemu-i386.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user \
+    && rm -rf /var/lib/apt/lists/*

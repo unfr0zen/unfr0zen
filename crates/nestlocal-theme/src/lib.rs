@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CString};
 use std::path::Path;
 use std::time::Instant;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use engine::{display::Geometry, gpu::{quads::Quads, render::Renderer}, theme::{Theme, Ui, Clock, ThermostatView}};
 use serde_json::Value;
 
@@ -36,12 +36,24 @@ static HOME_REVISION: AtomicU64 = AtomicU64::new(0);
 /// enabled the stencil test since last asked: it does for concave fills and
 /// overlapping translucent strokes, which nlclient's framebuffer, without a
 /// stencil, draws as their bounding boxes.
+/// Only enables while the frame's own framebuffer (SCREEN) is bound count:
+/// layers and cached shapes draw into textures that have a stencil.
 static GL_ENABLE: AtomicUsize = AtomicUsize::new(0);
+static GL_GET_INTEGERV: AtomicUsize = AtomicUsize::new(0);
+static SCREEN: AtomicU32 = AtomicU32::new(0);
 static STENCIL_USED: AtomicBool = AtomicBool::new(false);
 const GL_STENCIL_TEST: u32 = 0x0b90;
+const GL_FRAMEBUFFER_BINDING: u32 = 0x8ca6;
 
 unsafe extern "C" fn enable(cap: u32) {
-    if cap == GL_STENCIL_TEST { STENCIL_USED.store(true, Ordering::Relaxed); }
+    if cap == GL_STENCIL_TEST {
+        let get = GL_GET_INTEGERV.load(Ordering::Relaxed);
+        let mut bound = 0i32;
+        if get != 0 {
+            std::mem::transmute::<usize, unsafe extern "C" fn(u32, *mut i32)>(get)(GL_FRAMEBUFFER_BINDING, &mut bound);
+        }
+        if get == 0 || bound as u32 == SCREEN.load(Ordering::Relaxed) { STENCIL_USED.store(true, Ordering::Relaxed); }
+    }
     let real = std::mem::transmute::<usize, unsafe extern "C" fn(u32)>(GL_ENABLE.load(Ordering::Relaxed));
     real(cap);
 }
@@ -127,6 +139,7 @@ impl Engine {
         let femtovg_address = |name: &str| {
             let real = address(name);
             if name != "glEnable" || real.is_null() { return real; }
+            GL_GET_INTEGERV.store(address("glGetIntegerv") as usize, Ordering::Relaxed);
             GL_ENABLE.store(real as usize, Ordering::Relaxed);
             enable as *const c_void
         };
@@ -177,7 +190,9 @@ impl Engine {
         ui.changed_target = self.motion.target;
         ui.changed_screen = self.motion.screen;
         ui.turned_target = self.motion.turned.unwrap_or(-100.0);
-        let state = Ui { now: 0.0, ..ui.clone() };
+        // The second alone changes no frame: a theme showing it wakes for it.
+        let mut state = Ui { now: 0.0, ..ui.clone() };
+        state.clock.second = 0;
         let decoded = self.renderer.take_decoded();
         if self.retained && !self.animating && !decoded && self.previous.as_ref() == Some(&state)
             && self.wake.is_none_or(|wake| now < wake) {
@@ -221,6 +236,13 @@ impl Engine {
         }
         if image { self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into()) } else { Ok(1) }
     }
+
+    /// Seconds until the theme needs another frame: 0 while it moves, the
+    /// time it woke for, or infinite while it stands still.
+    fn next(&self) -> f32 {
+        if self.animating { return 0.0; }
+        self.wake.map_or(f32::INFINITY, |wake| (wake - self.started.elapsed().as_secs_f64()).max(0.0) as f32)
+    }
 }
 /// Native wheel notification, consumed by the GL thread on its next frame.
 #[no_mangle]
@@ -234,12 +256,20 @@ pub extern "C" fn nestlocal_theme_home() {
     HOME_REVISION.fetch_add(1, Ordering::Release);
 }
 
+/// When the theme drawn last needs its next frame (Engine::next); 0 before
+/// the first. Called only on nlclient's GL thread, after a draw.
+#[no_mangle]
+pub extern "C" fn nestlocal_theme_next() -> f32 {
+    ENGINE.with(|slot| slot.try_borrow().ok().and_then(|engine| engine.as_ref().map(Engine::next))).unwrap_or(0.0)
+}
+
 /// Called only on nlclient's GL thread, with its current theme framebuffer bound.
 ///
 /// # Safety
 /// `loader` must return valid GLES2 entry points for the current context.
 #[no_mangle]
 pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, image: u32, target: f32) -> u32 {
+    SCREEN.store(framebuffer, Ordering::Relaxed);
     let result = std::panic::catch_unwind(|| ENGINE.with(|slot| {
         let mut engine = slot.borrow_mut();
         if engine.is_none() { *engine = Some(Engine::new(loader, framebuffer)?); }
