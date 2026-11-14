@@ -339,6 +339,12 @@ impl Bridge {
                 Ok(Some(("schedule".into(), fields! {"days" => Value::Object(days)})))
             }
 
+            // The days given replace those days, as schedule.rs reads them.
+            "schedule" => {
+                let current = self.store.get(&format!("schedule.{}", self.serial)).map(|o| o.value);
+                Ok(Some(("schedule".into(), crate::schedule::from_json(arg, current.as_ref(), now)?)))
+            }
+
             _ => Err("unknown command".into()),
         }
     }
@@ -675,6 +681,30 @@ mod tests {
         assert_eq!(field("hot_water_schedule", "ON", "hot_water_mode"), json!("schedule"));
         assert_eq!(field("hot_water_schedule", "OFF", "hot_water_mode"), json!("off"));
         assert!(b.fields("hot_water_schedule", "maybe").is_err());
+    }
+
+    #[test]
+    fn a_schedule_replaces_the_days_it_gives() {
+        let b = test_bridge();
+        let entry =
+            |time: i64, temp: f64| json!({"entry_type": "setpoint", "temp": temp, "time": time, "type": "HEAT"});
+        let days: serde_json::Map<_, _> = (0..7).map(|d| (d.to_string(), json!({"0": entry(0, 18.0)}))).collect();
+        b.store.merge("schedule.S", &fields! {"days" => Value::Object(days), "schedule_mode" => "HEAT"}, 0, 0, true);
+        b.apply("mqtt", "schedule", r#"{"days": {"monday": [{"time": "07:00", "temperature": 21}]}}"#).unwrap();
+        let s = b.store.get("schedule.S").unwrap().value;
+        assert_eq!(
+            (s["days"]["0"]["0"]["entry_type"].clone(), s["days"]["0"]["0"]["temp"].clone()),
+            (json!("continuation"), json!(18)),
+            "Sunday's 18 °C until 07:00"
+        );
+        assert_eq!(
+            (s["days"]["0"]["1"]["time"].clone(), s["days"]["0"]["1"]["temp"].clone()),
+            (json!(25200), json!(21))
+        );
+        assert_eq!(s["days"]["1"]["0"]["temp"], json!(18), "Tuesday as it was");
+        assert!(b
+            .apply("mqtt", "schedule", r#"{"days": {"monday": [{"time": "07:00", "temperature": 50}]}}"#)
+            .is_err());
     }
 
     #[test]
