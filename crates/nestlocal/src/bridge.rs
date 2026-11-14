@@ -9,7 +9,10 @@
 //!                                      (retained, will)
 //!   <prefix>/<serial>/state            the computed state (retained)
 //!   <prefix>/<serial>/raw/<bucket>     each bucket, whole (retained)
+//!   <prefix>/<serial>/schedule         the schedule: its mode and each day's
+//!                                      transitions (retained, schedule.rs)
 //!   <prefix>/<serial>/set/<command>    Home Assistant's commands
+//!   <prefix>/<serial>/set/schedule     the days given replace those days
 //!   <prefix>/<serial>/set/raw/<bucket> merge a JSON object into a bucket
 //!                                      (anything the entities don't cover)
 //!   <prefix>/<serial>/update           unfr0zen's installed and latest
@@ -304,6 +307,11 @@ impl Bridge {
     fn publish_raw(&self, o: &Object) {
         let typ = o.key.split_once('.').map_or(o.key.as_str(), |(t, _)| t);
         self.publish(&format!("{}/raw/{typ}", self.base), true, Value::Object(o.value.clone()).to_string().as_bytes());
+        if typ == "schedule" {
+            if let Some(schedule) = crate::schedule::to_json(&o.value) {
+                self.publish(&format!("{}/schedule", self.base), true, schedule.to_string().as_bytes());
+            }
+        }
     }
 
     /// Buckets of this unit, by type: device, shared, ... With
