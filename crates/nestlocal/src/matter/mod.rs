@@ -727,7 +727,7 @@ struct Addresses {
     ipv6: Vec<std::net::Ipv6Addr>,
 }
 
-/// The first interface with an IPv6 link-local address, and its addresses.
+/// The interface to announce on (link_local), and its addresses.
 fn addresses() -> Option<Addresses> {
     let (name, index, ipv6) = link_local()?;
     let ipv4 = if_addrs::get_if_addrs().unwrap_or_default().into_iter()
@@ -740,7 +740,7 @@ fn addresses() -> Option<Addresses> {
     Some(Addresses { name, index, ipv4, ipv6 })
 }
 
-/// The first interface with an IPv6 link-local address: its name, index and
+/// The interface with an IPv6 link-local address, one with IPv4 too first: its name, index and
 /// lasting IPv6 addresses (not the temporary, deprecated or still tentative
 /// ones). From the kernel's own list: if_addrs leaves link-local addresses
 /// out, and on a home network they may be the only ones there are.
@@ -757,7 +757,16 @@ fn link_local() -> Option<(String, u32, Vec<std::net::Ipv6Addr>)> {
         let name = *f.get(5)?;
         (flags & PASSING == 0).then_some((std::net::Ipv6Addr::from(address), index, scope, name))
     }).collect();
-    let &(_, index, _, name) = rows.iter().find(|(_, _, scope, name)| *scope == 0x20 && *name != "lo")?;
+    // A Heat Link unit lists wpan0 (its 802.15.4 radio, link-local only)
+    // before wlan0, and mDNS sent there never reaches a controller: prefer an
+    // interface that also has an IPv4 address, as Wi-Fi does.
+    let with_ipv4: Vec<String> = if_addrs::get_if_addrs().unwrap_or_default().into_iter()
+        .filter(|i| matches!(i.addr, if_addrs::IfAddr::V4(_)))
+        .map(|i| i.name)
+        .collect();
+    let link_local = |(_, _, scope, name): &&(std::net::Ipv6Addr, u32, u32, &str)| *scope == 0x20 && *name != "lo";
+    let &(_, index, _, name) = rows.iter().filter(link_local).find(|r| with_ipv4.iter().any(|n| n == r.3))
+        .or_else(|| rows.iter().find(link_local))?;
     let addresses = rows.iter().filter(|r| r.3 == name).map(|r| r.0).collect();
     Some((name.to_string(), index, addresses))
 }
