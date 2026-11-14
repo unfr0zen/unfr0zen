@@ -361,8 +361,27 @@ fn preloads(root: &Path, out: &Path) {
 }
 
 /// What draws customizable themes on the gen 3 (platform/common/theme): the
-/// library preloaded into nlclient and nestlocal's theme library it loads.
+/// library preloaded into nlclient and nestlocal's theme library it loads;
+/// and the Lua themes (crates/nestlocal/themes), listed in themes.rs.
 fn theme(root: &Path, out: &Path) {
+    let themes = root.join("crates/nestlocal/themes");
+    println!("cargo:rerun-if-changed={}", themes.display());
+    let (mut files, mut dirs) = (Vec::new(), vec![themes.clone()]);
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            println!("cargo:rerun-if-changed={}", path.display());
+            if path.is_dir() { dirs.push(path) } else { files.push(path) }
+        }
+    }
+    files.sort();
+    let list: String = files.iter().map(|path| {
+        // The name on the unit, whatever the build host's separator.
+        let name = path.strip_prefix(&themes).unwrap().components()
+            .map(|part| part.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join("/");
+        format!("({name:?}, include_bytes!({:?}).as_slice()),", path.display().to_string())
+    }).collect();
+    fs::write(out.join("themes.rs"), format!("&[{list}]")).unwrap();
     for name in ["libunfr0zen-theme.so", "libnestlocal_theme.so"] {
         let library = root.join("build/theme").join(name);
         println!("cargo:rerun-if-changed={}", library.display());

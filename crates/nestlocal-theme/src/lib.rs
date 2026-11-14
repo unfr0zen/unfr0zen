@@ -1,6 +1,6 @@
 //! The gen 3's customizable home screen themes, drawn: nestlocal's Lua themes
-//! (crates/nestlocal/themes, which nestlocal unpacks under
-//! /var/run/unfr0zen/themes) in nlclient's own GLES2 context. The theme preload
+//! (crates/nestlocal/themes, which the patch installs under
+//! /media/scratch/.unfr0zen/themes) in nlclient's own GLES2 context. The theme preload
 //! (platform/common/theme) loads this library into nlclient and calls
 //! nestlocal_theme_draw for each frame of the dial; the theme, with the device
 //! and shared buckets, comes from nestlocal (theme.native.json), the live
@@ -164,7 +164,7 @@ impl Engine {
         if !theme_id(name) { return Err("unknown theme".into()); }
         let theme_changed = name != self.name;
         if theme_changed {
-            let theme = Theme::load(&Path::new("/var/run/unfr0zen/themes").join(name))?;
+            let theme = Theme::load(&Path::new("/media/scratch/.unfr0zen/themes").join(name))?;
             self.renderer.use_fonts(&theme.fonts)?;
             self.theme = Some(theme); self.name = name.into(); self.previous = None; self.stencil = false;
             eprintln!("THEME Lua theme={name}");

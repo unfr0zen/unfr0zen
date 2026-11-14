@@ -38,6 +38,11 @@ pub trait Volume {
     /// "uid:gid mode" of a directory; None if it is absent.
     fn directory(&mut self, name: &str) -> Result<Option<String>>;
     fn free_bytes(&mut self) -> Result<u64>;
+    /// Free bytes on the filesystem that holds `name`, which may be another
+    /// mounted under the volume (the gen 3's scratch).
+    fn free_bytes_at(&mut self, _name: &str) -> Result<u64> {
+        self.free_bytes()
+    }
     /// Whether a write needs free space before it lands, checked against
     /// free_bytes first. A volume patched in memory, which fails before
     /// anything reaches flash when its writes do not fit, needs no check.

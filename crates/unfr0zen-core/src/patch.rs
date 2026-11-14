@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
 use regex::Regex;
 
+use crate::diamond3::scratch;
 use crate::nestlocal::{self, Matter, Mqtt, Overlay, Pki};
 use crate::shell::{sha256_hex, Volume};
 use crate::{device, Device, Result};
@@ -561,6 +562,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
                        new_pki: &mut dyn FnMut() -> Result<Pki>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
+    // The gen 3 keeps unfr0zen's programs and data on its scratch volume.
+    let on_scratch = target == Device::Diamond3;
+    let moved = |name: &'static str| -> &'static str { if on_scratch { scratch::name(name) } else { name } };
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
     }
@@ -678,6 +682,14 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             }
         }
     }
+    if let Some(overlay) = overlay.as_mut().filter(|_| on_scratch) {
+        for (name, _, _) in &mut overlay.files {
+            *name = scratch::name(name).to_string();
+        }
+        for (name, _) in &mut overlay.directories {
+            *name = scratch::directory(name).to_string();
+        }
+    }
     let mut directories = Vec::new();
     if let Some(overlay) = &overlay {
         fetch(volume, &mut tree, &mut originals, &STALE_SECRETS, false, false)?;
@@ -717,11 +729,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     fetch(volume, &mut tree, &mut originals, &[NESTLABS], false, true)?;
     fetch(volume, &mut tree, &mut originals, &[LOCAL_CLOUD], false, false)?;
     // Themes' libraries come in with nestlocal's overlay, and go without it.
-    fetch(volume, &mut tree, &mut originals, &[THEME_PRELOAD, THEME_LIBRARY], false, false)?;
+    fetch(volume, &mut tree, &mut originals, &[THEME_PRELOAD, moved(THEME_LIBRARY)], false, false)?;
     // Updates come through nestlocal: the engine stays with it.
-    fetch(volume, &mut tree, &mut originals, &[APPLY], false, false)?;
+    fetch(volume, &mut tree, &mut originals, &[moved(APPLY)], false, false)?;
     if overlay.is_some() && !options.apply.is_empty() {
-        tree.insert(APPLY.into(), (options.apply.clone(), 0o755));
+        tree.insert(moved(APPLY).into(), (options.apply.clone(), 0o755));
     }
     if overlay.is_some() {
         if options.local_cloud.is_empty() {
@@ -753,6 +765,11 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     if target == Device::J49 && options.dark_theme && screen.is_none() {
         return device("j49 dark theme requires nlclient");
     }
+    // The stock nlclient's backup, and where an older patch left it: the gen
+    // 3's moves from the root volume to scratch (migrate_backups).
+    let original_to = moved(crate::nlclient::ORIGINAL);
+    fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ORIGINAL, original_to], false, false)?;
+    let original_at = if originals.get(original_to).is_some_and(Option::is_some) { original_to } else { crate::nlclient::ORIGINAL };
     let mut screen_patch = None;
     if let Some((owner, mode, sha)) = &screen {
         if !owner.starts_with("0:") || mode & 0o111 == 0 {
@@ -768,10 +785,9 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         // is the source, if it builds to exactly the executable on the unit.
         let mut rebuilt = None;
         if previous.as_ref().is_none_or(|p| p.output_sha != *sha && p.stock_sha != *sha) {
-            fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ORIGINAL], false, false)?;
-            if let Some((_, _, backup_sha)) = originals.get(crate::nlclient::ORIGINAL).and_then(Option::as_ref)
+            if let Some((_, _, backup_sha)) = originals.get(original_at).and_then(Option::as_ref)
                 .filter(|(_, _, backup_sha)| backup_sha != sha && previous.as_ref().is_none_or(|p| p.stock_sha == *backup_sha)).cloned() {
-                let (_, _, original) = volume.read(crate::nlclient::ORIGINAL)?
+                let (_, _, original) = volume.read(original_at)?
                     .ok_or_else(|| crate::Error::Device("nlclient original backup disappeared during inspection".into()))?;
                 if sha256_hex(&original) != backup_sha { return device("nlclient original backup changed during inspection"); }
                 let journal = if original.starts_with(b"\x7fELF") { build_screen(&original).ok() } else { None };
@@ -794,8 +810,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         if source.starts_with(b"\x7fELF") {
             // Preserve the stock executable once, including on devices patched
             // by older versions where only the undo journal was retained.
-            fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ORIGINAL], false, false)?;
-            if let Some((_, _, backup_sha)) = originals.get(crate::nlclient::ORIGINAL).and_then(Option::as_ref) {
+            if let Some((_, _, backup_sha)) = originals.get(original_at).and_then(Option::as_ref) {
                 if *backup_sha != sha256_hex(&source) {
                     return device("nlclient original backup does not match this firmware; leaving it untouched");
                 }
@@ -819,8 +834,8 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             tree.insert(crate::nlclient::ICON.into(), (crate::nlclient::ICON_BYTES.to_vec(), 0o644));
             tree.insert(crate::nlclient::GLYPH.into(), (crate::nlclient::GLYPH_BYTES.to_vec(), 0o644));
             tree.insert(crate::nlclient::VERSION.into(), (format!("unfr0zen {}\n", options.version).into_bytes(), 0o644));
-            if originals.get(crate::nlclient::ORIGINAL).is_some_and(Option::is_none) {
-                tree.insert(crate::nlclient::ORIGINAL.into(), (source, 0o600));
+            if originals.get(original_at).is_some_and(Option::is_none) {
+                tree.insert(original_to.into(), (source, 0o600));
             }
             directories.push(("etc/unfr0zen".into(), 0o755));
             screen_patch = Some(patch);
@@ -832,8 +847,32 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
             log::warn!("UNFR0ZEN screen skipped: nlclient is not an ELF executable");
         }
     } else { log::warn!("UNFR0ZEN screen skipped: nlclient is absent"); }
-    patch_connmand(volume, &mut tree, &mut originals, &mut directories, options.block_cloud)?;
+    patch_connmand(volume, &mut tree, &mut originals, &mut directories, options.block_cloud, on_scratch)?;
     patch_boot_artwork(volume, &mut tree, &mut originals, &mut directories)?;
+    // What moved to scratch leaves the root volume; backups are copied first.
+    let legacy: Vec<&str> = if on_scratch { scratch::MOVED.iter().map(|(root, _)| *root).collect() } else { Vec::new() };
+    if on_scratch {
+        let backups: Vec<&str> = scratch::MOVED.iter().filter(|(root, _)| root.starts_with("etc/unfr0zen/"))
+            .map(|(_, to)| *to).collect();
+        fetch(volume, &mut tree, &mut originals, &legacy, false, false)?;
+        fetch(volume, &mut tree, &mut originals, &backups, false, false)?;
+        migrate_backups(volume, &mut tree, &originals)?;
+        fetch(volume, &mut tree, &mut originals, &[scratch::MANIFEST], false, false)?;
+        let mut files: Vec<(&str, String)> = tree.iter().filter(|(name, _)| scratch::holds(name))
+            .map(|(name, (data, _))| (name.as_str(), sha256_hex(data))).collect();
+        // Backups on scratch already, which the run reads but does not write.
+        files.extend(backups.iter().filter(|name| !tree.contains_key(**name))
+            .filter_map(|name| originals.get(*name).cloned().flatten().map(|(_, _, sha)| (*name, sha))));
+        let manifest = scratch::manifest(files);
+        if !manifest.is_empty() {
+            tree.insert(scratch::MANIFEST.into(), (manifest, 0o644));
+        }
+        for name in scratch::directories(tree.keys().map(String::as_str)) {
+            if !directories.iter().any(|(have, _)| *have == name) {
+                directories.push((name, 0o755));
+            }
+        }
+    }
     let patch_screen = screen_patch.as_ref().is_some_and(|patch|
         screen.as_ref().unwrap().2 != patch.output_sha);
 
@@ -848,7 +887,8 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         }
     }
     let removals: Vec<&str> = STALE_SECRETS.iter().copied()
-        .chain([WAKE_FILTER, LOCAL_CLOUD, APPLY, THEME_PRELOAD, THEME_LIBRARY, crate::nlclient::theme::BINDINGS])
+        .chain([WAKE_FILTER, LOCAL_CLOUD, moved(APPLY), THEME_PRELOAD, moved(THEME_LIBRARY), crate::nlclient::theme::BINDINGS])
+        .chain(legacy.iter().copied())
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
     let mut folders = Vec::new();
     for (name, mode) in directories {
@@ -873,12 +913,13 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         changes.push(Change { name: crate::nlclient::BINARY.into(), action: "patch",
                               old: Some(screen_patch.as_ref().unwrap().stock_sha.clone()), new: Some(screen_patch.as_ref().unwrap().output_sha.clone()) });
     }
-    // Match the write order: backups, other files, staged nlclient, undo journal.
-    let mut sizes = Vec::new();
+    // Match the write order: backups, other files, staged nlclient, undo
+    // journal; the root volume's and scratch's apart.
+    let (mut sizes, mut scratch_sizes) = (Vec::new(), Vec::new());
     for (name, data, _, _) in writes.iter().filter(|(name, _, _, _)| is_boot_backup(name))
         .chain(writes.iter().filter(|(name, _, _, _)| !is_boot_backup(name) && name != crate::nlclient::JOURNAL)) {
         let old = if originals.get(name).is_some_and(Option::is_some) { volume.file_size(name)? } else { 0 };
-        sizes.push((data.len() as u64, old));
+        if scratch::holds(name) { &mut scratch_sizes } else { &mut sizes }.push((data.len() as u64, old));
     }
     if patch_screen {
         let patch = screen_patch.as_ref().unwrap();
@@ -888,12 +929,17 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         let old = if originals.get(name).is_some_and(Option::is_some) { volume.file_size(name)? } else { 0 };
         sizes.push((data.len() as u64, old));
     }
-    let needed = staging_space(&sizes) + (1 << 20);
-    if (!writes.is_empty() || patch_screen) && volume.checks_space() {
-        let available = volume.free_bytes()?;
-        log::info!("Root volume free space: {available} bytes; peak staging requirement: {needed} bytes");
-        if available < needed {
-            return device(format!("the volume has too little free space: {available} bytes available, {needed} bytes required including staging and reserve"));
+    if volume.checks_space() {
+        for (label, at, sizes) in [("Root volume", "", &sizes), ("Scratch", scratch::DIR, &scratch_sizes)] {
+            if sizes.is_empty() {
+                continue;
+            }
+            let needed = staging_space(sizes) + (1 << 20);
+            let available = volume.free_bytes_at(at)?;
+            log::info!("{label} free space: {available} bytes; peak staging requirement: {needed} bytes");
+            if available < needed {
+                return device(format!("{label} has too little free space: {available} bytes available, {needed} bytes required including staging and reserve"));
+            }
         }
     }
     if dry_run || changes.is_empty() {
@@ -906,7 +952,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     // Boot originals must reach flash before any artwork or kernel replacement.
     for (name, data, owner, mode) in writes.iter().filter(|(name, _, _, _)| is_boot_backup(name)) {
-        check_staging_space(volume, data.len() as u64)?;
+        check_staging_space(volume, name, data.len() as u64)?;
         volume.write(name, data, owner, *mode)?;
         if volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data))) {
             return device(format!("{name}: boot artwork backup did not read back correctly from flash"));
@@ -914,15 +960,15 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     for (name, data, owner, mode) in &writes {
         if name != crate::nlclient::JOURNAL && !is_boot_backup(name) {
-            check_staging_space(volume, data.len() as u64)?;
+            check_staging_space(volume, name, data.len() as u64)?;
             volume.write(name, data, owner, *mode)?;
             // Confirm the full backup reached flash before replacing nlclient.
-            if name == crate::nlclient::ORIGINAL && volume.inspect(name)? !=
+            if name == original_to && volume.inspect(name)? !=
                 Some((owner.clone(), *mode, sha256_hex(data))) {
                 return device("nlclient original backup did not read back correctly from flash");
             }
             // The same for connmand, whose backup sorts before it.
-            if name == CONNMAND_ORIGINAL && volume.inspect(name)? !=
+            if name == moved(CONNMAND_ORIGINAL) && volume.inspect(name)? !=
                 Some((owner.clone(), *mode, sha256_hex(data))) {
                 return device("connmand original backup did not read back correctly from flash");
             }
@@ -933,13 +979,13 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     if patch_screen {
         let patch = screen_patch.as_ref().unwrap();
-        check_staging_space(volume, patch.stock_len.max(patch.output_len) as u64)?;
+        check_staging_space(volume, crate::nlclient::BINARY, patch.stock_len.max(patch.output_len) as u64)?;
         volume.patch_nlclient(patch)?;
     }
     // Keep the prior undo journal until the binary replacement succeeds.
     for (name, data, owner, mode) in &writes {
         if name == crate::nlclient::JOURNAL {
-            check_staging_space(volume, data.len() as u64)?;
+            check_staging_space(volume, name, data.len() as u64)?;
             volume.write(name, data, owner, *mode)?;
         }
     }
@@ -989,11 +1035,11 @@ fn staging_space(sizes: &[(u64, u64)]) -> u64 {
 }
 
 // UBIFS compression and garbage collection affect the space actually reclaimed.
-fn check_staging_space(volume: &mut impl Volume, size: u64) -> Result<()> {
+fn check_staging_space(volume: &mut impl Volume, name: &str, size: u64) -> Result<()> {
     if !volume.checks_space() {
         return Ok(());
     }
-    let available = volume.free_bytes()?;
+    let available = volume.free_bytes_at(name)?;
     let needed = size + (1 << 20);
     if available < needed {
         return device(format!("the volume has too little free space: {available} bytes available, {needed} bytes required including staging and reserve"));
@@ -1001,10 +1047,37 @@ fn check_staging_space(volume: &mut impl Volume, size: u64) -> Result<()> {
     Ok(())
 }
 
+/// Copies the stock backups an older patch kept on the gen 3's root volume to
+/// scratch, unless scratch has them: the copy is written and read back
+/// before the root volume's goes (with the other moved files). A backup on
+/// both that differs is left to the user.
+fn migrate_backups(volume: &mut impl Volume, tree: &mut Tree, originals: &Originals) -> Result<()> {
+    for &(root, to) in scratch::MOVED.iter().filter(|(root, _)| root.starts_with("etc/unfr0zen/")) {
+        let Some((_, mode, sha)) = originals.get(root).cloned().flatten() else { continue };
+        match originals.get(to).and_then(Option::as_ref) {
+            Some((_, _, scratch_sha)) if *scratch_sha != sha => {
+                return device(format!("{root} and {to} are different backups; leaving both untouched"));
+            }
+            Some(_) => {}
+            None if tree.contains_key(to) => {}
+            None => {
+                let (_, _, data) = volume.read(root)?.ok_or_else(|| crate::Error::Device(format!("{root} disappeared during inspection")))?;
+                if sha256_hex(&data) != sha {
+                    return device(format!("{root} changed during inspection"));
+                }
+                tree.insert(to.into(), (data, mode));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// connmand's internet check, as patch_check_url sets it, with the stock
-/// connmand kept once in etc/unfr0zen before it is first changed.
+/// connmand kept once in etc/unfr0zen (the gen 3's on scratch) before it is
+/// first changed.
 fn patch_connmand(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals,
-                  directories: &mut Vec<(String, u32)>, block_cloud: bool) -> Result<()> {
+                  directories: &mut Vec<(String, u32)>, block_cloud: bool, on_scratch: bool) -> Result<()> {
+    let backup = if on_scratch { scratch::name(CONNMAND_ORIGINAL) } else { CONNMAND_ORIGINAL };
     fetch(volume, tree, originals, &[CONNMAND], false, true)?;
     let Some((data, _)) = tree.get(CONNMAND) else { return Ok(()); };
     let mut stock = data.clone();
@@ -1012,15 +1085,16 @@ fn patch_connmand(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Ori
     let mut output = stock.clone();
     patch_check_url(&mut output, CONNMAND, block_cloud)?;
     if output != stock {
-        fetch(volume, tree, originals, &[CONNMAND_ORIGINAL], false, false)?;
-        match originals.get(CONNMAND_ORIGINAL).and_then(Option::as_ref) {
+        fetch(volume, tree, originals, &[CONNMAND_ORIGINAL, backup], false, false)?;
+        let at = if originals.get(backup).is_some_and(Option::is_some) { backup } else { CONNMAND_ORIGINAL };
+        match originals.get(at).and_then(Option::as_ref) {
             Some((_, _, sha)) if *sha != sha256_hex(&stock) => {
                 return device("connmand original backup does not match this firmware; leaving it untouched");
             }
             Some(_) => {}
             None => {
-                tree.insert(CONNMAND_ORIGINAL.into(), (stock, 0o600));
-                if !directories.iter().any(|(name, _)| name == "etc/unfr0zen") {
+                tree.insert(backup.into(), (stock, 0o600));
+                if !on_scratch && !directories.iter().any(|(name, _)| name == "etc/unfr0zen") {
                     directories.push(("etc/unfr0zen".into(), 0o755));
                 }
             }
@@ -1086,6 +1160,8 @@ mod tests {
         readback: Option<String>,
         /// A file whose write fails, as a full or failing flash would.
         failing: Option<&'static str>,
+        /// Free bytes on the gen 3's scratch, apart from the root volume's.
+        scratch_free: u64,
     }
 
     fn stock() -> Vec<(&'static str, u32, String)> {
@@ -1111,7 +1187,7 @@ mod tests {
             FakeVolume {
                 files: files.into_iter().map(|(n, m, t)| (n.to_string(), ("0:0".to_string(), m, t.into_bytes()))).collect(),
                 directories: BTreeMap::new(), free: 1 << 30, binary: "0 755".into(), commands: Vec::new(), readback: None,
-                failing: None,
+                failing: None, scratch_free: 1 << 30,
             }
         }
 
@@ -1132,6 +1208,9 @@ mod tests {
         }
         fn free_bytes(&mut self) -> Result<u64> {
             Ok(self.free)
+        }
+        fn free_bytes_at(&mut self, name: &str) -> Result<u64> {
+            Ok(if scratch::holds(name) { self.scratch_free } else { self.free })
         }
         fn shell_binary(&mut self) -> Result<String> {
             Ok(self.binary.clone())
@@ -1361,11 +1440,37 @@ mod tests {
         let mut volume = nestlocal_unit(Some(&pki));
         let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
         let changes = patch(&mut volume, &updates, false).unwrap();
-        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "create"));
-        assert_eq!((volume.files[APPLY].1, volume.files[APPLY].2.as_slice()), (0o755, &b"\x7fELF apply"[..]));
+        let engine = scratch::name(APPLY);
+        assert!(changes.iter().any(|c| c.name == engine && c.action == "create"));
+        assert_eq!((volume.files[engine].1, volume.files[engine].2.as_slice()), (0o755, &b"\x7fELF apply"[..]));
         // A host-patched unit (no engine in its bundle) loses one an earlier run left.
         let changes = patch(&mut volume, &Options { apply: Vec::new(), ..updates }, false).unwrap();
-        assert!(changes.iter().any(|c| c.name == APPLY && c.action == "remove"));
+        assert!(changes.iter().any(|c| c.name == engine && c.action == "remove"));
+    }
+
+    #[test]
+    fn the_gen_3_moves_nestlocal_and_the_update_engine_from_the_root_volume_to_scratch() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
+        patch(&mut volume, &updates, false).unwrap();
+        // Where an older patch left them.
+        for (root, on_scratch) in [("nestlabs/sbin/nestlocal", scratch::name("nestlabs/sbin/nestlocal")),
+                                   (APPLY, scratch::name(APPLY))] {
+            let file = volume.files.remove(on_scratch).unwrap();
+            volume.files.insert(root.into(), ("0:0".into(), 0o755, b"OLD".to_vec()));
+            assert_eq!(file.2, if root == APPLY { &b"\x7fELF apply"[..] } else { b"ARMV7" });
+        }
+        let changes = patch(&mut volume, &updates, false).unwrap();
+        for root in ["nestlabs/sbin/nestlocal", APPLY] {
+            assert!(changes.iter().any(|c| c.name == root && c.action == "remove"), "{root}");
+            assert!(!volume.files.contains_key(root), "{root}");
+            assert_eq!(volume.files[scratch::name(root)].1, 0o755, "{root}");
+        }
+        assert_eq!(volume.files[scratch::name("nestlabs/sbin/nestlocal")].2, b"ARMV7");
+        let manifest = volume.text(scratch::MANIFEST);
+        assert!(manifest.contains("  bin/nestlocal\n") && manifest.contains("  bin/unfr0zen-apply\n"), "{manifest}");
+        assert!(patch(&mut volume, &updates, false).unwrap().is_empty(), "a second run changes nothing");
     }
 
     #[test]
@@ -1400,13 +1505,14 @@ mod tests {
         assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -themes"));
         assert!(volume.text(NESTLABS).contains(NLCLIENT_START.2));
         assert_eq!(volume.files[THEME_PRELOAD].2, b"\x7fELF preload");
-        assert_eq!(volume.files[THEME_LIBRARY].2, b"\x7fELF library");
+        assert_eq!(volume.files[scratch::name(THEME_LIBRARY)].2, b"\x7fELF library");
+        assert!(!volume.files.contains_key(THEME_LIBRARY), "kept off the root volume");
         let bindings = &volume.files[crate::nlclient::theme::BINDINGS];
         assert_eq!((bindings.1, &bindings.2), (0o644, &crate::nlclient::theme::bindings(&stock_nlclient).unwrap()));
         assert!(names(&patch(&mut volume, &on, false).unwrap()).is_empty(), "a second run changes nothing");
         // Off: nlclient starts without the preload, unbound, and its libraries go.
         let changes = patch(&mut volume, &Options { theme: None, ..on.clone() }, false).unwrap();
-        for name in [THEME_PRELOAD, THEME_LIBRARY, crate::nlclient::theme::BINDINGS] {
+        for name in [THEME_PRELOAD, scratch::name(THEME_LIBRARY), crate::nlclient::theme::BINDINGS] {
             assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name}");
         }
         assert!(!volume.text(nestlocal::OPTIONS).contains("-themes"));
@@ -1551,7 +1657,9 @@ mod tests {
         let options = Options { doom: Some(doom), ..options() };
         patch(&mut volume, &options, false).unwrap();
         assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -doom"));
-        assert_eq!(volume.text("nestlabs/sbin/doom"), "DOOM");
+        assert_eq!(volume.text("media/scratch/.unfr0zen/doom/doom"), "DOOM");
+        assert!(!volume.files.contains_key("nestlabs/sbin/doom"));
+        assert_eq!(volume.directories["media/scratch/.unfr0zen/doom"], "0:0 755");
         patch(&mut volume, &Options { doom: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-doom"));
     }
@@ -2090,24 +2198,93 @@ mod tests {
     #[test]
     fn native_screen_backs_up_the_original_first_and_keeps_the_journal_last() {
         use crate::nlclient::{BINARY, GLYPH, ICON, JOURNAL, ORIGINAL};
+        let backup = crate::diamond3::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
         let journal = build.makes(&output);
         let mut volume = with_nlclient(build.stock());
         let changes = build.patch(&mut volume, &options(), true).unwrap();
-        for name in [BINARY, ORIGINAL, JOURNAL, ICON, GLYPH, "etc/unfr0zen/"] {
+        for name in [BINARY, backup, JOURNAL, ICON, GLYPH, "etc/unfr0zen/"] {
             assert!(names(&changes).contains(name), "{name}");
         }
         assert!(volume.commands.is_empty());
         build.patch(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.files[BINARY], ("0:0".into(), 0o755, output));
-        assert_eq!(volume.files[ORIGINAL], ("0:0".into(), 0o600, build.stock()));
+        assert_eq!(volume.files[backup], ("0:0".into(), 0o600, build.stock()));
         assert_eq!(volume.files[JOURNAL].2, journal);
-        assert!(position(&volume, ORIGINAL) < position(&volume, BINARY));
+        assert!(position(&volume, backup) < position(&volume, BINARY));
         assert!(position(&volume, BINARY) < position(&volume, JOURNAL));
         volume.commands.clear();
         assert!(build.patch(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
+    }
+
+    #[test]
+    fn the_gen_3_moves_its_backups_and_optional_files_from_the_root_volume_to_scratch() {
+        use crate::nlclient::{BINARY, ORIGINAL};
+        let (google, _) = CHECK_URLS;
+        let connmand = [&b"\x7fELF connmand\0"[..], google, b"%s"].concat();
+        let build = FakeBuild::new();
+        let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
+        build.makes(&output);
+        // A unit an older patch left with everything on its root volume.
+        let mut volume = with_nlclient(build.stock());
+        build.patch(&mut volume, &options(), false).unwrap();
+        let backup = volume.files.remove(scratch::name(ORIGINAL)).unwrap();
+        volume.files.insert(ORIGINAL.into(), backup.clone());
+        volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, connmand.clone()));
+        volume.files.insert(CONNMAND_ORIGINAL.into(), ("0:0".into(), 0o600, connmand.clone()));
+        volume.files.insert("nestlabs/sbin/doom".into(), ("0:0".into(), 0o755, b"OLD DOOM".to_vec()));
+        volume.files.insert("usr/share/doom/doom1.wad".into(), ("0:0".into(), 0o644, b"WAD".to_vec()));
+        volume.files.remove(scratch::MANIFEST);
+        volume.commands.clear();
+        let changes = build.patch(&mut volume, &options(), false).unwrap();
+        for name in [ORIGINAL, CONNMAND_ORIGINAL, "nestlabs/sbin/doom", "usr/share/doom/doom1.wad"] {
+            assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name}");
+            assert!(!volume.files.contains_key(name), "{name}");
+        }
+        assert_eq!(volume.files[scratch::name(ORIGINAL)], backup, "the backup keeps its contents and mode");
+        assert_eq!(volume.files[scratch::name(CONNMAND_ORIGINAL)].2, connmand);
+        // Each backup reaches scratch, read back, before its root copy goes.
+        let removed = |name: &str| volume.commands.iter().position(|c| *c == format!("rm {name}")).unwrap();
+        assert!(position(&volume, scratch::name(ORIGINAL)) < removed(ORIGINAL));
+        assert!(position(&volume, scratch::name(CONNMAND_ORIGINAL)) < removed(CONNMAND_ORIGINAL));
+        assert_eq!(volume.files[BINARY].2, output, "nlclient is left as it was");
+        let manifest = volume.text(scratch::MANIFEST);
+        assert_eq!(manifest, format!("{}  backup/connmand.original\n{}  backup/nlclient.original\n",
+                                     sha256_hex(&connmand), sha256_hex(&backup.2)));
+        assert_eq!(volume.directories[scratch::DIR], "0:0 755");
+        assert!(build.patch(&mut volume, &options(), false).unwrap().is_empty(), "a second run changes nothing");
+    }
+
+    #[test]
+    fn differing_backups_on_root_and_scratch_stop_the_patch_before_any_write() {
+        use crate::nlclient::ORIGINAL;
+        let build = FakeBuild::new();
+        build.makes(&[&build.stock()[..], b"screen"].concat());
+        let mut volume = with_nlclient(build.stock());
+        build.patch(&mut volume, &options(), false).unwrap();
+        volume.files.insert(ORIGINAL.into(), ("0:0".into(), 0o600, b"\x7fELF another stock".to_vec()));
+        volume.commands.clear();
+        let error = build.patch(&mut volume, &options(), false).unwrap_err().to_string();
+        assert!(error.contains("different backups"), "{error}");
+        assert!(volume.commands.is_empty());
+    }
+
+    #[test]
+    fn scratch_and_the_root_volume_each_need_room_for_their_own_writes() {
+        let build = FakeBuild::new();
+        build.makes(&[&build.stock()[..], b"screen"].concat());
+        let mut volume = with_nlclient(build.stock());
+        volume.scratch_free = 1000;
+        let error = build.patch(&mut volume, &options(), false).unwrap_err().to_string();
+        assert!(error.starts_with("Scratch has too little free space"), "{error}");
+        assert!(volume.commands.is_empty());
+        // Room on scratch, and on the root volume for its own writes alone.
+        volume.scratch_free = 1 << 30;
+        volume.free = (1 << 20) + (1 << 17);
+        build.patch(&mut volume, &options(), false).unwrap();
+        assert!(volume.files.contains_key(scratch::name(crate::nlclient::ORIGINAL)));
     }
 
     #[test]
@@ -2128,6 +2305,7 @@ mod tests {
     fn block_cloud_moves_the_internet_check_to_cloudflare_and_back() {
         use crate::nlclient::{BINARY, JOURNAL, Patch};
         let (google, cloudflare) = CHECK_URLS;
+        let backup = scratch::name(CONNMAND_ORIGINAL);
         let connmand = [&b"\x7fELF connmand\0"[..], google, b"%s"].concat();
         let build = FakeBuild::new();
         let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
@@ -2143,20 +2321,20 @@ mod tests {
             assert!(contains(data, cloudflare) && !contains(data, google), "{name}");
         }
         assert_eq!(volume.files[CONNMAND].2.len(), connmand.len());
-        assert_eq!(volume.files[CONNMAND_ORIGINAL], ("0:0".into(), 0o600, connmand.clone()));
-        assert!(position(&volume, CONNMAND_ORIGINAL) < position(&volume, CONNMAND));
+        assert_eq!(volume.files[backup], ("0:0".into(), 0o600, connmand.clone()));
+        assert!(position(&volume, backup) < position(&volume, CONNMAND));
         let journal = Patch::parse(&volume.files[JOURNAL].2).unwrap();
         assert_eq!(journal.apply(&volume.files[BINARY].2, true).unwrap(), build.stock());
         assert!(build.patch(&mut volume, &blocked, false).unwrap().is_empty());
         build.patch(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.files[CONNMAND].2, connmand);
-        assert_eq!(volume.files[CONNMAND_ORIGINAL].2, connmand);
+        assert_eq!(volume.files[backup].2, connmand);
         assert_eq!(volume.files[BINARY].2, output);
         // A backup of some other connmand is never overwritten, nor patched over.
-        volume.files.get_mut(CONNMAND_ORIGINAL).unwrap().2 = b"other connmand".to_vec();
+        volume.files.get_mut(backup).unwrap().2 = b"other connmand".to_vec();
         assert!(build.patch(&mut volume, &blocked, false).unwrap_err().to_string().contains("connmand original backup"));
         assert_eq!(volume.files[CONNMAND].2, connmand);
-        volume.files.remove(CONNMAND_ORIGINAL);
+        volume.files.remove(backup);
         // A connmand without the URL is left alone; one with it twice is refused.
         volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, b"\x7fELF connmand\0".to_vec()));
         build.patch(&mut volume, &blocked, false).unwrap();
@@ -2168,6 +2346,7 @@ mod tests {
     #[test]
     fn a_failed_nlclient_write_keeps_the_previous_journal() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
+        let backup = crate::diamond3::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let first = [&build.stock()[..], b"first screen"].concat();
         let old_journal = build.makes(&first);
@@ -2178,12 +2357,13 @@ mod tests {
         assert!(build.patch(&mut volume, &options(), false).unwrap_err().to_string().contains("no space left"));
         assert_eq!(volume.files[BINARY].2, first);
         assert_eq!(volume.files[JOURNAL].2, old_journal);
-        assert_eq!(volume.files[ORIGINAL].2, build.stock());
+        assert_eq!(volume.files[backup].2, build.stock());
     }
 
     #[test]
     fn a_failed_journal_write_is_rebuilt_from_the_original_on_the_next_run() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
+        let backup = crate::diamond3::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let first = [&build.stock()[..], b"first screen"].concat();
         let first_journal = build.makes(&first);
@@ -2207,8 +2387,8 @@ mod tests {
         volume.commands.clear();
         assert_eq!(names(&build.patch(&mut volume, &options(), false).unwrap()), BTreeSet::from([JOURNAL]));
         assert_eq!(volume.files[JOURNAL].2, second_journal);
-        assert_eq!(volume.files[ORIGINAL], ("0:0".into(), 0o600, build.stock()));
-        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {ORIGINAL} ")) || c.starts_with(&format!("write {BINARY} "))));
+        assert_eq!(volume.files[backup], ("0:0".into(), 0o600, build.stock()));
+        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {backup} ")) || c.starts_with(&format!("write {BINARY} "))));
         // A build that no longer gives the executable on the unit is refused.
         build.makes(&[&build.stock()[..], b"third"].concat());
         volume.files.remove(JOURNAL);
@@ -2220,6 +2400,7 @@ mod tests {
     #[test]
     fn a_new_screen_upgrades_through_the_old_journal_and_keeps_the_backup() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
+        let backup = crate::diamond3::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         // The first build changes stock bytes the second leaves alone.
         let mut first = build.stock();
@@ -2228,7 +2409,7 @@ mod tests {
         build.makes(&first);
         let mut volume = with_nlclient(build.stock());
         build.patch(&mut volume, &options(), false).unwrap();
-        volume.files.get_mut(ORIGINAL).unwrap().1 = 0o400;
+        volume.files.get_mut(backup).unwrap().1 = 0o400;
         let second = [&build.stock()[..], b"second"].concat();
         let journal = build.makes(&second);
         volume.commands.clear();
@@ -2237,8 +2418,8 @@ mod tests {
         assert_eq!((screen.old.clone(), screen.new.clone()), (Some(sha256_hex(&first)), Some(sha256_hex(&second))));
         assert_eq!(volume.files[BINARY].2, second);
         assert_eq!(volume.files[JOURNAL].2, journal);
-        assert_eq!(volume.files[ORIGINAL], ("0:0".into(), 0o400, build.stock()));
-        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {ORIGINAL} "))));
+        assert_eq!(volume.files[backup], ("0:0".into(), 0o400, build.stock()));
+        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {backup} "))));
     }
 
     #[test]

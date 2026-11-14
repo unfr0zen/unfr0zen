@@ -32,7 +32,9 @@
 #include <unistd.h>
 
 #define BINDINGS "/etc/unfr0zen/theme.bindings"
-#define LIBRARY "/nestlabs/lib/libnestlocal_theme.so"
+/* On the scratch volume, with the themes (unfr0zen-core's diamond3::scratch);
+ * when it is gone the dial stays stock. */
+#define LIBRARY "/media/scratch/.unfr0zen/lib/libnestlocal_theme.so"
 /* nestlocal's files (crates/nestlocal/src/theme/mod.rs). */
 #define MARKER "/var/run/unfr0zen/theme-marker.png"
 #define ENABLED "/var/run/unfr0zen/theme.native.enabled"

@@ -1,5 +1,5 @@
 //! Customizable home screen themes (-themes, gen 3): the themes (themes/,
-//! embedded and unpacked under /var/run/unfr0zen/themes) draw the home
+//! which the patch installs in THEMES on the scratch volume) draw the home
 //! screen's dial inside nlclient, on its GPU, through the theme preload
 //! (platform/common/theme) and the theme library (theme_plugin.rs). This side
 //! offers them on the UNFR0ZEN screen's Themes page, keeps the choice, and
@@ -25,7 +25,9 @@ use serde_json::{json, Value};
 use crate::store::Store;
 use crate::{logf, settings_ui};
 
-const THEME_FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs"));
+/// Where the patch installs the themes (unfr0zen-core's diamond3::scratch::THEMES),
+/// one directory each. A scratch volume wiped since leaves only stock.
+const INSTALLED: &str = "/media/scratch/.unfr0zen/themes";
 
 /// The theme chosen on the UNFR0ZEN screen, kept across restarts.
 const CHOSEN: &str = "/media/data/nestlocal.theme";
@@ -39,15 +41,10 @@ fn label(name: &str) -> Option<&'static str> {
     THEMES.iter().find(|(n, _)| *n == name).map(|(_, l)| *l)
 }
 
-/// The themes' files, unpacked into `root` where the themes' `require` and
-/// fonts read them.
-fn unpack(root: &Path) -> std::io::Result<()> {
-    for (name, data) in THEME_FILES {
-        let path = root.join(name);
-        std::fs::create_dir_all(path.parent().unwrap_or(root))?;
-        std::fs::write(&path, data)?;
-    }
-    Ok(())
+/// Whether the theme `name` can be shown: stock always, another once
+/// installed under `root`.
+fn installed(root: &Path, name: &str) -> bool {
+    name == "stock" || (label(name).is_some() && root.join(name).join("theme.lua").is_file())
 }
 
 /// The marker image: the theme's size, in a colour the preload knows it by.
@@ -90,12 +87,15 @@ pub fn start(store: Arc<Store>, serial: String) {
     let watched = (device.clone(), shared.clone());
     store.watch(move |o| if o.key == watched.0 || o.key == watched.1 { let _ = tx.send(()); });
     let spawned = std::thread::Builder::new().name("theme".into()).spawn(move || {
-        if let Err(e) = unpack(&Path::new(settings_ui::DIR).join("themes")) {
-            return logf!("theme: unpacking the themes: {e}");
+        let root = Path::new(INSTALLED);
+        let missing: Vec<&str> = THEMES.iter().map(|(id, _)| *id).filter(|id| !installed(root, id)).collect();
+        if !missing.is_empty() {
+            logf!("theme: not installed in {INSTALLED}: {}; patch again to restore them", missing.join(", "));
         }
-        let catalog: String = THEMES.iter().map(|(id, label)| format!("{id}\t{label}\n")).collect();
+        let catalog: String = THEMES.iter().filter(|(id, _)| installed(root, id))
+            .map(|(id, label)| format!("{id}\t{label}\n")).collect();
         let mut theme = std::fs::read_to_string(CHOSEN).map(|n| n.trim().to_string()).unwrap_or_default();
-        if label(&theme).is_none() {
+        if !installed(root, &theme) {
             theme = "stock".into();
         }
         let buckets = |key: &str| store.get(key).map_or(Value::Null, |o| Value::Object(o.value));
@@ -121,7 +121,7 @@ pub fn start(store: Arc<Store>, serial: String) {
             if let Ok(name) = std::fs::read_to_string(&request) {
                 let _ = std::fs::remove_file(&request);
                 let name = name.trim();
-                if label(name).is_some() && name != theme {
+                if installed(root, name) && name != theme {
                     theme = name.to_string();
                     // The library is on only while its state names a theme:
                     // the state first for a theme, and for stock select
@@ -151,14 +151,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn themes_are_stock_and_every_bundled_theme() {
-        let themes: std::collections::BTreeSet<&str> = THEME_FILES.iter()
-            .filter_map(|(name, _)| name.strip_suffix("/theme.lua")).collect();
-        let offered: std::collections::BTreeSet<&str> = THEMES.iter().skip(1).map(|(id, _)| *id).collect();
+    fn themes_are_stock_and_every_theme_in_themes() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("themes");
+        let themes: std::collections::BTreeSet<String> = std::fs::read_dir(&source).unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.join("theme.lua").is_file())
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
+        let offered: std::collections::BTreeSet<String> = THEMES.iter().skip(1).map(|(id, _)| id.to_string()).collect();
         assert_eq!(THEMES[0].0, "stock");
         assert_eq!(themes, offered);
         assert_eq!(label("nest-gen4"), Some("Nest 4th Gen"));
         assert_eq!(label("unknown"), None);
+    }
+
+    #[test]
+    fn only_installed_themes_are_offered() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("themes");
+        assert!(installed(&source, "nest-gen4") && installed(&source, "stock"));
+        let wiped = Path::new("/nonexistent/unfr0zen-themes");
+        assert!(installed(wiped, "stock"));
+        assert!(!installed(wiped, "nest-gen4"));
+        assert!(!installed(&source, "common"), "a theme only if the screen names it");
     }
 
     #[test]

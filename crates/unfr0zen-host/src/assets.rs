@@ -53,18 +53,23 @@ pub fn doom() -> Overlay {
     }
 }
 
+/// The Lua themes (crates/nestlocal/themes), by their names there.
+const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs"));
+
 /// Customizable home screen themes for the gen 3: the library preloaded into
-/// nlclient, and nestlocal's theme library it draws the themes with.
+/// nlclient, nestlocal's theme library it draws the themes with, and the
+/// themes, which go on the scratch volume with the library.
 pub fn theme() -> Overlay {
-    Overlay {
-        directories: Vec::new(),
-        files: vec![
-            (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
-             gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
-            (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
-             gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
-        ],
-    }
+    let mut files = vec![
+        (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
+         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
+        (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
+         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
+    ];
+    files.extend(THEMES.iter().map(|(name, data)| {
+        (format!("{}/{name}", unfr0zen_core::diamond3::scratch::THEMES), 0o644, data.to_vec())
+    }));
+    Overlay { directories: Vec::new(), files }
 }
 
 /// The onboard Thread transport's host side, installed only when selected;

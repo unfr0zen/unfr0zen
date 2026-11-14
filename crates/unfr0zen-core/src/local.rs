@@ -2,7 +2,7 @@
 //! on the unit itself. Every name is relative to the mount point.
 
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::Command;
@@ -65,6 +65,22 @@ fn owner_ids(owner: &str) -> Result<(u32, u32)> {
         .map_or_else(|| device(format!("not an owner: {owner:?}")), Ok)
 }
 
+/// Free bytes for an unprivileged writer on the filesystem holding `path`.
+fn free_bytes(path: &std::path::Path) -> Result<u64> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| Error::Device("the path holds a NUL".into()))?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: path is NUL-terminated and stat is written by statvfs before it is read.
+    if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: statvfs returned 0, so it filled stat in.
+    let stat = unsafe { stat.assume_init() };
+    // Their widths differ between platforms: u32 on some, u64 on others.
+    #[allow(clippy::useless_conversion)]
+    Ok(u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
+}
+
 fn sync() {
     // SAFETY: sync(2) takes no arguments and cannot fail.
     unsafe { libc::sync() }
@@ -97,18 +113,15 @@ impl Volume for LocalVolume {
     }
 
     fn free_bytes(&mut self) -> Result<u64> {
-        let path = std::ffi::CString::new(self.root.as_os_str().as_encoded_bytes())
-            .map_err(|_| Error::Device("the root path holds a NUL".into()))?;
-        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        // SAFETY: path is NUL-terminated and stat is written by statvfs before it is read.
-        if unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        // SAFETY: statvfs returned 0, so it filled stat in.
-        let stat = unsafe { stat.assume_init() };
-        // Their widths differ between platforms: u32 on some, u64 on others.
-        #[allow(clippy::useless_conversion)]
-        Ok(u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
+        let root = self.root.clone();
+        free_bytes(&root)
+    }
+
+    fn free_bytes_at(&mut self, name: &str) -> Result<u64> {
+        // The nearest directory that exists: name may not be there yet.
+        let mut path = self.path(name);
+        while !path.is_dir() && path.pop() {}
+        free_bytes(&path)
     }
 
     fn shell_binary(&mut self) -> Result<String> {
@@ -129,10 +142,17 @@ impl Volume for LocalVolume {
         let mut staged = path.clone().into_os_string();
         staged.push(".unfr0zen");
         let staged = PathBuf::from(staged);
-        fs::write(&staged, data)?;
+        let mut file = fs::File::create(&staged)?;
+        file.write_all(data)?;
         std::os::unix::fs::chown(&staged, Some(uid), Some(gid))?;
-        fs::set_permissions(&staged, fs::Permissions::from_mode(mode))?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        // On flash before the rename, and the rename before the caller goes
+        // on: a backup's other copy is removed once this returns.
+        file.sync_all()?;
         fs::rename(&staged, &path)?;
+        if let Some(parent) = path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 

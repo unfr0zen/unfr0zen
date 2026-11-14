@@ -9,9 +9,17 @@
 # stopped while Doom plays and started again after.
 data=/media/data/doom
 run=/var/run/unfr0zen
+# The game and its WAD: on the gen 3's scratch volume, else (the gen 2, or a
+# unit patched before) the root volume.
+game=/media/scratch/.unfr0zen/doom
+if [ -x "$game/doom" ]; then
+    doom=$game/doom wad=$game/doom1.wad
+else
+    doom=/nestlabs/sbin/doom wad=/usr/share/doom/doom1.wad
+fi
 mkdir -p "$data"
 play() {
-    cd "$data" && HOME="$data" exec /nestlabs/sbin/doom -iwad /usr/share/doom/doom1.wad > "$data/doom.log" 2>&1
+    cd "$data" && HOME="$data" exec "$doom" -iwad "$wad" > "$data/doom.log" 2>&1
 }
 read -r keeper _ < "$run/keeper.pid" 2> /dev/null
 if [ -n "$keeper" ] && [ "$keeper" = "$(pidof nlclient)" ]; then

@@ -27,7 +27,7 @@ fn help_styles() -> clap::builder::Styles {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
+#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat over USB.\n\n\
     Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
     is written.", args_conflicts_with_subcommands = true)]
 struct Args {

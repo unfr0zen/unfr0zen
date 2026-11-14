@@ -25,6 +25,7 @@ mod naming;
 mod nlsettings;
 mod occupancy;
 mod sensor;
+mod scratch;
 mod store;
 mod settings_ui;
 mod structure;
@@ -285,6 +286,9 @@ async fn run(config: flags::Config) {
                     config.wake_iface.clone(), move || if let Some(bridge) = &bridge { bridge.woke() });
     }
     if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) { logf!("settings UI: {e}"); }
+    if device::current().name == "diamond3" {
+        scratch::check();
+    }
     if config.doom {
         doom::start();
     }

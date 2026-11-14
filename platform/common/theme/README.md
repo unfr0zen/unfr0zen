@@ -10,8 +10,8 @@ setpoints.
 | Part | What it does |
 |-|-|
 | `theme.c` → `/nestlabs/lib/libunfr0zen-theme.so` | Preloaded into nlclient beside `liblocalcloud.so`. Hooks the dial's, its figures', the background's and the thermostat screen's vtable slots, replaces the dial's draw with the theme's, and asks nlclient for a redraw each frame while the theme moves, about once a second while it stands still. |
-| `crates/nestlocal-theme` → `/nestlabs/lib/libnestlocal_theme.so` | The theme host and painters (femtovg and batched quads, LuaJIT), loaded by the preload on nlclient's GL thread. |
-| `crates/nestlocal/src/theme.rs` (`-themes`) | Unpacks the themes, offers them on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets. |
+| `crates/nestlocal-theme` → `libnestlocal_theme.so` | The theme host and painters (femtovg and batched quads, LuaJIT), loaded by the preload on nlclient's GL thread. |
+| `crates/nestlocal/src/theme.rs` (`-themes`) | Offers the installed themes on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets. |
 | `unfr0zen-core`'s `nlclient::theme` | Writes `/etc/unfr0zen/theme.bindings` for the unit's stock nlclient at the patch. |
 
 ## How the theme is drawn
