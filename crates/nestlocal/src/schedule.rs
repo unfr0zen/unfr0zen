@@ -298,8 +298,15 @@ fn hhmm(minutes: u16) -> String {
 /// heat_cool), °C.
 pub fn to_json(bucket: &Fields) -> Option<Value> {
     let (mode, days) = week(bucket)?;
+    Some(days_json(mode, &days.into_iter().enumerate().collect::<Vec<_>>()))
+}
+
+/// Days (the unit's, 0 to 6) and their points in to_json's shape, which
+/// from_json reads.
+pub fn days_json(mode: Mode, days: &[(usize, Vec<Point>)]) -> Value {
     let mut out = Fields::new();
-    for (name, points) in DAYS.iter().zip(&days) {
+    for (day, points) in days {
+        let Some(name) = DAYS.get(*day) else { continue };
         let list: Vec<Value> = points
             .iter()
             .map(|p| {
@@ -321,7 +328,7 @@ pub fn to_json(bucket: &Fields) -> Option<Value> {
             .collect();
         out.insert((*name).into(), Value::Array(list));
     }
-    Some(Value::Object(fields! {"mode" => mode_name(mode), "days" => Value::Object(out)}))
+    Value::Object(fields! {"mode" => mode_name(mode), "days" => Value::Object(out)})
 }
 
 /// MQTT's set/schedule: the days given (in to_json's shape) replace those

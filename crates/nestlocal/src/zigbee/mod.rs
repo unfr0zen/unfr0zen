@@ -509,12 +509,14 @@ impl Server {
         if message.aps.cluster == TIME && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
             self.time_answer(&message.payload);
         }
-        if let Some((endpoint, answer)) = answer(nest, &message) {
+        if let Some((endpoint, answers)) = answer(nest, &message) {
             let to = (message.sender, message.aps.source_endpoint);
-            // A read unanswered now is a failed read: wait briefly for room.
-            let until = Instant::now() + ANSWER_RETRY;
-            while !send(ezsp, to, endpoint, message.aps.cluster, &answer)? && Instant::now() < until {
-                std::thread::sleep(Duration::from_millis(50));
+            for answer in answers {
+                // A read unanswered now is a failed read: wait briefly for room.
+                let until = Instant::now() + ANSWER_RETRY;
+                while !send(ezsp, to, endpoint, message.aps.cluster, &answer)? && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
         }
         Ok(())
@@ -588,9 +590,9 @@ impl Server {
     }
 }
 
-/// The answer to a message, if one is due, and the endpoint it is from: a
-/// broadcast or multicast gets no default response.
-fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
+/// The answers to a message, if any are due, and the endpoint they are
+/// from: a broadcast or multicast gets no default response.
+fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<Vec<u8>>)> {
     // EmberIncomingMessageType: unicast, unicast reply; multicast, broadcast
     // and their loopbacks above.
     const UNICAST_REPLY: u8 = 0x01;
@@ -601,8 +603,9 @@ fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
     if message.aps.profile != PROFILE_HA || !nest.endpoints.iter().any(|e| e.id == endpoint) {
         return None;
     }
-    let answer = zcl::serve(nest, endpoint, message.aps.cluster, &message.payload)?;
-    (message.kind <= UNICAST_REPLY || !zcl::is_default_response(&answer)).then_some((endpoint, answer))
+    let mut answers = zcl::serve_all(nest, endpoint, message.aps.cluster, &message.payload);
+    answers.retain(|answer| message.kind <= UNICAST_REPLY || !zcl::is_default_response(answer));
+    (!answers.is_empty()).then_some((endpoint, answers))
 }
 
 /// A ZCL frame from one of the unit's endpoints to a node's endpoint,
@@ -730,16 +733,20 @@ mod tests {
             sender: COORDINATOR,
             payload: payload.to_vec(),
         };
-        let unknown = [0x01, 7, 0x01]; // a command the Thermostat cluster does not have
+        let unknown = [0x01, 7, 0x04]; // Get Relay Status Log, which the Thermostat cluster does not have
         let read = [0x00, 8, 0x00, 0x03, 0x00]; // AbsMinHeatSetpointLimit
         for kind in [0x00, 0x01] {
-            assert_eq!(answer(&nest, &message(kind, &unknown)), Some((1, vec![0x18, 7, 0x0B, 0x01, 0x81])), "{kind}");
+            assert_eq!(
+                answer(&nest, &message(kind, &unknown)),
+                Some((1, vec![vec![0x18, 7, 0x0B, 0x04, 0x81]])),
+                "{kind}"
+            );
         }
         for kind in 0x02..=0x05 {
             assert_eq!(answer(&nest, &message(kind, &unknown)), None, "{kind}");
             assert_eq!(
                 answer(&nest, &message(kind, &read)),
-                Some((1, vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03])),
+                Some((1, vec![vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03]])),
                 "{kind}"
             );
         }
