@@ -104,6 +104,32 @@ from 12 o'clock.
 - Loading the theme, and drawing one frame, may each take at most 250 ms;
   past that the theme fails.
 
+## Limits
+
+A theme runs inside nlclient, so the engine checks everything of it and
+fails the theme, never the thermostat, on the first thing out of bounds.
+The error names what and why in nlclient's log (`THEME Lua: ...`).
+
+| What | Limit |
+|-|-|
+| Folder, font and layer names | 1 to 64 bytes; folders and fonts in letters, digits, `-` and `_`. |
+| Every file | A regular file inside the themes' folder; a link leading out of it is refused. |
+| A Lua file | 256 KiB of UTF-8 source. |
+| A font file | 8 MiB. |
+| An image | A PNG of 4 MiB and 1024 pixels a side; another is not drawn (`gfx:image` returns false), the reason logged once. |
+| `theme.lua` | Returns a table: `api` the number 1, `name` one line of 1 to 64 bytes, `design` a number from 120 to 1920, `draw` a function, `fonts` 16 names at most, each a file or a list of 4 at most; the font found must exist. |
+| `require` | A module that requires itself, through others or not, fails. |
+| Lua's memory | 16 MiB. |
+| Patterns | `find`, `match`, `gmatch` and `gsub` take 64 KiB of text, and refuse a pattern whose worst case is long: the text's length to the power of one more than the pattern's `*`, `+`, `-` and `?` must stay under ten million. Match short texts, or `find` plainly (`s:find(text, 1, true)`). |
+| Numbers given to `gfx` | Finite and within a million. |
+| `gfx:lines`, `gfx:polygon`, clips | 16384 numbers. |
+| A text | 1024 bytes; its `size` and `spacing` within `design`, its `outline_width` within an eighth of it. |
+| `gfx:radial_glow` | 255 steps. |
+| `gfx:save` | 64 deep in a frame. |
+| Layers | 64 names, each side twice `design` at most, 12 dials of area in all; keys of 1024 bytes. |
+| `gfx:sprite` | A column at least, frames a unit wide and high at least. |
+| `gfx:wake` | 0 seconds or more. |
+
 ## ui: what a theme reads
 
 `ui` is rebuilt for every frame. Temperatures are in the unit shown

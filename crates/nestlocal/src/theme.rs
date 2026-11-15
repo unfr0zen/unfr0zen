@@ -39,19 +39,27 @@ const CHOSEN: &str = "/media/data/nestlocal.theme";
 /// nlclient's own dial, offered first.
 const STOCK: &str = "stock";
 
+/// The theme library's limits (nestlocal-theme's engine/theme.rs): the
+/// longest a theme's folder name and its label, and the largest its
+/// theme.lua, in bytes. What is past them is not offered.
+const NAME_LIMIT: usize = 64;
+const SOURCE_LIMIT: u64 = 256 << 10;
+
 /// Whether `name` can name a theme: its folder's name.
 fn theme_id(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !name.is_empty() && name.len() <= NAME_LIMIT && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Whether the theme `name` can be shown: stock always, another once its
-/// folder under `root` has a theme.lua.
+/// folder under `root` has a theme.lua the library would read.
 fn installed(root: &Path, name: &str) -> bool {
-    name == STOCK || (theme_id(name) && root.join(name).join("theme.lua").is_file())
+    name == STOCK || (theme_id(name)
+        && std::fs::metadata(root.join(name).join("theme.lua")).is_ok_and(|f| f.is_file() && f.len() <= SOURCE_LIMIT))
 }
 
 /// The theme `name` as the UNFR0ZEN screen shows it: the name its
-/// theme.lua gives it (a `name = "..."` line), else its folder's.
+/// theme.lua gives it (a `name = "..."` line), where that is one the
+/// library takes and a line of the catalog can hold, else its folder's.
 fn label(root: &Path, name: &str) -> String {
     if name == STOCK {
         return "Stock".into();
@@ -59,9 +67,9 @@ fn label(root: &Path, name: &str) -> String {
     std::fs::read_to_string(root.join(name).join("theme.lua")).ok()
         .and_then(|lua| lua.lines().find_map(|line| {
             let rest = line.trim_start().strip_prefix("name = \"")?;
-            Some(rest[..rest.find('"')?].to_string())
+            Some(rest[..rest.find('"')?].trim().to_string())
         }))
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && l.len() <= NAME_LIMIT && !l.chars().any(char::is_control))
         .unwrap_or_else(|| name.to_string())
 }
 
@@ -211,6 +219,29 @@ mod tests {
         assert!(!installed(wiped, "nest-gen4"));
         assert!(!installed(&source, "common"), "a theme has a theme.lua");
         assert!(!installed(&source, "../themes/nest-gen4"), "a theme is a folder's name");
+    }
+
+    #[test]
+    fn themes_the_library_would_refuse_are_not_offered() {
+        let root = std::env::temp_dir().join(format!("nestlocal-themes-{}", std::process::id()));
+        let theme = |name: &str, lua: &str| {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+            std::fs::write(root.join(name).join("theme.lua"), lua).unwrap();
+        };
+        theme("mine", "return {\n  name = \" My Theme \",\n}");
+        theme("tabbed", "return { }\nname = \"a\tb\",");
+        theme("long", &format!("name = \"{}\",", "n".repeat(NAME_LIMIT + 1)));
+        theme("huge", &" ".repeat(SOURCE_LIMIT as usize + 1));
+        theme(&"n".repeat(NAME_LIMIT + 1), "");
+        theme("not a theme", "");
+        std::fs::create_dir_all(root.join("folder/theme.lua")).unwrap();
+        let mut offered = themes(&root);
+        offered.sort();
+        assert_eq!(offered, ["long", "mine", "stock", "tabbed"]);
+        assert_eq!(label(&root, "mine"), "My Theme");
+        assert_eq!(label(&root, "tabbed"), "tabbed", "a label is one field of a catalog line");
+        assert_eq!(label(&root, "long"), "long");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
