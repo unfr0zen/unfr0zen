@@ -24,6 +24,18 @@ extern int rcs_poll(struct rcs_poll_descriptor *, int, unsigned);
 #define WORD(p, n) (*(int *)((char *)(p) + (n)))
 #endif
 
+/* The globals' event handler, settings and association registry. */
+#define GLOBALS_HANDLER 0xb0
+#define GLOBALS_SETTINGS 0x98
+#define GLOBALS_REGISTRY 0x9c
+/* A stock layer's event destination and dimensions. */
+#define LAYER_EVENT_TARGET 0x14
+#define LAYER_WIDTH 0x64
+#define LAYER_HEIGHT 0x68
+/* poll(2)'s POLLIN, and how long each poll waits. */
+#define POLL_IN 1
+#define POLL_MS 1000
+
 void *custom_factory(void *globals, const char *name) {
     void *screen = rcs_screen_lookup(globals, name);
     if (screen || strcmp(name, "remotecomfortscreen")) return screen;
@@ -31,12 +43,12 @@ void *custom_factory(void *globals, const char *name) {
     if (!template) return 0;
     void *layer = rcs_layer_lookup(globals, "remotecomfortlayer");
     if (!layer) {
-        layer = rcs_layer_new(globals, PTR(template, 0x14), "remotecomfortlayer",
-                              WORD(template, 0x64), WORD(template, 0x68));
+        layer = rcs_layer_new(globals, PTR(template, LAYER_EVENT_TARGET), "remotecomfortlayer",
+                              WORD(template, LAYER_WIDTH), WORD(template, LAYER_HEIGHT));
         if (!layer) return 0;
         rcs_add_layer(globals, layer);
     }
-    screen = rcs_screen_new(globals, PTR(globals, 0xb0), name);
+    screen = rcs_screen_new(globals, PTR(globals, GLOBALS_HANDLER), name);
     if (screen) rcs_add_screen(globals, screen);
     return screen;
 }
@@ -46,8 +58,8 @@ void *custom_factory(void *globals, const char *name) {
  * the test-device fallback; its queued sample precedes a later selection. */
 int rcs_post_reading(void *globals, const void *id, int temperature,
                      int battery, signed char rssi) {
-    void *settings = PTR(globals, 0x98);
-    if (!settings || !PTR(globals, 0x9c) ||
+    void *settings = PTR(globals, GLOBALS_SETTINGS);
+    if (!settings || !PTR(globals, GLOBALS_REGISTRY) ||
         rcs_string_find(rcs_associated(settings), id, 0) != 1) return 0;
     rcs_native_post(globals, id, temperature, battery, rssi);
     return 1;
@@ -61,8 +73,8 @@ int rcs_read_command(void *socket, char *buffer, int size,
     int used = 0;
     rcs_string_clear(reply);
     while (*running && used < size - 1) {
-        struct rcs_poll_descriptor descriptor = {socket, 1, 0};
-        if (rcs_poll(&descriptor, 1, rcs_interval(1000)) <= 0 || !*running) break;
+        struct rcs_poll_descriptor descriptor = {socket, POLL_IN, 0};
+        if (rcs_poll(&descriptor, 1, rcs_interval(POLL_MS)) <= 0 || !*running) break;
         int count = rcs_native_read(socket, buffer + used, size - 1 - used);
         if (count == 0) {
             buffer[used] = 0;

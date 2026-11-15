@@ -17,7 +17,8 @@ const POST_PATCH: &[u8] = include_bytes!("../../../platform/diamond3/bundle/post
 
 /// The bundle for a device: nestlocal, the libraries and objects the patch
 /// installs or links, and Thread's and Doom's overlays. The gen 3's also has
-/// unfr0zen-apply and the hook scripts, which run on the unit; the gen 1's
+/// unfr0zen-apply and the hook scripts, which run on the unit, and the
+/// customizable themes' overlay; the gen 1's
 /// and gen 2's, patched on the host, the Sensors view helper and the SSH
 /// server they lack.
 pub fn contents(device: Device) -> Result<(Files, BTreeMap<String, u32>)> {
@@ -62,6 +63,7 @@ fn diamond3() -> (Files, BTreeMap<String, u32>) {
                                            crate::diamond3::assets::THREAD_RADIO_IDENTITY);
     bundle::add_overlay(&mut files, &mut directories, bundle::THREAD, &thread);
     bundle::add_overlay(&mut files, &mut directories, bundle::DOOM, &assets::doom());
+    bundle::add_overlay(&mut files, &mut directories, bundle::THEME, &assets::theme());
     (files, directories)
 }
 
@@ -88,13 +90,18 @@ mod tests {
         let bundle = Bundle::unpack(&data).unwrap();
         assert_eq!(bundle.manifest.device, "diamond3");
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
-        let settings = Settings { thread: true, doom: true, matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
+        let settings = Settings { thread: true, doom: true, theme: true, matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
                                   ..Settings::default() };
         let options = settings.options(&bundle).unwrap();
         assert_eq!(options.wake_filter, assets::WAKE_FILTER);
         assert_eq!(options.local_cloud, assets::LOCAL_CLOUD);
         assert!(options.thread.unwrap().files.iter().any(|(name, _, _)| name == "usr/share/nestlocal/thread-rcp.bin"));
         assert_eq!(options.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
+        let theme = options.theme.unwrap();
+        let (libraries, themes): (Vec<_>, Vec<_>) = theme.files.iter().partition(|(name, _, _)| name.ends_with(".so"));
+        assert!(libraries.len() == 2 && libraries.iter().all(|(_, _, data)| data.starts_with(b"\x7fELF")));
+        assert!(themes.iter().all(|(name, _, _)| name.starts_with("media/scratch/.unfr0zen/themes/")));
+        assert!(themes.iter().any(|(name, _, _)| name.ends_with("/nest-gen4/theme.lua")));
         assert!(pack(Device::Onyx, "1.0.0", None).is_err());
     }
 

@@ -11,8 +11,8 @@
 //! root the unit is running from, which stays writable, and takes the
 //! version from the bundle.
 //!
-//! update is the unit's own engine (/nestlabs/sbin/unfr0zen-apply) taking a
-//! new bundle: it checks it against its manifest and the release key, and
+//! update is the unit's own engine (/media/scratch/.unfr0zen/bin/
+//! unfr0zen-apply on the scratch volume) taking a new bundle: it checks it against its manifest and the release key, and
 //! refuses one older than the unit runs, unless the unit was patched to allow
 //! unsigned updates, then runs the bundle's engine --live on / with the
 //! unit's options.json. The caller restarts the

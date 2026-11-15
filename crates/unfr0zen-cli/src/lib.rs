@@ -27,7 +27,7 @@ fn help_styles() -> clap::builder::Styles {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat (3rd, 2nd or experimental 1st generation) over USB.\n\n\
+#[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat over USB.\n\n\
     Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
     is written.", args_conflicts_with_subcommands = true)]
 struct Args {
@@ -66,7 +66,7 @@ struct Args {
     /// a root shell on the unit's USB serial port, which the run then confirms (default: no USB serial port)
     #[arg(long, help_heading = "Root filesystem options")]
     usb_shell: bool,
-    /// relay to this MQTT broker (--mqtt, --matter, --zigbee and --doom each install nestlocal)
+    /// relay to this MQTT broker (--mqtt, --matter, --zigbee, --themes and --doom each install nestlocal)
     #[arg(long, value_name = "URL", help_heading = "Root filesystem options")]
     mqtt: Option<String>,
     /// MQTT user name for --mqtt
@@ -105,6 +105,9 @@ struct Args {
     /// how the 3rd generation's boot ROM is entered for recovery: auto, cve-2017-7932, cve-2017-7936 or official-loader
     #[arg(long, global = true)]
     entry_point: Option<EntryPoint>,
+    /// gen 3: customizable home screen themes, picked on the UNFR0ZEN settings screen (Stock, Hyperdrive, Nest 4th Gen) and drawn on the unit's GPU; needs a firmware the themes support
+    #[arg(long, help_heading = "Root filesystem options")]
+    themes: bool,
     /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
@@ -205,6 +208,7 @@ impl Args {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
             entry_point: self.entry_point.unwrap_or_default(),
+            themes: self.themes,
             doom: self.doom,
             external_temperature: self.external_temperature,
             dark_theme: self.dark_theme,

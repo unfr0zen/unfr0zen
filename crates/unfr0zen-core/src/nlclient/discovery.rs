@@ -8,10 +8,11 @@ use crate::shell::sha256_hex;
 use crate::{device, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-const IMPORTS: [(&str, &str); 10] = [
+const IMPORTS: [(&str, &str); 11] = [
     ("native_new", "_Znwj"),
     ("native_string_ctor", "_ZN8nlStringC1Ev"),
     ("native_string_copy", "_ZN8nlString4CopyEPKc"),
+    ("native_string_destroy", "_ZN8nlStringD1Ev"),
     ("native_event_type", "_ZNK7nlEvent7GetTypeEv"),
     ("native_fopen", "fopen"),
     ("native_fread", "fread"),
@@ -51,8 +52,8 @@ pub fn handover(discovery: &Discovery) -> u32 {
 }
 
 /// What the screen's hand-over links against, besides the build's natives:
-/// its kind, and the natives and fields of a kind the build hasn't as 0,
-/// never used.
+/// the hand-over's kind, and the natives and fields of a kind the build
+/// hasn't as 0, never used.
 pub fn handover_externals(discovery: &Discovery) -> BTreeMap<String, u32> {
     let kind = handover(discovery);
     let mut externals: BTreeMap<String, u32> = HANDOVER_IMPORTS
@@ -124,6 +125,26 @@ pub struct Discovery {
     /// The gen 2's framebuffer, for its screen hand-over; absent elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framebuffer: Option<Framebuffer>,
+    /// The thermostat's dial, which the theme preload draws themes in place of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dial: Option<Dial>,
+}
+/// The thermostat's dial, nlTempSliderLayer: the layer of the home screen
+/// that shows the temperature, whose draw (the vtable's fifth method, as for
+/// every nlLayer) the theme preload replaces (platform/common/theme). Its
+/// screen's, nlTempScreen's, event handler (the first method) turns the ring
+/// into setpoints; `value` is nlEvent::GetValue, a turn's size.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Dial {
+    pub slot: u32,
+    pub draw: u32,
+    pub event_slot: u32,
+    pub event: u32,
+    pub value: u32,
+    /// The thermostat's figures (nlTempLayer, over the dial), which the
+    /// theme hides, having its own.
+    pub figures_slot: u32,
+    pub figures: u32,
 }
 pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<()> {
     if ok {
@@ -613,6 +634,7 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     } else {
         framebuffer(&elf, &arm, &imports).ok()
     };
+    let dial = dial(&elf, &imports).ok();
     require(
         layout["LAYER_VTABLE_SIZE"].max(layout["SCREEN_VTABLE_SIZE"]) <= 0x400,
         "vtable larger than the payload holds",
@@ -677,6 +699,7 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         stock_sha256: sha256_hex(data),
         validation,
         framebuffer,
+        dial,
     };
     Ok((found, objection))
 }
@@ -777,6 +800,42 @@ fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
     }
     unique(vtables, &format!("{name} primary vtable"))
 }
+/// A PIE's vtable slot holds an address the loader biases: one the patch
+/// rewrites must have its R_ARM_RELATIVE relocation.
+fn relocated(elf: &Elf, slot: u32, what: &str) -> Result<()> {
+    if half(elf.data, 16)? != 3 {
+        return Ok(());
+    }
+    let relocations = elf
+        .sections
+        .iter()
+        .filter(|s| s.kind == 9)
+        .flat_map(|s| (s.offset..s.offset + s.size).step_by(8));
+    let mut relative = false;
+    for off in relocations {
+        if word(elf.data, off)? == slot {
+            require(word(elf.data, off + 4)? == 0x17, format!("{what} requires R_ARM_RELATIVE"))?;
+            relative = true;
+        }
+    }
+    require(relative, format!("{what} has no load-bias relocation"))
+}
+/// The thermostat's dial (Dial).
+fn dial(elf: &Elf, imports: &BTreeMap<String, u32>) -> Result<Dial> {
+    let slot = primary_vtable(elf, "17nlTempSliderLayer")? + 0x10;
+    let event_slot = primary_vtable(elf, "12nlTempScreen")?;
+    let (draw, event) = (elf.read(slot)?, elf.read(event_slot)?);
+    require(elf.text(draw) && elf.text(event), "dial methods are not code")?;
+    relocated(elf, slot, "dial vtable")?;
+    relocated(elf, event_slot, "dial vtable")?;
+    let value = *imports.get("_ZNK7nlEvent8GetValueEv")
+        .ok_or_else(|| crate::Error::Device("missing event value import".into()))?;
+    let figures_slot = primary_vtable(elf, "11nlTempLayer")? + 0x10;
+    let figures = elf.read(figures_slot)?;
+    require(elf.text(figures), "figures draw is not code")?;
+    relocated(elf, figures_slot, "figures vtable")?;
+    Ok(Dial { slot, draw, event_slot, event, value, figures_slot, figures })
+}
 /// The gen 2's nlARMFramebuffer (Framebuffer). Its init maps fb0 with
 /// `mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)` and stores the
 /// address; its flip pans with FBIOPAN_DISPLAY. Only an EXEC build: a PIE's
@@ -869,24 +928,7 @@ fn downlink(
             anchors.insert("view_dispatch".into(), dispatch);
             continue;
         }
-        if half(elf.data, 16)? == 3 {
-            let relocations = elf
-                .sections
-                .iter()
-                .filter(|s| s.kind == 9)
-                .flat_map(|s| (s.offset..s.offset + s.size).step_by(8));
-            let mut relative = false;
-            for off in relocations {
-                if word(elf.data, off)? == slot {
-                    require(
-                        word(elf.data, off + 4)? == 0x17,
-                        "bucket vtable requires R_ARM_RELATIVE",
-                    )?;
-                    relative = true;
-                }
-            }
-            require(relative, "bucket vtable has no load-bias relocation")?;
-        }
+        relocated(elf, slot, "bucket vtable")?;
         if bucket == "device" {
             let offsets = arm
                 .code(function, None)?

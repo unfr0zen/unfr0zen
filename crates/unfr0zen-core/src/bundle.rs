@@ -43,6 +43,8 @@ pub const POST_PATCH: &str = "scripts/post-patch.sh";
 const OVERLAYS: &str = "overlays/";
 pub const THREAD: &str = "thread";
 pub const DOOM: &str = "doom";
+/// The gen 3's customizable home screen themes: the theme preload and library.
+pub const THEME: &str = "theme";
 /// The SSH server of a unit without its own (the gen 2's dropbear).
 pub const SSH: &str = "ssh";
 
@@ -267,6 +269,9 @@ pub struct Settings {
     pub zigbee: bool,
     pub wwn_boiler: bool,
     pub doom: bool,
+    /// Customizable home screen themes (the gen 3).
+    #[serde(default)]
+    pub theme: bool,
     pub external_temperature: bool,
     pub dark_theme: bool,
     pub ssh: bool,
@@ -331,6 +336,7 @@ impl Settings {
             zigbee: options.zigbee,
             wwn_boiler: options.wwn_boiler,
             doom: options.doom.is_some(),
+            theme: options.theme.is_some(),
             external_temperature: options.external_temperature,
             dark_theme: options.dark_theme,
             ssh: options.ssh,
@@ -369,6 +375,7 @@ impl Settings {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(|| bundle.overlay(DOOM)).transpose()?,
+            theme: self.theme.then(|| bundle.overlay(THEME)).transpose()?,
             external_temperature: self.external_temperature,
             // Only the gen 2's bundle has these: the gen 3 needs neither.
             external_temperature_screen: if self.external_temperature {
@@ -423,6 +430,10 @@ mod tests {
         add_overlay(&mut files, &mut directories, DOOM, &Overlay {
             files: vec![("usr/share/doom/doom1.wad".into(), 0o644, b"IWAD".to_vec())],
             directories: vec![("usr/share/doom".into(), 0o755)],
+        });
+        add_overlay(&mut files, &mut directories, THEME, &Overlay {
+            files: vec![(crate::patch::THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec())],
+            directories: Vec::new(),
         });
         (files, directories)
     }
@@ -515,6 +526,7 @@ mod tests {
             wake_filter: b"\x7fELF wake".to_vec(),
             local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
+            theme: Some(bundle.overlay(THEME).unwrap()),
             ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()),
             apply: b"\x7fELF apply".to_vec(),
             ..Options::default()
@@ -528,6 +540,7 @@ mod tests {
         assert_eq!(kept, Settings { pki: None, ..settings.clone() });
         assert_eq!(format!("{:?}", Options { record: Vec::new(), ..rebuilt.clone() }), format!("{options:?}"));
         assert_eq!(rebuilt.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
+        assert_eq!(rebuilt.theme.unwrap().files[0].0, crate::patch::THEME_PRELOAD);
         let thread = Settings { thread: true, ..Settings::default() };
         assert!(thread.options(&bundle).unwrap_err().to_string().contains("no thread overlay"));
     }

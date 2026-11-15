@@ -210,7 +210,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     progress.phase(Phase::Prepare);
     let initramfs = stage(progress, "Build the patch bundle and the initramfs", || -> Result<Vec<u8>> {
         let nestlocal = options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
-            || options.external_temperature;
+            || options.theme.is_some() || options.external_temperature;
         let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
         let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");
         let files = BTreeMap::from([

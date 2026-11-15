@@ -148,7 +148,8 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     ];
     script(&bundle, bundle::PRE_PATCH, out, &env)?;
 
-    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
+    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
+        || options.theme.is_some() {
         bundle.file(bundle::NESTLOCAL)?.to_vec()
     } else {
         Vec::new()

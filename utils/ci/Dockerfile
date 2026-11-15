@@ -40,7 +40,7 @@ RUN for arch in amd64 arm64 riscv64; do [ "$arch" = "$TARGETARCH" ] || dpkg --ad
     && pip install --no-cache-dir --break-system-packages --root-user-action=ignore \
         ziglang==0.16.0 cargo-zigbuild==0.23.4 unicorn==2.1.4 pyelftools==0.33 \
     && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu \
-        aarch64-apple-darwin x86_64-apple-darwin armv7-unknown-linux-musleabihf \
+        aarch64-apple-darwin x86_64-apple-darwin armv7-unknown-linux-musleabihf armv7-unknown-linux-gnueabihf \
         riscv64gc-unknown-linux-gnu aarch64-pc-windows-gnullvm \
     && printf '#!/bin/sh\nexec /usr/lib/llvm-19/bin/llvm-windres --target=aarch64-w64-mingw32 "$@"\n' \
         > /usr/local/bin/llvm-windres && chmod +x /usr/local/bin/llvm-windres \
@@ -93,3 +93,9 @@ ENV CFLAGS_x86_64_unknown_linux_gnu="-isystem /opt/libudev" \
     SDKROOT=/opt/MacOSX.sdk \
     MACOSX_DEPLOYMENT_TARGET=13.0 \
     CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS="-C link-arg=-Wl,-headerpad,0x4000"
+# The theme library's LuaJIT (platform/common/theme/build.sh) links with the ARM
+# GNU toolchain's libgcc; on arm64 hosts its 32-bit build tools run under
+# qemu-i386.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user \
+    && rm -rf /var/lib/apt/lists/*

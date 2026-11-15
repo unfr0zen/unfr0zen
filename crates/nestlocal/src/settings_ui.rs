@@ -33,15 +33,15 @@ pub fn take_request_age(protocol: &str) -> Option<std::time::Duration> {
     Some(age)
 }
 
-pub fn init(matter: bool, zigbee: bool, doom: bool) -> std::io::Result<()> {
+pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(DIR)?;
     std::fs::set_permissions(DIR, std::fs::Permissions::from_mode(0o700))?;
     // Publish configured features independently of service/radio readiness.
-    let features = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2);
-    publish("features", &[b'0' + features])?;
+    let features = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2) | ((theme as u8) << 3);
+    publish("features", format!("{features:x}").as_bytes())?;
     publish_activity_icons()?;
-    for name in ["display.request", "display.taken", "matter.request", "matter-reset.request", "zigbee.request", "doom.request", "matter.code", "matter.png"] {
+    for name in ["display.request", "display.taken", "matter.request", "matter-reset.request", "zigbee.request", "doom.request", "theme.request", "matter.code", "matter.png"] {
         let _ = std::fs::remove_file(Path::new(DIR).join(name));
     }
     status("matter", if matter { "Starting Matter..." } else { "Matter not enabled" });

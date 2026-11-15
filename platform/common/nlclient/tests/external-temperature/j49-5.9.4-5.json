@@ -1,22 +1,22 @@
 {
   "stock_sha256": "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
-  "screen_sha256": "c2b3de2bdedecfefacdc903a468a42b9462f8256eadfad83bb0f37be3b0ba0ad",
-  "screen_size": 5195033,
-  "entry": 5326108,
-  "read_entry": 5326224,
-  "socket_entry": 5326248,
-  "temperature_entry": 5326316,
-  "result_entry": 5326392,
-  "guard_entry": 5326404,
-  "reply_entry": 5326420,
-  "payload_offset": 5195036,
+  "screen_sha256": "3b71468197c0e02c53f895364b06e9a0ea74a3d5a20001f3c92b1c5cdd471099",
+  "screen_size": 5196897,
+  "entry": 5327972,
+  "read_entry": 5328088,
+  "socket_entry": 5328112,
+  "temperature_entry": 5328180,
+  "result_entry": 5328256,
+  "guard_entry": 5328268,
+  "reply_entry": 5328284,
+  "payload_offset": 5196900,
   "payload_size": 1050,
-  "payload_sha256": "ae9eaf80a16b50b0dcc629381f08e65921ce6a54a239779025fe43e9f2e306ae",
+  "payload_sha256": "82760371ac4365d9834c2cb8063e08fe51b0b28fb00d691a94259c5154e08dcb",
   "machine_payload_size": 364,
-  "machine_payload_sha256": "b776ce2d9aaf32604e96888266b4df34d2b957973c4f23f4b1ce24994f9e0ca9",
-  "ui_address": 5326472,
+  "machine_payload_sha256": "f1d6a956b71b6c1b314a4651d484f2a3b0e4b577a1eff2eef5fe086712d10969",
+  "ui_address": 5328336,
   "ui_size": 686,
-  "ui_sha256": "16d1ec10dd424878f82a643c077a9eb2fe99f732c6d5a3ed13b8c8b66f9fe43c",
+  "ui_sha256": "3b740cd12a491f5ab53161887702a90183f2c2b179fd40964fdc5105f5908821",
   "ui_bindings": {
     "rcs_add_layer": 334184,
     "rcs_add_screen": 334312,
@@ -35,19 +35,19 @@
     "strcmp": 179908
   },
   "ui_symbols": {
-    "custom_factory": 5326472,
-    "rcs_post_reading": 5326728,
-    "rcs_read_command": 5326856
+    "custom_factory": 5328336,
+    "rcs_post_reading": 5328592,
+    "rcs_read_command": 5328720
   },
-  "output_size": 5196086,
-  "output_sha256": "63fde59e91648dd2ee75ff77c645da2493f6ffb1c1e10d88093d3ffc4c127747",
-  "journal_sha256": "cbfdd3dfdb6b12afea3a609d6953f84dd613afece04586da958cf099c3aecc0d",
+  "output_size": 5197950,
+  "output_sha256": "6a2c64814092a2f6062c9dfb9602091063518ca854dbc20bdd4a3bb052b8a9d4",
+  "journal_sha256": "c17ff1d5829766e182ca29295ce87ab7ff497337e4c2e182da5efecff22aa75f",
   "sites": [
     {
       "address": 294536,
       "offset": 261768,
       "before": "401105e3",
-      "after": "a33113ea"
+      "after": "753313ea"
     },
     {
       "address": 294548,
@@ -71,37 +71,37 @@
       "address": 1318012,
       "offset": 1285244,
       "before": "6ea0fbeb",
-      "after": "494a0feb"
+      "after": "1b4c0feb"
     },
     {
       "address": 1318208,
       "offset": 1285440,
       "before": "8daafbeb",
-      "after": "124a0feb"
+      "after": "e44b0feb"
     },
     {
       "address": 1321004,
       "offset": 1288236,
       "before": "7a3cfceb",
-      "after": "95470feb"
+      "after": "67490feb"
     },
     {
       "address": 1681000,
       "offset": 1648232,
       "before": "ec0090e5",
-      "after": "f5e70dea"
+      "after": "c7e90dea"
     },
     {
       "address": 1316952,
       "offset": 1284184,
       "before": "48aafceb",
-      "after": "ca4b0feb"
+      "after": "9c4d0feb"
     },
     {
       "address": 1316956,
       "offset": 1284188,
       "before": "1c1a0fe3",
-      "after": "7c4b0fea"
+      "after": "4e4d0fea"
     },
     {
       "address": 1132364,
@@ -113,19 +113,19 @@
       "address": 2325236,
       "offset": 2292468,
       "before": "fcfdfdeb",
-      "after": "bc720beb"
+      "after": "8e740beb"
     },
     {
       "address": 2325244,
       "offset": 2292476,
       "before": "e0ffffea",
-      "after": "cd720bea"
+      "after": "9f740bea"
     },
     {
       "address": 5175584,
       "offset": 5110048,
       "before": "6c373a00",
-      "after": "70465100"
+      "after": "b84d5100"
     },
     {
       "address": 5175588,
@@ -135,13 +135,13 @@
     },
     {
       "offset": 292,
-      "before": "19450000",
-      "after": "36490000"
+      "before": "614c0000",
+      "after": "7e500000"
     },
     {
       "offset": 296,
-      "before": "19450000",
-      "after": "36490000"
+      "before": "614c0000",
+      "after": "7e500000"
     }
   ],
   "reference": "Debian clang 19.1.7 + GNU arm-none-eabi-ld; independent assembly, native bindings, full-file construction and UFP1 journal"

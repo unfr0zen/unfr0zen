@@ -36,12 +36,12 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 21] = [
+const REQUIRED: [&str; 23] = [
     "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
     "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
     "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
     "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so", "unfr0zen-apply-armv7",
-    "localcloud/liblocalcloud.so",
+    "localcloud/liblocalcloud.so", "theme/libunfr0zen-theme.so", "theme/libnestlocal_theme.so",
 ];
 
 fn firmware_missing(root: &Path) -> Vec<&'static str> {
@@ -53,7 +53,8 @@ fn firmware_missing(root: &Path) -> Vec<&'static str> {
 /// several times at once, for several targets, so one builds and the others
 /// wait for it. CI brings build/ along, and Windows cannot build it.
 fn build_firmware(root: &Path) {
-    let nestlocal = [root.join("crates/nestlocal"), root.join("Cargo.lock")];
+    let nestlocal = [root.join("crates/nestlocal"), root.join("crates/nestlocal-theme"), root.join("platform/common/theme"),
+                     root.join("Cargo.lock")];
     let apply = [root.join("crates/unfr0zen-apply"), root.join("crates/unfr0zen-core"), root.join("Cargo.lock")];
     for path in nestlocal.iter().chain(&apply) {
         println!("cargo:rerun-if-changed={}", path.display());
@@ -359,6 +360,38 @@ fn preloads(root: &Path, out: &Path) {
     fs::write(out.join("liblocalcloud.so"), data).unwrap();
 }
 
+/// What draws customizable themes on the gen 3 (platform/common/theme): the
+/// library preloaded into nlclient and nestlocal's theme library it loads;
+/// and the Lua themes (crates/nestlocal/themes), listed in themes.rs.
+fn theme(root: &Path, out: &Path) {
+    let themes = root.join("crates/nestlocal/themes");
+    println!("cargo:rerun-if-changed={}", themes.display());
+    let (mut files, mut dirs) = (Vec::new(), vec![themes.clone()]);
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+            let path = entry.unwrap().path();
+            println!("cargo:rerun-if-changed={}", path.display());
+            if path.is_dir() { dirs.push(path) } else { files.push(path) }
+        }
+    }
+    files.sort();
+    let list: String = files.iter().map(|path| {
+        // The name on the unit, whatever the build host's separator.
+        let name = path.strip_prefix(&themes).unwrap().components()
+            .map(|part| part.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join("/");
+        format!("({name:?}, include_bytes!({:?}).as_slice()),", path.display().to_string())
+    }).collect();
+    fs::write(out.join("themes.rs"), format!("&[{list}]")).unwrap();
+    for name in ["libunfr0zen-theme.so", "libnestlocal_theme.so"] {
+        let library = root.join("build/theme").join(name);
+        println!("cargo:rerun-if-changed={}", library.display());
+        let data = fs::read(&library)
+            .unwrap_or_else(|_| panic!("build/theme/{name} is missing: build it first (utils/build-firmware.sh)"));
+        assert_eq!((&data[..6], data[16], data[18]), (&b"\x7fELF\x01\x01"[..], 3, 40), "{name} is not an ARM shared library");
+        gzip(&data, &out.join(format!("{name}.gz")));
+    }
+}
+
 fn custom_screen(root: &Path, out: &Path) {
     for name in ["custom-screen.o", "j49-rcs-screen.o"] {
         let object = root.join("build").join(name);
@@ -383,6 +416,7 @@ fn main() {
     doom(&root, &out);
     custom_screen(&root, &out);
     preloads(&root, &out);
+    theme(&root, &out);
     // The gen3's radio image serves Thread and Zigbee alike, the gen2's
     // Thread image Thread alone; the Thread host tools beside them.
     for (dir, name, embedded) in [("build/radio", "radio.bin", "radio.bin"), ("build/radio", "radio.identity", "radio.identity"),

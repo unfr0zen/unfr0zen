@@ -3,7 +3,8 @@ version: 2.1
 # nestlocal and thread-rcp for the thermostat, carrying the radio images and
 # every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
 # from the cache, where the jobs upstream in the workflow stored them. The
-# patch bundle's unfr0zen-apply builds here too, with the same toolchain.
+# patch bundle's unfr0zen-apply builds here too, with the same toolchain, and
+# the gen 3's theme preload and theme library (platform/common/theme).
 
 jobs:
   nestlocal:
@@ -24,6 +25,10 @@ jobs:
           cache: nestlocal
           path: .work/nestlocal-target
           module: nestlocal
+      - cargo-target-restore:
+          cache: theme
+          path: .work/theme-target
+          module: nestlocal
       - module-build:
           module: nestlocal
           # The j49's zbwake.ko beside the gen 3's.
@@ -32,6 +37,9 @@ jobs:
       - cargo-target-store:
           cache: nestlocal
           path: .work/nestlocal-target
+      - cargo-target-store:
+          cache: theme
+          path: .work/theme-target
       - module-store:
           module: nestlocal
-          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so build/localcloud/liblocalcloud.so build/unfr0zen-apply-armv7
+          outputs: build/thread/nestlocal build/thread/thread-rcp build/nestlocal-armv7 build/wakefilter/libwakefilter.so build/localcloud/liblocalcloud.so build/theme/libunfr0zen-theme.so build/theme/libnestlocal_theme.so build/unfr0zen-apply-armv7

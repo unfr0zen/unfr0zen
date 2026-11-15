@@ -3,6 +3,15 @@
 set -eu
 umask 077
 BIN=/nestlabs/sbin
+# The programs and the radio's Thread image: on the gen 3's scratch volume,
+# else (the gen 2, or a unit patched before) the root volume.
+SCRATCH=/media/scratch/.unfr0zen/thread
+if [ -x "$SCRATCH/ot-daemon" ]; then BIN=$SCRATCH; fi
+DAEMON=$BIN/ot-daemon
+IMAGE=$SCRATCH/thread-rcp.bin
+[ -f "$IMAGE" ] || IMAGE=/usr/share/nestlocal/thread-rcp.bin
+IDENTITY=$SCRATCH/thread-rcp.identity
+[ -f "$IDENTITY" ] || IDENTITY=/usr/share/nestlocal/thread-rcp.identity
 STATE=/media/data/nestlocal-thread
 OPTIONS=/etc/nestlocal/options
 [ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
@@ -28,12 +37,12 @@ start)
     chmod 700 "$STATE"
     # wpantund must be disabled by the installer before either process owns SPI.
     [ -z "$(pidof wpantund)" ] && [ -z "$(pidof spi-server)" ] || exit 1
-    if ! "$BIN/thread-rcp" --probe >/dev/null 2>&1; then
-        /nestlabs/bin/zb-loader --app-easyload /usr/share/nestlocal/thread-rcp.bin >/tmp/nestlocal-thread-loader.log 2>&1 || true
-        "$BIN/thread-rcp" --probe >/dev/null 2>&1 || exit 1
+    if ! "$BIN/thread-rcp" --identity "$IDENTITY" --probe >/dev/null 2>&1; then
+        /nestlabs/bin/zb-loader --app-easyload "$IMAGE" >/tmp/nestlocal-thread-loader.log 2>&1 || true
+        "$BIN/thread-rcp" --identity "$IDENTITY" --probe >/dev/null 2>&1 || exit 1
     fi
     trap stop EXIT
-    "$BIN/thread-rcp" >/run/nestlocal-thread-pty 2>/tmp/nestlocal-thread-rcp.log &
+    "$BIN/thread-rcp" --identity "$IDENTITY" >/run/nestlocal-thread-pty 2>/tmp/nestlocal-thread-rcp.log &
     echo $! >/run/nestlocal-thread-rcp.pid
     count=0
     while [ ! -s /run/nestlocal-thread-pty ]; do
@@ -45,7 +54,7 @@ start)
     case "$serial" in /dev/pts/*) ;; *) exit 1;; esac
     cd "$STATE"
     # OpenThread requests SIGHUP on parent exit; keep the supervised daemon alive.
-    nohup "$BIN/ot-daemon" -I thread0 -d 4 -v "spinel+hdlc+uart://$serial?uart-baudrate=115200&no-reset" >/tmp/nestlocal-thread-daemon.log 2>&1 &
+    nohup "$DAEMON" -I thread0 -d 4 -v "spinel+hdlc+uart://$serial?uart-baudrate=115200&no-reset" >/tmp/nestlocal-thread-daemon.log 2>&1 &
     echo $! >/run/nestlocal-thread-daemon.pid
     count=0
     while ! "$BIN/ot-ctl" -I thread0 state >/dev/null 2>&1; do

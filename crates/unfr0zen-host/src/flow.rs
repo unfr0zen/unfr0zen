@@ -59,6 +59,9 @@ pub struct PatchInputs {
     pub wwn_boiler: bool,
     /// How the 3rd generation's boot ROM is entered for recovery.
     pub entry_point: EntryPoint,
+    /// Customizable home screen themes (the gen 3): themes chosen on the
+    /// UNFR0ZEN screen draw the home screen's dial, in nlclient on its GPU.
+    pub themes: bool,
     /// Doom, launched from the UNFR0ZEN screen (through nestlocal).
     pub doom: bool,
     /// Regulate from an external thermometer's readings: nestlocal plays a Nest
@@ -115,6 +118,7 @@ impl PatchInputs {
             ("zigbee", on(self.zigbee)),
             ("wwn-boiler", on(self.wwn_boiler)),
             ("entry-point", (self.entry_point != EntryPoint::Auto).then(|| self.entry_point.name().to_string())),
+            ("themes", on(self.themes)),
             ("doom", on(self.doom)),
             ("external-temperature", on(self.external_temperature)),
             ("dark-theme", on(self.dark_theme)),
@@ -197,6 +201,7 @@ impl PatchInputs {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
             doom: self.doom.then(assets::doom),
+            theme: self.themes.then(assets::theme),
             external_temperature: self.external_temperature,
             external_temperature_screen: if self.external_temperature { assets::J49_RCS_SCREEN.to_vec() } else { Vec::new() },
             dark_theme: self.dark_theme,
@@ -355,6 +360,8 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
     match unit.device {
         Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
             Err(failure("--dark-theme is only for the 2nd generation")),
+        Device::Diamond | Device::J49 if config.options.theme.is_some() =>
+            Err(failure("--themes is only for the 3rd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),

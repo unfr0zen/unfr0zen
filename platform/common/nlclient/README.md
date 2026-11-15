@@ -88,6 +88,15 @@ nlclient leaves its pid in `/var/run/unfr0zen/keeper.pid` (kind 2: and its
 globals) at its first bucket commit or click on this screen; a launcher
 whose nlclient is not that pid stops nlclient instead.
 
+## The dial's theme
+
+With customizable themes installed (gen 3), nestlocal's options carry
+`-themes` and this screen offers a Themes page: its choices are
+`/var/run/unfr0zen/theme.catalog` (`id<TAB>label` lines), the current one
+`theme.status`, and a choice is written to `theme.request` for nestlocal. The
+theme itself is drawn in nlclient's own GPU context by a preloaded library
+(`platform/common/theme`); the screen patch does not touch the dial.
+
 ## Gen 2 external temperature input
 
 Selecting external temperature on j49 enables the native RCS input and
@@ -182,7 +191,9 @@ and both hashes. It is generated per device, never used as a prebuilt shortcut:
 
 - `/nestlabs/share/images/G_unfr0zen_192px.png`
 - `/etc/unfr0zen/nlclient.undo.gz`
-- `/etc/unfr0zen/nlclient.original` — full original executable, root-only (mode 600)
+- `/etc/unfr0zen/nlclient.original` — full original executable, root-only (mode 600);
+  on the gen 3 `/media/scratch/.unfr0zen/backup/nlclient.original`, on its scratch
+  volume, where a patch moves one an earlier version left on the root volume
 
 Recovery creates and verifies the full original backup before replacing
 `nlclient`. Subsequent runs preserve it without rewriting it. For devices
@@ -249,7 +260,10 @@ commissioning and a Zigbee radio join remain device acceptance checks.
 
 ## Undo locally
 
-The full original is available directly at `/etc/unfr0zen/nlclient.original`.
+The full original is available directly at `/etc/unfr0zen/nlclient.original`
+(the gen 3's at `/media/scratch/.unfr0zen/backup/nlclient.original`). A gen 3
+whose scratch volume was wiped has only the undo journal, which turns the
+patched executable back into the original.
 Restore it to `/nestlabs/sbin/nlclient` with the executable's original ownership
 and permissions (normally root-owned, mode 755), while nlclient is stopped.
 

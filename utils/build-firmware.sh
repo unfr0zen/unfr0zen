@@ -15,7 +15,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 mkdir -p .work build
-nestlocal_target=armv7-unknown-linux-musleabihf
+nestlocal_target=armv7-unknown-linux-gnueabihf
 export NESTLOCAL_TARGET_DIR=${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}
 
 if [ "$(uname -s)" = Darwin ]; then
@@ -32,13 +32,14 @@ if [ "$(uname -s)" = Darwin ]; then
 else
     missing=
     for tool in git make gcc bc bison flex python3 clang cmake ninja arm-none-eabi-gcc arm-none-eabi-as arm-none-eabi-ld \
-                arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump cargo cargo-zigbuild; do
+                arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump arm-linux-gnueabihf-gcc arm-linux-gnueabihf-ar \
+                arm-linux-gnueabihf-strip cargo cargo-zigbuild; do
         command -v "$tool" > /dev/null || missing="$missing $tool"
     done
     [ -z "$missing" ] || { echo "Missing build tools:$missing. See README.md." >&2; exit 1; }
     python3 -c 'import PIL' 2> /dev/null || { echo "The boot logo needs Pillow (python3-pil). See README.md." >&2; exit 1; }
     if command -v rustup > /dev/null; then
-        rustup target add "$nestlocal_target" > /dev/null 2>&1 || true
+        rustup target add "$nestlocal_target" armv7-unknown-linux-musleabihf > /dev/null 2>&1 || true
     fi
     run() { "$@"; }
 fi

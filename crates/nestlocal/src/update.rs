@@ -23,8 +23,13 @@ use serde_json::{json, Value};
 
 use crate::logf;
 
-/// The engine the patch keeps on a unit that installs updates.
-const ENGINE: &str = "/nestlabs/sbin/unfr0zen-apply";
+/// The engine the patch keeps on a unit that installs updates: on the
+/// scratch volume, else where a unit patched before has it.
+const ENGINES: [&str; 2] = ["/media/scratch/.unfr0zen/bin/unfr0zen-apply", "/nestlabs/sbin/unfr0zen-apply"];
+
+fn engine() -> &'static str {
+    crate::scratch::installed(&ENGINES)
+}
 /// "unfr0zen VERSION", written by the patch.
 const VERSION_FILE: &str = "/etc/unfr0zen/version";
 /// The latest release, as GitHub's API describes it.
@@ -147,7 +152,7 @@ impl Updates {
         Arc::new(Updates {
             device,
             installed: std::fs::read_to_string(VERSION_FILE).ok().as_deref().and_then(installed),
-            can_install: Path::new(ENGINE).is_file(),
+            can_install: Path::new(engine()).is_file(),
             releases: releases.to_string(),
             store: store.to_path_buf(),
             latest: Mutex::new(load(store)),
@@ -226,7 +231,7 @@ impl Updates {
     /// unit's engine checks it either way.
     pub fn install(self: &Arc<Self>, request: Request) {
         if !self.can_install {
-            return logf!("update: this unit has no update engine ({ENGINE}): patch it with unfr0zen");
+            return logf!("update: this unit has no update engine ({}): patch it with unfr0zen", engine());
         }
         let (bundle, what) = match request {
             Request::Url(url) => (url.clone(), format!("the bundle at {url}")),
@@ -265,8 +270,8 @@ impl Updates {
         logf!("update: downloading {url}");
         let data = crate::fetch::get(url, BUNDLE_LIMIT, Duration::from_secs(600)).await?;
         std::fs::write(DOWNLOAD, &data).map_err(|e| format!("{DOWNLOAD}: {e}"))?;
-        let output = tokio::task::spawn_blocking(|| std::process::Command::new(ENGINE).args(["update", DOWNLOAD]).output())
-            .await.map_err(|e| e.to_string())?.map_err(|e| format!("{ENGINE}: {e}"))?;
+        let output = tokio::task::spawn_blocking(|| std::process::Command::new(engine()).args(["update", DOWNLOAD]).output())
+            .await.map_err(|e| e.to_string())?.map_err(|e| format!("{}: {e}", engine()))?;
         let _ = std::fs::remove_file(DOWNLOAD);
         for line in String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines()) {
             logf!("update: {line}");

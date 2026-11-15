@@ -1,6 +1,6 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
-//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, and Doom with
-//! its WAD for --doom. Each device's own firmware is in its module.
+//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, Doom with its
+//! WAD for --doom, and the gen 3's customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
 
@@ -51,6 +51,25 @@ pub fn doom() -> Overlay {
             ("nestlabs/share/images/G_unfr0zen_doom.png".into(), 0o644, include_bytes!(concat!(env!("OUT_DIR"), "/doom-logo.png")).to_vec()),
         ],
     }
+}
+
+/// The Lua themes (crates/nestlocal/themes), by their names there.
+const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs"));
+
+/// Customizable home screen themes for the gen 3: the library preloaded into
+/// nlclient, nestlocal's theme library it draws the themes with, and the
+/// themes, which go on the scratch volume with the library.
+pub fn theme() -> Overlay {
+    let mut files = vec![
+        (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
+         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
+        (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
+         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
+    ];
+    files.extend(THEMES.iter().map(|(name, data)| {
+        (format!("{}/{name}", unfr0zen_core::diamond3::scratch::THEMES), 0o644, data.to_vec())
+    }));
+    Overlay { directories: Vec::new(), files }
 }
 
 /// The onboard Thread transport's host side, installed only when selected;

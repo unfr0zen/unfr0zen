@@ -7,7 +7,10 @@
 # CLI/GUI settings in /etc/nestlocal/options take precedence. Units without
 # that file can use /media/system-config/nestlocal.options.
 
-DAEMON=/nestlabs/sbin/nestlocal
+# On the gen 3's scratch volume, else (the gen 2, or a unit patched before)
+# the root volume.
+DAEMON=/media/scratch/.unfr0zen/bin/nestlocal
+[ -x "$DAEMON" ] || DAEMON=/nestlabs/sbin/nestlocal
 PIDFILE=/var/run/nestlocal.pid
 OPTIONS=/etc/nestlocal/options
 [ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
@@ -33,7 +36,8 @@ start)
     done
     ;;
 stop)
-    start-stop-daemon -K -q -p ${PIDFILE} -x ${DAEMON}
+    # By name: one started from the other volume stops as well.
+    start-stop-daemon -K -q -p ${PIDFILE} -n nestlocal
     rm -f ${PIDFILE}
     [ ! -x /etc/init.d/nestlocal-thread ] || /etc/init.d/nestlocal-thread stop
     ;;

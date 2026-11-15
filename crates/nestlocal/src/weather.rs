@@ -38,6 +38,9 @@ struct State {
     humidity: Option<f64>,
     current: Fields,  // icon, sunrise, sunset
     forecast: Fields, // hourly, daily
+    /// Home Assistant's own condition ("rainy", "pouring", ...), finer
+    /// than the icon, for themes.
+    condition: Option<String>,
 }
 
 /// set/weather's payload: Home Assistant's own names, a weather entity's
@@ -150,6 +153,24 @@ impl Outdoor {
         Some(answer)
     }
 
+    /// Everything known so far, whatever is missing: temp_c, humidity,
+    /// the current conditions (icon, sunrise, sunset) and forecast, under
+    /// the names of the /weather answer, and Home Assistant's condition.
+    pub fn known(&self) -> Fields {
+        let s = self.state.lock().unwrap();
+        let mut known = Fields::new();
+        put(&mut known, "temp_c", s.temp);
+        put(&mut known, "humidity", s.humidity);
+        known.extend(s.current.clone());
+        if let Some(condition) = &s.condition {
+            known.insert("condition".into(), condition.as_str().into());
+        }
+        if !s.forecast.is_empty() {
+            known.insert("forecast".into(), Value::Object(s.forecast.clone()));
+        }
+        known
+    }
+
     pub fn set_weather(&self, w: &HAWeather) {
         let mut current = Fields::new();
         if let Some(icon) = nest_icon(&w.condition) {
@@ -186,6 +207,7 @@ impl Outdoor {
         let mut s = self.state.lock().unwrap();
         s.current = current;
         s.forecast = forecast;
+        s.condition = Some(w.condition.clone()).filter(|c| !c.is_empty());
     }
 }
 
@@ -251,5 +273,16 @@ mod tests {
         o.set(None, None); // nothing new: both stay
         assert_eq!(o.temperature(), Some(-0.5));
         assert_eq!(Value::Object(o.answer().unwrap()), json!({"current": {"temp_c": -0.5, "humidity": 50}}));
+    }
+
+    #[test]
+    fn known_gives_what_is_known_without_waiting_for_both_readings() {
+        let o = Outdoor::default();
+        assert!(o.known().is_empty());
+        o.set(Some(7.5), None);
+        o.set_weather(&HAWeather { condition: "rainy".into(), hourly: Some(vec![forecast("2026-11-14T15:00:00+00:00", 8.0, None)]),
+                                   ..Default::default() });
+        assert_eq!(Value::Object(o.known()), json!({"temp_c": 7.5, "icon": "rain", "condition": "rainy",
+            "forecast": {"hourly": [{"hour": 1, "time": 1_794_668_400, "temp_c": 8}]}}));
     }
 }
