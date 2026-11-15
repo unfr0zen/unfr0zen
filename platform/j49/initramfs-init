@@ -1,0 +1,43 @@
+#!/bin/sh
+# unfr0zen initramfs /init for the gen 1 and gen 2, booted from SDRAM.
+#
+# Mounts the root slot named by unfr0zen.slot= (its JFFS2 partition, found
+# by name in /proc/mtd) read-only and serves a shell on the ACM gadget for
+# the host to drive, or on the console when the kernel has no ACM gadget or
+# the command line says unfr0zen.console. The host decides every write.
+/bin/busybox mkdir -p /sbin /usr/bin /usr/sbin
+/bin/busybox --install -s
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+fail() {
+    echo "unfr0zen initramfs: $*" > /dev/kmsg
+    sleep 5
+    reboot -f
+}
+
+slot=$(sed -n 's/.*unfr0zen\.slot=\(root[01]\).*/\1/p' /proc/cmdline)
+[ -n "$slot" ] || fail "no unfr0zen.slot= on the kernel command line"
+mtd=$(awk -F: -v name="\"$slot\"" '$2 ~ name"$" { sub("mtd", "", $1); print $1 }' /proc/mtd)
+[ -n "$mtd" ] || fail "no $slot partition in /proc/mtd"
+mount -t jffs2 -o ro,noatime "/dev/mtdblock$mtd" /mnt || fail "cannot mount $slot (mtd$mtd)"
+tty=/dev/console
+# unfr0zen.console keeps the shell on the console, for a unit driven over its UART.
+grep -q 'unfr0zen\.console' /proc/cmdline ||
+for _ in $(seq 10); do
+    [ -c /dev/ttyGS0 ] && { tty=/dev/ttyGS0; break; }
+    sleep 1
+done
+echo "unfr0zen initramfs: $slot (mtd$mtd) at /mnt, shell on $tty" > /dev/kmsg
+if [ "$tty" = /dev/ttyGS0 ]; then
+    stty -F /dev/ttyGS0 raw -echo
+    # Through a pipe the shell is not interactive: no prompts in its output.
+    while true; do
+        cat /dev/ttyGS0 | sh > /dev/ttyGS0 2>&1
+    done
+fi
+while true; do
+    setsid sh -c "exec sh < $tty > $tty 2>&1"
+done

@@ -32,6 +32,12 @@
  *   host   -> 'USBU' 'ALL!' 0                              lift the limits
  *   device -> 'USBs' 0 status      0 unlocked, 1 refused (wrong magic word)
  *   host   -> 'USBx' 0 0                                   reset the SoC
+ *   host   -> 'USBb' machine length, then length bytes: the entry of a
+ *             kernel x-loader loaded with the flasher, then its ATAGs
+ *   device -> 'USBs' 0 status      0 booting, 1 refused (too long, or not
+ *             whole words); then, booting, the flasher leaves USB and
+ *             enters the kernel as a boot loader enters one: r0 0, r1 the
+ *             machine number, r2 the ATAGs (at 0x80000100)
  *   device -> 'USBe' page                                  a read stayed busy; halts
  */
 typedef unsigned char u8;
@@ -55,6 +61,15 @@ typedef unsigned int u32;
 #define PRM_RSTCTRL_RESET	0x04
 
 #define USB_BASE	0x480AB000
+#define USB_POWER	(USB_BASE + 0x01)
+#define USB_SOFTCONN	(1 << 6)
+#define USB_INTRTXE	(USB_BASE + 0x06)
+#define USB_INTRRXE	(USB_BASE + 0x08)
+#define USB_INTRUSBE	(USB_BASE + 0x0B)
+#define OTG_SYSCONFIG	(USB_BASE + 0x404)
+#define OTG_SOFTRESET	(1 << 1)
+#define OTG_SYSSTATUS	(USB_BASE + 0x408)
+#define OTG_RESETDONE	(1 << 0)
 #define EP1_FIFO	(USB_BASE + 0x24)
 #define EP1_TXCSR	(USB_BASE + 0x112)
 #define EP1_RXCSR	(USB_BASE + 0x116)
@@ -83,6 +98,9 @@ typedef unsigned int u32;
 #define CMD_ERASE	PACK4('U', 'S', 'B', 'E')
 #define CMD_ERROR	PACK4('U', 'S', 'B', 'e')
 #define CMD_UNLOCK	PACK4('U', 'S', 'B', 'U')
+#define CMD_BOOT	PACK4('U', 'S', 'B', 'b')
+#define ATAGS		0x80000100
+#define ATAGS_LIMIT	1024
 #define UNLOCK_MAGIC	PACK4('A', 'L', 'L', '!')
 
 #define STATUS_OK	0
@@ -92,6 +110,8 @@ typedef unsigned int u32;
 #define STATUS_WRITTEN	4
 
 #define ECC_OFFSET	36	/* OOB: BCH codes from here to the end */
+
+void enter_kernel(u32 entry, u32 machine, u32 atags) __attribute__((noreturn));
 
 /* x-loader leaves the caches off, so every instruction would be fetched
  * from SDRAM: the I-cache and branch prediction go on first (the MMU stays
@@ -110,6 +130,36 @@ __asm__(
 	"	isb\n"
 	"	bl flasher_main\n"
 	"1:	b 1b\n"
+	/* enter_kernel(entry, machine, atags): the CPU as U-Boot leaves it for
+	 * Linux (cleanup_before_linux), which x-loader does not: L2 invalidated
+	 * by the ROM (a GP device's service 1, as U-Boot's
+	 * omap3_gp_romcode_call; reset leaves it on and holding garbage, which
+	 * the kernel's cache cleaning would write to SDRAM), the MMU, caches,
+	 * branch prediction and alignment faults off (x-loader turns those on,
+	 * and the kernel's decompressor reads unaligned), the I-cache
+	 * invalidated. The ROM call may change r0-r5 and r12. */
+	"	.global enter_kernel\n"
+	"enter_kernel:\n"
+	"	push {r0, r1, r2}\n"
+	"	mov r12, #1\n"
+	"	mov r0, #0\n"
+	"	mcr p15, 0, r0, c7, c10, 4\n"	/* DSB */
+	"	mcr p15, 0, r0, c7, c10, 5\n"	/* DMB */
+	"	.word 0xe1600070\n"		/* SMC #0 */
+	"	ldmfd sp!, {r4, r5, r6}\n"
+	"	mrc p15, 0, r0, c1, c0, 0\n"
+	"	bic r0, r0, #0x1800\n"		/* SCTLR.I, SCTLR.Z */
+	"	bic r0, r0, #0x0007\n"		/* SCTLR.C, SCTLR.A, SCTLR.M */
+	"	mcr p15, 0, r0, c1, c0, 0\n"
+	"	isb\n"
+	"	mov r0, #0\n"
+	"	mcr p15, 0, r0, c7, c5, 0\n"	/* invalidate the I-cache */
+	"	mcr p15, 0, r0, c7, c5, 6\n"	/* and the branch predictor */
+	"	dsb\n"
+	"	isb\n"
+	"	mov r1, r5\n"
+	"	mov r2, r6\n"
+	"	bx r4\n"
 	".ltorg\n");
 
 struct stream {
@@ -426,6 +476,34 @@ void flasher_main(void)
 			put32(&s, 0);
 			put32(&s, unlocked ? STATUS_OK : STATUS_REFUSED);
 			flush(&s);
+		} else if (command[0] == CMD_BOOT) {
+			/* The entry word lands just below the ATAGs. */
+			status = command[2] > 4 && command[2] <= 4 + ATAGS_LIMIT && command[2] % 4 == 0
+				? STATUS_OK : STATUS_REFUSED;
+			if (status == STATUS_OK)
+				for (got = 0; got < command[2]; )
+					got += recv((u8 *)(ATAGS - 4) + got, command[2] - got);
+			put32(&s, CMD_STATUS);
+			put32(&s, 0);
+			put32(&s, status);
+			flush(&s);
+			if (status == STATUS_OK) {
+				/* Off USB once the host has the status, as
+				 * x-loader leaves it for a kernel
+				 * (udc_disconnect), and the controller reset to
+				 * how a boot from NAND finds it: the kernel's
+				 * gadget connects afresh. */
+				while (REG16(EP1_TXCSR) & PKTRDY)
+					;
+				REG16(USB_INTRTXE) = 0;
+				REG16(USB_INTRRXE) = 0;
+				REG8(USB_INTRUSBE) = 0;
+				REG8(USB_POWER) &= ~USB_SOFTCONN;
+				REG32(OTG_SYSCONFIG) |= OTG_SOFTRESET;
+				while (!(REG32(OTG_SYSSTATUS) & OTG_RESETDONE))
+					;
+				enter_kernel(REG32(ATAGS - 4), command[1], ATAGS);
+			}
 		} else if (command[0] == CMD_RESET) {
 			REG32(PRM_RSTCTRL) |= PRM_RSTCTRL_RESET;
 			for (;;)

@@ -91,7 +91,9 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
         .ok_or_else(|| crate::Error::Device("settings menu has no account".into()))?;
     let account = menu_words.remove(account);
     menu_words.insert(1, account);
-    let mut output = source.to_vec();
+    // Room for the payload from the start: growing a copy of the source would double it.
+    let mut output = Vec::with_capacity(offset.max(source.len()) + linked.bytes.len());
+    output.extend_from_slice(source);
     output[factory_offset..factory_offset + 4].copy_from_slice(&branch.to_le_bytes());
     for bucket in ["device", "shared", "schedule"] {
         let slot = elf.offset(discovery.anchors[&format!("{bucket}_commit_slot")])?;

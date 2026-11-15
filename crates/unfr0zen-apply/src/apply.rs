@@ -30,11 +30,21 @@ pub fn main() {
     let flag = |name: &str| args.iter().any(|a| a == name);
     let (dry_run, live) = (flag("--dry-run"), flag("--live"));
     let paths: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
+    if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--entropy=")) {
+        if let Err(error) = credit_entropy(Path::new(path)) {
+            eprintln!("unfr0zen-apply: {path}: {error}");
+            std::process::exit(1);
+        }
+    }
     let result = match paths[..] {
         ["update", bundle] => update(Path::new(bundle)),
-        [bundle, options, root, out] => run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run, live),
+        [bundle, options, root, out] => {
+            let generation = args.iter().find_map(|a| a.strip_prefix("--device="));
+            run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run, live, generation)
+        }
         _ => {
-            eprintln!("usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] | update BUNDLE");
+            eprintln!("usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--device=NAME] [--entropy=FILE] \
+                       | update BUNDLE");
             std::process::exit(2);
         }
     };
@@ -44,6 +54,33 @@ pub fn main() {
     }
 }
 
+/// Credits the kernel's pool with the host's random bytes in `path`. An
+/// initramfs on the gen 1 and gen 2 (Linux 2.6.37, without getrandom(2))
+/// gathers too little entropy for /dev/random to be ready, which the patch's
+/// random seed and salts wait for.
+#[cfg(target_os = "linux")]
+fn credit_entropy(path: &Path) -> Result<()> {
+    /// _IOW('R', 0x03, int[2]), from linux/random.h.
+    const RNDADDENTROPY: libc::c_int = 0x4008_5203;
+    let bytes = fs::read(path)?;
+    let mut info = Vec::with_capacity(8 + bytes.len());
+    info.extend_from_slice(&((bytes.len() * 8) as i32).to_ne_bytes());
+    info.extend_from_slice(&(bytes.len() as i32).to_ne_bytes());
+    info.extend_from_slice(&bytes);
+    let random = fs::OpenOptions::new().write(true).open("/dev/random")?;
+    // SAFETY: info is a struct rand_pool_info: entropy bits, buffer size, then the buffer.
+    if unsafe { libc::ioctl(std::os::fd::AsRawFd::as_raw_fd(&random), RNDADDENTROPY as _, info.as_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn credit_entropy(_: &Path) -> Result<()> {
+    Err(failure("crediting entropy needs Linux"))
+}
+
 fn failure(message: impl Into<String>) -> Error {
     Error::Device(message.into())
 }
@@ -51,14 +88,20 @@ fn failure(message: impl Into<String>) -> Error {
 fn device(name: &str) -> Result<Device> {
     match name {
         "diamond3" => Ok(Device::Diamond3),
+        "j49" => Ok(Device::J49),
+        "diamond" => Ok(Device::Diamond),
         other => Err(failure(format!("the bundle is for a {other}, which unfr0zen-apply does not patch"))),
     }
 }
 
 /// Runs one of the bundle's scripts from OUT, with the run's details in its environment.
 fn script(bundle: &Bundle, name: &str, out: &Path, env: &[(&str, String)]) -> Result<()> {
+    script_data(bundle.file(name)?, name, out, env)
+}
+
+fn script_data(data: &[u8], name: &str, out: &Path, env: &[(&str, String)]) -> Result<()> {
     let path = out.join(Path::new(name).file_name().unwrap());
-    fs::write(&path, bundle.file(name)?)?;
+    fs::write(&path, data)?;
     log::info!("Running {name}");
     let status = Command::new("sh").arg(&path).envs(env.iter().map(|(k, v)| (*k, v))).status()?;
     if !status.success() {
@@ -107,7 +150,9 @@ fn update(path: &Path) -> Result<()> {
 }
 
 /// Runs an executable held in memory: /tmp and the unit's other writable
-/// places are noexec. run gets the path to execute it by.
+/// places are noexec. run gets the path to execute it by. A kernel without
+/// memfd_create (the gen 1's and gen 2's 2.6.37) runs it from beside this
+/// engine instead, on their scratch volume, which allows executables.
 #[cfg(target_os = "linux")]
 fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
     use std::io::Write;
@@ -115,7 +160,16 @@ fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Resu
     // SAFETY: the name is NUL-terminated; a failed call returns -1, checked.
     let fd = unsafe { libc::memfd_create(c"unfr0zen-apply".as_ptr(), 0) };
     if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ENOSYS) {
+            return Err(error.into());
+        }
+        let path = std::env::current_exe()?.with_file_name("unfr0zen-apply.update");
+        fs::write(&path, executable)?;
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+        let ran = run(&path.display().to_string());
+        let _ = fs::remove_file(&path);
+        return Ok(ran?);
     }
     // SAFETY: fd was just created and nothing else owns it.
     let mut file = unsafe { fs::File::from_raw_fd(fd) };
@@ -128,10 +182,17 @@ fn run_from_memory<T>(_: &[u8], _: impl FnOnce(&str) -> std::io::Result<T>) -> R
     Err(failure("updates install on the unit"))
 }
 
-fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, live: bool) -> Result<()> {
+/// `generation`: the gen 1 or gen 2 the host read the unit's environment
+/// as, which share one bundle (named for the j49).
+fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, live: bool,
+       generation: Option<&str>) -> Result<()> {
     fs::create_dir_all(out)?;
-    let bundle = Bundle::unpack(&fs::read(bundle)?)?;
-    let target = device(&bundle.manifest.device)?;
+    let mut bundle = Bundle::unpack(&fs::read(bundle)?)?;
+    let target = match (device(&bundle.manifest.device)?, generation.map(device).transpose()?) {
+        (Device::J49 | Device::Diamond, Some(unit @ (Device::J49 | Device::Diamond))) => unit,
+        (bundled, None) => bundled,
+        (bundled, Some(unit)) => return Err(failure(format!("the bundle is for a {}, not a {}", bundled.name(), unit.name()))),
+    };
     log::info!("Bundle {} for the {}", bundle.manifest.version, bundle.manifest.device);
     let mut settings = read_settings(options)?;
     if live {
@@ -150,11 +211,15 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
 
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
         || options.theme.is_some() {
-        bundle.file(bundle::NESTLOCAL)?.to_vec()
+        bundle.files.remove(bundle::NESTLOCAL).map(|(_, data)| data)
+            .ok_or_else(|| failure(format!("bundle: no {}", bundle::NESTLOCAL)))?
     } else {
         Vec::new()
     };
-    let screen = bundle.file(bundle::SCREEN)?;
+    let screen = &bundle.file(bundle::SCREEN)?.to_vec();
+    // The rest is in options now: the 64 MB OMAP units cannot hold a second copy.
+    let post_patch = bundle.file(bundle::POST_PATCH)?.to_vec();
+    drop(bundle);
     let manifest = RefCell::new(serde_json::Value::Null);
     let build_screen = |source: &[u8]| -> Result<Vec<u8>> {
         log::info!("Discovering nlclient ABI and linking UNFR0ZEN settings");
@@ -179,8 +244,8 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
         None => nestlocal::generate_pki(),
     };
     let mut volume = if live { LocalVolume::live(root) } else { LocalVolume::new(root) };
-    let changes = patch::patch_on_device(&mut volume, target, &options, &nestlocal_binary, &mut new_pki, dry_run,
-                                         &build_screen)?;
+    let changes = patch::patch_owned(&mut volume, target, options, nestlocal_binary, &mut new_pki, dry_run,
+                                     &build_screen)?;
     let result = json!({
         "changes": changes.iter().map(|c| json!({"name": c.name, "action": c.action, "old": c.old, "new": c.new}))
             .collect::<Vec<_>>(),
@@ -191,7 +256,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     if !dry_run {
         let mut env = env.to_vec();
         env.push(("UNFR0ZEN_CHANGES", changes.len().to_string()));
-        script(&bundle, bundle::POST_PATCH, out, &env)?;
+        script_data(&post_patch, bundle::POST_PATCH, out, &env)?;
     }
     Ok(())
 }

@@ -110,7 +110,9 @@ impl Patch {
             (&self.output_sha, &self.stock_sha, self.stock_len)
         } else { (&self.stock_sha, &self.output_sha, self.output_len) };
         if sha256_hex(source) != *expected { return device("nlclient firmware hash mismatch"); }
-        let mut output = source.to_vec();
+        // Sized exactly: growing a copy of the source would double it.
+        let mut output = Vec::with_capacity(self.output_len.max(source.len()));
+        output.extend_from_slice(source);
         output.resize(self.output_len, 0);
         for edit in &self.edits {
             let bytes = if reverse { &edit.before } else { &edit.after };

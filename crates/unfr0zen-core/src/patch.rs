@@ -561,9 +561,20 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
                        new_pki: &mut dyn FnMut() -> Result<Pki>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
+    patch_owned(volume, target, options.clone(), nestlocal_binary.to_vec(), new_pki, dry_run, build_screen)
+}
+
+/// patch_on_device, moving the options' and nestlocal's files into the patch
+/// rather than copying them: the 64 MB OMAP units patching themselves
+/// cannot hold both.
+#[allow(clippy::too_many_arguments)]
+pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Options, nestlocal_binary: Vec<u8>,
+                   new_pki: &mut dyn FnMut() -> Result<Pki>,
+                   dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
-    // The gen 3 keeps unfr0zen's programs and data on its scratch volume.
-    let on_scratch = target == Device::Diamond3;
+    // unfr0zen's programs and data go on the scratch volume, of every
+    // generation, wherever the volume reaches it.
+    let on_scratch = volume.scratch();
     let moved = |name: &'static str| -> &'static str { if on_scratch { scratch::name(name) } else { name } };
     if options.thread.is_some() && (options.matter.is_none() || options.zigbee) {
         return device("Matter over Thread requires Matter and exclusive radio access");
@@ -606,7 +617,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     };
     let (mut tree, mut originals) = (Tree::new(), Originals::new());
     fetch(volume, &mut tree, &mut originals, rootfs.files, true, true)?;
-    let optional = (rootfs.optional_files)(options);
+    let optional = (rootfs.optional_files)(&options);
     fetch(volume, &mut tree, &mut originals, &optional.iter().map(String::as_str).collect::<Vec<_>>(), false, false)?;
     patch_root_password(&mut tree, &options.root_hash, rootfs.shadow_modes)?;
     if public_key.is_some() {
@@ -641,35 +652,35 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         overlay = Some(nestlocal::overlay(|name| tree.get(name).cloned(), options.mqtt.as_ref(),
                                           options.matter.as_ref(), options.zigbee || options.thread.is_some(),
                                           options.device_name.as_deref(), nestlocal_binary, &pki)?);
-        if let Some(thread) = &options.thread {
+        if let Some(thread) = options.thread.as_mut() {
             let overlay = overlay.as_mut().unwrap();
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
             *line = nestlocal::options(options.mqtt.as_ref(), options.matter.as_ref(), false, options.device_name.as_deref())?.0;
             line.pop();
             line.extend_from_slice(b" -matter-thread\n");
-            overlay.files.extend(thread.files.clone());
-            overlay.directories.extend(thread.directories.clone());
+            overlay.files.append(&mut thread.files);
+            overlay.directories.append(&mut thread.directories);
             let (_, _, monit) = overlay.files.iter_mut().find(|(name, _, _)| name == "etc/monit.d/nestlocal.monitrc").unwrap();
             *monit = String::from_utf8(monit.clone()).unwrap()
                 .replace("start program = \"/etc/init.d/nestlocal start\"",
                          "start program = \"/etc/init.d/nestlocal start\" with timeout 180 seconds").into_bytes();
             monit.extend_from_slice(include_bytes!("../../nestlocal/rootfs/thread.monitrc"));
         }
-        if let Some(doom) = &options.doom {
+        if let Some(doom) = options.doom.as_mut() {
             let overlay = overlay.as_mut().unwrap();
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
             line.pop();
             line.extend_from_slice(b" -doom\n");
-            overlay.files.extend(doom.files.clone());
-            overlay.directories.extend(doom.directories.clone());
+            overlay.files.append(&mut doom.files);
+            overlay.directories.append(&mut doom.directories);
         }
-        if let Some(theme) = &options.theme {
+        if let Some(theme) = options.theme.as_mut() {
             let overlay = overlay.as_mut().unwrap();
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
             line.pop();
             line.extend_from_slice(b" -themes\n");
-            overlay.files.extend(theme.files.clone());
-            overlay.directories.extend(theme.directories.clone());
+            overlay.files.append(&mut theme.files);
+            overlay.directories.append(&mut theme.directories);
         }
         if options.external_temperature {
             let overlay = overlay.as_mut().unwrap();
@@ -691,17 +702,17 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         }
     }
     let mut directories = Vec::new();
-    if let Some(overlay) = &overlay {
+    if let Some(overlay) = overlay.as_mut() {
         fetch(volume, &mut tree, &mut originals, &STALE_SECRETS, false, false)?;
         for name in STALE_SECRETS {
             tree.remove(name);
         }
         let names: Vec<&str> = overlay.files.iter().map(|(name, _, _)| name.as_str()).collect();
         fetch(volume, &mut tree, &mut originals, &names, false, false)?;
-        for (name, mode, data) in &overlay.files {
-            tree.insert(name.clone(), (data.clone(), *mode));
+        for (name, mode, data) in overlay.files.drain(..) {
+            tree.insert(name, (data, mode));
         }
-        directories = overlay.directories.clone();
+        directories = std::mem::take(&mut overlay.directories);
     }
     patch_backplate_sim(&mut tree, options.backplate_sim)?;
     fetch(volume, &mut tree, &mut originals, &["etc/hosts"], options.block_cloud, true)?;
@@ -714,7 +725,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
         fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
         let wake = options.matter.is_some() && !options.wake_filter.is_empty();
         if wake {
-            tree.insert(WAKE_FILTER.into(), (options.wake_filter.clone(), 0o755));
+            tree.insert(WAKE_FILTER.into(), (std::mem::take(&mut options.wake_filter), 0o755));
         }
         if tree.contains_key(NLSLEEP) {
             patch_wake_patterns(&mut tree, wake)?;
@@ -722,7 +733,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     if !options.record.is_empty() {
         fetch(volume, &mut tree, &mut originals, &[RECORD], false, true)?;
-        tree.insert(RECORD.into(), (options.record.clone(), 0o600));
+        tree.insert(RECORD.into(), (std::mem::take(&mut options.record), 0o600));
         directories.push(("etc/unfr0zen".into(), 0o755));
     }
     // nestlocal is nlclient's cloud: nlclient has to reach it whatever its network.
@@ -733,13 +744,13 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     // Updates come through nestlocal: the engine stays with it.
     fetch(volume, &mut tree, &mut originals, &[moved(APPLY)], false, false)?;
     if overlay.is_some() && !options.apply.is_empty() {
-        tree.insert(moved(APPLY).into(), (options.apply.clone(), 0o755));
+        tree.insert(moved(APPLY).into(), (std::mem::take(&mut options.apply), 0o755));
     }
     if overlay.is_some() {
         if options.local_cloud.is_empty() {
             return device("nestlocal needs the local cloud library for nlclient");
         }
-        tree.insert(LOCAL_CLOUD.into(), (options.local_cloud.clone(), 0o755));
+        tree.insert(LOCAL_CLOUD.into(), (std::mem::take(&mut options.local_cloud), 0o755));
     }
     if tree.contains_key(NESTLABS) {
         patch_local_cloud(&mut tree, overlay.is_some(), options.theme.is_some())?;
@@ -748,7 +759,7 @@ pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Optio
     }
     patch_root_rw(&mut tree, true)?;
     patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
-    (rootfs.patch)(&mut tree, options)?;
+    (rootfs.patch)(&mut tree, &options)?;
     if let Some(key) = &public_key {
         patch_authorized_key(&mut tree, key)?;
         directories.retain(|(name, _)| name != "root/.ssh");

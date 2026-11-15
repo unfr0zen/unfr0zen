@@ -3,7 +3,7 @@
 //!
 //! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
-//! - the j49's NAND flasher, dropbear, kernel and the x-loader its boot ROM
+//! - the j49's NAND flasher, dropbear, the busybox of its initramfs, kernel and the x-loader its boot ROM
 //!   takes over USB, and the gen 1's x-loader, built there too;
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
@@ -36,9 +36,9 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 23] = [
+const REQUIRED: [&str; 24] = [
     "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
-    "j49/nand-flasher.bin", "j49/dropbearmulti", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
+    "j49/nand-flasher.bin", "j49/dropbearmulti", "j49/busybox", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
     "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
     "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so", "unfr0zen-apply-armv7",
     "localcloud/liblocalcloud.so", "theme/libunfr0zen-theme.so", "theme/libnestlocal_theme.so",
@@ -307,6 +307,12 @@ fn j49(root: &Path, out: &Path) {
         .unwrap_or_else(|_| panic!("build/j49/dropbearmulti is missing: build it first (utils/build-firmware.sh)"));
     assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/j49/dropbearmulti is not an ARM ELF binary");
     gzip(&data, &out.join("dropbearmulti.gz"));
+    let busybox = root.join("build/j49/busybox");
+    println!("cargo:rerun-if-changed={}", busybox.display());
+    let data = fs::read(&busybox)
+        .unwrap_or_else(|_| panic!("build/j49/busybox is missing: build it first (utils/build-firmware.sh)"));
+    assert_eq!((&data[..4], data[18]), (&b"\x7fELF"[..], 40), "build/j49/busybox is not an ARM ELF binary");
+    gzip(&data, &out.join("j49-busybox.gz"));
     // x-loader builds in Docker too; without it the app reaches no OMAP unit.
     let xloader = root.join("build/j49/x-load.bin");
     println!("cargo:rerun-if-changed={}", xloader.display());
@@ -325,6 +331,12 @@ fn diamond(root: &Path, out: &Path) {
     // Its reset vector: b reset.
     assert!(xloader.is_empty() || xloader[3] == 0xea, "build/diamond/x-load.bin does not start with its vectors");
     fs::write(out.join("diamond-x-load.bin"), xloader).unwrap();
+    // Its kernel with a USB serial port, for its initramfs; Docker too.
+    let kernel = root.join("build/diamond/uImage");
+    println!("cargo:rerun-if-changed={}", kernel.display());
+    let kernel = fs::read(&kernel).unwrap_or_default();
+    assert!(kernel.is_empty() || kernel[..4] == [0x27, 0x05, 0x19, 0x56], "build/diamond/uImage is not a U-Boot image");
+    fs::write(out.join("diamond-uImage"), kernel).unwrap();
 }
 
 fn nestlocal(root: &Path, out: &Path) {

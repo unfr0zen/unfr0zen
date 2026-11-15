@@ -1,7 +1,8 @@
 //! The j49 firmware the binary carries (build.rs): Nest's x-loader, which the
 //! boot ROM runs from SRAM, the NAND flasher it loads, the kernel with a USB
 //! serial port (those two built in Docker, and empty in a build without it),
-//! the SSH server it has none of, and the EM357's Thread image.
+//! the SSH server it has none of, its initramfs's busybox, and the EM357's
+//! Thread image.
 
 use std::io::Read;
 
@@ -13,6 +14,14 @@ pub const KERNEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-uImage")
 /// Gzipped, as with_thread_radio takes them.
 pub const THREAD_RADIO: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/thread-radio-em357.bin.gz"));
 pub const THREAD_RADIO_IDENTITY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/thread-radio-em357.identity.gz"));
+
+/// The static musl busybox of the gen 1's and gen 2's initramfs.
+pub fn busybox() -> Vec<u8> {
+    let mut busybox = Vec::new();
+    flate2::read::GzDecoder::new(&include_bytes!(concat!(env!("OUT_DIR"), "/j49-busybox.gz"))[..])
+        .read_to_end(&mut busybox).expect("embedded at build time");
+    busybox
+}
 
 /// dropbear and its init script, for --ssh.
 pub fn ssh_server() -> Overlay {

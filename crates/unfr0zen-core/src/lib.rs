@@ -7,6 +7,7 @@ pub mod bundle;
 pub mod console;
 mod device;
 pub mod diamond3;
+pub mod initramfs;
 pub mod j49;
 #[cfg(unix)]
 pub mod local;

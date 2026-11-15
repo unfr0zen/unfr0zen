@@ -9,6 +9,7 @@ pub mod device;
 mod diamond;
 pub mod diamond3;
 pub mod flow;
+pub mod initramfs;
 pub mod j49;
 mod machine;
 pub mod nand;

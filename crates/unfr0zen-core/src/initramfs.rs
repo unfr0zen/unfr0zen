@@ -1,15 +1,13 @@
 //! The unfr0zen initramfs: a gzipped newc cpio with a static ARMv7 busybox,
-//! scripts/initramfs-init as /init, and the files the run brings at its root
-//! (the patch bundle and its options). Port of build_initramfs in unfr0zen.py.
+//! the device's /init (diamond3::INIT, j49::boot::INIT), and the files the
+//! run brings at its root (the patch bundle and its options). Port of
+//! build_initramfs in unfr0zen.py.
 
 use std::collections::BTreeMap;
 use std::io::Write;
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-
-/// The same /init unfr0zen.py's initramfs runs.
-pub const INIT: &[u8] = include_bytes!("../../../../platform/diamond3/initramfs-init");
 
 const DIRECTORY: u32 = 0o040000;
 const REGULAR: u32 = 0o100000;
@@ -51,14 +49,14 @@ pub fn cpio(entries: &[Entry]) -> Vec<u8> {
 }
 
 /// The gzipped initramfs. files: {name: contents}, each as /name.
-pub fn build(busybox: &[u8], files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+pub fn build(busybox: &[u8], init: &[u8], files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
     let mut entries: Vec<Entry> = ["bin", "dev", "lib", "mnt", "proc", "sys"].iter()
         .map(|name| Entry::new(name, DIRECTORY | 0o755, b"")).collect();
     // The kernel opens /dev/console for /init before devtmpfs is mounted.
     entries.push(Entry { rdev: (5, 1), ..Entry::new("dev/console", CHARACTER | 0o600, b"") });
     entries.push(Entry::new("bin/busybox", REGULAR | 0o755, busybox));
     entries.push(Entry::new("bin/sh", SYMLINK | 0o777, b"busybox"));
-    entries.push(Entry::new("init", REGULAR | 0o755, INIT));
+    entries.push(Entry::new("init", REGULAR | 0o755, init));
     entries.extend(files.iter().map(|(name, data)| Entry::new(name, REGULAR | 0o644, data)));
     // No name and a zero mtime: the same inputs give the same bytes.
     let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
@@ -98,9 +96,9 @@ mod tests {
     fn initramfs_layout() {
         let files = BTreeMap::from([("bundle.tgz".to_string(), b"blob".to_vec())]);
         let mut archive = Vec::new();
-        GzDecoder::new(&build(b"\x7fELF busybox", &files)[..]).read_to_end(&mut archive).unwrap();
+        GzDecoder::new(&build(b"\x7fELF busybox", b"#!/bin/sh\n", &files)[..]).read_to_end(&mut archive).unwrap();
         let members = members(&archive);
-        assert_eq!(members["init"].1, INIT);
+        assert_eq!(members["init"].1, b"#!/bin/sh\n");
         assert_eq!(members["init"].0, REGULAR | 0o755);
         assert_eq!((members["bin/sh"].0, &members["bin/sh"].1[..]), (SYMLINK | 0o777, &b"busybox"[..]));
         assert_eq!((members["dev/console"].0, members["dev/console"].2), (CHARACTER | 0o600, (5, 1)));
@@ -112,6 +110,6 @@ mod tests {
 
     #[test]
     fn the_same_inputs_give_the_same_initramfs() {
-        assert_eq!(build(b"busybox", &BTreeMap::new()), build(b"busybox", &BTreeMap::new()));
+        assert_eq!(build(b"busybox", b"init", &BTreeMap::new()), build(b"busybox", b"init", &BTreeMap::new()));
     }
 }

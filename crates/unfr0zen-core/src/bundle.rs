@@ -130,9 +130,8 @@ impl Bundle {
     /// Unpacks a bundle and checks its files against its manifest: every one
     /// listed, present, and unchanged. The signature is checked by verify.
     pub fn unpack(data: &[u8]) -> Result<Bundle> {
-        let mut tar = Vec::new();
-        flate2::read::GzDecoder::new(data).read_to_end(&mut tar).map_err(|e| Error::Device(format!("bundle: {e}")))?;
-        let mut archive = tar::Archive::new(&tar[..]);
+        // Read from the stream: the 64 MB OMAP units cannot hold the tar beside its members.
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data));
         let mut members = Files::new();
         for entry in archive.entries().map_err(|e| Error::Device(format!("bundle: {e}")))? {
             let mut entry = entry.map_err(|e| Error::Device(format!("bundle: {e}")))?;
@@ -141,7 +140,8 @@ impl Bundle {
             }
             let name = entry.path().map_err(|e| Error::Device(format!("bundle: {e}")))?.to_string_lossy().into_owned();
             let mode = entry.header().mode().map_err(|e| Error::Device(format!("bundle: {name}: {e}")))?;
-            let mut contents = Vec::new();
+            // Sized from the header: growing as it reads would double the largest.
+            let mut contents = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
             entry.read_to_end(&mut contents)?;
             if members.insert(name.clone(), (mode, contents)).is_some() {
                 return device(format!("bundle: {name} appears twice"));
