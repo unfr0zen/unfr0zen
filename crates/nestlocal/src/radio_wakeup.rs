@@ -40,5 +40,5 @@ pub fn arm() -> Result<(), String> {
 /// The radio has something to say: the unit must not go to sleep, since
 /// nHOST_INT is already low and no falling edge would wake it.
 pub fn pending() -> bool {
-    super::spi::host_int_low()
+    crate::spi::host_int_low()
 }

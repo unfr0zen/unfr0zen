@@ -21,9 +21,9 @@ pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";
 /// A file, so the screen's object and its goldens do not change per revision.
 pub const VERSION: &str = "etc/unfr0zen/version";
 pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
-pub const ICON_BYTES: &[u8] = include_bytes!("../../../platform/common/nlclient/assets/unfr0zen.png");
+pub const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen.png"));
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";
-pub const GLYPH_BYTES: &[u8] = include_bytes!("../../../platform/common/nlclient/assets/unfr0zen-glyph.png");
+pub const GLYPH_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
 
 pub struct Edit { pub offset: usize, pub before: Vec<u8>, pub after: Vec<u8> }
 pub struct Patch {
@@ -110,7 +110,9 @@ impl Patch {
             (&self.output_sha, &self.stock_sha, self.stock_len)
         } else { (&self.stock_sha, &self.output_sha, self.output_len) };
         if sha256_hex(source) != *expected { return device("nlclient firmware hash mismatch"); }
-        let mut output = source.to_vec();
+        // Sized exactly: growing a copy of the source would double it.
+        let mut output = Vec::with_capacity(self.output_len.max(source.len()));
+        output.extend_from_slice(source);
         output.resize(self.output_len, 0);
         for edit in &self.edits {
             let bytes = if reverse { &edit.before } else { &edit.after };

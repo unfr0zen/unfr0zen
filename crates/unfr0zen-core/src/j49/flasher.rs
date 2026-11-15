@@ -8,6 +8,8 @@
 //!   'USBE' block 0 -> 'USBs' block status
 //!   'USBU' 'ALL!' 0 -> 'USBs' 0 status: lift the limits below
 //!   'USBx' 0 0: reset the SoC
+//!   'USBb' machine length, then the kernel's entry and its ATAGs ->
+//!     'USBs' 0 status: enter a kernel loaded with the flasher (super::boot)
 //! It programs only erased pages of the boot and root partitions and the
 //! environment blocks, and erases only the environment blocks and the upper
 //! halves of the boot partitions, until unlocked for a whole-NAND restore or
@@ -31,6 +33,7 @@ const CMD_RESET: &[u8; 4] = b"USBx";
 const CMD_ERASE: &[u8; 4] = b"USBE";
 const CMD_ERROR: &[u8; 4] = b"USBe";
 const CMD_UNLOCK: &[u8; 4] = b"USBU";
+const CMD_BOOT: &[u8; 4] = b"USBb";
 const UNLOCK_MAGIC: &[u8; 4] = b"ALL!";
 /// (NAND ID bytes 0-1, name, size, bus width). Nest's own x-loader (5.9.4,
 /// drivers/mtd/nand/k9f1g08r0a.c) boots from the Micron, Spansion and Hynix
@@ -144,6 +147,20 @@ impl<B: Bulk> Flasher<B> {
             return device(format!("status for {what} {}, expected {expected}", word(4)));
         }
         Ok(word(8))
+    }
+}
+
+impl<B: Bulk> Flasher<B> {
+    /// Hands the unit to a kernel x-loader loaded beside the flasher, at
+    /// `entry`, with these ATAGs (super::boot). The flasher is gone after.
+    pub fn boot(mut self, entry: u32, machine: u32, atags: &[u8]) -> Result<()> {
+        let payload = [&entry.to_le_bytes()[..], atags].concat();
+        self.command(CMD_BOOT, machine, payload.len() as u32)?;
+        self.bulk.send(&payload, Duration::from_secs(5))?;
+        match self.status("boot", 0)? {
+            0 => Ok(()),
+            status => device(format!("the flasher did not boot the kernel: {}", status_text(status))),
+        }
     }
 }
 

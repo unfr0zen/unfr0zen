@@ -4,7 +4,7 @@
 //! Other platforms set the window icon at runtime (with_icon).
 
 fn main() {
-    let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let root = std::path::PathBuf::from(env!("UNFR0ZEN_ROOT"));
     third_party_licenses(&root);
     println!("cargo:rerun-if-env-changed=UNFR0ZEN_BUILD_VERSION");
     let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&root).output().ok()
@@ -24,7 +24,7 @@ fn main() {
     }
     // The target, not the host: the .exe may be cross-built on Linux.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let icon = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/icon/unfr0zen.ico");
+        let icon = concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen.ico");
         println!("cargo:rerun-if-changed={icon}");
         let mut res = winresource::WindowsResource::new();
         res.set_icon(icon);

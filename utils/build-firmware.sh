@@ -70,11 +70,11 @@ run python3 platform/diamond3/bootstrap/build_bootstrap.py
 step recovery sh platform/diamond3/uboot/build_uboot.sh
 step j49 sh platform/j49/build.sh build/j49
 step j49-dropbear sh platform/j49/dropbear.sh build/j49
-# The j49's and the gen 1's x-loaders and the j49's kernel with a USB serial
-# port build in Docker containers of their own, from the host. Without Docker
+step j49-busybox sh platform/j49/busybox.sh build/j49
+# The j49's and the gen 1's x-loaders and kernels with a USB serial port
+# build in Docker containers of their own, from the host. Without Docker
 # (and no build of them already) the app is built without them: it reaches
-# no OMAP unit of a generation without its x-loader, and --usb-shell is
-# unavailable on a j49 without the kernel.
+# no OMAP unit of a generation without its x-loader and kernel.
 if command -v docker > /dev/null || [ -f build/j49/x-load.bin ]; then
     echo "Building j49-xloader; log: .work/build-j49-xloader.log"
     sh platform/j49/xloader.sh build/j49 > .work/build-j49-xloader.log 2>&1 || { tail -n 40 .work/build-j49-xloader.log >&2; exit 1; }
@@ -91,7 +91,13 @@ if command -v docker > /dev/null || [ -f build/j49/uImage ]; then
     echo "Building j49-kernel; log: .work/build-j49-kernel.log"
     sh platform/j49/kernel.sh build/j49 > .work/build-j49-kernel.log 2>&1 || { tail -n 40 .work/build-j49-kernel.log >&2; exit 1; }
 else
-    echo "Skipping the j49 kernel: it needs Docker; --usb-shell will be unavailable on a j49" >&2
+    echo "Skipping the j49 kernel: it needs Docker; the app will patch no gen 2" >&2
+fi
+if command -v docker > /dev/null || [ -f build/diamond/uImage ]; then
+    echo "Building diamond-kernel; log: .work/build-diamond-kernel.log"
+    sh platform/j49/kernel.sh build/diamond diamond > .work/build-diamond-kernel.log 2>&1 || { tail -n 40 .work/build-diamond-kernel.log >&2; exit 1; }
+else
+    echo "Skipping the gen 1's kernel: it needs Docker; the app will patch no gen 1" >&2
 fi
 # The radio's firmware, from Silicon Labs' SDK and OpenThread at pinned
 # commits, is built by the Thread step below; nestlocal carries it.

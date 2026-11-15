@@ -46,8 +46,8 @@ pub const CA_FILE: &str = "etc/nestlocal/mqtt-ca.pem";
 /// word-splits the options.
 pub const NAME_FILE: &str = "etc/nestlocal/device-name";
 pub const RANDOM_SEED: &str = "etc/nestlocal/random-seed";
-const INIT: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.init");
-const MONITRC: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.monitrc");
+const INIT: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.init"));
+const MONITRC: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.monitrc"));
 
 /// The stock files the overlay edits, as the unit has them.
 /// nestlocal's options; present once nestlocal is installed.
@@ -488,7 +488,7 @@ pub struct Overlay {
 /// The nestlocal overlay for a unit, from its own stock files (contents and
 /// mode); the files it edits keep the unit's mode.
 pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool,
-               name: Option<&str>, binary: &[u8], pki: &Pki) -> Result<Overlay> {
+               name: Option<&str>, binary: Vec<u8>, pki: &Pki) -> Result<Overlay> {
     let text = |name: &str| -> Result<String> {
         let (data, _) = stock(name).map_or_else(|| device(format!("{name} is missing from the unit")), Ok)?;
         String::from_utf8(data).or_else(|_| device(format!("{name} is not text")))
@@ -507,7 +507,7 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
     let product = configure_matter_ble(edit_product_config(&text("etc/nestlabs/product.config")?)?,
         matter.is_some(), stock(BLE_FIRMWARE).map(|(data, _)| data).as_deref());
     let mut files = vec![
-        ("nestlabs/sbin/nestlocal".to_string(), 0o755, binary.to_vec()),
+        ("nestlabs/sbin/nestlocal".to_string(), 0o755, binary),
         ("etc/nestlocal/server.crt".to_string(), 0o644, pki.server_crt.clone()),
         ("etc/nestlocal/server.key".to_string(), 0o600, pki.server_key.clone()),
         (OPTIONS.to_string(), 0o644, options),
@@ -778,7 +778,7 @@ mod tests {
         let (one, _) = pkis();
         let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
         let mut files = stock();
-        let first = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7", one).unwrap();
+        let first = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
         let by_name: BTreeMap<_, _> = first.files.iter().map(|(n, m, d)| (n.clone(), (*m, d.clone()))).collect();
         let rcs = String::from_utf8(by_name["etc/init.d/rcS"].1.clone()).unwrap();
         assert!(rcs.find(RCS_LINE).unwrap() < rcs.find(RCS_BEFORE).unwrap());
@@ -793,7 +793,7 @@ mod tests {
         }
         assert!(!String::from_utf8_lossy(&by_name["etc/monitrc"].1).contains(WPANTUND_LINE));
         assert_eq!(by_name["etc/init.d/networking-defines"].1, WITHOUT_WPAN.as_bytes());
-        let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7", one).unwrap();
+        let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
         assert_eq!(again.files, first.files);
     }
 
@@ -802,7 +802,7 @@ mod tests {
         let (pki, _) = pkis();
         let mut files = stock();
         let make = |files: &BTreeMap<String, Vec<u8>>| {
-            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7", pki)
+            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), pki)
         };
         let seed = |overlay: Overlay| overlay.files.into_iter().find(|(name, _, _)| name == RANDOM_SEED).unwrap().2;
         assert_ne!(seed(make(&files).unwrap()), seed(make(&files).unwrap()));
@@ -819,7 +819,7 @@ mod tests {
         files.remove(UNLOCK_BUNDLE);
         files.insert("etc/nestlabs/client.config".into(),
                      b"<a key=\"cloudregisterurl\" value=\"http://homeassistant.local:9543/entry\"/>\n".to_vec());
-        let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7", one).unwrap();
+        let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), one).unwrap();
         let by_name: BTreeMap<_, _> = made.files.iter().map(|(n, _, d)| (n.clone(), d.clone())).collect();
         assert!(!by_name.contains_key(UNLOCK_BUNDLE));
         assert_eq!(String::from_utf8_lossy(&by_name["etc/nestlabs/client.config"]),

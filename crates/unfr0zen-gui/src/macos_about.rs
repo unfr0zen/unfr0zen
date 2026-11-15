@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn native_panel_has_version_icon_and_no_credits() {
-        let data = NSData::with_bytes(include_bytes!("../../../assets/icon/unfr0zen-macos.png"));
+        let data = NSData::with_bytes(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen-macos.png")));
         let icon = NSImage::initWithData(NSImage::alloc(), &data).expect("app icon decodes in AppKit");
         assert!(icon.size().width > 0.0 && icon.size().height > 0.0);
         let panel = options(&icon);

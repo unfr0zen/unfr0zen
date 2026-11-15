@@ -684,6 +684,12 @@ impl Volume for Slot {
         false
     }
 
+    /// The slot alone: what the patch puts on scratch on a mounted unit stays
+    /// on the root volume here, where the unit's programs find it too.
+    fn scratch(&self) -> bool {
+        false
+    }
+
     fn shell_binary(&mut self) -> Result<String> {
         for name in ["bin/busybox", "bin/toybox"] {
             if let Some(ino) = self.lookup(name, true)? {

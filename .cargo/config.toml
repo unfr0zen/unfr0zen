@@ -1,0 +1,5 @@
+# The workspace root, for the files crates embed from outside their own
+# directory (platform/, assets/, utils/, other crates):
+# include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/...")).
+[env]
+UNFR0ZEN_ROOT = { value = ".", relative = true }

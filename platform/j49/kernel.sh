@@ -18,15 +18,26 @@
 # module's source.
 #
 #     platform/j49/kernel.sh OUT
+#
+# With diamond, OUT/uImage alone: the gen 1's, from configs/diamond's
+# release_defconfig with the same USB serial port, which the gen 1's
+# initramfs runs on (j49::boot); its own kernel stays in its NAND.
+#
+#     platform/j49/kernel.sh OUT diamond
 set -eu
 
-[ $# -eq 1 ] || { echo "usage: $0 OUT" >&2; exit 2; }
+[ $# -eq 1 ] || [ $# -eq 2 ] && [ "${2:-diamond}" = diamond ] || { echo "usage: $0 OUT [diamond]" >&2; exit 2; }
+board=${2:-j49}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$(dirname "$dir")")
 mkdir -p "$1"
 out=$(CDPATH= cd -- "$1" && pwd)
 module=$dir/zbwake/zbwake.c
-if [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ] && [ -f "$out/zbwake.ko" ] && [ "$out/zbwake.ko" -nt "$0" ] \
+if [ "$board" = diamond ] && [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ]; then
+    echo "$out/uImage is up to date"
+    exit 0
+fi
+if [ "$board" = j49 ] && [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ] && [ -f "$out/zbwake.ko" ] && [ "$out/zbwake.ko" -nt "$0" ] \
     && [ "$out/zbwake.ko" -nt "$module" ]; then
     echo "$out/uImage and $out/zbwake.ko are up to date"
     exit 0
@@ -42,30 +53,33 @@ if [ "$(git -C "$source" rev-parse -q --verify HEAD 2> /dev/null)" != "$commit" 
     git -C "$source" checkout -q --detach "$commit"
 fi
 
-volume=unfr0zen-j49-kernel
+volume=unfr0zen-$board-kernel
 docker volume create "$volume" > /dev/null
 git -C "$source" archive --format=tar "$commit" |
     docker run --rm -i -v "$volume:/vol" "$image" sh -ec 'rm -rf /vol/src /vol/out; mkdir -p /vol/src /vol/out; tar -x -C /vol/src'
-docker run --rm -v "$volume:/vol" -v "$out:/out" -v "$module:/zbwake/zbwake.c:ro" "$image" sh -ec '
+docker run --rm -e board="$board" -v "$volume:/vol" -v "$out:/out" -v "$module:/zbwake/zbwake.c:ro" "$image" sh -ec '
     apt-get update -qq > /dev/null
     apt-get install -y -qq gcc-arm-linux-gnueabihf gcc make bc perl u-boot-tools > /dev/null 2>&1
     k="make -C /vol/src/linux O=/vol/out ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf-"
     acm=/vol/src/linux/drivers/usb/gadget/f_acm.c
     perl -0pi -e "s/desc->bDeviceClass = USB_CLASS_COMM;\s*desc->bDeviceSubClass = USB_CDC_SUBCLASS_ACM;/desc->bDeviceClass = USB_CLASS_MISC;\n\t\tdesc->bDeviceSubClass = 0x02;\n\t\tdesc->bDeviceProtocol = 0x01;/" $acm
     grep -q "desc->bDeviceClass = USB_CLASS_MISC;" $acm
-    sed "s/^# CONFIG_USB_DYNAMIC_ACM is not set\$/CONFIG_USB_DYNAMIC_ACM=y/" /vol/src/configs/j49/release_defconfig > /vol/out/.config
+    sed "s/^# CONFIG_USB_DYNAMIC_ACM is not set\$/CONFIG_USB_DYNAMIC_ACM=y/" /vol/src/configs/$board/release_defconfig > /vol/out/.config
     yes "" | $k oldconfig > /vol/out/oldconfig.log
     grep -q "^CONFIG_USB_DYNAMIC_ACM=y\$" /vol/out/.config
     $k -j"$(nproc)" zImage modules > /vol/out/make.log 2>&1 || { tail -n 40 /vol/out/make.log; exit 1; }
+    if [ "$board" = j49 ]; then
     mkdir -p /vol/zbwake
     cp /zbwake/zbwake.c /vol/zbwake/zbwake.c
     echo "obj-m := zbwake.o" > /vol/zbwake/Kbuild
     $k M=/vol/zbwake modules > /vol/out/zbwake.log 2>&1 || { tail -n 40 /vol/out/zbwake.log; exit 1; }
     cp /vol/zbwake/zbwake.ko /out/zbwake.ko.partial
+    chown '"$(id -u):$(id -g)"' /out/zbwake.ko.partial
+    fi
     # As the units boot0 image: loaded and entered at 0x80008000.
     mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n Linux-2.6.37 \
         -d /vol/out/arch/arm/boot/zImage /out/uImage.partial > /dev/null
-    chown '"$(id -u):$(id -g)"' /out/uImage.partial /out/zbwake.ko.partial'
+    chown '"$(id -u):$(id -g)"' /out/uImage.partial'
 mv "$out/uImage.partial" "$out/uImage"
-mv "$out/zbwake.ko.partial" "$out/zbwake.ko"
+[ "$board" = diamond ] || mv "$out/zbwake.ko.partial" "$out/zbwake.ko"
 echo "Built $out/uImage ($(wc -c < "$out/uImage") bytes)"

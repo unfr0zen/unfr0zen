@@ -8,7 +8,7 @@ mod bridge;
 mod clock;
 mod cloud;
 mod commands;
-mod device;
+use nestlocal::device;
 mod doom;
 mod entropy;
 mod theme;

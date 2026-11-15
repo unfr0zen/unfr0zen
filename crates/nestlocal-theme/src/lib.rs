@@ -466,7 +466,7 @@ mod tests {
     }
     #[test]
     fn existing_lua_themes_load() {
-        let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nestlocal/themes");
+        let themes = Path::new(env!("UNFR0ZEN_ROOT")).join("crates/nestlocal/themes");
         let mut names: Vec<String> = std::fs::read_dir(&themes).unwrap().map(|e| e.unwrap().path())
             .filter(|p| p.join("theme.lua").is_file())
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
@@ -538,7 +538,7 @@ mod tests {
     fn previews() {
         let out = std::path::PathBuf::from(std::env::var("THEME_PREVIEWS").expect("THEME_PREVIEWS=DIR"));
         std::fs::create_dir_all(&out).unwrap();
-        let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nestlocal/themes");
+        let themes = Path::new(env!("UNFR0ZEN_ROOT")).join("crates/nestlocal/themes");
         let names = std::env::var("THEME_PREVIEW_THEMES").unwrap_or("analog,lcd,weather".into());
         let day = 1_794_660_000_i64; // 2026-11-14 12:40 UTC
         let weather = |condition: &str, temp: f64| serde_json::json!({"temp_c": temp, "humidity": 70, "condition": condition,

@@ -49,6 +49,12 @@ pub trait Volume {
     fn checks_space(&self) -> bool {
         true
     }
+    /// Whether the scratch volume is reachable under the volume
+    /// (media/scratch), where the patch keeps unfr0zen's programs and data
+    /// (diamond3::scratch). A root slot patched in memory has only itself.
+    fn scratch(&self) -> bool {
+        true
+    }
     /// "uid mode" of bin/busybox or bin/toybox; empty if it has neither.
     fn shell_binary(&mut self) -> Result<String>;
     /// Replaces or creates a file by a rename.

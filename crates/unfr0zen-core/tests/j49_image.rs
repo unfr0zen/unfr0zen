@@ -172,7 +172,7 @@ fn the_patch_applies_to_both_slots() {
     use unfr0zen_core::patch::{patch_on_device, root_hash, Options};
     use unfr0zen_core::Device;
     let Some(image) = image() else { return };
-    let object = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o");
+    let object = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o");
     let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (utils/build-firmware.sh)", object.display()) };
     let build_screen = |source: &[u8]| unfr0zen_core::nlclient::build(source, &object);
     let pki = generate_pki().unwrap();
@@ -219,8 +219,8 @@ fn the_patch_applies_to_both_slots() {
         // The settings screens are dark when asked for.
         let original = back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2;
         if dark {
-            let golden: serde_json::Value = serde_json::from_str(include_str!(
-                "../../../platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json")).unwrap();
+            let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
+                "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"))).unwrap();
             let hex = |value: &serde_json::Value| u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
             for edit in golden["edits"].as_array().unwrap() {
                 let at = elf_offset(&original, hex(&edit[0]));

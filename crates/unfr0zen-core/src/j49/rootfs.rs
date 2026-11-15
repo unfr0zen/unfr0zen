@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn a_j49_without_password_login_starts_dropbear_with_keys_only() {
-        let init = include_str!("../../../../platform/j49/ssh.init");
+        let init = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/ssh.init"));
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (b"a\n${INITDIR}/sshd start\nb\n".to_vec(), 0o750))]);
         let server = Overlay { directories: vec![], files: vec![(SSH_INIT.into(), 0o755, init.as_bytes().to_vec())] };
         patch_ssh(&mut tree, Some(&server), false).unwrap();

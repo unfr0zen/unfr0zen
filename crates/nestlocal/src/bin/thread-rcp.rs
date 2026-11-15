@@ -1,13 +1,5 @@
 //! Nest SPI to OpenThread HDLC bridge. Requires exclusive radio access.
-#[path = "../device/mod.rs"]
-#[allow(dead_code)]
-mod device;
-#[path = "../zigbee/spi.rs"]
-#[allow(dead_code)]
-mod spi;
-#[path = "../radio_wakeup.rs"]
-#[allow(dead_code)]
-mod wakeup;
+use nestlocal::{radio_wakeup as wakeup, spi};
 
 fn payload(response: &[u8]) -> Result<&[u8], String> {
     match response.split_first() {

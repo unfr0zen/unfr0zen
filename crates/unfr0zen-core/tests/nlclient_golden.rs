@@ -11,8 +11,7 @@ use unfr0zen_core::{
     shell::sha256_hex,
 };
 fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
+    Path::new(env!("UNFR0ZEN_ROOT"))
         .canonicalize()
         .unwrap()
 }

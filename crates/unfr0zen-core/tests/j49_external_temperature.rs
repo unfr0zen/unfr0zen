@@ -26,15 +26,15 @@ fn target(instruction: u32, address: u32) -> u32 {
 
 #[test]
 fn rcs_object_matches_the_independent_reference_without_firmware() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(env!("UNFR0ZEN_ROOT"));
     let path = std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"));
     let Ok(object) = std::fs::read(path) else {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the j49 RCS object");
         return;
     };
-    let golden: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json")).unwrap();
+    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
+        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
     let linked = nlclient::linker::link(&object, golden["ui_address"].as_u64().unwrap() as u32,
         &serde_json::from_value(golden["ui_bindings"].clone()).unwrap()).unwrap();
     assert_eq!(linked.bytes.len(), golden["ui_size"].as_u64().unwrap() as usize);
@@ -46,7 +46,7 @@ fn rcs_object_matches_the_independent_reference_without_firmware() {
 
 #[test]
 fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(env!("UNFR0ZEN_ROOT"));
     let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from)
         .unwrap_or_else(|| root.join(".work/firmware"));
     let object = std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from)
@@ -58,8 +58,8 @@ fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
     };
     let rcs_object = std::fs::read(std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"))).expect("build the j49 RCS screen object");
-    let golden: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json")).unwrap();
+    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
+        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
     let screen = nlclient::builder::build(&stock, &object).unwrap().output;
     assert_eq!(unfr0zen_core::shell::sha256_hex(&stock), golden["stock_sha256"]);
     assert_eq!(unfr0zen_core::shell::sha256_hex(&screen), golden["screen_sha256"]);

@@ -110,7 +110,7 @@ mod tests {
     /// The preload's names, which theme.c reads: each line is one of them.
     #[test]
     fn names_match_the_preload() {
-        let preload = include_str!("../../../../platform/common/theme/theme.c");
+        let preload = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/theme/theme.c"));
         for name in ["dial_slot", "dial_draw", "dial_event_slot", "dial_event", "figures_slot", "figures_draw",
                      "background_slot", "background_draw", "brightness_manager", "read_als", "settings_view",
                      "thermostat_view", "view_offset", "current_temperature", "current_humidity", "leaf_slot"]
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn reviewed_builds_bind_every_name() {
-        let firmware = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.work/firmware");
+        let firmware = std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware");
         for sample in ["nlclient-gen3-2025", "nlclient-gen3-6.5-14"] {
             let Ok(stock) = std::fs::read(firmware.join(sample)) else {
                 assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");

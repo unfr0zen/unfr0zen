@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 fn english() -> &'static HashMap<String, String> {
     static CATALOG: OnceLock<HashMap<String, String>> = OnceLock::new();
-    CATALOG.get_or_init(|| serde_json::from_str(include_str!("../locales/en.json")).expect("valid English GUI catalog"))
+    CATALOG.get_or_init(|| serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.json"))).expect("valid English GUI catalog"))
 }
 
 pub fn text(key: &str) -> &'static str {

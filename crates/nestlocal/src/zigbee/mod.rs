@@ -19,9 +19,8 @@ mod clusters;
 mod ezsp;
 mod network;
 mod radio;
-mod spi;
-#[path = "../radio_wakeup.rs"]
-pub mod wakeup;
+pub use nestlocal::radio_wakeup as wakeup;
+use nestlocal::spi;
 mod zcl;
 
 use std::collections::BTreeMap;

@@ -190,8 +190,8 @@ mod tests {
 
     #[test]
     fn edits_match_the_independent_golden() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json")).unwrap();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
+            "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"))).unwrap();
         assert_eq!(STOCK_SHA, golden["stock_sha256"].as_str().unwrap());
         let hex = |value: &serde_json::Value| u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
         let expected: Vec<(u32, u32)> = golden["edits"].as_array().unwrap().iter()

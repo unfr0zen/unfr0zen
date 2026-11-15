@@ -6,7 +6,7 @@ use unfr0zen_core::Slot;
 
 fn kernels() -> Vec<(String, Vec<u8>)> {
     let mut kernels = Vec::new();
-    let built = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../build/j49/uImage");
+    let built = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("build/j49/uImage");
     if let Ok(image) = std::fs::read(&built) {
         kernels.push(("build/j49/uImage".into(), image));
     }
