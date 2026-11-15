@@ -293,7 +293,7 @@ async fn run(config: flags::Config) {
         doom::start();
     }
     if config.themes {
-        theme::start(store.clone(), config.serial.clone());
+        theme::start(store.clone(), config.serial.clone(), outdoor.clone());
     }
     if let (true, Some(bridge)) = (config.zigbee, &bridge) {
         zigbee::start(bridge.clone(), config.zigbee_store.clone().into());

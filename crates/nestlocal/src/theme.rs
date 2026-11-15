@@ -8,8 +8,10 @@
 //! The files, under settings_ui::DIR: theme.catalog (`id<TAB>label` lines)
 //! and theme.status (the chosen theme's label) for the Themes page, which
 //! answers in theme.request; theme.native.enabled while a theme is chosen
-//! (absent for stock), theme.native.json (`{"theme", "dev", "shared"}`) for
-//! the library, theme-marker.png (480 pixels square, every one RGBA
+//! (absent for stock), theme.native.json for the library (`theme`, the
+//! device and shared buckets as `dev` and `shared`, `state` as MQTT's state
+//! topic has it, and `weather`: Home Assistant's outdoor readings, conditions
+//! and forecast, weather::Outdoor::known), theme-marker.png (480 pixels square, every one RGBA
 //! 12 34 56 ff) for the preload to mark the theme's place in nlclient's
 //! drawing with, and theme.native.ready once all of these are written.
 //!
@@ -22,8 +24,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::json::Fields;
 use crate::store::Store;
-use crate::{logf, settings_ui};
+use crate::weather::Outdoor;
+use crate::{bridge, logf, settings_ui};
 
 /// Where the patch installs the themes (unfr0zen-core's diamond3::scratch::THEMES),
 /// one directory each. A scratch volume wiped since leaves only stock.
@@ -34,7 +38,8 @@ const CHOSEN: &str = "/media/data/nestlocal.theme";
 
 /// The themes the UNFR0ZEN screen offers, by the names it asks for them
 /// with, and as it shows them: nlclient's own dial, then the themes.
-const THEMES: &[(&str, &str)] = &[("stock", "Stock"), ("hyperdrive", "Hyperdrive"), ("nest-gen4", "Nest 4th Gen")];
+const THEMES: &[(&str, &str)] = &[("stock", "Stock"), ("hyperdrive", "Hyperdrive"), ("nest-gen4", "Nest 4th Gen"),
+                                  ("analog", "Analog"), ("lcd", "LCD"), ("weather", "Weather")];
 
 /// The theme `name` as the UNFR0ZEN screen shows it, if it is one.
 fn label(name: &str) -> Option<&'static str> {
@@ -59,9 +64,13 @@ fn marker() -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// theme.native.json: the theme and the buckets the library draws from.
-fn state(theme: &str, dev: Value, shared: Value) -> Vec<u8> {
-    json!({"theme": theme, "dev": dev, "shared": shared}).to_string().into_bytes()
+/// theme.native.json: the theme and what the library draws from.
+fn state(theme: &str, dev: Value, shared: Value, weather: Fields) -> Vec<u8> {
+    let shown = match (&dev, &shared) {
+        (Value::Object(dev), Value::Object(shared)) => Value::Object(bridge::state(dev, shared)),
+        _ => Value::Null,
+    };
+    json!({"theme": theme, "dev": dev, "shared": shared, "state": shown, "weather": weather}).to_string().into_bytes()
 }
 
 /// Makes `name` the theme shown: its label for the Themes page, and the
@@ -80,8 +89,8 @@ fn select(name: &str) -> std::io::Result<()> {
 }
 
 /// Offers the themes and serves the chosen one, from the buckets of the
-/// unit `serial`.
-pub fn start(store: Arc<Store>, serial: String) {
+/// unit `serial` and the weather in `outdoor`.
+pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
     let (tx, rx) = mpsc::channel::<()>();
     let (device, shared) = (format!("device.{serial}"), format!("shared.{serial}"));
     let watched = (device.clone(), shared.clone());
@@ -99,11 +108,13 @@ pub fn start(store: Arc<Store>, serial: String) {
             theme = "stock".into();
         }
         let buckets = |key: &str| store.get(key).map_or(Value::Null, |o| Value::Object(o.value));
-        let publish = |theme: &str| settings_ui::publish("theme.native.json", &state(theme, buckets(&device), buckets(&shared)));
+        let publish = |theme: &str, weather: &Fields| settings_ui::publish("theme.native.json",
+            &state(theme, buckets(&device), buckets(&shared), weather.clone()));
+        let mut weather = outdoor.known();
         let ready = marker().map_err(std::io::Error::other)
             .and_then(|png| settings_ui::publish("theme-marker.png", &png))
             .and_then(|()| settings_ui::publish("theme.catalog", catalog.as_bytes()))
-            .and_then(|()| publish(&theme))
+            .and_then(|()| publish(&theme, &weather))
             .and_then(|()| select(&theme))
             .and_then(|()| settings_ui::publish("theme.native.ready", b"1"));
         if let Err(e) = ready {
@@ -117,6 +128,11 @@ pub fn start(store: Arc<Store>, serial: String) {
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             };
             changed |= rx.try_iter().count() > 0;
+            let known = outdoor.known();
+            if known != weather {
+                weather = known;
+                changed = true;
+            }
             let request = Path::new(settings_ui::DIR).join("theme.request");
             if let Ok(name) = std::fs::read_to_string(&request) {
                 let _ = std::fs::remove_file(&request);
@@ -126,7 +142,7 @@ pub fn start(store: Arc<Store>, serial: String) {
                     // The library is on only while its state names a theme:
                     // the state first for a theme, and for stock select
                     // alone, the state following below.
-                    let state = if theme == "stock" { Ok(()) } else { publish(&theme) };
+                    let state = if theme == "stock" { Ok(()) } else { publish(&theme, &weather) };
                     if let Err(e) = std::fs::write(CHOSEN, &theme).and(state).and_then(|()| select(&theme)) {
                         logf!("theme: {e}");
                     }
@@ -135,7 +151,7 @@ pub fn start(store: Arc<Store>, serial: String) {
                 }
             }
             if changed {
-                if let Err(e) = publish(&theme) {
+                if let Err(e) = publish(&theme, &weather) {
                     logf!("theme: {e}");
                 }
             }
@@ -185,10 +201,19 @@ mod tests {
     }
 
     #[test]
-    fn state_carries_the_theme_and_buckets() {
-        let state: Value = serde_json::from_slice(&state("hyperdrive", json!({"temperature_scale": "F"}), Value::Null)).unwrap();
-        assert_eq!(state["theme"], "hyperdrive");
-        assert_eq!(state["dev"]["temperature_scale"], "F");
-        assert!(state["shared"].is_null());
+    fn state_carries_the_theme_buckets_mqtt_state_and_weather() {
+        let weather = json!({"temp_c": 4.5, "icon": "snow"}).as_object().unwrap().clone();
+        let first: Value = serde_json::from_slice(&state("hyperdrive", json!({"temperature_scale": "F"}), Value::Null,
+                                                         weather)).unwrap();
+        assert_eq!(first["theme"], "hyperdrive");
+        assert_eq!(first["dev"]["temperature_scale"], "F");
+        assert!(first["shared"].is_null() && first["state"].is_null(), "no state before the unit reports");
+        assert_eq!(first["weather"]["icon"], "snow");
+        let second: Value = serde_json::from_slice(&state("nest-gen4", json!({"temperature_scale": "C", "current_humidity": 41}),
+            json!({"target_temperature_type": "heat", "target_temperature": 20.6, "hvac_heater_state": true}), Fields::new())).unwrap();
+        assert_eq!(second["state"]["mode"], "heat");
+        assert_eq!(second["state"]["target"], 20.5);
+        assert_eq!(second["state"]["action"], "heating");
+        assert_eq!(second["state"]["current_humidity"], 41);
     }
 }

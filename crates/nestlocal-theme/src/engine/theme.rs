@@ -171,6 +171,9 @@ pub struct Theme {
     /// The last view given to Lua and its table: while only the time moves,
     /// the table is kept and its `now` updated.
     last: std::cell::RefCell<Option<(Ui, Table)>>,
+    /// The last `ui.nest` given to Lua and its table, kept until nestlocal
+    /// writes new data.
+    nest: std::cell::RefCell<Option<(Nest, Table)>>,
 }
 
 impl std::fmt::Debug for Theme {
@@ -207,7 +210,7 @@ impl Theme {
         }
         fonts.sort();
         debug!("theme: {name} loaded from {}: design {design}, {} fonts", dir.display(), fonts.len());
-        Ok(Theme { lua, deadline, name, dir: dir.to_path_buf(), design, fonts, draw, converting: Default::default(), wake: Cell::new(None), last: Default::default() })
+        Ok(Theme { lua, deadline, name, dir: dir.to_path_buf(), design, fonts, draw, converting: Default::default(), wake: Cell::new(None), last: Default::default(), nest: Default::default() })
     }
 
     /// Draws one frame; true while the theme is animating and wants another.
@@ -220,7 +223,16 @@ impl Theme {
                 table.clone()
             }
             _ => {
-                let table = ui.to_lua(&self.lua).map_err(|e| e.to_string())?;
+                let mut nest = self.nest.borrow_mut();
+                let nest = match nest.as_ref() {
+                    Some((data, table)) if *data == ui.nest => table.clone(),
+                    _ => {
+                        let table = ui.nest.to_lua(&self.lua).map_err(|e| e.to_string())?;
+                        *nest = Some((ui.nest.clone(), table.clone()));
+                        table
+                    }
+                };
+                let table = ui.to_lua(&self.lua, nest).map_err(|e| e.to_string())?;
                 *last = Some((ui.clone(), table.clone()));
                 table
             }
@@ -507,6 +519,59 @@ pub struct Ui {
     pub changed_target: f64,
     /// When the target was last turned.
     pub turned_target: f64,
+    pub nest: Nest,
+}
+
+/// What nestlocal gives the themes, as it comes (theme.native.json), as
+/// `ui.nest`: `device` and `shared`, the unit's buckets; `state`, the
+/// fields MQTT's state topic has (what Home Assistant shows); `weather`,
+/// Home Assistant's outdoor temperature and humidity (`temp_c`,
+/// `humidity`), conditions (`condition`, its own; `icon`, the unit's;
+/// `sunrise`, `sunset`) and forecast (`forecast.hourly`, `forecast.daily`). Views of the same data compare
+/// equal.
+#[derive(Clone, Debug, Default)]
+pub struct Nest(pub Rc<serde_json::Value>);
+
+impl PartialEq for Nest {
+    fn eq(&self, other: &Nest) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Nest {
+    fn to_lua(&self, lua: &Lua) -> mlua::Result<Table> {
+        let nest = lua.create_table()?;
+        for (name, key) in [("device", "dev"), ("shared", "shared"), ("state", "state"), ("weather", "weather")] {
+            nest.set(name, json(lua, &self.0[key])?)?;
+        }
+        Ok(nest)
+    }
+}
+
+/// A JSON value as Lua's: null is nil, numbers are numbers, arrays count
+/// from 1.
+fn json(lua: &Lua, value: &serde_json::Value) -> mlua::Result<LuaValue> {
+    use serde_json::Value as Json;
+    Ok(match value {
+        Json::Null => LuaValue::Nil,
+        Json::Bool(b) => LuaValue::Boolean(*b),
+        Json::Number(n) => LuaValue::Number(n.as_f64().unwrap_or(0.0)),
+        Json::String(s) => LuaValue::String(lua.create_string(s)?),
+        Json::Array(items) => {
+            let table = lua.create_table_with_capacity(items.len(), 0)?;
+            for (i, item) in items.iter().enumerate() {
+                table.set(i + 1, json(lua, item)?)?;
+            }
+            LuaValue::Table(table)
+        }
+        Json::Object(fields) => {
+            let table = lua.create_table_with_capacity(0, fields.len())?;
+            for (key, item) in fields {
+                table.set(key.as_str(), json(lua, item)?)?;
+            }
+            LuaValue::Table(table)
+        }
+    })
 }
 
 /// The local time.
@@ -517,6 +582,11 @@ pub struct Clock {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
+    /// Seconds since 1970 (UTC), to the second, and the local time's
+    /// offset from UTC in seconds: for times nestlocal gives as epoch
+    /// seconds (sunrise, sunset, the forecast's hours).
+    pub epoch: i64,
+    pub utc_offset: i32,
     pub twelve_hour: bool,
     /// While someone is near Farsight: its digital clock's and its analog
     /// clock's date lines, "Saturday, October 17" and "SAT 17" in English.
@@ -605,8 +675,9 @@ impl Ui {
         Ui { now: o.now, ..self.clone() } == *o
     }
 
-    fn to_lua(&self, lua: &Lua) -> mlua::Result<Table> {
+    fn to_lua(&self, lua: &Lua, nest: Table) -> mlua::Result<Table> {
         let ui = lua.create_table()?;
+        ui.set("nest", nest)?;
         ui.set("now", self.now)?;
         ui.set("screen", self.screen)?;
         ui.set("fan_on", self.fan_on)?;
@@ -666,6 +737,8 @@ impl Ui {
         clock.set("hour", self.clock.hour)?;
         clock.set("minute", self.clock.minute)?;
         clock.set("second", self.clock.second)?;
+        clock.set("epoch", self.clock.epoch)?;
+        clock.set("utc_offset", self.clock.utc_offset)?;
         clock.set("twelve_hour", self.clock.twelve_hour)?;
         clock.set("weekday_date", self.clock.weekday_date.as_deref())?;
         clock.set("weekday_day", self.clock.weekday_day.as_deref())?;

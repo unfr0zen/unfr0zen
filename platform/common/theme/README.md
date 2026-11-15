@@ -11,7 +11,7 @@ setpoints.
 |-|-|
 | `theme.c` → `/nestlabs/lib/libunfr0zen-theme.so` | Preloaded into nlclient beside `liblocalcloud.so`. Hooks the dial's, its figures', the background's and the thermostat screen's vtable slots, replaces the dial's draw with the theme's, and asks nlclient for a redraw each frame while the theme moves, about once a second while it stands still. |
 | `crates/nestlocal-theme` → `libnestlocal_theme.so` | The theme host and painters (femtovg and batched quads, LuaJIT), loaded by the preload on nlclient's GL thread. |
-| `crates/nestlocal/src/theme.rs` (`-themes`) | Offers the installed themes on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets. |
+| `crates/nestlocal/src/theme.rs` (`-themes`) | Offers the installed themes on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets, the fields of MQTT's state topic and Home Assistant's weather. |
 | `unfr0zen-core`'s `nlclient::theme` | Writes `/etc/unfr0zen/theme.bindings` for the unit's stock nlclient at the patch. |
 
 ## How the theme is drawn
@@ -29,7 +29,20 @@ Each frame the theme reads the native control model through the preload
 (`nestlocal_native_theme_v1`): target, room temperature, heat-cool ends and the
 end picked or being edited (the slider layer's word at `0xec`), mode, the
 heating or cooling backdrop, humidity and the leaf. The ring's turns reach the
-theme from the thermostat screen's event hook.
+theme from the thermostat screen's event hook. The rest comes from nestlocal:
+`ui.thermostat` takes the stages running, Early-On, Sunblock, the time to
+target, the outside temperature and stock's weather picture from it, and
+`ui.nest` holds all of it as nestlocal gives it: `device` and `shared` (the
+unit's buckets), `state` (what MQTT's state topic, and so Home Assistant,
+shows) and `weather` (Home Assistant's outdoor readings, its condition,
+sunrise, sunset and forecast). `ui.clock` gives the local time with its
+epoch seconds and UTC offset, for the times the weather gives as epoch
+seconds.
+
+A theme that animates for long, as the Weather theme's rain and snow, draws
+its particles as stamps of layers it drew once (`gfx:warp_layer`): each is
+one textured quad, and runs of the same layer at the same opacity are one
+GPU draw.
 
 The library tells the preload when the theme needs its next frame
 (`nestlocal_theme_next`): at once while it animates, when it asked with
