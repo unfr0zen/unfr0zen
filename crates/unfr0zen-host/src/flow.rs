@@ -358,8 +358,8 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
     progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
-        Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
-            Err(failure("--dark-theme is only for the 2nd generation")),
+        Device::Diamond3 if config.options.dark_theme =>
+            Err(failure("--dark-theme is only for the 1st and 2nd generation")),
         Device::Diamond | Device::J49 if config.options.theme.is_some() =>
             Err(failure("--themes is only for the 3rd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),

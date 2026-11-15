@@ -155,9 +155,9 @@ fn prepare_settings(config: &flags::Config) {
         if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
             logf!("external temperature: {e}");
         }
-    } else if device::current().ble.is_some() || device::current().generation == 2 {
+    } else if device::current().ble.is_some() || device::current().omap() {
         let store = store::Store::new(&config.state);
-        let settings = (device::current().generation == 2).then_some(std::path::Path::new(path));
+        let settings = device::current().omap().then_some(std::path::Path::new(path));
         let where_id = sensor::where_id(&store, &config.serial, settings);
         if let Err(e) = sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref()) {
             logf!("external temperature: {e}");
@@ -165,7 +165,7 @@ fn prepare_settings(config: &flags::Config) {
     }
 }
 
-/// The stand-in sensor over gen 3 BLE or gen 2's loopback RCS input, or gone
+/// The stand-in sensor over gen 3 BLE or the gen 1's and gen 2's loopback RCS input, or gone
 /// from a unit that no longer has the option.
 fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc<sensor::Sensor>> {
     let identity = std::path::Path::new(&config.external_temperature_store);
@@ -174,7 +174,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         return None;
     }
     let device = device::current();
-    if device.ble.is_none() && device.generation != 2 {
+    if device.ble.is_none() && !device.omap() {
         logf!("external temperature: this unit has no supported sensor transport");
         return None;
     }
@@ -186,10 +186,10 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
             return None;
         }
     };
-    let gen2 = device.generation == 2;
-    let where_id = sensor::where_id(store, &config.serial, gen2.then_some(std::path::Path::new(&config.settings)));
+    let omap = device.omap();
+    let where_id = sensor::where_id(store, &config.serial, omap.then_some(std::path::Path::new(&config.settings)));
     sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
-    if gen2 {
+    if omap {
         // Its Sensors view lists the sensor under the room, so it follows a move.
         sensor::keep_location(store, &config.serial, &sensor.bucket);
     } else {

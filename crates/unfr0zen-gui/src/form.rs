@@ -174,8 +174,8 @@ impl Form {
             themes: self.themes && self.device.or(self.last_device) == Some(Device::Diamond3),
             doom: self.doom,
             external_temperature: self.external_temperature && self.supports_external_temperature(),
-            // Only for the gen 2 the checkbox was offered for.
-            dark_theme: self.dark_theme && self.device.or(self.last_device) == Some(Device::J49),
+            // Only for the gen 1 or gen 2 the checkbox was offered for.
+            dark_theme: self.dark_theme && matches!(self.device.or(self.last_device), Some(Device::Diamond | Device::J49)),
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
             ssh_key_only: self.ssh && !self.ssh_password_login,
@@ -461,8 +461,8 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
-        // Offered only with a gen 2 chosen or on the bus.
-        if self.known_device(bus) == Some(Device::J49) {
+        // Offered only with a gen 1 or gen 2 chosen or on the bus.
+        if matches!(self.known_device(bus), Some(Device::Diamond | Device::J49)) {
             crate::toggle_card(ui, &mut self.dark_theme, true, crate::tr!("form.dark_theme"), crate::tr!("form.dark_theme_hint"));
         }
         // Offered only with a gen 3 chosen or on the bus.
@@ -1024,7 +1024,7 @@ mod tests {
         form.dark_theme = true;
         assert!(form.inputs().dark_theme && form.config().unwrap().options.dark_theme);
         form.device = Some(Device::Diamond3);
-        assert!(!form.inputs().dark_theme, "only for a gen 2");
+        assert!(!form.inputs().dark_theme, "only for a gen 1 or gen 2");
         assert!(!form.dialog_pending());
     }
 }

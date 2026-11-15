@@ -1,4 +1,5 @@
-//! Gen 2's loopback-only RCS input, restricted to the temperature command.
+//! The gen 1's and gen 2's loopback-only RCS input, restricted to the
+//! temperature command.
 use super::elf::{align, bytes, half, word, Elf};
 use crate::{device, shell::sha256_hex, Result};
 
@@ -12,7 +13,7 @@ const RETRY_REPLY: &[u8] = b"Retry\0";
 fn branch(from: u32, to: u32, opcode: u32) -> Result<u32> {
     let delta = i64::from(to) - i64::from(from) - 8;
     if delta % 4 != 0 || !(-(1 << 25)..(1 << 25)).contains(&delta) {
-        return device("j49 external temperature branch out of range");
+        return device("external temperature branch out of range");
     }
     Ok(opcode | ((delta >> 2) as u32 & 0xffffff))
 }
@@ -156,7 +157,7 @@ fn screen_bindings() -> std::collections::BTreeMap<String, u32> {
 /// The caller includes these edits in the same reversible screen journal.
 pub fn patch(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()> {
     if sha256_hex(stock) != STOCK_SHA {
-        return device("j49 external temperature requires the reviewed nlclient 5.9.4-5 binary");
+        return device("the external temperature requires the reviewed nlclient 5.9.4-5 binary");
     }
     extend(stock, output, screen_object)
 }
@@ -184,15 +185,15 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
                                (simulation, 0xebff8824), (temperature, 0xebfdfdfc),
                                (temperature_result, 0xeaffffe0)] {
         if word(output, offset)? != expected {
-            return device("j49 external temperature patch site changed");
+            return device("the external temperature patch site changed");
         }
     }
     if bytes(output, table, 12)? != bytes(stock, table, 12)? {
-        return device("j49 external temperature command table changed");
+        return device("the external temperature command table changed");
     }
     let phoff = word(output, 28)? as usize;
     let stride = half(output, 42)? as usize;
-    if stride != 32 { return device("unsupported j49 program header size"); }
+    if stride != 32 { return device("unsupported nlclient program header size"); }
     let mut segment = None;
     for i in 0..half(output, 44)? as usize {
         let at = phoff + i * stride;
@@ -201,16 +202,16 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
         if word(output, at)? == 1 && word(output, at + 24)? == 5
             && offset >= stock.len() && offset.checked_add(size) == Some(output.len())
             && word(output, at + 20)? as usize == size {
-            if segment.is_some() { return device("ambiguous j49 payload segment"); }
+            if segment.is_some() { return device("ambiguous nlclient payload segment"); }
             segment = Some((at, offset, word(output, at + 8)?));
         }
     }
     let Some((header, offset, base)) = segment else {
-        return device("j49 external temperature needs the linked screen payload");
+        return device("the external temperature needs the linked screen payload");
     };
     let start = align(output.len(), 4)?;
     let address = base.checked_add((start - offset) as u32)
-        .ok_or_else(|| crate::Error::Device("j49 payload address overflow".into()))?;
+        .ok_or_else(|| crate::Error::Device("external temperature payload address overflow".into()))?;
     let mut code = startup(address)?;
     let read_address = address + code.len() as u32;
     code.extend(bounded_read(read_address, read_address)?);
@@ -230,9 +231,9 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     code.resize(align(code.len(), 4)?, 0);
     let screen = super::linker::link(screen_object, address + code.len() as u32, &screen_bindings())?;
     let post_entry = screen.symbols.get("rcs_post_reading").copied()
-        .ok_or_else(|| crate::Error::Device("j49 RCS payload has no reading gate".into()))?;
+        .ok_or_else(|| crate::Error::Device("the RCS payload has no reading gate".into()))?;
     let reader = screen.symbols.get("rcs_read_command").copied()
-        .ok_or_else(|| crate::Error::Device("j49 RCS payload has no command reader".into()))?;
+        .ok_or_else(|| crate::Error::Device("the RCS payload has no command reader".into()))?;
     let read_code = bounded_read(read_address, reader)?;
     let read_at = (read_address - address) as usize;
     code[read_at..read_at + read_code.len()].copy_from_slice(&read_code);
@@ -249,7 +250,7 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     output.resize(start, 0);
     output.extend(code);
     let size = u32::try_from(output.len() - offset)
-        .map_err(|_| crate::Error::Device("j49 payload size overflow".into()))?;
+        .map_err(|_| crate::Error::Device("external temperature payload size overflow".into()))?;
     for at in [header + 16, header + 20] {
         output[at..at + 4].copy_from_slice(&size.to_le_bytes());
     }

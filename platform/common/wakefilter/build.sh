@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds libwakefilter.so, the library preloaded into nlsleepd (wakefilter.c),
-# into OUT: one for every unit, so for the gen 2's Cortex-A8 and with nothing
+# into OUT: one for every unit, so for the gen 1's and gen 2's Cortex-A8 and with nothing
 # of glibc newer than its 2.19. Needs zig, on PATH or as python3's ziglang
 # module (the build image has the module).
 #

@@ -384,7 +384,7 @@ static u32 parse_number(const char *text, int *at, int count) {
     for (; *at < count && text[*at] >= '0' && text[*at] <= '9'; ++*at) value = value * 10 + (text[*at] - '0');
     return value;
 }
-/* The framebuffer's width: 480 on a gen 3, 320 on a gen 2. */
+/* The framebuffer's width: 480 on a gen 3, 320 on a gen 1 or gen 2. */
 static int display_width(void) {
     char size[24];
     int at = 0;
@@ -571,7 +571,7 @@ static void keeper_start(void *globals) {
     unsigned int thread;
     native_pthread_create(&thread, 0, keeper, globals);
 }
-/* The gen 2's flip (HANDOVER_FLIP). nlclient draws straight into its mapping
+/* The gen 1's and gen 2's flip (HANDOVER_FLIP). nlclient draws straight into its mapping
  * of fb0's two pages, so while the display is owned that mapping is
  * replaced, in place, by private memory: nlclient draws there unseen and
  * nothing is panned. Each owned frame waits FLIP_WAIT, as the vsync it
@@ -1058,7 +1058,7 @@ static void no_reload(void *raw) { (void)raw; }
 #define IMAGE_LIFT 24
 #define MATTER_IMAGE_LIFT 10
 #define DOOM_IMAGE_LIFT 20
-/* The gen 2's text rows reach this much further above their anchor. */
+/* The gen 1's and gen 2's text rows reach this much further above their anchor. */
 #define GEN2_TEXT_RISE 12
 /* The pictured pages' and other pages' inset from the round display's
  * edge, in the gen 3's layout. */
@@ -1149,7 +1149,7 @@ static void subtitle_text(void *context, int x, int y, void *text,
 /* How far the title rises over the menu glyph, in the gen 3's layout. */
 #define TITLE_LIFT 40
 /* The menu glyph: 80 px, centred this far above the tile's centre at the
- * menu's resting (half) scale; on the gen 2, 44/80 of it, lower. */
+ * menu's resting (half) scale; on the gen 1 and gen 2, 44/80 of it, lower. */
 #define GLYPH_SIZE 80
 #define GLYPH_Y (-120)
 #define GEN2_GLYPH_SIZE 44
@@ -1176,7 +1176,7 @@ static int screen_draw(void *screen, void *context) {
         if (s->menu_glyph) {
             /* Native menu titles settle at half scale; glyph coordinates
              * describe the full 80px image at that resting size, as the
-             * gen 3's own glyphs are. The gen 2's are smaller and lower:
+             * gen 3's own glyphs are. The gen 1's and gen 2's are smaller and lower:
              * 30px showing, centred 59px above the tile's centre. */
             int gen3 = s->display >= GEN3_WIDTH;
             float scale = native_menu_scale(globals) * 2;

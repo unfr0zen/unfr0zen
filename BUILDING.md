@@ -8,7 +8,7 @@ versions.
 |-|-|
 | `diamond3` (gen 3) | Recovery U-Boot over the ROM's serial download, then the slot's own kernel with an initramfs sets up its UBIFS root. |
 | `j49` (gen 2) | Nest's own x-loader over the ROM's USB boot loads a NAND flasher; the host appends the changes to the slot's JFFS2 root in its erased blocks. |
-| `diamond` (gen 1, experimental) | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path; a stock Gen 1 NAND and physical unit are still needed for validation. |
+| `diamond` (gen 1) | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path. |
 
 ## Dependencies
 

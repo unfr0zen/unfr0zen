@@ -1,4 +1,4 @@
-/* Preloaded into nlsleepd (the gen 2's and the gen 3's alike), which sets the Wi-Fi chip's wake patterns before
+/* Preloaded into nlsleepd (every generation's alike), which sets the Wi-Fi chip's wake patterns before
  * each sleep (nl80211 SET_WOWLAN) and can only describe one kind: a frame to
  * an address and a port. This adds the patterns nestlocal lists in
  * /var/run/unfr0zen/wake-patterns to the ones nlsleepd sends, one a line:
@@ -120,7 +120,7 @@ static void add_listed(struct nl_msg *msg, int count)
 			return;
 		nla_put(msg, NL80211_PKTPAT_MASK, mask_len, mask);
 		nla_put(msg, NL80211_PKTPAT_PATTERN, pattern_len, pattern);
-		/* The gen 2's cfg80211 predates the attribute: without it the
+		/* The gen 1's and gen 2's cfg80211 predates the attribute: without it the
 		 * pattern is at the frame's start. */
 		if (offset)
 			nla_put(msg, NL80211_PKTPAT_OFFSET, sizeof(offset), &offset);

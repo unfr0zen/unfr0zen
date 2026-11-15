@@ -71,7 +71,7 @@ fn gpio(line: &str, write: bool) -> std::io::Result<File> {
 /// nHOST_INT is low, read without opening the radio.
 pub fn host_int_low() -> bool {
     let mut level = *b"1";
-    gpio(crate::device::current().radio.host_int, false).and_then(|mut f| f.read(&mut level)).is_ok() && level[0] == b'0'
+    crate::device::radio().is_ok_and(|radio| gpio(radio.host_int, false).and_then(|mut f| f.read(&mut level)).is_ok()) && level[0] == b'0'
 }
 
 /// nSSEL as a GPIO, its pad taken from the SPI controller while this lives.
@@ -117,7 +117,7 @@ impl Spi {
     }
 
     pub fn open() -> Result<Spi, String> {
-        let radio = &crate::device::current().radio;
+        let radio = crate::device::radio()?;
         let dev = OpenOptions::new().read(true).write(true).open(radio.spi).map_err(io(radio.spi))?;
         let fd = dev.as_raw_fd();
         let (mode, bits, speed) = (0u8, 8u8, SPEED_HZ);
@@ -344,7 +344,7 @@ impl Spi {
         };
         // SAFETY: the transfer's buffers outlive the call and are len long.
         if unsafe { libc::ioctl(self.dev.as_raw_fd(), SPI_IOC_MESSAGE_1 as _, &t) } < 0 {
-            return Err(format!("{}: {}", crate::device::current().radio.spi, std::io::Error::last_os_error()));
+            return Err(format!("{}: {}", crate::device::radio().map_or("radio", |radio| radio.spi), std::io::Error::last_os_error()));
         }
         Ok(rx)
     }

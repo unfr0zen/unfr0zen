@@ -42,7 +42,7 @@ struct Args {
     /// run record directory (default: the runs folder in unfr0zen's data directory)
     #[arg(long)]
     work_dir: Option<PathBuf>,
-    /// j49/diamond: set up FILE, a raw NAND image (2112-byte pages), in place instead of a unit
+    /// gen 1 and gen 2: set up FILE, a raw NAND image (2112-byte pages), in place instead of a unit
     #[arg(long, value_name = "FILE")]
     nand_image: Option<PathBuf>,
     /// the unit's generation (default: identified on USB, or from the NAND's U-Boot environment in USB download mode)
@@ -114,7 +114,7 @@ struct Args {
     /// regulate from temperatures sent over MQTT, Zigbee or Matter, using one sensor named after the thermostat's room; gen 1 and gen 2 need the reviewed 5.9.4-5 nlclient patch; gen 3 turns off its own Bluetooth, so real Nest Temperature Sensors stop working; needs --mqtt, --matter or --zigbee
     #[arg(long, help_heading = "Root filesystem options")]
     external_temperature: bool,
-    /// gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
+    /// gen 1 and gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
     #[arg(long, help_heading = "Root filesystem options")]
     dark_theme: bool,
     /// run nlclient's backplate simulator: 1H1C, simulated temperature
@@ -287,7 +287,7 @@ pub fn main() {
         fail("boot and uboot are diamond3-only".into());
     }
     if args.device == Some(Device::Diamond3) && args.nand_image.is_some() {
-        fail("--nand-image is a j49 or Diamond NAND image".into());
+        fail("--nand-image is a gen 1 or gen 2 NAND image".into());
     }
     let options = args.setup_inputs().build().unwrap_or_else(|e| fail(e.to_string()));
     if !args.skip_logo {

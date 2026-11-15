@@ -1,5 +1,5 @@
 //! The software painter: themes' drawing on the CPU, through tiny-skia, for
-//! units without a GPU (the gen 2's AM3703). It draws what the GPU painter
+//! units without a GPU (the gen 1's and gen 2's AM3703). It draws what the GPU painter
 //! draws, into a pixmap the size of the framebuffer.
 
 use std::collections::HashMap;

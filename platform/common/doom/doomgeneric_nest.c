@@ -1,5 +1,5 @@
-// Doom on the Nest: doomgeneric's platform layer, one binary for the gen 3
-// and the gen 2, told apart by their panels.
+// Doom on the Nest: doomgeneric's platform layer, one binary for every
+// generation, told apart by their panels.
 //
 // While Doom runs nlclient may keep running (nlclient's patch hands its
 // display over to the process in /var/run/unfr0zen/screen.owner): Doom
@@ -7,13 +7,14 @@
 // way out puts back the page nlclient showed and pans to it.
 //
 // Display: the gen 3's 480x640 panel (fb0, 32 bpp, two pages) is mounted on
-// its side with the round face in its top 480x480; the gen 2's is the face
-// itself, 320x320 and upright. The 320x200 picture is scaled to the face's
+// its side with the round face in its top 480x480; the gen 1's and gen 2's is
+// the face itself, 320x320 and upright. The 320x200 picture is scaled to the face's
 // width (on the gen 3, 480x300, the status bar's corners under the bezel)
 // and turned onto the panel as it is mounted; each frame is drawn on the
 // hidden page, then shown, or straight onto the only one.
 //
-// Controls (the gen 3's dial and Enter, the gen 2's ring and power key):
+// Controls (the gen 3's dial and Enter, the gen 1's and gen 2's ring and
+// power key):
 // in a level the player walks forward all along, the wheel turns
 // (as a mouse would) and the button fires; use is pressed now and then, so
 // doors and switches open on the way. Dead, the button restarts. In the
@@ -63,12 +64,12 @@ _Static_assert(sizeof(struct input_event) == 16, "the kernel's input_event is 16
 #define EV_KEY 0x01
 #define EV_REL 0x02
 #define EV_SND 0x12
-#define REL_X 0x00 /* the gen 2's ring */
+#define REL_X 0x00 /* the gen 1's and gen 2's ring */
 #define REL_DIAL 0x07 /* the gen 3's */
 #define SND_TONE 0x02
 #define EVIOCGRAB 0x40044590
 #define BUTTON 28 /* evdev's KEY_ENTER, the gen 3's button */
-#define POWER 116 /* evdev's KEY_POWER, the gen 2's */
+#define POWER 116 /* evdev's KEY_POWER, the gen 1's and gen 2's */
 
 // Mouse units a dial count turns: one detent (about 120 counts) turns
 // about 16 degrees.

@@ -13,7 +13,7 @@ const LOADER: &str = "/nestlabs/bin/zb-loader";
 /// The embedded image's version, its application address table's
 /// customerApplicationVersion, if there is one.
 pub fn version() -> Option<u16> {
-    let radio = &crate::device::current().radio;
+    let radio = crate::device::radio().ok()?;
     radio.zigbee_image.get(radio.version_at..radio.version_at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
 }
 
@@ -37,7 +37,7 @@ pub fn install() -> Result<(), String> {
     };
     logf!("zigbee: installing the radio's firmware, version {version}");
     let path = std::env::temp_dir().join("nestlocal-radio.bin");
-    std::fs::write(&path, crate::device::current().radio.zigbee_image).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(&path, crate::device::radio()?.zigbee_image).map_err(|e| format!("{}: {e}", path.display()))?;
     let out = Command::new(LOADER).arg("--app-easyload").arg(&path).output();
     let _ = std::fs::remove_file(&path);
     let out = out.map_err(|e| format!("{LOADER}: {e}"))?;

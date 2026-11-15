@@ -494,9 +494,6 @@ fn unsupported(device: Device, options: &setup::Options) -> Result<()> {
     if options.usb_shell {
         return Err(failure("Diamond needs its own kernel for --usb-shell"));
     }
-    if options.dark_theme {
-        return Err(failure("--dark-theme is only for the 2nd generation"));
-    }
     Ok(())
 }
 

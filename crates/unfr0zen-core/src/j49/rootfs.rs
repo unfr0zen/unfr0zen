@@ -1,4 +1,4 @@
-//! The j49's part of the root filesystem setup. Its USB gadget is built into
+//! The gen 1's and gen 2's part of the root filesystem setup. Its USB gadget is built into
 //! the kernel and it has no SSH server: the root shell is a script inittab
 //! starts, SSH a server the run brings, and its busybox 1.19 ash takes none of
 //! root's profile additions (no alias, no prompt substitution).
@@ -46,7 +46,7 @@ fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
     set_up_usb_shell(tree, options.usb_shell)?;
     let server = options.ssh_server.as_ref().filter(|_| options.ssh);
     if options.ssh && server.is_none() {
-        return device("--ssh on a j49 needs its SSH server's files");
+        return device("--ssh on a gen 1 or gen 2 needs its SSH server's files");
     }
     set_up_ssh(tree, server, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {

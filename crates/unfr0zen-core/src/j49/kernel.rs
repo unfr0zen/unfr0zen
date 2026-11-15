@@ -1,7 +1,7 @@
-//! The j49's kernel with a USB serial port, or one with the dark boot logo,
-//! beside the stock one: in the unused upper half of the slot's boot
-//! partition, booted first through nandbootNacm, a copy of the stock
-//! nandbootN loading from there. Should it not load, U-Boot goes on to the
+//! The gen 2's kernel with a USB serial port, or either generation's with the
+//! dark boot logo, beside the stock one: in the unused upper half of the
+//! slot's boot partition, booted first through nandbootNacm, a copy of the
+//! stock nandbootN loading from there. Should it not load, U-Boot goes on to the
 //! stock kernel. Port of unfr0zen-gen2.py.
 
 use std::sync::LazyLock;

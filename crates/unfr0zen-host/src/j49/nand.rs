@@ -1,4 +1,4 @@
-//! The j49's whole NAND, backed up, verified or restored through the
+//! The gen 1's and gen 2's whole NAND, backed up, verified or restored through the
 //! flasher: raw pages with their OOB (2112 bytes each), so bad blocks and the
 //! ECC are kept as they are. Port of scripts/backup_nand.py.
 //!
@@ -34,7 +34,7 @@ use crate::nand::{checksum_path, file, read_at, read_checked, recorded_sha256, J
 use crate::progress::{stage, stage_with, Progress};
 use crate::usb::Pipe;
 
-/// Whether a whole-NAND image of `len` bytes is a j49's: raw pages with their OOB.
+/// Whether a whole-NAND image of `len` bytes is a gen 1's or gen 2's: raw pages with their OOB.
 pub fn is_image(len: u64) -> bool {
     CHIP_SIZES.iter().any(|&size| len == size / nand::PAGE as u64 * PAGE_RAW as u64)
 }

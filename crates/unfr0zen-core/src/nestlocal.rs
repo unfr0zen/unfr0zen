@@ -56,7 +56,7 @@ pub const BLE_FIRMWARE: &str = "usr/share/dialog/data/firmware/nl_ble_peripheral
 pub const STOCK_FILES: [&str; 6] = ["etc/init.d/rcS", "etc/monitrc", "etc/init.d/networking-defines",
                                     "etc/nestlabs/client.config", "etc/nestlabs/product.config",
                                     "etc/ssl/certs/ca-bundle.pem"];
-/// The bundle nlclient trusts once unlocked; a j49 has none.
+/// The bundle nlclient trusts once unlocked; the gen 1 and gen 2 have none.
 pub const UNLOCK_BUNDLE: &str = "etc/ssl/certs/ca-unlock-bundle.pem";
 
 fn regex(pattern: &str) -> Regex {

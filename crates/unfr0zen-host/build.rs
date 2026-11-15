@@ -3,8 +3,8 @@
 //!
 //! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
-//! - the j49's NAND flasher, dropbear, the busybox of its initramfs, kernel and the x-loader its boot ROM
-//!   takes over USB, and the gen 1's x-loader, built there too;
+//! - the gen 1's and gen 2's NAND flasher, dropbear, initramfs busybox and
+//!   kernels, and each one's x-loader its boot ROM takes over USB, built there too;
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
 //!   .work/initramfs, fetched with curl when absent);

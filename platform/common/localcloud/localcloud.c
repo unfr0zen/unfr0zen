@@ -14,7 +14,7 @@
  * connected also keeps nlclient's network recovery, which scans, powers the
  * radio back on and finally resets the network settings, from ever starting.
  *
- * The same symbols in every nlclient build, gen 2 and gen 3 alike. Built
+ * The same symbols in every generation's nlclient build. Built
  * without libc: it calls nothing. */
 
 typedef _Bool bool;

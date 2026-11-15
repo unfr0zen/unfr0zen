@@ -57,8 +57,8 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
   Thread, and it has no USB shell.
 - **Matter and sleep:** the thermostat sleeps and wakes for a controller's
   messages. On the 3rd generation a controller looking it up wakes it too; the
-  2nd generation's Wi-Fi chip lets no lookup through while it sleeps, so it
-  answers them on its own wakes.
+  1st and 2nd generation's Wi-Fi chip lets no lookup through while it sleeps,
+  so it answers them on its own wakes.
 - **Thread and Zigbee** share the 2nd and 3rd generation's 802.15.4 radio (an
   EM357 or EM3581 on SPI), so only one of them can be on, and on European
   models either one replaces the wireless Heat Link connection. Zigbee drives

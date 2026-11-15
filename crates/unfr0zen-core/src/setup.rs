@@ -482,12 +482,12 @@ pub struct Options {
     /// by nestlocal on the UNFR0ZEN screen.
     pub theme: Option<Overlay>,
     /// Regulate from nestlocal's virtual sensor: BLE on gen 3, or the
-    /// reviewed native RCS input and Sensors selector patch on gen 2.
+    /// reviewed native RCS input and Sensors selector patch on gen 1 and gen 2.
     pub external_temperature: bool,
-    /// The relocatable native Sensors view helper, linked only on j49.
+    /// The relocatable native Sensors view helper, linked only on gen 1 and gen 2.
     pub external_temperature_screen: Vec<u8>,
-    /// Gen 2's settings screens in the gen 3's dark palette, through the
-    /// reviewed nlclient 5.9.4-5 patch; other generations ignore it.
+    /// The gen 1's and gen 2's settings screens in the gen 3's dark palette,
+    /// through the reviewed nlclient 5.9.4-5 patch; the gen 3 ignores it.
     pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
@@ -599,7 +599,7 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
         let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
-        let dark_theme = target == Device::J49 && options.dark_theme;
+        let dark_theme = matches!(target, Device::Diamond | Device::J49) && options.dark_theme;
         if !options.block_cloud && !external_temperature && !dark_theme {
             return Ok(journal);
         }
@@ -720,7 +720,7 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
         set_up_block_cloud(&mut tree, options.block_cloud)?;
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
-    if matches!(target, Device::Diamond3 | Device::J49) {
+    if matches!(target, Device::Diamond | Device::Diamond3 | Device::J49) {
         fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
         fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
         let wake = options.matter.is_some() && !options.wake_filter.is_empty();
@@ -771,10 +771,10 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
         return device("customizable home screen themes need nlclient");
     }
     if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && screen.is_none() {
-        return device("j49 external temperature requires nlclient");
+        return device("the external temperature requires nlclient");
     }
-    if target == Device::J49 && options.dark_theme && screen.is_none() {
-        return device("j49 dark theme requires nlclient");
+    if matches!(target, Device::Diamond | Device::J49) && options.dark_theme && screen.is_none() {
+        return device("the dark theme requires nlclient");
     }
     // The stock nlclient's backup, and where an older setup left it: the gen
     // 3's moves from the root volume to scratch (migrate_backups).
@@ -813,10 +813,10 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
             else if previous.stock_sha != *sha { return device("nlclient undo journal does not match the executable"); }
         }
         if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && !source.starts_with(b"\x7fELF") {
-            return device("j49 external temperature requires an ARM ELF nlclient");
+            return device("the external temperature requires an ARM ELF nlclient");
         }
-        if target == Device::J49 && options.dark_theme && !source.starts_with(b"\x7fELF") {
-            return device("j49 dark theme requires an ARM ELF nlclient");
+        if matches!(target, Device::Diamond | Device::J49) && options.dark_theme && !source.starts_with(b"\x7fELF") {
+            return device("the dark theme requires an ARM ELF nlclient");
         }
         if source.starts_with(b"\x7fELF") {
             // Preserve the stock executable once, including on devices set up
@@ -1587,7 +1587,7 @@ mod tests {
             let error = set_up_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
                 false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
-            assert!(error.to_string().contains("j49 external temperature"), "{error}");
+            assert!(error.to_string().contains("the external temperature requires"), "{error}");
             assert_eq!(volume.files, before);
             assert!(volume.commands.is_empty());
         }

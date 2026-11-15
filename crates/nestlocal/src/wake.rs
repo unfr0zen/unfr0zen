@@ -14,7 +14,7 @@
 //!   com.nestlabs.czsniffer.main) with the last packet the broker sent it,
 //!   captured on the WiFi interface;
 //! - it registers the connection's remote port with nlsleepd
-//!   (RegisterSniffer on gen2, RegisterWakeKa on gen3; the broker's packets
+//!   (RegisterSniffer on gen 1 and gen 2, RegisterWakeKa on gen 3; the broker's packets
 //!   come from that port) whenever the connection changes and every two minutes,
 //!   and says the connection is up (GetScpmStats: uint32 dumpStats, uint32
 //!   svcConnected, uint16 port) every 10 seconds and before each sleep, since
@@ -28,12 +28,12 @@
 //!   also lets the bridge send to the broker if its keepalive is due.
 //!
 //! svcConnected stays 0: with it 1 the chip also keeps the connection alive
-//! with TCP keepalives, and the gen 2, whose nlscpm works the same way, never
-//! woke for the broker's messages with that on.
+//! with TCP keepalives, and the gen 1 and gen 2, whose nlscpm works the same
+//! way, never woke for the broker's messages with that on.
 //!
 //! Matter registers native IPv4 and IPv6 UDP destination-port wake patterns
-//! through RegisterWakeKa; the gen 2's nlsleepd has no such call, and the
-//! library preloaded into it sets them instead. Until they are set, and while
+//! through RegisterWakeKa; the gen 1's and gen 2's nlsleepd has no such call,
+//! and the library preloaded into it sets them instead. Until they are set, and while
 //! Matter is starting or commissioning, nestlocal declines sleep. A
 //! controller's lookups of the unit wake it through that library too
 //! (matter/wake_patterns.rs), and Matter's clock counts the time asleep
@@ -273,8 +273,8 @@ async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool
             match call(bus, WAKEKA_PATH, WAKEKA, "RegisterWakeKa",
                        &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false)).await {
                 Ok(()) => {}
-                // The gen 2's nlsleepd has no such call: its library sets the
-                // port's patterns, once nestlocal has listed them
+                // The gen 1's and gen 2's nlsleepd has no such call: its
+                // library sets the port's patterns, once nestlocal has listed them
                 // (matter/wake_patterns.rs), which the network comes before.
                 Err(e) if unsupported(&e) && crate::matter::wake_patterns::in_nlsleepd() => {
                     let (bus, ready) = (bus.clone(), ready.clone());

@@ -1,4 +1,4 @@
-//! The j49's NAND through j49/nand-flasher.c, which x-loader's USB loader
+//! The gen 1's and gen 2's NAND through j49/nand-flasher.c, which x-loader's USB loader
 //! runs from SDRAM, or through a raw image standing in for the unit.
 //!
 //! The flasher's protocol (little-endian words on bulk EP1):

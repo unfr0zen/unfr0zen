@@ -14,8 +14,8 @@ use crate::logf;
 const DIR: &str = "/media/scratch/.unfr0zen";
 
 /// The first of `paths` that is a file, else the last: a program on the gen
-/// 3's scratch volume, else where the gen 2 (or a unit set up before) has
-/// it.
+/// 3's scratch volume, else where the gen 1 and gen 2 (or a unit set up
+/// before) have it.
 pub fn installed(paths: &[&'static str]) -> &'static str {
     paths.iter().copied().find(|p| Path::new(p).is_file()).unwrap_or(paths[paths.len() - 1])
 }

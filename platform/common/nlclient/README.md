@@ -9,7 +9,7 @@ The object is compiled once with the firmware when building the app.
 Rust discovery incorporates research commit `aa5f304` from `imx6-stuff`: ELF
 imports, screen registrations, ARM call graphs and address-independent
 instruction fingerprints. Capstone's ARM decoder is statically linked.
-The three audited ABI shapes (2025 gen3, 2019 gen3 and gen2) remain supported;
+The three audited ABI shapes (2025 gen3, 2019 gen3, and gen1 and gen2) remain supported;
 this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
@@ -75,7 +75,7 @@ one of two kinds (`layout_HANDOVER`), or none, which patches without it:
   while the display is owned. A thread of nlclient's own lights the display
   every 2 s meanwhile, as a command from Home Assistant does, since the
   owner grabs the ring and the button.
-- **2, framebuffer** (gen 2, and the 2019 gen 3): nlclient draws straight into
+- **2, framebuffer** (gen 1 and gen 2, and the 2019 gen 3): nlclient draws straight into
   its own mapping of fb0's two pages (`nlARMFramebuffer`, found by its RTTI)
   and pans between them in its vtable's third method. That slot goes through
   `custom_flip`: while the display is owned it maps private memory over that
@@ -97,9 +97,9 @@ With customizable themes installed (gen 3), nestlocal's options carry
 theme itself is drawn in nlclient's own GPU context by a preloaded library
 (`platform/common/theme`); the screen patch does not touch the dial.
 
-## Gen 2 external temperature input
+## Gen 1 and gen 2 external temperature input
 
-Selecting external temperature on j49 enables the native RCS input and
+Selecting external temperature on a gen 1 or gen 2 enables the native RCS input and
 the main menu's Active Sensor chooser. It accepts only the reviewed
 5.9.4-5 stock binary (SHA256
 `67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7`);
@@ -136,10 +136,10 @@ the option removes these patches while retaining the settings screen. The
 [RCS golden and acceptance process](tests/external-temperature/README.md)
 cover the additional native bindings and layouts.
 
-## Gen 2 dark theme
+## Gen 1 and gen 2 dark theme
 
 With the dark theme selected (`--dark-theme`, or **Dark theme** under
-Advanced in the app, offered for a gen 2), j49's settings screens take the
+Advanced in the app, offered for a gen 1 or gen 2), their settings screens take the
 gen 3's colours: black backgrounds, white text, `#00a3d9` selection,
 `#004157` fields being edited, `#666666` unselected rows and `#00a1f2`
 carousel tiles. The UNFR0ZEN screen draws with the stock palette, so it
