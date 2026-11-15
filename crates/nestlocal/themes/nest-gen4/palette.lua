@@ -22,19 +22,24 @@ return {
   },
   -- The track, open at the bottom: the lowest temperature at `from`, the
   -- highest at `to`, `width` units thick, its ends fading over `fade`
-  -- degrees. The dots on it are `dot` units in radius.
-  ring = { radius = 216, width = 5, from = -138, to = 138, fade = 48, dot = 4 },
-  -- The scale shown while the wheel turns: a tick every `step` degrees,
-  -- `length` units long inward from the track, `width` thick at `dim`
-  -- opacity, `lit_width` thick between the room and the target. The
-  -- room's and the targets' ticks are bars `bar` units longer and
-  -- `bar_width` thick.
+  -- degrees. The dots on it are `dot` units in radius. Its outer edge is
+  -- the scale's outer end (ticks.radius), so the scale grows inwards from it.
+  ring = { radius = 229.5, width = 5, from = -150, to = 150, fade = 48, dot = 4 },
+  -- The scale shown while the wheel turns, as the 4th gen draws it: a tick
+  -- every `step` degrees, from `radius` `length` units in, `width` thick at
+  -- `dim` opacity and `lit_width` thick from the room to the target.
+  -- Round-ended bars stand for the room (`room_inner` to `room_outer`,
+  -- `room_width` thick) and the targets (`bar_inner` to `bar_outer`,
+  -- `bar_width` thick in their colours, glowing `glow` units wider at
+  -- `glow_alpha`), a little past the ticks at both ends.
   --
   -- The room's number and the mode's symbols stand `margin` units inside
   -- the dots (inside the bars while the scale shows). While a symbol
   -- overlaps the room's number, the number dims to `under` opacity.
   ticks = {
-    step = 1.5, length = 16, width = 1.1, dim = 0.55, lit_width = 2, bar = 6, bar_width = 3.5,
+    step = 2.6, radius = 232, length = 27, width = 1.6, dim = 0.55, lit_width = 2.5,
+    room_inner = 202, room_outer = 234, room_width = 4.5,
+    bar_inner = 198, bar_outer = 236, bar_width = 7, glow = 8, glow_alpha = 0.35,
     margin = 3, under = 0.3,
   },
   -- The glow behind the number: its radius, `drop` units below the

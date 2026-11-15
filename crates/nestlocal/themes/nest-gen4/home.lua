@@ -63,12 +63,12 @@ local CLIP = { from = -150, to = 150, span = 30 }
 local TRACK_CLIP = 8
 local MARKS_CLIP = { inside = 95, outside = 20 }
 local TICK_CLIP_PAD = 2
+-- The bars of the targets' glow.
+local GLOW_STEPS = 4
 -- Units round the glow's square kept in its clip.
 local GLOW_CLIP_PAD = 4
 -- Below this the glow is not painted.
 local GLOW_VISIBLE = 0.001
--- The black outline round the target's bar on the scale.
-local TARGET_OUTLINE = 3
 -- The layer the words and leaf are drawn into: its top-left on the dial
 -- and its size.
 local WORDS_BOX = { x = 90, y = 325, w = 300, h = 135 }
@@ -119,10 +119,15 @@ local function digits(value, unit)
   return string.format("%d", math.floor(halves / 2)), halves % 2 == 1 and "5" or nil
 end
 
+-- A temperature as the room's number by its mark shows it: "21.5".
+local function bare(value, unit)
+  local whole, half = digits(value, unit)
+  return whole .. (half and "." .. half or "")
+end
+
 -- A temperature as small text: "21.5°".
 local function short(value, unit)
-  local whole, half = digits(value, unit)
-  return whole .. (half and "." .. half or "") .. "°"
+  return bare(value, unit) .. "°"
 end
 
 -- The track's angle for a temperature.
@@ -449,9 +454,9 @@ end
 -- heat-cool), and longer bars for the room and the targets. Each kind of
 -- tick is one layer, painted through clips whose edges fall between ticks.
 local function draw_scale(gfx, c, t, a, s)
-  local inner, outer = ring.radius - ticks.length, ring.radius
+  local inner, outer = ticks.radius - ticks.length, ticks.radius
   local function tick_layer(name, width)
-    gfx:layer(name, table.concat({ ticks.step, ticks.length, width }, " "), function(g)
+    gfx:layer(name, table.concat({ ticks.step, ticks.radius, ticks.length, width }, " "), function(g)
       local segs = {}
       for i = 0, math.floor((ring.to - ring.from) / ticks.step + 0.001) do
         geom.push_spoke(segs, c, ring.from + i * ticks.step, inner, outer)
@@ -485,14 +490,21 @@ local function draw_scale(gfx, c, t, a, s)
   paint("lit_ticks", colors.text .. alpha(s), lit_from, lit_to)
   paint("ticks", dim, lit_to, last)
 
-  local room = {}
-  geom.push_spoke(room, c, a.room, inner - ticks.bar, outer)
-  gfx:lines(room, ticks.bar_width, colors.room .. alpha(s))
+  -- A round-ended bar across the scale at angle `at`.
+  local function bar(at, from, to, width, bar_color)
+    local x1, y1 = polar(c, from, at)
+    local x2, y2 = polar(c, to, at)
+    gfx:line(x1, y1, x2, y2, width, bar_color, true)
+  end
+  bar(a.room, ticks.room_inner, ticks.room_outer, ticks.room_width, colors.room .. alpha(s))
+  -- The targets' bars glow: wider bars under them, fainter the wider.
   local function target_bar(at, bar_color)
-    local segs = {}
-    geom.push_spoke(segs, c, at, inner - ticks.bar, outer)
-    gfx:lines(segs, ticks.bar_width + TARGET_OUTLINE, colors.bg .. alpha(s))
-    gfx:lines(segs, ticks.bar_width, bar_color .. alpha(s))
+    for i = GLOW_STEPS, 1, -1 do
+      local f = i / GLOW_STEPS
+      bar(at, ticks.bar_inner, ticks.bar_outer, ticks.bar_width + ticks.glow * f,
+          bar_color .. alpha(s * ticks.glow_alpha * (1 - f) * 2))
+    end
+    bar(at, ticks.bar_inner, ticks.bar_outer, ticks.bar_width, bar_color .. alpha(s))
   end
   if t.mode == "heat-cool" then
     target_bar(a.low, range_color(t, "low"))
@@ -595,7 +607,7 @@ local function draw_marks(g, t, p, label_opacity)
   end
   local style = { font = ROOM_LABEL_FONT.font, size = ROOM_LABEL_FONT.size,
                   color = colors.room .. alpha(label_opacity), align = "center" }
-  g:text(short(t.current, t.unit), p.label[1], p.label[2] + ROOM_LABEL.drop, style)
+  g:text(bare(t.current, t.unit), p.label[1], p.label[2] + ROOM_LABEL.drop, style)
 end
 
 -- How far the marks are pushed in for the scale's bars, and the room's
@@ -610,8 +622,9 @@ local covered = false
 -- the symbol is OVERLAP.hysteresis units clear. Returns the spots, the
 -- number's opacity and whether anything is moving.
 local function place_marks(g, c, t, a, s, now)
-  local clear, moving = inset((ticks.length + ticks.bar - ring.dot) * s, now)
-  local p = mark_spots(c, a, clear, (g:measure(short(t.current, t.unit), ROOM_LABEL_FONT)))
+  -- In from the dots at rest to inside the bars while the scale shows.
+  local clear, moving = inset((ring.radius - ring.dot - math.min(ticks.bar_inner, ticks.room_inner)) * s, now)
+  local p = mark_spots(c, a, clear, (g:measure(bare(t.current, t.unit), ROOM_LABEL_FONT)))
   local drawn = t.mode == "heat-cool" and { "low", "high" } or { "set" }
   local over = false
   for _, k in ipairs(drawn) do
