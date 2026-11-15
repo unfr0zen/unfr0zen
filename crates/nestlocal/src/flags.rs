@@ -15,6 +15,7 @@ enum Kind {
 /// Name, kind, default and help, in the order -h lists them.
 const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("cert", Kind::Text, "/etc/nestlocal/server.crt", "TLS certificate (signed by the CA added to ca-bundle.pem)"),
+    ("check-options", Kind::Bool, "false", "parse the other flags and exit: 0 when they are valid"),
     ("discovery", Kind::Text, "homeassistant", "Home Assistant discovery prefix"),
     ("device-name-file", Kind::Text, "", "file holding the unit's name in Home Assistant and Matter (its NodeLabel), <serial> standing for the unit's serial; empty keeps the last, at first \"Nest Thermostat\""),
     ("doom", Kind::Bool, "false", "offer Doom in the settings menu's DOOM entry and launch it from there (doom.rs)"),
@@ -52,12 +53,14 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("state", Kind::Text, "/media/data/nestlocal.json", "bucket store"),
     ("syslog", Kind::Bool, "false", "log to syslog instead of stderr"),
     ("topic", Kind::Text, "nestlocal", "MQTT topic prefix"),
+    ("update-listen", Kind::Text, "", "address the update API listens on (wifi_update/), empty for none; it takes an upload while an update window is open, which keeps the unit awake only with a nonempty -wake-iface and -mqtt, -matter or -zigbee"),
     ("wake-iface", Kind::Text, "wlan0", "WiFi interface the broker's packets wake the sleeping unit on (wake.rs); empty for none, which also lets the unit sleep with -matter"),
     ("v", Kind::Bool, "false", "log every request and answer"),
 ];
 
 pub struct Config {
     pub cert: String,
+    pub check_options: bool,
     pub discovery: String,
     pub device_name_file: String,
     pub doom: bool,
@@ -94,6 +97,7 @@ pub struct Config {
     pub state: String,
     pub syslog: bool,
     pub topic: String,
+    pub update_listen: String,
     pub verbose: bool,
     pub wake_iface: String,
     pub releases: String,
@@ -222,6 +226,7 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         .ok_or_else(|| Some(format!("invalid value {:?} for flag -matter-discriminator", get("matter-discriminator"))))?;
     Ok(Config {
         cert: get("cert"),
+        check_options: flag("check-options"),
         discovery: get("discovery"),
         device_name_file: get("device-name-file"),
         doom: flag("doom"),
@@ -257,6 +262,7 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         state: get("state"),
         syslog: flag("syslog"),
         topic: get("topic"),
+        update_listen: get("update-listen"),
         verbose: flag("v"),
         wake_iface: get("wake-iface"),
         releases: get("releases"),
@@ -281,6 +287,15 @@ mod tests {
         assert!(parse(&args("-mqtt= -doom")).ok().unwrap().doom);
         assert_eq!(c.mqtt_ca, "/etc/nestlocal/mqtt-ca.pem");
         assert_eq!((c.hold, c.stale, c.listen.as_str()), (Duration::from_secs(290), Duration::from_secs(300), "127.0.0.1:443"));
+    }
+
+    #[test]
+    fn check_options_parses_and_is_reported() {
+        let c = parse(&args("-check-options -mqtt tcp://b:1883")).ok().unwrap();
+        assert!(c.check_options);
+        assert_eq!(c.mqtt, "tcp://b:1883");
+        assert!(!parse(&args("-mqtt tcp://b:1883")).ok().unwrap().check_options);
+        assert_eq!(parse(&args("-check-options -nope")).err().unwrap().unwrap(), "flag provided but not defined: -nope");
     }
 
     #[test]

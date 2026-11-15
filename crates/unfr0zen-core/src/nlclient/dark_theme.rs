@@ -131,6 +131,16 @@ pub fn reviewed(stock: &[u8]) -> bool {
     sha256_hex(stock) == STOCK_SHA
 }
 
+/// Whether output, an nlclient built from stock, has the dark palette: every
+/// word patch writes is there. False for a stock it was not reviewed for.
+pub fn applied(stock: &[u8], output: &[u8]) -> bool {
+    let Some(elf) = reviewed(stock).then(|| Elf::parse(stock).ok()).flatten() else {
+        return false;
+    };
+    edits().into_iter()
+        .all(|(address, after)| elf.offset(address).and_then(|offset| word(output, offset)).is_ok_and(|word| word == after))
+}
+
 /// Apply the dark palette to the screen builder's output. The stock hash
 /// guards the fixed addresses; unknown builds fail closed, and an output whose
 /// words at these addresses differ from stock is refused before any write.
@@ -164,6 +174,7 @@ mod tests {
         assert!(!reviewed(b"unknown firmware"));
         assert!(patch(b"unknown firmware", &mut output).is_err());
         assert_eq!(output, b"linked screen");
+        assert!(!applied(b"unknown firmware", &output));
     }
 
     #[test]

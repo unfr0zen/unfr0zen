@@ -1,0 +1,298 @@
+#!/bin/sh
+#
+# nestlocal-update-guard: puts back a set of files applied over Wi-Fi
+# (crates/nestlocal/src/wifi_update/bundle.rs) that does not come up, or that a
+# power cut stopped part way in. nestlocal.init runs it before each start.
+#
+# The journal names each file of the set and the backup of what it
+# replaced, each directory it made, and each directory whose owner and mode
+# it changed with what they were. While it reads "swapping" the set is part way in or out, and is
+# put back at once. Once "swapped", the pending marker keeps the set on trial:
+# more than 3 starts, or 600 s without the new nestlocal keeping it, roll it
+# back. nestlocal keeps a set by removing the marker, then the backups, then
+# the journal. A set of class "reboot" changed more than nestlocal's own
+# files, and reboots the unit once put back. A set put back is recorded
+# beside the marker for nestlocal to report, until the next is swapped in.
+
+ROOT=${NESTLOCAL_UPDATE_ROOT:-}
+WAIT=${NESTLOCAL_UPDATE_WAIT:-600}
+RESTART=${NESTLOCAL_UPDATE_RESTART:-/etc/init.d/nestlocal restart}
+REBOOT=${NESTLOCAL_UPDATE_REBOOT:-reboot}
+JOURNAL=$ROOT/etc/nestlocal/update/journal
+STAGING=$ROOT/etc/nestlocal/update/staging
+MARKER=$ROOT/media/data/nestlocal-update.pending
+ROLLED_BACK=$ROOT/media/data/nestlocal-update.rolled-back
+PIDFILE=$ROOT/var/run/nestlocal-update-guard.pid
+LOCK=$ROOT/var/run/nestlocal-update-guard.lock
+STARTS=3
+# The journal format this guard reads (bundle.rs JOURNAL_VERSION).
+VERSION=1
+NL='
+'
+SPACE=' '
+
+# Starts and the watcher's rollback take turns, since monit can start
+# nestlocal while a restart does: each start counts once and one watcher
+# runs. mkdir is atomic in any busybox, which may lack flock. A lock left by
+# a guard killed while holding it is taken over after 5 s, so that it never
+# keeps nestlocal from starting.
+lock() {
+    tries=0
+    until mkdir "$LOCK" 2>/dev/null || [ "$tries" -ge 5 ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+}
+
+unlock() {
+    rmdir "$LOCK" 2>/dev/null || :
+}
+
+# Logging never decides an outcome: a unit's logger may be missing or fail.
+log() {
+    logger -t nestlocal "$*" 2>/dev/null || :
+}
+
+# Reads the journal into CLASS, STATE and ENTRIES, its entry lines last
+# first. Fails on a journal of a version this guard does not know, which is
+# then left as it is.
+read_journal() {
+    CLASS=
+    STATE=
+    ENTRIES=
+    header=
+    while read -r kind path backup; do
+        if [ -z "$header" ]; then
+            header="$kind $path"
+            continue
+        fi
+        case "$kind" in
+        class) CLASS=$path ;;
+        state) STATE=$path ;;
+        write | remove | mkdir | owner) ENTRIES="$kind $path ${backup:--}$NL$ENTRIES" ;;
+        esac
+    done <"$JOURNAL"
+    [ "$header" = "unfr0zen-update $VERSION" ] && return 0
+    log "update journal \"$header\" is not version $VERSION: left as it is"
+    return 1
+}
+
+# Runs the function $1 with each of ENTRIES' kind, path and backup, last
+# first; FAILED is set when one fails. Paths hold no spaces or wildcards
+# (update_wire::bundle::allowed).
+each_entry() {
+    FAILED=
+    set -f
+    IFS=$NL
+    for entry in $ENTRIES; do
+        IFS=$SPACE
+        # shellcheck disable=SC2086
+        "$1" $entry || FAILED=1
+        IFS=$NL
+    done
+    IFS=" 	$NL"
+    set +f
+}
+
+# Undoes one entry. A write's backup can still be a second link to the file
+# it replaced, when the swap stopped before renaming its new file in; mv
+# may leave such a pair as it is, so the backup is dropped instead.
+put_back() {
+    path=$ROOT/$2
+    if [ "$1" = mkdir ]; then
+        rmdir "$path" 2>/dev/null || :
+        return 0
+    fi
+    if [ "$1" = owner ]; then
+        [ -d "$path" ] || return 0
+        chown "$3" "$path" 2>/dev/null && chmod "$4" "$path" 2>/dev/null && return 0
+    elif [ "$3" = - ]; then
+        rm -f "$path" 2>/dev/null && return 0
+    elif [ ! -e "$ROOT/$3" ]; then
+        return 0
+    elif [ "$path" -ef "$ROOT/$3" ]; then
+        rm -f "$ROOT/$3" && return 0
+    else
+        mv -f "$ROOT/$3" "$path" 2>/dev/null && return 0
+    fi
+    log "update not rolled back: $2 could not be put back"
+    return 1
+}
+
+drop_backup() {
+    [ "$1" = write ] || [ "$1" = remove ] || return 0
+    [ "$3" = - ] || rm -f "$ROOT/$3"
+}
+
+# Journals the set read_journal read as swapping, durably: written beside
+# the journal and renamed over it, as bundle.rs's replace does.
+mark_swapping() {
+    written=1
+    while IFS= read -r line; do
+        [ "$line" != "state swapped" ] || line="state swapping"
+        printf '%s\n' "$line" || written=
+    done 2>/dev/null <"$JOURNAL" >"$JOURNAL.new"
+    if [ -n "$written" ] && sync && mv -f "$JOURNAL.new" "$JOURNAL" 2>/dev/null; then
+        sync
+        STATE=swapping
+        return 0
+    fi
+    rm -f "$JOURNAL.new"
+    log "update not rolled back: its journal could not be marked"
+    return 1
+}
+
+# Puts back the set read_journal read and forgets it. The journal reads
+# "swapping" before anything is put back, so that a rollback cut short is
+# finished by the next start, and nestlocal never keeps the set
+# (bundle::keep). Fails, keeping the journal and the marker for the next
+# start to retry, when a file cannot be put back.
+roll_back() {
+    [ "$STATE" = swapping ] || mark_swapping || return 1
+    each_entry put_back
+    [ -z "$FAILED" ] || return 1
+    echo "$CLASS" 2>/dev/null >"$ROLLED_BACK" || :
+    rm -f "$JOURNAL" "$MARKER"
+    sync
+    log "update rolled back"
+}
+
+# Finishes keeping a set whose nestlocal removed the marker and stopped
+# before its backups went.
+keep_set() {
+    each_entry drop_backup
+    rm -f "$JOURNAL"
+    sync
+}
+
+# Removes what an apply staged and never swapped in, and the directories it
+# made for them unless a journal now names them.
+clear_staging() {
+    dirs=
+    while read -r kind path; do
+        case "$kind $path" in
+        "new "*.unfr0zen-new) rm -f "$ROOT/$path" ;;
+        "mkdir "?*) dirs="$path$NL$dirs" ;;
+        esac
+    done <"$STAGING"
+    if [ ! -e "$JOURNAL" ]; then
+        set -f
+        IFS=$NL
+        for dir in $dirs; do
+            rmdir "$ROOT/$dir" 2>/dev/null || :
+        done
+        IFS=" 	$NL"
+        set +f
+    fi
+    rm -f "$STAGING"
+    sync
+    log "update: removed what an unfinished update staged"
+}
+
+# The pid file names a live watcher, not a process that took a dead
+# watcher's pid. read drops cmdline's NULs, which leaves its arguments run
+# together. Without /proc (a test on macOS) only liveness is checked.
+watching() {
+    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -d /proc/self ] || return 0
+    cmdline=
+    read -r cmdline <"/proc/$pid/cmdline" 2>/dev/null
+    case "$cmdline" in
+    *nestlocal-update-guard*) return 0 ;;
+    esac
+    return 1
+}
+
+# Polls rather than sleeping the whole wait, so that a kept set ends its
+# watcher at once. Its stdio is replaced here, not at the call, where a
+# shell keeps the caller's open beside it: whoever started nestlocal would
+# wait for the watcher. A marker reading 0 is a newer set, swapped in but
+# not yet started; its first start replaces this watcher.
+watch_update() {
+    exec </dev/null >/dev/null 2>&1
+    trap '' HUP
+    waited=0
+    while [ -e "$MARKER" ] && [ "$waited" -lt "$WAIT" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    lock
+    rm -f "$PIDFILE"
+    rolled=
+    if [ -e "$MARKER" ] && [ "$(cat "$MARKER" 2>/dev/null)" != 0 ] && [ -e "$JOURNAL" ] && read_journal; then
+        roll_back && rolled=1
+    fi
+    unlock
+    [ -n "$rolled" ] || return 0
+    # The next nestlocal resets a chip a loader of this one's is flashing.
+    tries=0
+    while pidof zb-loader da-loader >/dev/null 2>&1 && [ "$tries" -lt 300 ]; do
+        sleep 1
+        tries=$((tries + 1))
+    done
+    if [ "$CLASS" = reboot ]; then
+        sh -c "$REBOOT"
+    else
+        sh -c "$RESTART"
+    fi
+}
+
+# Counts a start of the set on trial and has it watched. A set's first
+# start replaces the watcher of the set before it, whose time has partly
+# run out. Past STARTS, the start under way runs what was put back.
+count_start() {
+    count=$(cat "$MARKER" 2>/dev/null)
+    case "$count" in
+    '' | *[!0-9]*) count=0 ;;
+    esac
+    count=$((count + 1))
+    if [ "$count" -gt "$STARTS" ]; then
+        roll_back && [ "$CLASS" = reboot ] && REBOOTING=1
+        return 0
+    fi
+    echo "$count" >"$MARKER"
+    if watching; then
+        [ "$count" -eq 1 ] || return 0
+        kill "$pid" 2>/dev/null
+    fi
+    watch_update &
+    echo $! >"$PIDFILE"
+}
+
+on_start() {
+    [ ! -e "$STAGING" ] || clear_staging
+    if [ -e "$JOURNAL" ]; then
+        read_journal || return 0
+        case "$STATE" in
+        swapping) roll_back && [ "$CLASS" = reboot ] && REBOOTING=1 ;;
+        swapped)
+            if [ -e "$MARKER" ]; then
+                count_start
+            else
+                keep_set
+            fi
+            ;;
+        esac
+    elif [ -e "$MARKER" ]; then
+        rm -f "$MARKER"
+        sync
+        log "update marker without a journal dropped"
+    fi
+    return 0
+}
+
+case "${1:-}" in
+start)
+    [ -e "$JOURNAL" ] || [ -e "$MARKER" ] || [ -e "$STAGING" ] || exit 0
+    REBOOTING=
+    lock
+    on_start
+    unlock
+    [ -z "$REBOOTING" ] || sh -c "$REBOOT"
+    ;;
+*)
+    echo "Usage: ${0} start"
+    exit 1
+    ;;
+esac

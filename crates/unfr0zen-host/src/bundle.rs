@@ -76,6 +76,14 @@ pub fn assemble(device: Device, version: &str) -> Result<Bundle> {
     Ok(Bundle::from_files(device, version, files, &directories))
 }
 
+/// The options a run's patch takes on a device: the run's options through
+/// bundle::Settings, with the files of the device's bundle. The gen 3's
+/// engine takes them so on the unit, a gen 1 or gen 2 run on the host, and a
+/// run over Wi-Fi as both, so all three write the same files.
+pub fn options(device: Device, options: &unfr0zen_core::setup::Options) -> Result<unfr0zen_core::setup::Options> {
+    bundle::Settings::new(options, None).options(&assemble(device, &options.version)?)
+}
+
 /// The packed bundle, signed with key when given.
 pub fn pack(device: Device, version: &str, key: Option<&SigningKey>) -> Result<Vec<u8>> {
     let (files, directories) = contents(device)?;

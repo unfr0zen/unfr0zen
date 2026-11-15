@@ -158,6 +158,7 @@ Commands:
   boot      Boot the application firmware
   uboot     Load recovery U-Boot over USB and leave it at its prompt (3rd generation)
   nlclient  Patch a local stock nlclient, or restore it from its undo journal
+  nestlocal-update  Send this app's nestlocal to a unit over Wi-Fi (set up with --update-api)
 
 Common options:
   --device <GEN>         diamond, j49 or diamond3 instead of the USB identity
@@ -169,6 +170,7 @@ Common options:
   --doom                Install Doom, launched from UNFR0ZEN → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
+  --update-api          Let a newer app replace nestlocal over Wi-Fi, with a code the unit shows
 ```
 Run `unfr0zen --help` for every option.
 

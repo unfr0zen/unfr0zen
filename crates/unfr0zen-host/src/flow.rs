@@ -42,6 +42,9 @@ pub struct SetupInputs {
     pub mqtt_password: Option<String>,
     pub mqtt_tls: bool,
     pub mqtt_ca: Option<PathBuf>,
+    /// The CA's contents, when they come from the unit rather than a file:
+    /// used when mqtt_ca is None.
+    pub mqtt_ca_pem: Option<Vec<u8>>,
     /// The name MQTT and Matter give the unit; None keeps the unit's.
     pub device_name: Option<String>,
     /// What replaces nestlocal_<serial> in the entity IDs; None keeps the unit's.
@@ -73,11 +76,16 @@ pub struct SetupInputs {
     pub ssh: bool,
     /// One OpenSSH public key to authorize for root; requires SSH.
     pub ssh_public_key: Option<PathBuf>,
+    /// The key itself, when it comes from the unit rather than a file: used
+    /// when ssh_public_key is None.
+    pub ssh_public_key_text: Option<String>,
     /// SSH takes keys only, refusing root's password; requires the key.
     pub ssh_key_only: bool,
     /// The USB root shell (an ACM port); off by default. Without it the run
     /// cannot log in at the end to confirm the result.
     pub usb_shell: bool,
+    /// nestlocal's update API, for `unfr0zen nestlocal-update`; needs nestlocal.
+    pub update_api: bool,
 }
 
 /// A URL with any user name and password in it replaced by ***.
@@ -102,14 +110,15 @@ impl SetupInputs {
             ("ntp-server", self.ntp_server.clone()),
             ("root-password", secret(&self.root_password)),
             ("ssh", on(self.ssh)),
-            ("ssh-public-key", file(&self.ssh_public_key)),
+            ("ssh-public-key", file(&self.ssh_public_key)
+                .or_else(|| self.ssh_public_key_text.as_ref().map(|_| "(the unit's)".to_string()))),
             ("ssh-key-only", on(self.ssh_key_only)),
             ("usb-shell", on(self.usb_shell)),
             ("mqtt", self.mqtt.as_deref().map(mask_url)),
             ("mqtt-user", secret(&self.mqtt_user)),
             ("mqtt-password", secret(&self.mqtt_password)),
             ("mqtt-tls", on(self.mqtt_tls)),
-            ("mqtt-ca", file(&self.mqtt_ca)),
+            ("mqtt-ca", file(&self.mqtt_ca).or_else(|| self.mqtt_ca_pem.as_ref().map(|_| "(the unit's)".to_string()))),
             ("ha-entity-root", self.ha_entity_root.clone()),
             ("matter", on(self.matter)),
             ("device-name", self.device_name.as_ref().map(|name| format!("{name:?}"))),
@@ -122,6 +131,7 @@ impl SetupInputs {
             ("doom", on(self.doom)),
             ("external-temperature", on(self.external_temperature)),
             ("dark-theme", on(self.dark_theme)),
+            ("update-api", on(self.update_api)),
             ("backplate-sim", on(self.backplate_sim)),
             ("allow-unsigned-updates", on(self.allow_unsigned_updates)),
             ("block-cloud", on(self.block_cloud)),
@@ -131,17 +141,24 @@ impl SetupInputs {
         if set.is_empty() { "no options".into() } else { set.join(" ") }
     }
 
+    /// Whether nestlocal runs to serve the unit: over MQTT, Matter (asked
+    /// for, or given a pairing code) or Zigbee.
+    pub fn runs_nestlocal(&self) -> bool {
+        let matter = self.matter || self.matter_code.as_deref().is_some_and(|code| !code.trim().is_empty());
+        self.mqtt.is_some() || matter || self.zigbee
+    }
+
     /// Checks the options against each other and the filesystem, and builds the
     /// setup, all before the unit is touched. The error text is shown as is.
     pub fn build(&self) -> Result<Options> {
-        if self.ssh_public_key.is_some() && !self.ssh {
+        if (self.ssh_public_key.is_some() || self.ssh_public_key_text.is_some()) && !self.ssh {
             return Err(failure("--ssh-public-key needs --ssh"));
         }
-        if self.ssh_key_only && self.ssh_public_key.is_none() {
+        if self.ssh_key_only && self.ssh_public_key.is_none() && self.ssh_public_key_text.is_none() {
             return Err(failure("--ssh-key-only needs --ssh-public-key: without a key nothing could log in"));
         }
         if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some()
-            || self.ha_entity_root.is_some()) && self.mqtt.is_none() {
+            || self.mqtt_ca_pem.is_some() || self.ha_entity_root.is_some()) && self.mqtt.is_none() {
             return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls, --mqtt-ca and --ha-entity-root need --mqtt"));
         }
         let code = self.matter_code.as_deref().map(str::trim).filter(|c| !c.is_empty());
@@ -155,8 +172,11 @@ impl SetupInputs {
         if self.wwn_boiler && !self.zigbee && !self.matter_thread {
             return Err(failure("--wwn-boiler is for a radio nestlocal holds: it needs --zigbee or --matter-thread"));
         }
-        if self.external_temperature && self.mqtt.is_none() && !matter && !self.zigbee {
+        if self.external_temperature && !self.runs_nestlocal() {
             return Err(failure("--external-temperature takes its readings over --mqtt, --matter or --zigbee"));
+        }
+        if self.update_api && !self.runs_nestlocal() {
+            return Err(failure(setup::UPDATE_API_NEEDS_NESTLOCAL));
         }
         let read = |flag: &str, path: &Path| fs::read(path)
             .map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
@@ -166,7 +186,8 @@ impl SetupInputs {
         let mqtt = match &self.mqtt {
             Some(url) => Some(Mqtt {
                 url: url.clone(), user: self.mqtt_user.clone(), password: self.mqtt_password.clone(),
-                tls: self.mqtt_tls, ca: self.mqtt_ca.as_deref().map(|p| read("--mqtt-ca", p)).transpose()?,
+                tls: self.mqtt_tls,
+                ca: self.mqtt_ca.as_deref().map(|p| read("--mqtt-ca", p)).transpose()?.or_else(|| self.mqtt_ca_pem.clone()),
                 entity_root: self.ha_entity_root.clone(),
             }),
             None => None,
@@ -177,11 +198,15 @@ impl SetupInputs {
         if let Some(name) = &self.device_name {
             nestlocal::check_device_name(name)?;
         }
-        let ssh_public_key = self.ssh_public_key.as_deref().map(|path| {
-            let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
-                path.file_name().unwrap_or_default().to_string_lossy())))?;
-            setup::ssh_public_key(&data)
-        }).transpose()?;
+        let ssh_public_key = match (&self.ssh_public_key, &self.ssh_public_key_text) {
+            (Some(path), _) => {
+                let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
+                    path.file_name().unwrap_or_default().to_string_lossy())))?;
+                Some(setup::ssh_public_key(&data)?)
+            }
+            (None, Some(key)) => Some(setup::ssh_public_key(key.as_bytes())?),
+            (None, None) => None,
+        };
         Ok(Options {
             root_hash: setup::root_hash(self.root_password.as_deref().unwrap_or(setup::DEFAULT_ROOT_PASSWORD))?,
             version: progress::app_version().to_string(),
@@ -192,7 +217,7 @@ impl SetupInputs {
             mqtt,
             matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
             device_name: self.device_name.clone(),
-            wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
+            wake_filter: if matter || self.update_api { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
             local_cloud: assets::LOCAL_CLOUD.to_vec(),
             // Each device's run adds it from its bundle::Settings.
             record: Vec::new(),
@@ -210,6 +235,7 @@ impl SetupInputs {
             ssh_key_only: self.ssh_key_only,
             ssh_server: None,
             usb_shell: self.usb_shell,
+            update_api: self.update_api,
         })
     }
 }
@@ -420,6 +446,22 @@ mod describe_tests {
         let thread = SetupInputs { matter: true, matter_thread: true, ..alone };
         assert!(thread.build().unwrap().wwn_boiler);
         assert!(!SetupInputs { zigbee: true, ..SetupInputs::default() }.build().unwrap().wwn_boiler, "off unless asked");
+    }
+
+    #[test]
+    fn the_update_api_needs_nestlocal() {
+        let alone = SetupInputs { update_api: true, ..SetupInputs::default() };
+        assert!(alone.build().err().unwrap().to_string().contains("--update-api needs nestlocal"));
+        let doom = SetupInputs { doom: true, ..alone.clone() };
+        assert!(doom.build().err().unwrap().to_string().contains("--update-api needs nestlocal"), "Doom alone does not keep the unit awake");
+        let mqtt = SetupInputs { mqtt: Some("broker".into()), ..alone };
+        let options = mqtt.build().unwrap();
+        assert!(options.update_api);
+        assert_eq!(options.wake_filter, assets::WAKE_FILTER, "an app connecting wakes the unit");
+        assert_eq!(mqtt.describe(), "--mqtt broker --update-api");
+        let off = SetupInputs { mqtt: Some("broker".into()), ..SetupInputs::default() }.build().unwrap();
+        assert!(!off.update_api, "off unless asked");
+        assert!(off.wake_filter.is_empty());
     }
 
     #[test]

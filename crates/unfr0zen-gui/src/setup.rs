@@ -1,7 +1,9 @@
 //! The Set up page: one guided flow from a unit on USB to a set-up one.
 //! Connect, Integrations, Features and Review are steps the person moves
 //! through; the run started from Review shows in place of them, and its
-//! success ends on Done.
+//! success ends on Done. A unit patched with updates over Wi-Fi can be
+//! connected over Wi-Fi on the Connect step instead: the steps then hold its
+//! settings, and Review's run sends them there.
 
 use std::f32::consts::TAU;
 
@@ -85,6 +87,9 @@ impl App {
         match (self.running(), &self.logs.outcome) {
             // The wait for download mode called off: back to the step.
             (false, Some(Err(_))) if self.cancelled => Screen::Step(self.step),
+            // A Wi-Fi run's code or changes called off: it ends without
+            // error, having sent nothing.
+            (false, Some(Ok(_))) if self.cancelled && self.wifi_flow() => Screen::Step(self.step),
             (true, _) | (false, None) => Screen::Running,
             (false, Some(Err(_))) => Screen::Failed,
             (false, Some(Ok(_))) => Screen::Done,
@@ -101,10 +106,15 @@ impl App {
         matches!(self.bus.current(), Bus::One(seen) if seen.device != Device::Onyx)
     }
 
-    /// The steps past Connect can be shown: a supported unit is on USB, or
-    /// this build goes on without one.
-    fn may_go_on(&self) -> bool {
-        self.steps_without_unit || self.connected()
+    /// The steps past Connect can be shown: a supported unit is on USB or
+    /// connected over Wi-Fi, or this build goes on without one.
+    pub(crate) fn may_go_on(&self) -> bool {
+        self.steps_without_unit || self.connected() || self.wifi_connected()
+    }
+
+    /// The flow's run sends its settings over Wi-Fi, not over USB.
+    fn wifi_flow(&self) -> bool {
+        self.task == Some(Task::WifiPatch)
     }
 
     pub(crate) fn setup_page(&mut self, ui: &mut egui::Ui) {
@@ -137,6 +147,17 @@ impl App {
     /// The flow's run is in its Backing up phase.
     pub(crate) fn backing_up(&self) -> bool {
         self.logs.phases.last().is_some_and(|row| row.phase == Phase::Backup && row.done.is_none())
+    }
+
+    /// Starts the run the review step asked for while connected over Wi-Fi:
+    /// the settings, sent to the unit.
+    pub(crate) fn start_wifi_flow(&mut self) {
+        if !self.idle() {
+            return;
+        }
+        self.flow_backup = None;
+        self.start(Task::WifiPatch);
+        self.flow_run = true;
     }
 
     /// The phases the flow's run goes through: Backing up only when it
@@ -219,7 +240,18 @@ impl App {
                 ui.label(egui::RichText::new(hint).color(MUTED).size(13.0));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if step == Step::Review {
+                if step == Step::Review && self.wifi_connected() {
+                    // Connected over Wi-Fi, the run sends the settings there,
+                    // unless only a setup over USB can.
+                    let needs_usb = self.wifi_needs_usb();
+                    let enabled = self.idle() && needs_usb.is_none();
+                    let disabled = needs_usb.unwrap_or_else(|| tr!("form.start_disabled").to_string());
+                    if pill_button(ui, tr!("wifi.update"), true, enabled)
+                        .on_hover_text(tr!("wifi.update_hint")).on_disabled_hover_text(disabled).clicked() {
+                        self.start_wifi_flow();
+                    }
+                    ui.label(egui::RichText::new(tr!("setup.wifi_allow_note")).color(MUTED).size(13.0));
+                } else if step == Step::Review {
                     let label = if self.form.backup_first {
                         tr!("setup.start_backup_setup")
                     } else {
@@ -248,16 +280,29 @@ impl App {
 
     fn connect_step(&mut self, ui: &mut egui::Ui) {
         let bus = self.bus.current();
+        // Connected over Wi-Fi, the unit stays on its base: the step says
+        // so, and its ring and pill show that unit, whatever is on USB.
+        let wifi = self.wifi_remote()
+            .map(|(_, remote)| (remote.device, remote.info.version.clone(), remote.info.pending));
+        let (title, about, cards) = if wifi.is_some() {
+            (tr!("setup.wifi_connect_title"), tr!("setup.wifi_connect_about"), [
+                (tr!("setup.wifi_connect_1"), tr!("setup.wifi_connect_1_about")),
+                (tr!("setup.wifi_connect_2"), tr!("setup.wifi_connect_2_about")),
+                (tr!("setup.wifi_connect_3"), tr!("setup.wifi_connect_3_about")),
+            ])
+        } else {
+            (tr!("setup.connect_title"), tr!("setup.connect_about"), [
+                (tr!("setup.connect_1"), tr!("setup.connect_1_about")),
+                (tr!("setup.connect_2"), tr!("setup.connect_2_about")),
+                (tr!("setup.connect_3"), tr!("setup.connect_3_about")),
+            ])
+        };
         ui.horizontal_top(|ui| {
             let left = (ui.available_width() - 300.0).max(320.0);
             ui.vertical(|ui| {
                 ui.set_width(left);
-                heading(ui, tr!("setup.connect_title"), tr!("setup.connect_about"));
-                for (number, (title, about)) in [
-                    (tr!("setup.connect_1"), tr!("setup.connect_1_about")),
-                    (tr!("setup.connect_2"), tr!("setup.connect_2_about")),
-                    (tr!("setup.connect_3"), tr!("setup.connect_3_about")),
-                ].into_iter().enumerate() {
+                heading(ui, title, about);
+                for (number, (title, about)) in cards.into_iter().enumerate() {
                     card(ui, |ui| {
                         ui.horizontal_top(|ui| {
                             ui.label(egui::RichText::new((number + 1).to_string()).font(crate::display(22.0)).color(ACCENT));
@@ -270,11 +315,42 @@ impl App {
                     });
                     ui.add_space(10.0);
                 }
+                // The other way to the unit, once patched with updates over
+                // Wi-Fi; the way in use while connected.
+                group(ui, if wifi.is_some() { tr!("setup.group.wifi_connected") } else { tr!("setup.group.wifi") });
+                self.wifi_card(ui);
             });
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
-                unit_ring(ui, &bus);
+                if let Some((device, unit, pending)) = &wifi {
+                    unit_ring(ui, Some((*device, Link::Wifi)));
+                    ui.add_space(16.0);
+                    status_pill(ui, tr!("setup.wifi_connected"), OK_LIGHT, OK_FILL, OK, false);
+                    ui.add_space(8.0);
+                    let version = Some(unit.as_str()).filter(|v| !v.is_empty()).unwrap_or(tr!("wifi.unknown_version"));
+                    let mut lines = tr!("setup.wifi_nestlocal", version = version);
+                    if let Some(status) = nestlocal_status(unit, *pending, crate::app_nestlocal_known()).text() {
+                        lines = format!("{lines}\n{status}");
+                    }
+                    ui.label(egui::RichText::new(lines).color(MUTED).size(12.5));
+                    if let Some(needs_usb) = self.wifi_needs_usb() {
+                        ui.add_space(10.0);
+                        warning(ui, needs_usb);
+                    }
+                    // The flow goes over Wi-Fi while connected: a unit on USB
+                    // waits for Disconnect.
+                    if self.connected() {
+                        ui.add_space(10.0);
+                        warning(ui, tr!("setup.wifi_also_usb"));
+                    }
+                    return;
+                }
+                let found = match &bus {
+                    Bus::One(seen) => Some((seen.device, Link::Usb)),
+                    _ => None,
+                };
+                unit_ring(ui, found);
                 ui.add_space(16.0);
                 bus_pill(ui, &bus);
                 ui.add_space(8.0);
@@ -283,69 +359,65 @@ impl App {
                     ui.label(egui::RichText::new(format!("{}\n{mode}", seen.device.description())).color(MUTED).size(12.5));
                     if seen.device == Device::Onyx {
                         ui.add_space(10.0);
-                        ui.add(egui::Label::new(egui::RichText::new(tr!("setup.unsupported_unit")).color(WARN).size(13.0)).wrap());
+                        warning(ui, tr!("setup.unsupported_unit"));
                     }
                 }
             });
         });
     }
 
+    /// The Connect step's Wi-Fi card: the unit's address and Connect, or,
+    /// once connected, Disconnect, which takes the flow back to USB; a
+    /// read's progress or failure under them.
+    fn wifi_card(&mut self, ui: &mut egui::Ui) {
+        let connected = self.wifi_connected();
+        card(ui, |ui| {
+            let about = if connected { tr!("setup.wifi_disconnect_for_usb") } else { tr!("setup.wifi_about") };
+            ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.add_enabled_ui(!self.running() && !connected, |ui| self.wifi.address_ui(ui))
+                    .response.on_disabled_hover_text(if connected { tr!("wifi.address_connected") } else { tr!("run.disabled_busy") });
+                if connected {
+                    if rounded_button(ui, tr!("wifi.disconnect"), Look::Secondary, !self.running(), egui::vec2(0.0, 30.0))
+                        .on_hover_text(tr!("wifi.disconnect_hint"))
+                        .on_disabled_hover_text(tr!("run.disabled_busy"))
+                        .clicked() {
+                        self.wifi_disconnect();
+                    }
+                } else {
+                    let address = !self.wifi.address.trim().is_empty();
+                    if rounded_button(ui, tr!("wifi.connect"), Look::Primary, self.idle() && address, egui::vec2(0.0, 30.0))
+                        .on_hover_text(tr!("wifi.connect_hint"))
+                        .on_disabled_hover_text(if address { tr!("run.disabled_busy") } else { tr!("push.address_needed") })
+                        .clicked() {
+                        self.start(Task::WifiRead);
+                    }
+                }
+            });
+            // A read's outcome stays while it is news: under way, connected,
+            // or a failure; Disconnect clears the rest.
+            let news = self.running() || connected || matches!(self.logs.outcome, Some(Err(_)));
+            if self.task == Some(Task::WifiRead) && news && !self.cancelled {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| self.task_summary(ui, Page::SetUp));
+            }
+        });
+    }
+
     fn review_step(&mut self, ui: &mut egui::Ui) {
+        if self.wifi_connected() {
+            return self.wifi_review_step(ui);
+        }
         ui.horizontal_top(|ui| {
             let left = (ui.available_width() - 340.0).max(320.0);
             ui.vertical(|ui| {
                 ui.set_width(left);
                 heading(ui, tr!("setup.review_title"), tr!("setup.review_about"));
-                card(ui, |ui| {
-                    let rows = self.form.summary();
-                    let count = rows.len();
-                    for (i, (name, value, step)) in rows.into_iter().enumerate() {
-                        // Name, value and Edit on the value's first line; a long
-                        // value, as a full Extras, wraps and the row grows.
-                        ui.horizontal_top(|ui| {
-                            let top = egui::Layout::top_down(egui::Align::Min);
-                            ui.allocate_ui_with_layout(egui::vec2(230.0, 20.0), top, |ui| {
-                                ui.set_width(230.0);
-                                ui.add_space(7.0);
-                                ui.add(egui::Label::new(egui::RichText::new(name).color(MUTED)).truncate());
-                            });
-                            let room = ui.available_width() - 50.0;
-                            ui.allocate_ui_with_layout(egui::vec2(room, 20.0), top, |ui| {
-                                ui.set_width(room);
-                                ui.add_space(7.0);
-                                ui.add(egui::Label::new(value).wrap());
-                                ui.add_space(7.0);
-                            });
-                            ui.vertical(|ui| {
-                                ui.add_space(7.0);
-                                if link(ui, tr!("setup.edit")).clicked() {
-                                    self.step = step;
-                                }
-                            });
-                        });
-                        if i + 1 < count {
-                            separator(ui);
-                        }
-                    }
-                });
+                self.summary_card(ui);
                 ui.add_space(10.0);
-                card(ui, |ui| {
-                    let header = ui.horizontal(|ui| {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                        chevron(ui.painter(), rect.center(), self.developer_open, MUTED);
-                        ui.label(egui::RichText::new(tr!("setup.developer")).font(medium(15.0)).color(TEXT));
-                    }).response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(tr!("setup.developer_hint"));
-                    if header.clicked() {
-                        self.developer_open = !self.developer_open;
-                    }
-                    if self.developer_open {
-                        ui.add_space(10.0);
-                        ui.spacing_mut().item_spacing.y = 8.0;
-                        let bus = self.bus.current();
-                        self.form.developer_ui(ui, &bus);
-                    }
-                });
+                self.developer_card(ui, false);
             });
             ui.add_space(20.0);
             ui.vertical(|ui| {
@@ -366,12 +438,104 @@ impl App {
         });
     }
 
+    /// The review step while connected over Wi-Fi: the choices, the unit and
+    /// its nestlocal, and the developer options with Force; no backup, which
+    /// takes USB.
+    fn wifi_review_step(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_top(|ui| {
+            let left = (ui.available_width() - 340.0).max(320.0);
+            ui.vertical(|ui| {
+                ui.set_width(left);
+                heading(ui, tr!("setup.wifi_review_title"), tr!("setup.wifi_review_about"));
+                self.summary_card(ui);
+                ui.add_space(10.0);
+                self.developer_card(ui, true);
+            });
+            ui.add_space(20.0);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(tr!("setup.wifi_unit")).font(medium(15.0)));
+                ui.add_space(8.0);
+                card(ui, |ui| {
+                    if let Some(line) = self.version_line() {
+                        ui.add(egui::Label::new(line).wrap());
+                        ui.add_space(6.0);
+                    }
+                    if let Some(needs_usb) = self.wifi_needs_usb() {
+                        warning(ui, needs_usb);
+                        ui.add_space(6.0);
+                    }
+                    ui.add(egui::Label::new(egui::RichText::new(tr!("setup.wifi_rollback")).color(MUTED).size(13.0)).wrap());
+                });
+            });
+        });
+    }
+
+    /// The review step's list of choices, each with Edit to its step.
+    fn summary_card(&mut self, ui: &mut egui::Ui) {
+        card(ui, |ui| {
+            let rows = self.form.summary();
+            let count = rows.len();
+            for (i, (name, value, step)) in rows.into_iter().enumerate() {
+                // Name, value and Edit on the value's first line; a long
+                // value, as a full Extras, wraps and the row grows.
+                ui.horizontal_top(|ui| {
+                    let top = egui::Layout::top_down(egui::Align::Min);
+                    ui.allocate_ui_with_layout(egui::vec2(230.0, 20.0), top, |ui| {
+                        ui.set_width(230.0);
+                        ui.add_space(7.0);
+                        ui.add(egui::Label::new(egui::RichText::new(name).color(MUTED)).truncate());
+                    });
+                    let room = ui.available_width() - 50.0;
+                    ui.allocate_ui_with_layout(egui::vec2(room, 20.0), top, |ui| {
+                        ui.set_width(room);
+                        ui.add_space(7.0);
+                        ui.add(egui::Label::new(value).wrap());
+                        ui.add_space(7.0);
+                    });
+                    ui.vertical(|ui| {
+                        ui.add_space(7.0);
+                        if link(ui, tr!("setup.edit")).clicked() {
+                            self.step = step;
+                        }
+                    });
+                });
+                if i + 1 < count {
+                    separator(ui);
+                }
+            }
+        });
+    }
+
+    /// The review step's developer options, folded away; with Force while
+    /// connected over Wi-Fi.
+    fn developer_card(&mut self, ui: &mut egui::Ui, wifi: bool) {
+        card(ui, |ui| {
+            let header = ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                chevron(ui.painter(), rect.center(), self.developer_open, MUTED);
+                ui.label(egui::RichText::new(tr!("setup.developer")).font(medium(15.0)).color(TEXT));
+            }).response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(tr!("setup.developer_hint"));
+            if header.clicked() {
+                self.developer_open = !self.developer_open;
+            }
+            if self.developer_open {
+                ui.add_space(10.0);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                let bus = self.bus.current();
+                let force = wifi.then_some(&mut self.wifi.force);
+                self.form.developer_ui(ui, &bus, force);
+            }
+        });
+    }
+
     /// The run in place of the steps: a ring with what it does and how far
     /// it is, still and blank while the download mode popup counts down, the
     /// steps so far beside it; a failure says why and offers the
     /// way back.
     fn running_page(&mut self, ui: &mut egui::Ui, error: Option<String>) {
         let backing_up = self.backing_up();
+        let wifi = self.wifi_flow();
         ui.add_space(((ui.available_height() - 300.0) * 0.4).max(20.0));
         ui.horizontal_top(|ui| {
             ui.add_space(16.0);
@@ -387,7 +551,13 @@ impl App {
                 let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
                 (Some(0.0), label, String::new(), String::new())
             } else {
-                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
+                let label = if wifi {
+                    tr!("setup.ring_updating")
+                } else if backing_up {
+                    tr!("setup.ring_backing_up")
+                } else {
+                    tr!("setup.ring_setting_up")
+                };
                 let seconds = self.logs.rows.first().map_or(0, |r| r.started.elapsed().as_secs());
                 (None, label, format!("{}:{:02}", seconds / 60, seconds % 60), String::new())
             };
@@ -395,9 +565,12 @@ impl App {
             ui.add_space(40.0);
             ui.vertical(|ui| {
                 ui.add_space(20.0);
-                let (title, about) = match &error {
-                    Some(_) => (tr!("setup.failed_title"), tr!("setup.failed_about")),
-                    None => (tr!("setup.running_title"), tr!("setup.running_about")),
+                let (title, about) = match (&error, wifi) {
+                    (Some(_), false) => (tr!("setup.failed_title"), tr!("setup.failed_about")),
+                    (None, false) => (tr!("setup.running_title"), tr!("setup.running_about")),
+                    (Some(_), true) if self.logs.not_sent => (tr!("setup.wifi_failed_title"), tr!("setup.wifi_not_sent_about")),
+                    (Some(_), true) => (tr!("setup.wifi_failed_title"), tr!("setup.wifi_failed_about")),
+                    (None, true) => (tr!("setup.wifi_running_title"), tr!("setup.wifi_running_about")),
                 };
                 ui.label(egui::RichText::new(title).font(crate::display(34.0)));
                 ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
@@ -406,9 +579,20 @@ impl App {
                     let name = backup.file_name().unwrap_or_default().to_string_lossy();
                     step_row(ui, StepMark::Done, &tr!("setup.backup_saved", name = name), None);
                 }
+                // A Wi-Fi run's steps as it reports them: it has no phases.
+                if wifi {
+                    for row in &self.logs.rows {
+                        let mark = match row.done {
+                            Some((_, true)) => StepMark::Done,
+                            Some((_, false)) => StepMark::Failed,
+                            None => StepMark::Running,
+                        };
+                        step_row(ui, mark, &row.label, Some(row.done.map_or_else(|| row.started.elapsed(), |(time, _)| time)));
+                    }
+                }
                 // The run's phases, every one from the start; the log has
                 // the steps inside them.
-                for phase in self.flow_phases() {
+                for phase in self.flow_phases().into_iter().filter(|_| !wifi) {
                     let (mark, time) = match self.logs.phases.iter().find(|row| row.phase == phase) {
                         Some(PhaseRow { done: Some((elapsed, true)), .. }) => (StepMark::Done, Some(*elapsed)),
                         Some(PhaseRow { done: Some((elapsed, false)), .. }) => (StepMark::Failed, Some(*elapsed)),
@@ -453,7 +637,8 @@ impl App {
                     self.show(Page::Logs);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if pill_button(ui, tr!("setup.another"), false, self.idle()).clicked() {
+                    let again = if self.wifi_flow() { tr!("setup.wifi_again") } else { tr!("setup.another") };
+                    if pill_button(ui, again, false, self.idle()).clicked() {
                         self.restart_flow();
                     }
                 });
@@ -466,6 +651,14 @@ impl App {
                 done_mark(ui);
                 ui.add_space(16.0);
                 ui.vertical(|ui| {
+                    if self.wifi_flow() {
+                        // What the unit did with the settings, and their changes.
+                        let title = if self.wifi_kept { tr!("setup.wifi_done_title") } else { tr!("setup.wifi_unchanged_title") };
+                        ui.label(egui::RichText::new(title).font(crate::display(34.0)));
+                        let outcome = self.logs.outcome.clone().and_then(Result::ok).unwrap_or_default();
+                        ui.add(egui::Label::new(egui::RichText::new(outcome).color(MUTED)).wrap());
+                        return;
+                    }
                     ui.label(egui::RichText::new(tr!("setup.done_title")).font(crate::display(34.0)));
                     let about = if self.flow_backup.is_some() {
                         tr!("setup.done_about_backup")
@@ -494,7 +687,7 @@ impl App {
                     });
                 });
             }
-            let next = self.form.next_steps();
+            let next = if self.wifi_flow() { self.form.wifi_next_steps(self.wifi_kept) } else { self.form.next_steps() };
             if next.is_empty() {
                 return;
             }
@@ -578,6 +771,11 @@ fn tick(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
 }
 
 /// A step's title in the display cut, its line under it.
+/// A wrapped line in the warning colour.
+fn warning(ui: &mut egui::Ui, text: impl Into<String>) {
+    ui.add(egui::Label::new(egui::RichText::new(text).color(WARN).size(13.0)).wrap());
+}
+
 fn heading(ui: &mut egui::Ui, title: &str, about: &str) {
     ui.label(egui::RichText::new(title).font(crate::display(34.0)));
     ui.add_space(2.0);
@@ -869,11 +1067,63 @@ pub(crate) fn link(ui: &mut egui::Ui, text: &str) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// The thermostat as the connect step draws it: with a unit on USB, its
-/// ring lit and its generation in the middle; without one, a plug in the
-/// middle and a short arc going round the ring, as the Nest's own ring
-/// does while it searches.
-fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
+/// What the connect step says of the nestlocal a unit connected over Wi-Fi
+/// runs, beside this app's, which Update sends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NestlocalStatus {
+    /// Its last update is on trial, to keep or roll back on the thermostat.
+    OnTrial,
+    /// It runs another nestlocal than this app's, older or unordered.
+    UpdateAvailable(String),
+    /// It runs a nestlocal newer than this app's, which Update refuses to
+    /// replace without Force.
+    Newer(String),
+    UpToDate,
+    /// The unit's version or this app's is unknown: nothing to compare.
+    Unknown,
+}
+
+impl NestlocalStatus {
+    /// The line under the unit's version, none when unknown.
+    fn text(&self) -> Option<String> {
+        match self {
+            NestlocalStatus::OnTrial => Some(tr!("setup.wifi_on_trial").to_string()),
+            NestlocalStatus::UpdateAvailable(app) => Some(tr!("setup.wifi_update_available", version = app)),
+            NestlocalStatus::Newer(app) => Some(tr!("setup.wifi_newer", version = app)),
+            NestlocalStatus::UpToDate => Some(tr!("setup.wifi_up_to_date").to_string()),
+            NestlocalStatus::Unknown => None,
+        }
+    }
+}
+
+/// The status of the nestlocal `unit` runs (empty when it names none),
+/// its last update on trial when `pending`, beside this app's `app`; newer
+/// by the order Update's refusal of an older nestlocal goes by.
+fn nestlocal_status(unit: &str, pending: bool, app: Option<&str>) -> NestlocalStatus {
+    use unfr0zen_host::push::newer_than;
+    match app {
+        _ if pending => NestlocalStatus::OnTrial,
+        Some(app) if !unit.is_empty() && unit == app => NestlocalStatus::UpToDate,
+        Some(app) if newer_than(unit, app) => {
+            NestlocalStatus::Newer(app.to_string())
+        }
+        Some(app) if !unit.is_empty() => NestlocalStatus::UpdateAvailable(app.to_string()),
+        _ => NestlocalStatus::Unknown,
+    }
+}
+
+/// How the connect step reaches the unit it found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Link {
+    Usb,
+    Wifi,
+}
+
+/// The thermostat as the connect step draws it: with a unit found, its
+/// ring lit and its generation in the middle, under a Wi-Fi mark when it
+/// was reached over Wi-Fi; without one, a plug in the middle and a short
+/// arc going round the ring, as the Nest's own ring does while it searches.
+fn unit_ring(ui: &mut egui::Ui, found: Option<(Device, Link)>) {
     let size = 200.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
@@ -881,11 +1131,7 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
     painter.circle_filled(c, size * 0.5, TRACK);
     painter.circle_filled(c, size * 0.5 - 10.0, FACE);
     painter.circle_filled(c - egui::vec2(0.0, 12.0), size * 0.32, FACE_LIGHT);
-    let found = match bus {
-        Bus::One(seen) => Some(seen.device),
-        _ => None,
-    };
-    let Some(device) = found else {
+    let Some((device, link)) = found else {
         // The search: a soft arc a quarter of the way round, every 2.4 s.
         let time = ui.input(|i| i.time) as f32;
         let r = size * 0.5 - 5.0;
@@ -912,8 +1158,25 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
         Device::Diamond => (tr!("setup.gen1"), tr!("setup.learning_thermostat")),
         Device::Onyx => (tr!("setup.gen_e"), tr!("setup.thermostat_e")),
     };
+    if link == Link::Wifi {
+        wifi_icon(painter, c - egui::vec2(0.0, 52.0), MUTED);
+    }
     painter.text(c - egui::vec2(0.0, 8.0), egui::Align2::CENTER_CENTER, big, crate::display(42.0), TEXT);
     painter.text(c + egui::vec2(0.0, 28.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(12.0), MUTED);
+}
+
+/// The Wi-Fi mark: a dot under three arcs fanning up, centred on `c`.
+fn wifi_icon(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.8, color);
+    let base = c + egui::vec2(0.0, 7.0);
+    for r in [4.5, 9.0, 13.5] {
+        let points: Vec<egui::Pos2> = (0..=12).map(|i| {
+            let a = -TAU * 3.0 / 8.0 + TAU / 4.0 * i as f32 / 12.0;
+            base + egui::vec2(a.cos(), a.sin()) * r
+        }).collect();
+        painter.add(egui::Shape::line(points, stroke));
+    }
+    painter.circle_filled(base, 1.6, color);
 }
 
 /// A USB plug, pointing up, its cable trailing down, centred on `c`.
@@ -967,7 +1230,11 @@ fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
         Bus::One(_) => (tr!("setup.found_unit"), OK_LIGHT, OK_FILL, OK),
         Bus::Several(_) => (tr!("setup.several_units"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
     };
-    let waiting = matches!(bus, Bus::Nothing);
+    status_pill(ui, text, fg, bg, dot, matches!(bus, Bus::Nothing));
+}
+
+/// A rounded status tag: `text` after a dot, which pulses while `waiting`.
+fn status_pill(ui: &mut egui::Ui, text: &str, fg: egui::Color32, bg: egui::Color32, dot: egui::Color32, waiting: bool) {
     // Painted at its own size, so a centred column centres it; a frame
     // would take the column's width and sit at its left.
     let galley = ui.painter().layout_no_wrap(text.to_string(), medium(13.5), fg);
@@ -1147,4 +1414,34 @@ fn next_card(ui: &mut egui::Ui, number: usize, title: &str, about: &str) {
             ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_status_line_says_whether_the_unit_runs_this_apps_nestlocal() {
+        let app = Some("v0.5.0");
+        assert_eq!(nestlocal_status("v0.4.1", false, app), NestlocalStatus::UpdateAvailable("v0.5.0".into()));
+        assert_eq!(nestlocal_status("v0.5.0", false, app), NestlocalStatus::UpToDate);
+        // Newer by Update's own order, which refuses to replace it without Force.
+        assert_eq!(nestlocal_status("v0.5.0-3-g10a3ece", false, app), NestlocalStatus::Newer("v0.5.0".into()));
+        assert_eq!(nestlocal_status("v0.10.0", false, Some("v0.9.9-30-gabcdef0")),
+                   NestlocalStatus::Newer("v0.9.9-30-gabcdef0".into()));
+        assert_eq!(nestlocal_status("v0.4.1-30-gabcdef0", false, app), NestlocalStatus::UpdateAvailable("v0.5.0".into()));
+        // Unordered but different: a bare commit on either side.
+        assert_eq!(nestlocal_status("10a3ece", false, app), NestlocalStatus::UpdateAvailable("v0.5.0".into()));
+        assert_eq!(nestlocal_status("v0.5.0", false, Some("10a3ece")), NestlocalStatus::UpdateAvailable("10a3ece".into()));
+        // A trial outranks the versions: the unit runs the update on trial.
+        assert_eq!(nestlocal_status("v0.5.0", true, app), NestlocalStatus::OnTrial);
+        assert_eq!(nestlocal_status("", true, None), NestlocalStatus::OnTrial);
+        assert_eq!(nestlocal_status("", false, app), NestlocalStatus::Unknown);
+        assert_eq!(nestlocal_status("v0.4.1", false, None), NestlocalStatus::Unknown);
+        assert_eq!(NestlocalStatus::UpdateAvailable("v0.5.0".into()).text().as_deref(), Some("Update available: v0.5.0"));
+        assert_eq!(NestlocalStatus::Newer("v0.5.0".into()).text().as_deref(), Some("Newer than this app's v0.5.0"));
+        assert_eq!(NestlocalStatus::OnTrial.text().as_deref(), Some(tr!("setup.wifi_on_trial")));
+        assert_eq!(NestlocalStatus::UpToDate.text().as_deref(), Some(tr!("setup.wifi_up_to_date")));
+        assert_eq!(NestlocalStatus::Unknown.text(), None);
+    }
 }

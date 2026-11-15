@@ -13,10 +13,12 @@
 //!
 //! nestlocal lists a pattern for each in `LIST`, and the library preloaded
 //! into nlsleepd (platform/common/wakefilter, which the app installs
-//! and names in nlsleepd's init script with Matter) adds them to
-//! nlsleepd's before each sleep: a line a pattern, `OFFSET MASK PATTERN`, the
-//! offset into the frame in decimal, nl80211's mask (a bit a pattern byte,
-//! least significant first) and the bytes in hex.
+//! and names in nlsleepd's init script with Matter or the update API) adds
+//! them to nlsleepd's before each sleep: a line a pattern, `OFFSET MASK
+//! PATTERN`, the offset into the frame in decimal, nl80211's mask (a bit a
+//! pattern byte, least significant first) and the bytes in hex. Without
+//! Matter, the update API lists its own port alone (`update_port`): an app
+//! knocks on Matter's port, which wakes a unit with Matter, then connects.
 //!
 //! A pattern is bytes at fixed offsets, so a query wakes the unit when the
 //! instance is its first question. Each generation's chip takes so many
@@ -28,6 +30,9 @@
 //! takes is cut, which matches more.
 
 use std::net::Ipv6Addr;
+use std::path::{Path, PathBuf};
+
+use crate::logf;
 
 pub const LIST: &str = "/var/run/unfr0zen/wake-patterns";
 /// Where the app installs the library.
@@ -159,6 +164,57 @@ pub fn list(budget: Budget, mac: [u8; 6], addresses: &[Ipv6Addr], instances: &[S
     patterns.iter().map(Pattern::line).collect()
 }
 
+/// The list for the update API without Matter: TCP over IPv4 to its port at
+/// the unit's Ethernet address, an app connecting.
+pub fn update_port(mac: [u8; 6]) -> String {
+    Pattern::default().at(0, &mac).at(ETHERTYPE, &[0x08, 0x00]).at(23, &[6]).at(36, &update_wire::PORT.to_be_bytes()).line()
+}
+
+/// The update API's list at `path`, kept to the Wi-Fi interface's Ethernet
+/// address. The interface comes up after nestlocal starts, and a pattern for
+/// no address matches nothing: there is no list until it has one, and an
+/// address that reads as none later (the interface down) keeps the list.
+pub struct UpdatePort {
+    path: PathBuf,
+    listed: Option<[u8; 6]>,
+    /// Logged once each: the interface has no address yet; the list failed.
+    waiting: bool,
+    failing: bool,
+}
+
+impl UpdatePort {
+    pub fn new(path: impl Into<PathBuf>) -> UpdatePort {
+        UpdatePort { path: path.into(), listed: None, waiting: false, failing: false }
+    }
+
+    /// Lists the port at `mac`, `interface`'s address now, unless it is
+    /// listed already; whether a pattern is listed.
+    pub fn refresh(&mut self, interface: &str, mac: [u8; 6]) -> bool {
+        if mac == [0; 6] {
+            if self.listed.is_none() && !self.waiting {
+                logf!("wifi-update: {interface} has no Ethernet address yet; an app wakes the unit once it has");
+                self.waiting = true;
+            }
+            return self.listed.is_some();
+        }
+        if self.listed == Some(mac) {
+            return true;
+        }
+        match write(&self.path, &update_port(mac)) {
+            Ok(()) => {
+                logf!("wifi-update: TCP to port {} on {interface} wakes the unit", update_wire::PORT);
+                (self.listed, self.failing) = (Some(mac), false);
+            }
+            Err(e) if !self.failing => {
+                logf!("wifi-update: {}: {e}; an app will not wake the unit", self.path.display());
+                self.failing = true;
+            }
+            Err(_) => {}
+        }
+        self.listed.is_some()
+    }
+}
+
 /// `LIST` holds Matter's port for an Ethernet address: what a gen 1 or gen 2 needs
 /// before it sleeps.
 pub fn matter_port_listed() -> bool {
@@ -176,11 +232,11 @@ pub fn in_nlsleepd() -> bool {
     })
 }
 
-/// Puts `list` in place whole: the library may be reading.
-pub fn write(list: &str) -> std::io::Result<()> {
-    let temporary = format!("{LIST}.{}", std::process::id());
+/// Puts `list` in place at `path` whole: the library may be reading.
+pub fn write(path: &Path, list: &str) -> std::io::Result<()> {
+    let temporary = format!("{}.{}", path.display(), std::process::id());
     std::fs::write(&temporary, list)?;
-    std::fs::rename(&temporary, LIST)
+    std::fs::rename(&temporary, path)
 }
 
 #[cfg(test)]
@@ -265,5 +321,43 @@ mod tests {
         assert!(all.iter().all(|line| bytes(line).len() <= 91));
         // The gen 3's nlsleepd takes the port.
         assert!(lines(&[LINK_LOCAL], &[INSTANCE]).iter().all(|line| bytes(line)[..6] != MAC.map(Some)));
+    }
+
+    #[test]
+    fn the_update_port_pattern_matches_a_syn_to_8443() {
+        let list = update_port(MAC);
+        assert_eq!(list.lines().count(), 1);
+        let pattern = bytes(list.lines().next().unwrap());
+        assert_eq!(pattern.len(), 38);
+        assert_eq!(pattern[..6], MAC.map(Some));
+        assert_eq!(pattern[12..14], [Some(0x08), Some(0x00)]);
+        assert_eq!(pattern[23], Some(6));
+        assert_eq!(pattern[36..], [Some(0x20), Some(0xfb)]);
+        let set: Vec<usize> = (0..pattern.len()).filter(|i| pattern[*i].is_some()).collect();
+        assert_eq!(set, [0, 1, 2, 3, 4, 5, 12, 13, 23, 36, 37]);
+        // The mask, a bit a byte from the first: 0-5, 12-13, 23, 36-37.
+        assert_eq!(list.split(' ').nth(1), Some("3f30800030"));
+    }
+
+    #[test]
+    fn the_update_pattern_waits_for_an_address_and_follows_it() {
+        let dir = std::env::temp_dir().join(format!("nestlocal-wake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wake-patterns");
+        let _ = std::fs::remove_file(&path);
+        let mut list = UpdatePort::new(&path);
+        let read = || std::fs::read_to_string(&path).ok();
+        // The interface not up yet: no pattern for no address.
+        assert!(!list.refresh("wlan0", [0; 6]));
+        assert_eq!(read(), None);
+        assert!(list.refresh("wlan0", MAC));
+        assert_eq!(read(), Some(update_port(MAC)));
+        let other = [0x02, 0, 0, 0, 0, 1];
+        assert!(list.refresh("wlan0", other));
+        assert_eq!(read(), Some(update_port(other)));
+        // Down for a moment: the address it had stays listed.
+        assert!(list.refresh("wlan0", [0; 6]));
+        assert_eq!(read(), Some(update_port(other)));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

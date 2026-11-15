@@ -4,9 +4,25 @@ use std::path::Path;
 
 pub const DIR: &str = "/var/run/unfr0zen";
 
+/// Where the files are: DIR, or a directory of the test run's own.
+#[cfg(not(test))]
+pub fn dir() -> &'static Path {
+    Path::new(DIR)
+}
+
+#[cfg(test)]
+pub fn dir() -> &'static Path {
+    static TEST_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    TEST_DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("nestlocal-settings-ui-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    })
+}
+
 pub fn publish(name: &str, data: &[u8]) -> std::io::Result<()> {
-    let path = Path::new(DIR).join(name);
-    let temporary = Path::new(DIR).join(format!("{name}.partial"));
+    let path = dir().join(name);
+    let temporary = dir().join(format!("{name}.partial"));
     // nlclient renders this on the physical display; pairing credentials
     // and commands remain accessible only to root.
     use std::io::Write;
@@ -23,30 +39,54 @@ pub fn status(protocol: &str, text: &str) {
     }
 }
 
+pub fn remove(name: &str) {
+    let _ = std::fs::remove_file(dir().join(name));
+}
+
 pub fn take_request(protocol: &str) -> bool { take_request_age(protocol).is_some() }
 
+/// Takes protocol's request, with what the screen wrote in it: at most
+/// limit bytes, trimmed.
+pub fn take_request_text(protocol: &str, limit: u64) -> Option<String> {
+    use std::io::Read;
+    let path = dir().join(format!("{protocol}.request"));
+    let mut text = Vec::new();
+    std::fs::File::open(&path).ok()?.take(limit).read_to_end(&mut text).ok()?;
+    std::fs::remove_file(path).ok()?;
+    Some(String::from_utf8_lossy(&text).trim().to_string())
+}
+
 pub fn take_request_age(protocol: &str) -> Option<std::time::Duration> {
-    let path = Path::new(DIR).join(format!("{protocol}.request"));
+    let path = dir().join(format!("{protocol}.request"));
     let age = std::fs::metadata(&path).ok()?.modified().ok()
         .and_then(|time| time.elapsed().ok()).unwrap_or_default();
     std::fs::remove_file(path).ok()?;
     Some(age)
 }
 
-pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Result<()> {
+/// The configured features, a bit each for Matter, Zigbee, Doom, Themes
+/// and Update, in hex.
+fn features(matter: bool, zigbee: bool, doom: bool, theme: bool, update: bool) -> String {
+    let bits = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2) | ((theme as u8) << 3) | ((update as u8) << 4);
+    format!("{bits:x}")
+}
+
+pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool, update: bool) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::create_dir_all(DIR)?;
-    std::fs::set_permissions(DIR, std::fs::Permissions::from_mode(0o700))?;
+    std::fs::create_dir_all(dir())?;
+    std::fs::set_permissions(dir(), std::fs::Permissions::from_mode(0o700))?;
     // Publish configured features independently of service/radio readiness.
-    let features = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2) | ((theme as u8) << 3);
-    publish("features", format!("{features:x}").as_bytes())?;
+    publish("features", features(matter, zigbee, doom, theme, update).as_bytes())?;
     publish_activity_icons()?;
-    for name in ["display.request", "display.taken", "matter.request", "matter-reset.request", "zigbee.request", "doom.request", "theme.request", "matter.code", "matter.png"] {
-        let _ = std::fs::remove_file(Path::new(DIR).join(name));
+    for name in ["display.request", "display.taken", "matter.request", "matter-reset.request", "zigbee.request", "doom.request",
+                 "theme.request", "update.request", "update-trust.request", "update-forget.request", "update-rollback.request",
+                 "matter.code", "matter.png", "update.code"] {
+        remove(name);
     }
     status("matter", if matter { "Starting Matter..." } else { "Matter not enabled" });
     status("zigbee", if zigbee { "Starting Zigbee..." } else { "Zigbee not enabled" });
     status("doom", if doom { "Ready" } else { "Unavailable" });
+    status("update", if update { crate::wifi_update::READY } else { crate::wifi_update::NOT_ENABLED });
     Ok(())
 }
 
@@ -131,6 +171,15 @@ fn encode_matter_codes(comm: &rs_matter::BasicCommData, capabilities: rs_matter:
 mod tests {
     use super::*;
     use rs_matter::{BasicCommData, sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef}};
+
+    #[test]
+    fn features_are_a_bit_each_in_hex() {
+        assert_eq!(features(true, true, true, true, true), "1f");
+        assert_eq!(features(false, false, false, false, true), "10");
+        assert_eq!(features(false, false, false, true, false), "8");
+        assert_eq!(features(true, false, true, false, false), "5");
+        assert_eq!(features(false, false, false, false, false), "0");
+    }
 
     #[test]
     fn qr_png_and_manual_code_follow_configured_credentials() {

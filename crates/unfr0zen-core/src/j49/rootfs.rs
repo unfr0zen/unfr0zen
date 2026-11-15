@@ -24,7 +24,7 @@ pub(crate) const GEN2_GETTY: &str = "# A login on the USB serial port (unfr0zen-
                                      [ -e /dev/ttyGS0 ] && /sbin/getty -L ttyGS0 115200 vt100; sleep 5; done &\"\n";
 /// The SSH server's init script, and the end of its dropbear line, before
 /// which -s goes for keys-only logins.
-const SSH_INIT: &str = "etc/init.d/unfr0zen-ssh";
+pub(crate) const SSH_INIT: &str = "etc/init.d/unfr0zen-ssh";
 const DROPBEAR_PIDFILE: &str = " -P \"$PIDFILE\"";
 /// rcS's stock sshd line, and the start of the server --ssh adds.
 const SSH_START: (&str, &str) = ("\n${INITDIR}/sshd start\n", "${INITDIR}/unfr0zen-ssh start\n");
@@ -67,6 +67,22 @@ pub(crate) fn set_up_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
     }
     put(tree, "etc/inittab", inittab);
     check_mode(tree, "etc/inittab", 0o644)
+}
+
+/// Whether the root shell on the USB serial port is on: its inittab entry.
+pub(crate) fn usb_shell(tree: &Tree) -> bool {
+    text(tree, "etc/inittab").is_ok_and(|inittab| inittab.contains(SHELL_LINE))
+}
+
+/// Whether SSH is on: rcS starts the server --ssh adds.
+pub(crate) fn ssh(tree: &Tree) -> bool {
+    let (anchor, start) = SSH_START;
+    text(tree, "etc/init.d/rcS").is_ok_and(|rcs| rcs.contains(&format!("{anchor}{start}")))
+}
+
+/// Whether SSH refuses root's password: dropbear starts with -s.
+pub(crate) fn ssh_key_only(tree: &Tree) -> bool {
+    ssh(tree) && text(tree, SSH_INIT).is_ok_and(|init| init.contains(&format!(" -s{DROPBEAR_PIDFILE}")))
 }
 
 /// With a server given, its files and their start in rcS, after stock's sshd

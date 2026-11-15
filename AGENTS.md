@@ -9,8 +9,9 @@ This Rust 2021 workspace builds USB recovery tools for Nest thermostats:
 - Device-specific code sits in one module per device (`diamond3`, `j49`) in core and host, plus host's detection-only `onyx` (the Thermostat E) and `diamond` (the gen 1's x-loader, which the OMAP flow sends in place of the j49's when the unit's app gadget or `--device` names a gen 1, and the kernel its initramfs runs on); `unfr0zen-host::device` identifies the unit on USB by its identity in any mode and the run dispatches to its device's flow; the gen 1 and gen 2 share their boot ROM's identity, and in that mode the OMAP flow reads the generation from the NAND's U-Boot environment (`nlmodel`) once the flasher runs.
 - `crates/unfr0zen-apply`: the setup engine on the unit, a static ARMv7 binary running `unfr0zen-core::setup` on the mounted root volume. Each generation's setup bundle (`unfr0zen-core::bundle`: one tar of apply, nestlocal, overlays, the screen object and the hook scripts in `platform/diamond3/bundle/` or `platform/j49/bundle/`, each file's SHA-256 in its manifest; the gen 1 and gen 2 share one) carries it, and every generation's run boots an initramfs (`unfr0zen-core::initramfs`, `unfr0zen-host::initramfs`) that runs it on the unit; `unfr0zen-host::bundle` assembles the bundle from the app's assets, and the `unfr0zen-bundle` tool packs and signs it for a release (`utils/bundle/release.pub` is the key units check updates against).
 - `crates/unfr0zen-gui` and `crates/unfr0zen-cli`: the `unfr0zen` executable (egui window) and the terminal interface, a library it runs when given arguments on Linux and macOS; Windows has the window only.
-- `crates/nestlocal`: device service implementing MQTT, Matter, and Zigbee; startup scripts live in `rootfs/`, the home screen themes in `themes/`.
+- `crates/nestlocal`: device service implementing MQTT, Matter, and Zigbee, and the update API that replaces it over Wi-Fi (`src/wifi_update/`); startup scripts, among them the update's rollback guard, live in `rootfs/`, the home screen themes in `themes/`.
 - `crates/nestlocal-theme`: the gen 3's customizable home screen themes, the themes drawn in nlclient's GPU context by the library `platform/common/theme` preloads.
+- `crates/update-wire`: the update protocol nestlocal's update API and the app's `unfr0zen-host` share.
 - `platform/`: what is built for and installed on the thermostat, by device:
   - `common/`: both generations. `nlclient/` (native settings screen, assets, binary discovery references, C tests), `radio/` (radio firmware, each radio's board, linker and OpenThread files in `em3581/` and `em357/`; OpenThread integration in `thread/`), `doom/` (doomgeneric submodule plus its platform layer), `wakefilter/` (the library preloaded into nlsleepd that adds nestlocal's Wi-Fi wake patterns to its own), `theme/` (the library preloaded into nlclient that draws customizable home screen themes).
   - `diamond3/`: the gen 3. The setup keeps unfr0zen's programs and data off the root volume of every generation, on the scratch volume under `/media/scratch/.unfr0zen` (`unfr0zen-core::diamond3::scratch`), and moves those an older setup left on root; `bundle/`'s hooks mount it in the initramfs. `bootstrap/` (ROM stage and boot wrapper), `uboot/` (recovery U-Boot submodule, patches and build scripts), `initramfs-init`, `zbwake/` (kernel wake module for each gen 3 release).
@@ -47,7 +48,7 @@ Match surrounding style and use four-space indentation in Rust. Use `snake_case`
 
 ## Testing Guidelines
 
-Rust tests use `#[test]` and integration tests under `crates/unfr0zen-core/tests/`. Name tests after observable behavior. CI also runs:
+Rust tests use `#[test]` and integration tests under `crates/unfr0zen-core/tests/` and `crates/nestlocal/tests/`. Name tests after observable behavior. CI also runs:
 
 ```sh
 clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/custom_flow_test.c -o /tmp/custom-flow-test

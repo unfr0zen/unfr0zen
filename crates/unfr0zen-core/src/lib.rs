@@ -14,6 +14,7 @@ pub mod local;
 pub mod nestlocal;
 pub mod nlclient;
 pub mod setup;
+pub mod settings;
 pub mod shell;
 mod slot;
 
@@ -28,12 +29,16 @@ pub enum Error {
     Io(String),
     Timeout(String),
     Device(String),
+    /// A change the unit takes only from a setup over USB, and why: refused
+    /// over Wi-Fi before anything is sent.
+    NeedsUsb(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Io(m) | Error::Timeout(m) | Error::Device(m) => f.write_str(m),
+            Error::NeedsUsb(reason) => write!(f, "this change needs a USB setup: {reason}"),
         }
     }
 }

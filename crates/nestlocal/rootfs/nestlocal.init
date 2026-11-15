@@ -7,24 +7,47 @@
 # CLI/GUI settings in /etc/nestlocal/options take precedence. Units without
 # that file can use /media/system-config/nestlocal.options.
 
+PIDFILE=/var/run/nestlocal.pid
+
 # On the gen 3's scratch volume, else (the gen 1 and gen 2, or a unit set up
 # before) the root volume.
-DAEMON=/media/scratch/.unfr0zen/bin/nestlocal
-[ -x "$DAEMON" ] || DAEMON=/nestlabs/sbin/nestlocal
-PIDFILE=/var/run/nestlocal.pid
-OPTIONS=/etc/nestlocal/options
-[ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
+daemon() {
+    DAEMON=/media/scratch/.unfr0zen/bin/nestlocal
+    [ -x "$DAEMON" ] || DAEMON=/nestlabs/sbin/nestlocal
+}
+
+options() {
+    OPTIONS=/etc/nestlocal/options
+    [ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
+}
 
 case "${1}" in
 start)
+    # An update pushed over Wi-Fi that does not come up is rolled back here,
+    # before the binary runs (nestlocal-update-guard), and before anything
+    # reads the options or picks the binary it may put back or remove.
+    [ ! -x /etc/init.d/nestlocal-update-guard ] || /etc/init.d/nestlocal-update-guard start
+    daemon
+    options
     # A radio that will not flash or attach must not take MQTT and Wi-Fi Matter down with it.
     if grep -q -- '-matter-thread' "$OPTIONS"; then
         /etc/init.d/nestlocal-thread start || echo "nestlocal: Thread transport unavailable; serving without it" >&2
     fi
     # nlclient reads its settings at start, before it asks nestlocal anything:
     # firmware 6.4-8 moves a unit with no structure to Nest's newer service
-    # (crates/nestlocal/src/structure.rs).
-    ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}`
+    # (crates/nestlocal/src/structure.rs). An update on trial gets 30 s for
+    # it, so that one which hangs counts as a failed start instead of holding
+    # rcS where the guard cannot roll it back.
+    if [ -e /media/data/nestlocal-update.pending ]; then
+        ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}` &
+        prepare=$!
+        ( sleep 30; kill -9 ${prepare} ) </dev/null >/dev/null 2>&1 &
+        watchdog=$!
+        wait ${prepare}
+        kill ${watchdog} 2>/dev/null
+    else
+        ${DAEMON} -syslog -prepare-settings `cat ${OPTIONS}`
+    fi
     rm -f /var/run/unfr0zen/nlclient-may-start
     start-stop-daemon -S -q -b -m -p ${PIDFILE} -x ${DAEMON} -- -syslog `cat ${OPTIONS}`
     # nlclient opens the BLE chip's UART as it starts and loads firmware into

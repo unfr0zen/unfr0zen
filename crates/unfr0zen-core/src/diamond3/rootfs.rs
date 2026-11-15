@@ -106,6 +106,38 @@ const KEY_ONLY_LOGIN: &str = "PermitRootLogin without-password\n";
 /// start with; units set up by v0.5.0 and older carry it.
 const NEWER_KEY_ONLY_LOGIN: &str = "PermitRootLogin prohibit-password\n";
 
+/// Whether the USB root shell is on: inittab's shell line (a login shell or
+/// an earlier release's plain one) and usb-gadget's ACM port.
+pub(crate) fn usb_shell(tree: &Tree) -> bool {
+    let inittab = text(tree, "etc/inittab").unwrap_or_default();
+    (inittab.contains(SHELL_LINES.0) || inittab.contains(PLAIN_SHELL_LINES.0))
+        && text(tree, "etc/init.d/usb-gadget").is_ok_and(|gadget| !gadget.contains(GADGET_LINES.1))
+}
+
+/// sshd_config's root login line, as one of its lines.
+fn root_login(tree: &Tree, line: &str) -> bool {
+    text(tree, "etc/ssh/sshd_config").is_ok_and(|config| config.split_inclusive('\n').any(|l| l == line))
+}
+
+/// Whether root logs in with a key only, in either spelling: an older
+/// setup's NEWER_KEY_ONLY_LOGIN reads as the same choice.
+fn key_only_login(tree: &Tree) -> bool {
+    root_login(tree, KEY_ONLY_LOGIN) || root_login(tree, NEWER_KEY_ONLY_LOGIN)
+}
+
+/// Whether SSH is on: rcS starts sshd, and sshd lets root log in, with its
+/// password or a key only.
+pub(crate) fn ssh(tree: &Tree) -> bool {
+    let (_, _, _, password_login) = SSH_EDITS[0];
+    text(tree, "etc/init.d/rcS").is_ok_and(|rcs| rcs.contains(SSHD_START.0))
+        && (root_login(tree, password_login) || key_only_login(tree))
+}
+
+/// Whether SSH refuses root's password: sshd lets root log in with a key only.
+pub(crate) fn ssh_key_only(tree: &Tree) -> bool {
+    ssh(tree) && key_only_login(tree)
+}
+
 /// An SSH server at boot, root logins with a key and, with `password_login`,
 /// root's password, and an ECDSA host key current clients accept. Without
 /// the flag rcS does not start sshd, and sshd_config and its init script are

@@ -306,17 +306,11 @@ impl Environment {
         Ok([numbers[0], numbers[1]].map(|n| if n == 0 { Slot::Root0 } else { Slot::Root1 }))
     }
 
-    /// The generation, as Nest's U-Boot tells the boards apart: `nlmodel` is
-    /// the family, a dash, the product and an optional dotted revision,
-    /// `Diamond-1.N` on a gen 1 and `Display-2.N` on a gen 2. None when it is
-    /// unset (U-Boot then assumes Display-2.0) or names neither.
+    /// The generation `nlmodel` names (Device::from_nlmodel), a gen 1 or gen
+    /// 2 being the only ones this NAND's boards are. None when it is unset
+    /// (U-Boot then assumes Display-2.0) or names neither.
     pub fn device(&self) -> Option<Device> {
-        let (family, rest) = self.get("nlmodel")?.rsplit_once('-')?;
-        match (family, rest.split('.').next()?) {
-            ("Diamond", "1") => Some(Device::Diamond),
-            ("Display", "2") => Some(Device::J49),
-            _ => None,
-        }
+        Device::from_nlmodel(self.get("nlmodel")?).filter(|device| matches!(device, Device::Diamond | Device::J49))
     }
 }
 

@@ -183,6 +183,7 @@ DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 #define MATTER_GLYPH IMAGES "G_unfr0zen_matter_80px.png"
 #define THEMES_GLYPH IMAGES "G_unfr0zen_themes_80px.png"
 #define DOOM_GLYPH IMAGES "G_unfr0zen_doom_80px.png"
+#define UPDATE_GLYPH IMAGES "G_unfr0zen_update_80px.png"
 /* Doom's title, made from the WAD when the app installs Doom (246x120). */
 #define DOOM_IMAGE IMAGES "G_unfr0zen_doom.png"
 /* nestlocal's files. */
@@ -192,6 +193,16 @@ DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 #define MATTER_CODE RUN "matter.code"
 #define MATTER_REQUEST RUN "matter-reset.request"
 #define THEME_REQUEST RUN "theme.request"
+/* The update window: nestlocal's status, and its code and IPv4 address. */
+#define UPDATE_STATUS RUN "update.status"
+#define UPDATE_CODE RUN "update.code"
+#define UPDATE_REQUEST RUN "update.request"
+#define UPDATE_TRUST_REQUEST RUN "update-trust.request"
+/* The laptops nestlocal trusts, a line each ("<id> <name>"), and, while a
+ * set is on trial, "On trial: update from <name>". */
+#define UPDATE_TRUSTED RUN "update.trusted"
+#define UPDATE_TRIAL RUN "update.trial"
+#define UPDATE_FAILED "Update is unavailable. Try again."
 #define NOT_ENABLED "Not enabled or service unavailable"
 
 /* The largest images shown: Doom's title is wider than the others. */
@@ -300,8 +311,14 @@ struct custom_state {
     void *refresh_request;
     char status[96];
     char code[32];
-    char detail[192];
+    char detail[384];
+    char trial[64];
     enum custom_page image_page;
+    /* The page show last laid out, which a page opening is reached from. */
+    enum custom_page shown_page;
+    /* One more than the choice show selects in place of the last one: the
+     * same action, once the Update page's choices change; 0 for none. */
+    int reselect;
     void *activity_images[ACTIVITY_FRAMES];
     unsigned int activity_ticks;
     int activity_started;
@@ -787,11 +804,43 @@ static int service_unready(const char *status) {
            same_text(status, "Zigbee not enabled") || same_text(status, "Starting Matter...") ||
            same_text(status, "Starting Zigbee...") || same_text(status, "Radio unavailable. Try again.");
 }
+/* Appends text to the size bytes at to, which stay terminated. */
+static unsigned int text_add(char *to, unsigned int n, unsigned int size, const char *text) {
+    while (*text && n < size - 1) to[n++] = *text++;
+    to[n] = 0;
+    return n;
+}
+/* The update window's requests, once its service is ready: the window, with
+ * trust, the set on trial's roll back, and forgetting the laptop the Forget
+ * page names, whose id the request holds. */
+static int request_update(int which, struct custom_state *s) {
+    char status[96];
+    read_text(UPDATE_STATUS, status, sizeof(status), "Unavailable");
+    if (same_text(status, "Unavailable") || same_text(status, "Update not enabled")) return -1;
+    /* A new window would replace the code of an upload under way. */
+    if ((which == REQUEST_UPDATE || which == REQUEST_UPDATE_TRUST) &&
+        (same_text(status, "Receiving update...") || same_text(status, "Installing...") ||
+         same_text(status, "Restarting..."))) return -1;
+    /* The request's name, by which, from one string: a choice among these
+     * constants could compile to a table of pointers, which the payload
+     * cannot hold. */
+    const char *name = "update\0update-trust\0update-rollback\0update-forget";
+    for (int i = REQUEST_UPDATE; i < which; i++) while (*name++) {}
+    char path[64], tmp[64];
+    text_add(path, text_add(path, text_add(path, 0, sizeof(path), RUN), sizeof(path), name), sizeof(path), ".request");
+    text_add(tmp, text_add(tmp, 0, sizeof(tmp), path), sizeof(tmp), ".tmp");
+    const char *text = which == REQUEST_UPDATE_FORGET ? s->flow.forget.id : "1";
+    unsigned int length = 0;
+    while (text[length]) length++;
+    return write_request(tmp, path, text, length);
+}
 /* custom_choose's requests (enum custom_request), as files nestlocal takes:
- * the theme's name in theme.request, else "1" in the action's request
- * file once its service is ready. 0 once written, else nonzero. */
+ * the theme's name in theme.request, the update window's (request_update),
+ * else "1" in the action's request file once its service is ready. 0 once
+ * written, else nonzero. */
 static int request_action(int which, void *context) {
     struct custom_state *s = context;
+    if (which >= REQUEST_UPDATE && which <= REQUEST_UPDATE_FORGET) return request_update(which, s);
     if (which >= REQUEST_THEME) {
         if (which - REQUEST_THEME >= s->themes.count) return -1;
         const char *name = s->themes.ids[which - REQUEST_THEME];
@@ -827,6 +876,58 @@ static void matter_detail(struct custom_state *s) {
     if (n < sizeof(s->detail) - 1) s->detail[n++] = '\n';
     while (*status && n < sizeof(s->detail) - 1) s->detail[n++] = *status++;
     s->detail[n] = 0;
+}
+/* Appends text to the detail, which stays terminated. */
+static unsigned int detail_add(struct custom_state *s, unsigned int n, const char *text) {
+    return text_add(s->detail, n, sizeof(s->detail), text);
+}
+static int update_page(enum custom_page page) {
+    return page == CUSTOM_UPDATE || page == CUSTOM_UPDATE_OPEN;
+}
+static int trusted_page(enum custom_page page) {
+    return page == CUSTOM_UPDATE_TRUSTED || page == CUSTOM_UPDATE_FORGET;
+}
+/* Whether an update page shows the window's code under its heading: the
+ * open page always, the Update page while the window is still open. */
+static int update_code_page(const struct custom_state *s) {
+    return s->flow.page == CUSTOM_UPDATE_OPEN ||
+           (!s->flow.action_failed && custom_update_shows_code(s->status, s->code));
+}
+/* The code, the address under it, and the window's status; the status
+ * alone once the code is gone. Otherwise what Allow does, and the status. */
+static void update_detail(struct custom_state *s) {
+    unsigned int n = 0;
+    if (s->flow.page == CUSTOM_UPDATE_OPEN && !s->activity_started) {
+        detail_add(s, 0, "Opening update...");
+        return;
+    }
+    if (update_code_page(s)) {
+        if (*s->code) n = detail_add(s, detail_add(s, 0, s->code), "\n\n");
+    } else {
+        n = detail_add(s, n, "Allow update shows a code to enter in unfr0zen. "
+                             "It lets the app replace nestlocal once in the next 10 minutes.");
+        if (custom_update_shows(&s->flow, 1))
+            n = detail_add(s, n, " Allow and trust also lets that laptop update later without a code.");
+        n = detail_add(s, n, "\n\n");
+    }
+    /* What Roll back would roll back, wherever it shows. */
+    if (s->flow.page == CUSTOM_UPDATE && s->flow.on_trial) n = detail_add(s, detail_add(s, n, s->trial), "\n\n");
+    detail_add(s, n, s->status);
+}
+/* nestlocal's trusted list and trial into the flow; whether either changed. */
+static int load_update_state(struct custom_state *s) {
+    char list[CUSTOM_LAPTOPS * 67 + 64], trial[sizeof(s->trial)];
+    read_text(UPDATE_TRUSTED, list, sizeof(list), "");
+    read_text(UPDATE_TRIAL, trial, sizeof(trial), "");
+    int changed = custom_trusted_parse(&s->flow, list) || !same_text(trial, s->trial);
+    text_add(s->trial, 0, sizeof(s->trial), trial);
+    s->flow.on_trial = s->trial[0] != 0;
+    return changed;
+}
+static int file_exists(const char *path) {
+    void *file = native_fopen(path, "r");
+    if (file) native_fclose(file);
+    return file != 0;
 }
 static void release_image(void *image) {
     if (image) {
@@ -893,7 +994,14 @@ static void show(void *raw, int opening) {
     int old_selection = WORD(common(raw), COMMON_SELECTION);
     struct custom_state *s = state(raw);
     int doom = s->flow.page == CUSTOM_DOOM, theme = s->flow.page == CUSTOM_THEMES;
-    if (s->flow.page != CUSTOM_HOME && !doom && !theme) {
+    int update = update_page(s->flow.page), trusted = trusted_page(s->flow.page);
+    if (update || trusted) {
+        read_text(UPDATE_STATUS, s->status, sizeof(s->status), "Unavailable");
+        read_text(UPDATE_CODE, s->code, sizeof(s->code), "");
+        /* The list and trial as the Update page opens; refresh_update
+         * follows them while it shows. */
+        if (opening && s->flow.page == CUSTOM_UPDATE) load_update_state(s);
+    } else if (s->flow.page != CUSTOM_HOME && !doom && !theme) {
         read_status(s->flow.page, s->status, sizeof(s->status));
         if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
             custom_matter_refresh(&s->flow, s->status, 0, &s->activity_started, 0))
@@ -905,7 +1013,10 @@ static void show(void *raw, int opening) {
     int activity = custom_activity(s->flow.page);
     int matter_pairing = s->flow.page == CUSTOM_MATTER_PAIRING;
     int choice_count = s->flow.page == CUSTOM_HOME ? 1 :
-                       theme ? s->themes.count + 1 : activity ? 1 : 2;
+                       theme ? s->themes.count + 1 :
+                       s->flow.page == CUSTOM_UPDATE ? custom_update_count(&s->flow) :
+                       s->flow.page == CUSTOM_UPDATE_TRUSTED ? custom_trusted_count(&s->flow) :
+                       activity || s->flow.page == CUSTOM_UPDATE_OPEN ? 1 : 2;
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
     s->config.text_count = activity ? 3 : 2;
     /* Text row 0 reserves the image's room in blank lines, so images
@@ -934,6 +1045,36 @@ static void show(void *raw, int opening) {
         native_string_copy(&s->choices[0], "Play");
         native_string_copy(&s->choices[1], "Back");
         clear_choices(s, 2);
+    } else if (update) {
+        /* The code shows under a heading, as Matter's does; without it the
+         * Update page is text only. */
+        update_detail(s);
+        int open = s->flow.page == CUSTOM_UPDATE_OPEN;
+        int code = update_code_page(s);
+        native_string_copy(&s->text[0], code ? "Update code" : s->flow.action_failed ? UPDATE_FAILED : s->detail);
+        native_string_copy(&s->text[1], code ? s->detail : "");
+        s->config.text_count = code ? 2 : 1;
+        /* In custom_update_action's order. */
+        int n = 0;
+        if (!open && custom_update_shows(&s->flow, 0)) native_string_copy(&s->choices[n++], "Allow update");
+        if (!open && custom_update_shows(&s->flow, 1)) native_string_copy(&s->choices[n++], "Allow and trust");
+        if (!open && custom_update_shows(&s->flow, 2)) native_string_copy(&s->choices[n++], "Trusted laptops");
+        if (!open && custom_update_shows(&s->flow, 3)) native_string_copy(&s->choices[n++], "Roll back");
+        native_string_copy(&s->choices[n++], "Back");
+        clear_choices(s, n);
+    } else if (trusted) {
+        /* The list: a choice per laptop by name, then Back. Forget names
+         * the one chosen. */
+        int forget = s->flow.page == CUSTOM_UPDATE_FORGET;
+        if (forget) detail_add(s, detail_add(s, detail_add(s, 0, "Forget "), s->flow.forget.name), "?");
+        native_string_copy(&s->text[0], s->flow.action_failed ? UPDATE_FAILED : forget ? s->detail :
+                           "These laptops update without a code. Choose one to forget it.");
+        native_string_copy(&s->text[1], "");
+        s->config.text_count = 1;
+        int count = s->flow.laptop_count;
+        for (int i = 0; i < CHOICE_ROWS; i++)
+            native_string_copy(&s->choices[i], forget ? (i == 0 ? "Forget" : i == 1 ? "Back" : "") :
+                               i < count ? s->flow.laptops[i].name : i == count ? "Back" : "");
     } else {
         /* Matter's and Zigbee's pages: status, confirmation or pairing. */
         read_text(MATTER_CODE, s->code, sizeof(s->code), "Code unavailable");
@@ -974,7 +1115,10 @@ static void show(void *raw, int opening) {
     WORD(base, COMMON_CHOICE_FIRST) = 0;
     WORD(base, COMMON_CHOICE_LAST) = choice_count - 1;
     native_config_layout(raw, &s->config, FIXED_ONE, choice_count);
-    int selection = opening ? 0 : old_selection;
+    int selection = opening ? custom_entry_selection(&s->flow, s->shown_page) :
+                    s->reselect ? s->reselect - 1 : old_selection;
+    s->reselect = 0;
+    s->shown_page = s->flow.page;
     if (selection >= choice_count) selection = choice_count - 1;
     if (selection < 0) selection = 0;
     native_select(raw, selection);
@@ -1000,17 +1144,49 @@ static int click(void *raw) {
     int selected = (int)WORD(common(raw), COMMON_SELECTION);
     enum custom_page before = s->flow.page;
     int result = custom_choose(&s->flow, selected, request_action, s);
-    if (s->flow.page != before && custom_activity(s->flow.page)) {
+    if (s->flow.page != before && (custom_activity(s->flow.page) || s->flow.page == CUSTOM_UPDATE_OPEN)) {
         s->activity_ticks = 0; s->activity_started = 0;
-        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING) keep_awake(raw);
+        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING || s->flow.page == CUSTOM_UPDATE_OPEN) keep_awake(raw);
     }
     if (result != RESULT_EXIT) show(raw, s->flow.page != before);
     return result;
+}
+/* The update pages, once a second. The open page keeps the display lit,
+ * as long as the window lasts. A change in the Update page's choices keeps
+ * the selected action selected, or else Back. */
+static void refresh_update(void *raw) {
+    struct custom_state *s = state(raw);
+    enum custom_page before = s->flow.page;
+    int action = before == CUSTOM_UPDATE ? custom_update_action(&s->flow, (int)WORD(common(raw), COMMON_SELECTION)) : -1;
+    char status[96], code[32];
+    read_text(UPDATE_STATUS, status, sizeof(status), "Unavailable");
+    read_text(UPDATE_CODE, code, sizeof(code), "");
+    int changed = !same_text(status, s->status) || !same_text(code, s->code);
+    if (changed) custom_update_changed(&s->flow);
+    if (load_update_state(s)) {
+        custom_trusted_changed(&s->flow);
+        changed = 1;
+    }
+    if (before == CUSTOM_UPDATE_OPEN) {
+        keep_awake(raw);
+        int pending = file_exists(UPDATE_REQUEST) || file_exists(UPDATE_TRUST_REQUEST);
+        changed |= custom_update_refresh(&s->flow, status, pending, &s->activity_started, ++s->activity_ticks);
+    }
+    if (!changed) return;
+    if (s->flow.page == before && action >= 0) {
+        int choice = custom_update_choice(&s->flow, action);
+        s->reselect = 1 + (choice >= 0 ? choice : custom_update_choice(&s->flow, 4));
+    }
+    show(raw, s->flow.page != before);
 }
 /* A status poll: follows nestlocal's status, the pairing's progress and
  * timeout, and lays the page out again when it changed. */
 static void refresh_status(void *raw) {
     struct custom_state *s = state(raw);
+    if (update_page(s->flow.page) || trusted_page(s->flow.page)) {
+        refresh_update(raw);
+        return;
+    }
     if (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM ||
         s->flow.page == CUSTOM_THEMES) return;
     enum custom_page before = s->flow.page;
@@ -1176,11 +1352,23 @@ static int draw(void *raw, void *context) {
 static int draw_common(void *base, void *context) {
     return draw((u8 *)base - COMMON_OFFSET, context);
 }
+/* The entry's place in the lists of its titles and glyphs: UNFR0ZEN's,
+ * then Zigbee's, Matter's, Themes', Doom's and Update's. An int, and the
+ * lists one string each, since a choice among this many strings compiles to
+ * a table of pointers, which the payload cannot hold. */
+static int root_index(enum custom_page root) {
+    return root == CUSTOM_ZIGBEE ? 1 : root == CUSTOM_MATTER ? 2 : root == CUSTOM_THEMES ? 3 :
+           root == CUSTOM_DOOM ? 4 : root == CUSTOM_UPDATE ? 5 : 0;
+}
+/* The nth of the NUL-separated strings at list. */
+static const char *nth(const char *list, int n) {
+    while (n--) while (*list++) {}
+    return list;
+}
 static void title(void *screen) {
     enum custom_page root = state(raw_layer(screen))->flow.root;
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE),
-                       root == CUSTOM_ZIGBEE ? "\nZIGBEE" : root == CUSTOM_MATTER ? "\nMATTER" :
-                       root == CUSTOM_THEMES ? "\nTHEMES" : root == CUSTOM_DOOM ? "\nDOOM" : "\nUNFR0ZEN");
+                       nth("\nUNFR0ZEN\0\nZIGBEE\0\nMATTER\0\nTHEMES\0\nDOOM\0\nUPDATE", root_index(root)));
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE), "");
     native_rebuild_title(screen);
 }
@@ -1224,9 +1412,8 @@ static int screen_draw(void *screen, void *context) {
         if (!s->menu_glyph) {
             int error = 0;
             enum custom_page root = s->flow.root;
-            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE ? ZIGBEE_GLYPH : root == CUSTOM_MATTER ? MATTER_GLYPH :
-                                              root == CUSTOM_THEMES ? THEMES_GLYPH : root == CUSTOM_DOOM ? DOOM_GLYPH :
-                                              MENU_GLYPH, &error);
+            s->menu_glyph = native_image_load(nth(MENU_GLYPH "\0" ZIGBEE_GLYPH "\0" MATTER_GLYPH "\0" THEMES_GLYPH "\0"
+                                                  DOOM_GLYPH "\0" UPDATE_GLYPH, root_index(root)), &error);
         }
         if (s->menu_glyph) {
             /* Native menu titles settle at half scale; glyph coordinates
@@ -1252,6 +1439,7 @@ static void enter_screen(void *screen) {
     s->active = 1;
     s->flow.page = s->flow.root;
     s->flow.action_failed = 0;
+    s->shown_page = s->flow.root;
     load_image(raw_layer(screen));
     native_screen_enter(screen);
     show(raw_layer(screen), 1);

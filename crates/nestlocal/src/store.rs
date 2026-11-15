@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Notify};
@@ -42,6 +42,7 @@ struct Inner {
     subs: BTreeMap<u64, mpsc::Sender<Vec<Object>>>, // held subscribes: server-side changes
     next_sub: u64,
     watch: Vec<Watcher>, // every change, device or server side
+    device_changed: BTreeMap<String, Instant>, // when the device last changed each bucket
 }
 
 pub struct Store {
@@ -115,6 +116,9 @@ impl Store {
                 o.timestamp = if ts > 0 { ts } else { now_ms() };
             }
             let object = o.clone();
+            if changed && from_device {
+                inner.device_changed.insert(key.to_string(), Instant::now());
+            }
             let subs: Vec<_> = if changed && !from_device { inner.subs.values().cloned().collect() } else { vec![] };
             (object, subs, inner.watch.clone(), changed)
         };
@@ -128,6 +132,37 @@ impl Store {
             }
         }
         (object, changed)
+    }
+
+    /// When the device last changed key's bucket, since this process started.
+    pub fn device_changed_at(&self, key: &str) -> Option<Instant> {
+        self.inner.lock().unwrap().device_changed.get(key).copied()
+    }
+
+    /// Sends key's bucket to the held subscribes again, its value as it
+    /// stands, at a newer revision and timestamp: nlclient takes it as it
+    /// takes a change of Home Assistant's, and commits it. Watchers hear
+    /// nothing, as no value changed, and the file is not rewritten for it.
+    /// The commit also runs nlclient's downlink_activity, which takes any
+    /// pending display.request. Being newer, the resend can undo a change
+    /// nlclient made to the bucket and has not uploaded yet (in
+    /// device.<serial>: Eco, the fan timer, a hot water boost): Resender
+    /// paces it. Whether there is such a bucket.
+    pub fn resend(&self, key: &str) -> bool {
+        let (object, subs) = {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(o) = inner.objects.get_mut(key) else {
+                return false;
+            };
+            o.revision += 1;
+            o.timestamp = now_ms().max(o.timestamp + 1);
+            let object = o.clone();
+            (object, inner.subs.values().cloned().collect::<Vec<_>>())
+        };
+        for sub in subs {
+            let _ = sub.try_send(vec![object.clone()]);
+        }
+        true
     }
 
     /// Server-side changes, for a held subscribe, until the subscription is
@@ -167,6 +202,53 @@ impl Store {
         let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
         write_private(&tmp, &bytes)?;
         std::fs::rename(&tmp, &self.path)
+    }
+}
+
+/// How often Resender sends a bucket again at most.
+pub const RESEND_EVERY: Duration = Duration::from_secs(60);
+/// How long after the device changed the bucket Resender waits.
+pub const DEVICE_QUIET: Duration = Duration::from_secs(10);
+
+/// What Resender::resend did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resent {
+    Sent,
+    /// Sent within RESEND_EVERY: not again.
+    Recently,
+    /// The device changed the bucket within DEVICE_QUIET: ask again later.
+    DeviceBusy,
+    /// There is no such bucket.
+    Missing,
+}
+
+/// One bucket sent to nlclient again (Store::resend), at most once every
+/// RESEND_EVERY, and not within DEVICE_QUIET of the device changing it:
+/// a resend can undo a change of nlclient's not yet uploaded.
+pub struct Resender {
+    store: Arc<Store>,
+    key: String,
+    last: Mutex<Option<Instant>>,
+}
+
+impl Resender {
+    pub fn new(store: Arc<Store>, key: String) -> Resender {
+        Resender { store, key, last: Mutex::new(None) }
+    }
+
+    pub fn resend(&self, now: Instant) -> Resent {
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|at| now.saturating_duration_since(at) < RESEND_EVERY) {
+            return Resent::Recently;
+        }
+        if self.store.device_changed_at(&self.key).is_some_and(|at| now.saturating_duration_since(at) < DEVICE_QUIET) {
+            return Resent::DeviceBusy;
+        }
+        if !self.store.resend(&self.key) {
+            return Resent::Missing;
+        }
+        *last = Some(now);
+        Resent::Sent
     }
 }
 
@@ -278,6 +360,58 @@ pub mod tests {
         let (o, changed) = s.merge("shared.S", &Fields::new(), 0, 0, true);
         assert!(changed && o.revision == 1 && o.value.is_empty());
         assert!(!s.merge("shared.S", &Fields::new(), 0, 0, false).1);
+    }
+
+    #[test]
+    fn resend_reaches_held_subscribes_with_the_value_unchanged() {
+        let s = temp_store();
+        let seen = Arc::new(Mutex::new(0));
+        let count = seen.clone();
+        s.merge("device.S", &fields!{"t" => 20, "on" => true}, 4, 1000, true);
+        s.watch(move |_| *count.lock().unwrap() += 1);
+        let (mut rx, _sub) = s.subscribe();
+        let marked = || futures_lite::future::block_on(futures_lite::future::poll_once(s.dirty.notified())).is_some();
+        assert!(marked(), "the merge marks the file to be written");
+        assert!(s.resend("device.S"));
+        let sent = rx.try_recv().unwrap();
+        assert_eq!(sent.len(), 1);
+        let (o, held) = (&sent[0], s.get("device.S").unwrap());
+        assert_eq!((o.key.as_str(), o.revision), ("device.S", 5));
+        assert!(o.timestamp > 1000 && o.timestamp == held.timestamp && held.revision == 5);
+        assert_eq!(Value::Object(o.value.clone()), json!({"t": 20, "on": true}));
+        assert_eq!(held.value, o.value);
+        assert_eq!(*seen.lock().unwrap(), 0, "no watcher hears of it");
+        assert!(!marked(), "nor is the file rewritten for it");
+        // A timestamp ahead of the clock still moves on.
+        s.merge("device.S", &fields!{"t" => 21}, 0, i64::MAX / 2, true);
+        assert!(s.resend("device.S"));
+        assert_eq!(s.get("device.S").unwrap().timestamp, i64::MAX / 2 + 1);
+        assert!(!s.resend("shared.S"), "no such bucket");
+        assert!(s.get("shared.S").is_none());
+    }
+
+    #[test]
+    fn a_resender_sends_once_a_minute_and_not_just_after_the_device_changed_the_bucket() {
+        let s = temp_store();
+        let (mut rx, _sub) = s.subscribe();
+        let resender = Resender::new(s.clone(), "device.S".into());
+        let start = Instant::now();
+        assert_eq!(resender.resend(start), Resent::Missing);
+        s.merge("device.S", &fields!{"t" => 20}, 0, 0, true);
+        let changed = s.device_changed_at("device.S").unwrap();
+        assert_eq!(resender.resend(changed + Duration::from_secs(9)), Resent::DeviceBusy);
+        assert!(rx.try_recv().is_err());
+        let now = changed + DEVICE_QUIET;
+        assert_eq!(resender.resend(now), Resent::Sent);
+        assert_eq!(rx.try_recv().unwrap()[0].revision, 2);
+        assert_eq!(resender.resend(now + Duration::from_secs(1)), Resent::Recently);
+        assert_eq!(resender.resend(now + Duration::from_secs(59)), Resent::Recently);
+        assert!(rx.try_recv().is_err(), "two nudges within the minute, one resend");
+        assert_eq!(resender.resend(now + RESEND_EVERY), Resent::Sent);
+        // Changes from the server side, and the device's that change nothing, do not count.
+        s.merge("device.S", &fields!{"t" => 22}, 0, 0, false);
+        s.merge("device.S", &fields!{"t" => 22}, 0, 0, true);
+        assert_eq!(s.device_changed_at("device.S"), Some(changed));
     }
 
     #[test]

@@ -284,6 +284,9 @@ pub struct Settings {
     /// The name the device goes by in Home Assistant, Matter and Zigbee.
     #[serde(default)]
     pub device_name: Option<String>,
+    /// nestlocal's update API, which takes the app's updates over Wi-Fi.
+    #[serde(default)]
+    pub update_api: bool,
     /// nestlocal's key set for a unit without its own.
     pub pki: Option<PkiSettings>,
 }
@@ -345,6 +348,7 @@ impl Settings {
             usb_shell: options.usb_shell,
             unsigned_updates: options.unsigned_updates,
             device_name: options.device_name.clone(),
+            update_api: options.update_api,
             pki: pki.map(|pki| PkiSettings {
                 ca: STANDARD.encode(&pki.ca), server_crt: STANDARD.encode(&pki.server_crt),
                 server_key: STANDARD.encode(&pki.server_key),
@@ -369,7 +373,7 @@ impl Settings {
                 })
             }).transpose()?,
             matter,
-            wake_filter: if matter.is_some() { bundle.file(WAKE_FILTER)?.to_vec() } else { Vec::new() },
+            wake_filter: if matter.is_some() || self.update_api { bundle.file(WAKE_FILTER)?.to_vec() } else { Vec::new() },
             local_cloud: bundle.file(LOCAL_CLOUD)?.to_vec(),
             thread: self.thread.then(|| bundle.overlay(THREAD)).transpose()?,
             zigbee: self.zigbee,
@@ -394,12 +398,13 @@ impl Settings {
             record: self.record(),
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
+            update_api: self.update_api,
         })
     }
 
     /// These settings as the unit keeps them: without the key set, which the
     /// unit has its own copy of once set up.
-    fn record(&self) -> Vec<u8> {
+    pub fn record(&self) -> Vec<u8> {
         let mut record = serde_json::to_vec_pretty(&Settings { pki: None, ..self.clone() }).expect("settings serialize");
         record.push(b'\n');
         record
@@ -527,7 +532,7 @@ mod tests {
             local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
             theme: Some(bundle.overlay(THEME).unwrap()),
-            ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()),
+            ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()), update_api: true,
             apply: b"\x7fELF apply".to_vec(),
             ..Options::default()
         };
@@ -559,5 +564,18 @@ mod tests {
         assert_eq!(asked.ssh_server.unwrap().files[0].0, "usr/sbin/dropbearmulti");
         let not = Settings::default().options(&bundle).unwrap();
         assert!(not.external_temperature_screen.is_empty() && not.ssh_server.is_none());
+    }
+
+    #[test]
+    fn the_update_api_takes_the_wake_filter_and_an_older_record_reads_without_it() {
+        let (files, directories) = contents();
+        let bundle = Bundle::from_files(Device::Diamond3, "1", files, &directories);
+        let options = Settings { mqtt: Some(MqttSettings { url: "tcp://b:1883".into(), ..MqttSettings::default() }),
+                                 update_api: true, ..Settings::default() }.options(&bundle).unwrap();
+        assert!(options.update_api);
+        assert_eq!(options.wake_filter, b"\x7fELF wake");
+        let mut older = serde_json::to_value(Settings::default()).unwrap();
+        older.as_object_mut().unwrap().remove("update_api");
+        assert!(!serde_json::from_value::<Settings>(older).unwrap().update_api);
     }
 }

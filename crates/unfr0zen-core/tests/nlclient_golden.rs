@@ -528,7 +528,7 @@ fn natives_of_another_shape_are_refused() {
     assert!(error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"), "{error}");
 }
 #[test]
-fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
+fn without_features_the_settings_menu_and_its_loop_are_five_entries_shorter() {
     let Some(object) = object() else { return };
     let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
         .map(PathBuf::from)
@@ -545,8 +545,8 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
         let (all, none) = (&all.manifest["settings_menu"], (&none.manifest["settings_menu"], &none.output));
         let names = |menu: &Value| menu["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect::<Vec<_>>();
         let shown = names(none.0);
-        assert_eq!(shown.len() + 4, names(all).len(), "{}", path.display());
-        assert!(!shown.iter().any(|n| ["account", "update", "proinfoscreen", "templock"].contains(&n.as_str())));
+        assert_eq!(shown.len() + 5, names(all).len(), "{}", path.display());
+        assert!(!shown.iter().any(|n| ["account", "update", "proinfoscreen", "templock", "utility"].contains(&n.as_str())));
         assert_eq!(shown[shown.len() - 3..], ["legalinfo", "reset", "temperature"]);
         let bound = none.0["bound"].as_u64().unwrap() as u32;
         let at = file_offset(&stock, bound);

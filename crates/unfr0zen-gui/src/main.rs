@@ -24,12 +24,13 @@ pub(crate) use setup::{boxed_select, card, checked_field, code_line, field, inse
 mod snapshot;
 mod terminal;
 mod when;
+mod wifi;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,7 @@ use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::nand::Job;
 use unfr0zen_host::update;
+use unfr0zen_host::wifi_patch::Remote;
 use unfr0zen_host::WAIT_USB_BOOT_STAGE;
 use unfr0zen_host::Device;
 
@@ -46,6 +48,7 @@ use bus::{Bus, Watcher};
 use form::Form;
 use run::{Event, Run};
 use terminal::Terminal;
+use wifi::Wifi;
 
 const BUILD_VERSION: &str = env!("UNFR0ZEN_BUILD_VERSION");
 
@@ -491,6 +494,11 @@ enum Task {
     /// The whole NAND backed up to the file, then the setup, with the unit
     /// in recovery once for both.
     BackupSetUp(PathBuf),
+    /// Connect: a unit's settings over Wi-Fi, into the setup flow's form.
+    WifiRead,
+    /// Update: the setup flow's settings, with this app's nestlocal, to the
+    /// unit connected over Wi-Fi.
+    WifiPatch,
     Backup(PathBuf),
     Restore(PathBuf),
     Uboot,
@@ -502,6 +510,8 @@ impl Task {
         match self {
             Task::SetUp => tr!("task.setup"),
             Task::BackupSetUp(_) => tr!("task.backup_setup"),
+            Task::WifiRead => tr!("task.wifi_read"),
+            Task::WifiPatch => tr!("task.wifi_patch"),
             Task::Backup(_) => tr!("task.backup"),
             Task::Restore(_) => tr!("task.restore"),
             Task::Uboot => tr!("task.uboot"),
@@ -513,6 +523,8 @@ impl Task {
         match self {
             Task::SetUp => "Set up",
             Task::BackupSetUp(_) => "Back up NAND and set up",
+            Task::WifiRead => "Connect over Wi-Fi",
+            Task::WifiPatch => "Update over Wi-Fi",
             Task::Backup(_) => "Back up NAND",
             Task::Restore(_) => "Restore NAND",
             Task::Uboot => "Load recovery U-Boot",
@@ -524,6 +536,8 @@ impl Task {
     fn doing(&self) -> &'static str {
         match self {
             Task::SetUp | Task::BackupSetUp(_) => tr!("task.setting_up"),
+            Task::WifiRead => tr!("task.wifi_reading"),
+            Task::WifiPatch => tr!("task.wifi_patching"),
             Task::Backup(_) => tr!("task.backing_up"),
             Task::Restore(_) => tr!("task.restoring"),
             Task::Uboot => tr!("task.loading_uboot"),
@@ -534,7 +548,7 @@ impl Task {
     /// The page the task was started from, where its summary shows.
     fn page(&self) -> Page {
         match self {
-            Task::SetUp | Task::BackupSetUp(_) => Page::SetUp,
+            Task::SetUp | Task::BackupSetUp(_) | Task::WifiRead | Task::WifiPatch => Page::SetUp,
             Task::Backup(_) | Task::Restore(_) => Page::Backups,
             Task::Uboot => Page::Uboot,
             Task::Boot => Page::Boot,
@@ -597,6 +611,11 @@ impl Transfer {
 struct App {
     page: Page,
     form: Form,
+    /// The Patch page's Wi-Fi inputs, and the code a Wi-Fi run waits on.
+    wifi: Wifi,
+    /// The unit whose settings the form holds, read over Wi-Fi, and its
+    /// address.
+    remote: Option<(String, Box<Remote>)>,
     library: Library,
     bus: Watcher,
     run: Option<Run>,
@@ -621,6 +640,8 @@ struct App {
     flow_run: bool,
     /// The backup the flow took before its setup, once whole.
     flow_backup: Option<PathBuf>,
+    /// The flow's Wi-Fi run sent its settings and the unit kept them.
+    wifi_kept: bool,
     /// Counts the flow's runs ending and restarts: its pages' scroll areas
     /// are new each time, so they open at the top.
     flow_epoch: u32,
@@ -629,6 +650,10 @@ struct App {
     steps_without_unit: bool,
     /// The version at the sidebar's foot; none when empty.
     version: &'static str,
+    /// The title bar is laid out as on macOS: room for the traffic lights,
+    /// no caption buttons. Set on macOS, and by the screenshots, which
+    /// show the macOS window whatever system renders them.
+    mac_title_bar: bool,
     /// The Serial console page's terminal, on the application's shells.
     shell: Terminal,
     /// The U-Boot page's terminal, on the recovery console.
@@ -665,6 +690,8 @@ impl Default for App {
         App {
             page: Page::default(),
             form: Form::new(),
+            wifi: Wifi::default(),
+            remote: None,
             library: Library::new(default_data_dir().join("backups")),
             bus: Watcher::default(),
             run: None,
@@ -678,9 +705,11 @@ impl Default for App {
             step: setup::Step::default(),
             flow_run: false,
             flow_backup: None,
+            wifi_kept: false,
             flow_epoch: 0,
             steps_without_unit: cfg!(debug_assertions),
             version: BUILD_VERSION,
+            mac_title_bar: cfg!(target_os = "macos"),
             shell: Terminal::new(terminal::SHELLS),
             uboot: Terminal::new(terminal::RECOVERY),
             maps: nandmap::Maps::default(),
@@ -714,6 +743,8 @@ struct LogContext {
     device: Option<String>,
     /// A setup run's phases so far, newest last; the last may still be open.
     phases: Vec<PhaseRow>,
+    /// A Wi-Fi run stopped before it sent anything.
+    not_sent: bool,
 }
 
 /// A phase of a setup run: when it began, and how long it took and whether
@@ -746,6 +777,46 @@ impl App {
 
     fn running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// Connected over Wi-Fi: the form holds the settings of the unit at the
+    /// address given.
+    fn wifi_connected(&self) -> bool {
+        self.remote.as_ref().is_some_and(|(read, _)| read == self.wifi.address.trim())
+    }
+
+    /// The unit connected over Wi-Fi and the address it was read at.
+    fn wifi_remote(&self) -> Option<(&str, &Remote)> {
+        self.remote.as_ref().filter(|_| self.wifi_connected()).map(|(host, remote)| (host.as_str(), &**remote))
+    }
+
+    /// Why the unit connected over Wi-Fi takes a setup only over USB, as
+    /// the Connect and Review steps say it; Update waits for none. The read
+    /// says it, or a run's check of its set, until the unit is read again.
+    fn wifi_needs_usb(&self) -> Option<String> {
+        let (_, remote) = self.wifi_remote()?;
+        remote.usb_reason.as_ref().map(|reason| tr!("setup.wifi_needs_usb", reason = reason))
+    }
+
+    /// Back to USB: the form as it was before Connect, and no Force.
+    fn wifi_disconnect(&mut self) {
+        self.remote = None;
+        self.form.disconnect();
+        self.wifi.force = false;
+    }
+
+    /// The connected unit, the nestlocal it runs and this app's, on one line.
+    fn version_line(&self) -> Option<String> {
+        let (_, remote) = self.wifi_remote()?;
+        let unknown = || tr!("wifi.unknown_version").to_string();
+        let device = remote.device.description();
+        let unit = Some(remote.info.version.clone()).filter(|v| !v.is_empty()).unwrap_or_else(unknown);
+        let app = app_nestlocal_version();
+        Some(if remote.info.pending {
+            tr!("wifi.version_on_trial", device = device, unit = unit, app = app)
+        } else {
+            tr!("wifi.version", device = device, unit = unit, app = app)
+        })
     }
 
     /// The Logs page lists the current run: while it runs, and after if it
@@ -801,6 +872,7 @@ impl App {
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
             Task::SetUp | Task::BackupSetUp(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
+            Task::WifiPatch => format!("Selected: {}, {}", task.log_title(), self.form.wifi_inputs().describe()),
             task => format!("Selected: {}", task.log_title()),
         });
         let entry_point = self.form.entry_point;
@@ -808,12 +880,18 @@ impl App {
             Task::SetUp => self.form.config().map(|config| Run::start(config, None)),
             Task::BackupSetUp(out) => self.form.config()
                 .and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone())))),
+            // The read of the unit's settings at the address, for the form.
+            Task::WifiRead => self.wifi.host().map(Run::wifi_read),
+            // The form must hold that unit's settings, read over Wi-Fi.
+            Task::WifiPatch if !self.wifi_connected() => self.wifi.host().and_then(|_| Err(tr!("wifi.read_first").to_string())),
+            Task::WifiPatch => self.wifi.host().map(|host| Run::wifi_patch(host, self.form.wifi_inputs(), self.wifi.force)),
             Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
             Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
             Task::Boot => Ok(Run::task(move |progress| unfr0zen_host::flow::boot(WAIT_USB, entry_point, progress))),
         };
         self.logs = LogContext::default();
+        self.wifi_kept = false;
         self.task = Some(task);
         self.finished_at = None;
         self.popup_dismissed = false;
@@ -909,6 +987,24 @@ impl App {
                 self.close_phase(true);
                 self.logs.phases.push(PhaseRow { phase, started: Instant::now(), done: None });
             }
+            Event::Code(prompt, reply) => self.wifi.ask(prompt, reply),
+            Event::Read(host, remote) => {
+                self.form.fill(&remote);
+                self.remote = Some((host, remote));
+            }
+            Event::NotSent(reason) => {
+                self.logs.not_sent = true;
+                if let (Some(reason), Some((_, remote))) = (reason, &mut self.remote) {
+                    remote.usb_reason = Some(reason);
+                }
+            }
+            Event::Updated => {
+                self.wifi_kept = true;
+                if let Some((_, remote)) = &mut self.remote {
+                    remote.info.version = app_nestlocal_version();
+                    remote.info.pending = false;
+                }
+            }
             Event::Done(result) => {
                 self.close_phase(result.is_ok());
                 self.flow_epoch += 1;
@@ -954,6 +1050,17 @@ impl App {
 fn backup_folder(out: &Path) -> Result<(), String> {
     let dir = out.parent().filter(|dir| !dir.as_os_str().is_empty());
     dir.map_or(Ok(()), |dir| std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display())))
+}
+
+/// The version this app's nestlocal marks itself with, which Update sends.
+pub(crate) fn app_nestlocal_version() -> String {
+    app_nestlocal_known().unwrap_or_else(|| tr!("wifi.unknown_version")).to_string()
+}
+
+/// This app's nestlocal's version, when its binary names one.
+pub(crate) fn app_nestlocal_known() -> Option<&'static str> {
+    static VERSION: OnceLock<Option<String>> = OnceLock::new();
+    VERSION.get_or_init(|| unfr0zen_host::push::identity(unfr0zen_host::assets::cached_nestlocal()).0).as_deref()
 }
 
 // The diamond3 boot logo's icy blue: the accent of every primary button.
@@ -1039,6 +1146,9 @@ impl App {
         self.drain();
         self.drain_image_dialog();
         self.form.track_device(&self.bus.current());
+        if self.remote.is_some() && !self.wifi_connected() {
+            self.wifi_disconnect();
+        }
         if self.running() || self.pending_image.is_some() || self.form.dialog_pending() {
             // Often enough for the progress bar to glide through a piece under
             // way, and for a pending file dialog's answer to land the frame it
@@ -1069,6 +1179,12 @@ impl App {
         let ctx = ui.ctx();
         if self.confirm.is_some() {
             self.confirm_ui(ctx);
+        } else if self.wifi.asking() {
+            // Called off: the Wi-Fi run ends without an error to show.
+            if self.wifi.dialog(ctx) == Some(true) {
+                self.cancelled = true;
+                self.popup_dismissed = true;
+            }
         } else if self.sdp_wait.is_some() {
             self.sdp_ui(ctx);
         } else if self.delete.is_some() {
@@ -1087,19 +1203,20 @@ impl App {
     /// The breadcrumb.
     fn title_bar(&mut self, ui: &mut egui::Ui) {
         // Outside macOS the caption buttons sit flush with the window's right edge.
-        let right = if cfg!(target_os = "macos") { 14 } else { 0 };
+        let mac = self.mac_title_bar;
+        let right = if mac { 14 } else { 0 };
         let frame = egui::Frame::new().fill(BAR).inner_margin(egui::Margin { left: 14, right, top: 0, bottom: 0 });
         egui::Panel::top("title").exact_size(TITLE_HEIGHT).show_separator_line(false).frame(frame).show(ui, |ui| {
             // Undecorated outside macOS: the bar moves the window. Sensed
             // first, so the buttons drawn on it take their clicks.
-            if !cfg!(target_os = "macos") {
+            if !mac {
                 let bar = ui.interact(ui.max_rect(), ui.id().with("drag"), egui::Sense::drag());
                 if bar.drag_started_by(egui::PointerButton::Primary) {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
             }
             ui.horizontal_centered(|ui| {
-                if cfg!(target_os = "macos") {
+                if mac {
                     ui.add_space(TRAFFIC_LIGHTS);
                 }
                 // The name, with the zero in the accent and a glint now and then.
@@ -1118,7 +1235,7 @@ impl App {
                 ui.ctx().request_repaint_after(glint_wait(time));
                 ui.label(egui::RichText::new("›").color(DIM));
                 ui.label(egui::RichText::new(self.page.title()).font(medium(13.5)));
-                if !cfg!(target_os = "macos") {
+                if !mac {
                     caption_buttons(ui);
                 }
             });
@@ -1207,13 +1324,27 @@ impl App {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let bus = self.bus.current();
-                dot(ui, bus_color(&bus));
-                ui.label(egui::RichText::new(bus.summary()).size(11.5).color(MUTED));
+                let wifi = self.wifi_remote()
+                    .map(|(host, remote)| tr!("status.wifi", device = remote.device.description(), host = host));
+                // USB first, unless a unit connected over Wi-Fi is all there is.
+                if wifi.is_none() || !matches!(bus, Bus::Nothing) {
+                    dot(ui, bus_color(&bus));
+                    let usb = if wifi.is_some() { tr!("status.usb", unit = bus.summary()) } else { bus.summary() };
+                    ui.label(egui::RichText::new(usb).size(11.5).color(MUTED));
+                }
+                if let Some(wifi) = wifi {
+                    dot(ui, OK);
+                    ui.label(egui::RichText::new(wifi).size(11.5).color(MUTED));
+                }
                 if self.shell.port_name().or(self.uboot.port_name()).is_some() {
                     ui.separator();
                     ui.label(egui::RichText::new(tr!("status.console_open")).size(11.5).color(ACCENT));
                 }
-                if let Some(task) = &self.task {
+                // A Connect that worked is a state the left already shows,
+                // not a job done; its failure and its progress still show.
+                let connected = self.task == Some(Task::WifiRead) && !self.running() && !self.cancelled
+                    && matches!(self.logs.outcome, Some(Ok(_)));
+                if let Some(task) = self.task.as_ref().filter(|_| !connected) {
                     ui.separator();
                     if self.running() {
                         ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
@@ -1619,13 +1750,7 @@ impl App {
                     self.progress_ui(ui);
                 } else if let Some(run) = &run {
                     for step in &run.steps {
-                        ui.horizontal(|ui| {
-                            outcome_mark(ui, step.ok, 14.0);
-                            ui.label(&step.label);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", step.elapsed))).color(DIM));
-                            });
-                        });
+                        step_row(ui, |ui| outcome_mark(ui, step.ok, 14.0), &step.label, f64::from(step.elapsed));
                     }
                     if let Some(failure) = &run.failure {
                         ui.add(egui::Label::new(egui::RichText::new(failure).color(BAD)).wrap());
@@ -1769,8 +1894,10 @@ impl App {
     /// The Logs page shows the run itself. Returns whether the card is up.
     fn run_popup(&mut self, ctx: &egui::Context) -> bool {
         let Some(task) = &self.task else { return false };
-        // The flow's run shows on Set up and in the status bar, never as a card.
-        if self.page == Page::Logs || self.popup_dismissed || self.flow_run {
+        // The flow's run shows on Set up and in the status bar, never as a
+        // card; so does Connect over Wi-Fi, in its card on the Connect step.
+        if self.page == Page::Logs || self.popup_dismissed || self.flow_run
+            || (self.page == Page::SetUp && *task == Task::WifiRead) {
             return false;
         }
         let outcome = self.logs.outcome.as_ref();
@@ -1887,16 +2014,25 @@ impl App {
     fn confirm_ui(&mut self, ctx: &egui::Context) {
         let Some((question, _)) = &self.confirm else { return };
         let question = question.clone();
+        // A restore's or a Wi-Fi send's question: the send lists its changes.
+        let wifi = self.task == Some(Task::WifiPatch);
+        let (title, yes, look) = if wifi {
+            (tr!("wifi.confirm_title"), tr!("wifi.send"), Look::Primary)
+        } else {
+            (tr!("backup.restore_title"), tr!("backup.erase_restore"), Look::Danger)
+        };
         let answer = backdrop::modal(ctx, "confirm_restore").show(ctx, |ui| {
-            ui.set_max_width(320.0);
-            dialog_title(ui, tr!("backup.restore_title"));
-            ui.add(egui::Label::new(question).wrap());
+            ui.set_max_width(if wifi { 520.0 } else { 320.0 });
+            dialog_title(ui, title);
+            egui::ScrollArea::vertical().id_salt("confirm_question").max_height(360.0).show(ui, |ui| {
+                ui.add(egui::Label::new(question).wrap());
+            });
             let mut answer = None;
             ui.horizontal(|ui| {
                 if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
                     answer = Some(false);
                 }
-                if setup::page_button(ui, tr!("backup.erase_restore"), Look::Danger, true).clicked() {
+                if setup::page_button(ui, yes, look, true).clicked() {
                     answer = Some(true);
                 }
             });
@@ -1905,6 +2041,11 @@ impl App {
         if let Some(yes) = answer {
             if let Some((_, reply)) = self.confirm.take() {
                 let _ = reply.send(yes);
+            }
+            // The changes not sent: the flow goes back to its step.
+            if wifi && !yes {
+                self.cancelled = true;
+                self.popup_dismissed = true;
             }
         }
     }
@@ -1955,23 +2096,14 @@ impl App {
     /// outcome when `with_outcome`.
     fn steps_ui(&self, ui: &mut egui::Ui, with_outcome: bool) {
         for row in &self.logs.rows {
-            ui.horizontal(|ui| {
-                match row.done {
-                    None => {
-                        ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
-                        ui.label(&row.label);
-                    }
-                    Some((_, ok)) => {
-                        outcome_mark(ui, ok, 14.0);
-                        ui.label(&row.label);
-                    }
+            // A running step counts up, repainted with the window.
+            let elapsed = row.done.map_or_else(|| row.started.elapsed(), |(elapsed, _)| elapsed);
+            step_row(ui, |ui| match row.done {
+                None => {
+                    ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
                 }
-                // A running step counts up, repainted with the window.
-                let elapsed = row.done.map_or_else(|| row.started.elapsed(), |(elapsed, _)| elapsed);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", elapsed.as_secs_f64()))).color(DIM));
-                });
-            });
+                Some((_, ok)) => outcome_mark(ui, ok, 14.0),
+            }, &row.label, elapsed.as_secs_f64());
         }
         for note in &self.logs.notes {
             ui.label(egui::RichText::new(note).weak().italics());
@@ -2325,6 +2457,25 @@ fn transfer_texts(done: u64, next: u64, total: u64, rate: Option<f64>) -> (Strin
 
 /// Draws a check or cross in a small square, so it renders regardless of the
 /// font (no bundled font has U+2713/U+2717, which showed as empty boxes).
+/// A run's step: its mark, its label wrapped in the room its elapsed time
+/// leaves, and the time at the right, which a long label never covers.
+fn step_row(ui: &mut egui::Ui, mark: impl FnOnce(&mut egui::Ui), label: &str, seconds: f64) {
+    let time = tr!("run.elapsed", seconds = format!("{seconds:.1}")).to_string();
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let time_width = ui.fonts_mut(|f| f.layout_no_wrap(time.clone(), font, DIM).size().x);
+    ui.horizontal_top(|ui| {
+        mark(ui);
+        let room = (ui.available_width() - time_width - ui.spacing().item_spacing.x).max(0.0);
+        ui.allocate_ui_with_layout(egui::vec2(room, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_max_width(room);
+            ui.add(egui::Label::new(label).wrap());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.label(egui::RichText::new(time).color(DIM));
+        });
+    });
+}
+
 fn outcome_mark(ui: &mut egui::Ui, ok: bool, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let stroke = egui::Stroke::new(2.0, if ok { OK } else { BAD });
@@ -2525,6 +2676,519 @@ mod tests {
         assert!(app.logs.outcome.as_ref().unwrap().as_ref().err().unwrap().contains("check digit"));
     }
 
+    /// A unit as a Wi-Fi read finds it.
+    fn remote(device: Device, version: &str, pending: bool) -> Box<unfr0zen_host::wifi_patch::Remote> {
+        let info = serde_json::from_value(serde_json::json!({"nlmodel": "Display-2", "version": version, "overlay": 1,
+                                                              "free_bytes": 1 << 20, "scratch_free_bytes": 1 << 20,
+                                                              "shell_binary": "/bin/sh", "pending": pending}))
+            .unwrap();
+        let settings = unfr0zen_core::settings::UnitSettings { usb_shell: true, update_api: true, zigbee: true, ..Default::default() };
+        Box::new(unfr0zen_host::wifi_patch::Remote { device, settings, info, usb_reason: None })
+    }
+
+    /// A unit as a Wi-Fi read finds it, whose nestlocal does not report the
+    /// scratch volume and has no check: an older one, which takes no set
+    /// over Wi-Fi.
+    fn remote_before_scratch(device: Device, version: &str) -> Box<unfr0zen_host::wifi_patch::Remote> {
+        let mut remote = remote(device, version, false);
+        remote.info.scratch_free_bytes = None;
+        remote.usb_reason = unfr0zen_host::wifi_patch::needs_usb(&remote.info);
+        remote
+    }
+
+    /// One frame of the window on `context`, with `events`.
+    fn frame_on(context: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
+        context.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+            events,
+            ..Default::default()
+        }, |ui| app.frame_ui(ui))
+    }
+
+    /// Clicks the text `label` where the last frame drew it.
+    fn click_on(context: &egui::Context, app: &mut App, label: &str) {
+        let output = frame_on(context, app, Vec::new());
+        let at = output.shapes.iter().rev().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(t) if t.galley.job.text == label => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+            _ => None,
+        }).unwrap_or_else(|| panic!("{label} is drawn"));
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame_on(context, app, vec![egui::Event::PointerMoved(at)]);
+        frame_on(context, app, vec![press(true)]);
+        frame_on(context, app, vec![press(false)]);
+        frame_on(context, app, vec![egui::Event::PointerGone]);
+    }
+
+    /// The window's texts on `context` after a frame to settle.
+    fn shown_on(context: &egui::Context, app: &mut App) -> Vec<String> {
+        frame_on(context, app, Vec::new());
+        texts(&frame_on(context, app, Vec::new()))
+    }
+
+    #[test]
+    fn connecting_over_wifi_takes_the_flow_past_connect_and_review_updates_the_unit() {
+        let context = egui::Context::default();
+        install_fonts(&context);
+        let mut app = App { page: Page::SetUp, steps_without_unit: false, bus: Watcher::fixed(Bus::Nothing), ..App::default() };
+        // A pairing code that fails its check digit, chosen before connecting:
+        // Disconnect has to bring it back.
+        app.form.matter.on = true;
+        app.form.matter.code = "1559-813-5764".into();
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.iter().any(|t| t == tr!("wifi.connect")), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("wifi.disconnect")), "{shown:?}");
+        assert!(!app.may_go_on(), "no unit on USB, none over Wi-Fi");
+
+        // Connected: the unit's settings fill the steps, which go on without USB.
+        app.wifi.address = "kitchen thermostat".into();
+        app.on_event(Event::Read("kitchen thermostat".into(), remote(Device::J49, "v0.4.1", false)));
+        assert!(app.wifi_connected() && app.form.locked && app.may_go_on());
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.iter().any(|t| t == tr!("wifi.disconnect")), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("wifi.connect")), "{shown:?}");
+        click_on(&context, &mut app, tr!("setup.continue"));
+        assert_eq!(app.step, setup::Step::Integrations, "the unit's settings are the steps'");
+
+        // Review sends them: Update, no backup choice.
+        app.step = setup::Step::Review;
+        let shown = shown_on(&context, &mut app);
+        for text in [tr!("wifi.update"), tr!("setup.wifi_review_title")] {
+            assert!(shown.iter().any(|t| t == text), "{text}: {shown:?}");
+        }
+        for text in [tr!("setup.start_backup_setup"), tr!("setup.backup_question")] {
+            assert!(!shown.iter().any(|t| t == text), "{text}: {shown:?}");
+        }
+        // Not an address a run would go to: refused before it starts, in the flow.
+        click_on(&context, &mut app, tr!("wifi.update"));
+        assert_eq!(app.task, Some(Task::WifiPatch), "an update over Wi-Fi");
+        assert!(app.flow_run);
+        assert_eq!(app.screen_name(), "Failed");
+        let error = app.logs.outcome.clone().unwrap().unwrap_err();
+        assert!(error.contains("is not a unit's address"), "{error}");
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_failed_title")), "{shown:?}");
+
+        // Back to review, then to Connect: Disconnect puts the steps back as
+        // they were before connecting.
+        click_on(&context, &mut app, tr!("setup.back_to_review"));
+        app.step = setup::Step::Connect;
+        click_on(&context, &mut app, tr!("wifi.disconnect"));
+        assert!(!app.wifi_connected() && !app.form.locked && !app.may_go_on());
+        assert!(app.form.matter.on && app.form.matter.code == "1559-813-5764");
+        assert!(!app.form.inputs().zigbee, "the unit's settings went with it");
+    }
+
+    #[test]
+    fn a_unit_needing_a_usb_setup_says_so_at_connect_and_review_and_update_stays_off() {
+        let context = egui::Context::default();
+        install_fonts(&context);
+        let mut app = App { page: Page::SetUp, steps_without_unit: false, bus: Watcher::fixed(Bus::Nothing), ..App::default() };
+        app.wifi.address = "kitchen thermostat".into();
+        app.on_event(Event::Read("kitchen thermostat".into(), remote_before_scratch(Device::Diamond3, "v0.4.1")));
+        let reason = app.wifi_remote().unwrap().1.usb_reason.clone().unwrap();
+        let warning = tr!("setup.wifi_needs_usb", reason = reason);
+        assert!(warning.starts_with("Needs a USB setup: ") && warning.contains("(v0.4.1)"), "{warning}");
+        assert_eq!(app.wifi_needs_usb().as_deref(), Some(warning.as_str()));
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.contains(&warning), "Connect warns: {shown:?}");
+
+        app.step = setup::Step::Review;
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.contains(&warning), "Review warns: {shown:?}");
+        click_on(&context, &mut app, tr!("wifi.update"));
+        assert_eq!(app.task, None, "Update is off: nothing starts");
+        assert!(!app.running());
+
+        // A unit that reports it shows no warning, and Update is on.
+        app.on_event(Event::Read("kitchen thermostat".into(), remote(Device::Diamond3, "v0.4.1", false)));
+        assert_eq!(app.wifi_needs_usb(), None);
+        let shown = shown_on(&context, &mut app);
+        assert!(!shown.iter().any(|t| t.starts_with("Needs a USB setup")), "{shown:?}");
+    }
+
+    #[test]
+    fn a_current_unit_s_refusal_shows_when_the_run_checks_it_and_turns_update_off() {
+        let context = egui::Context::default();
+        install_fonts(&context);
+        let mut app = App { page: Page::SetUp, steps_without_unit: false, bus: Watcher::fixed(Bus::Nothing), ..App::default() };
+        app.wifi.address = "kitchen thermostat".into();
+        // A nestlocal with a check, whose check of nestlocal's own path at
+        // the read refused it: Connect warns, whatever the info shows.
+        let mut unit = remote(Device::Diamond3, "v0.5.0", false);
+        let at_read = "the thermostat can't take these over Wi-Fi: media/scratch/.unfr0zen/bin/nestlocal (no scratch volume \
+                       is mounted at /media/scratch); set it up over USB once, and Wi-Fi updates work again after that";
+        unit.usb_reason = Some(at_read.into());
+        app.on_event(Event::Read("kitchen thermostat".into(), unit));
+        assert_eq!(app.wifi_needs_usb(), Some(tr!("setup.wifi_needs_usb", reason = at_read)), "Connect warns");
+
+        // One that took it: no warning at Connect, though its info reports
+        // no scratch volume.
+        let mut unit = remote_before_scratch(Device::Diamond3, "v0.5.0");
+        unit.usb_reason = None;
+        app.on_event(Event::Read("kitchen thermostat".into(), unit));
+        assert_eq!(app.wifi_needs_usb(), None, "the check of nestlocal's path passed");
+        let shown = shown_on(&context, &mut app);
+        assert!(!shown.iter().any(|t| t.starts_with("Needs a USB setup")), "{shown:?}");
+
+        // The run's plan stops on the unit's check of the whole set: the
+        // failure says why, and that nothing was sent.
+        app.step = setup::Step::Review;
+        (app.task, app.flow_run) = (Some(Task::WifiPatch), true);
+        let reason = "the thermostat can't take these over Wi-Fi: etc/link/x (is reached through a symlink or another \
+                      filesystem); set it up over USB once, and Wi-Fi updates work again after that";
+        let error = unfr0zen_host::Error::NeedsUsb(reason.into()).to_string();
+        app.on_event(Event::NotSent(Some(reason.into())));
+        app.on_event(Event::Done(Err(error.clone())));
+        assert_eq!(app.screen_name(), "Failed");
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.contains(&error), "the failure gives the reason: {shown:?}");
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_not_sent_about")), "nothing was sent: {shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("setup.wifi_failed_about")), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("wifi.update")), "{shown:?}");
+
+        // Back on Review it stays, and Update is off.
+        click_on(&context, &mut app, tr!("setup.back_to_review"));
+        let warning = tr!("setup.wifi_needs_usb", reason = reason);
+        assert_eq!(app.wifi_needs_usb().as_deref(), Some(warning.as_str()));
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.contains(&warning), "Review warns: {shown:?}");
+        (app.task, app.flow_run, app.logs) = (None, false, LogContext::default());
+        click_on(&context, &mut app, tr!("wifi.update"));
+        assert_eq!(app.task, None, "Update is off: nothing starts");
+
+        // Read again, the unit answers for itself again.
+        app.on_event(Event::Read("kitchen thermostat".into(), remote(Device::Diamond3, "v0.5.0", false)));
+        assert_eq!(app.wifi_needs_usb(), None);
+
+        // A plan that fails otherwise sent nothing either, and needs no USB.
+        app.step = setup::Step::Review;
+        (app.task, app.flow_run, app.logs) = (Some(Task::WifiPatch), true, LogContext::default());
+        app.on_event(Event::NotSent(None));
+        app.on_event(Event::Done(Err("the unit refused the update: etc/x (/ is mounted read-only)".into())));
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_not_sent_about")), "{shown:?}");
+        assert_eq!(app.wifi_needs_usb(), None);
+        // One that failed once the set went says the unit puts it back.
+        (app.task, app.flow_run, app.logs) = (Some(Task::WifiPatch), true, LogContext::default());
+        app.on_event(Event::Done(Err("the unit rolled the update back".into())));
+        let shown = shown_on(&context, &mut app);
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_failed_about")), "{shown:?}");
+    }
+
+    #[test]
+    fn a_wifi_update_the_unit_kept_ends_on_done_and_a_declined_one_back_on_review() {
+        let mut app = App { page: Page::SetUp, ..App::default() };
+        app.wifi.address = "kitchen".into();
+        app.on_event(Event::Read("kitchen".into(), remote(Device::Diamond3, "v0.4.1", false)));
+        app.step = setup::Step::Review;
+        // As start_wifi_flow leaves it, with the run's end as it reports it.
+        let flow = |app: &mut App| {
+            app.logs = LogContext::default();
+            (app.task, app.flow_run, app.wifi_kept, app.cancelled) = (Some(Task::WifiPatch), true, false, false);
+        };
+        let sent = |app: &mut App, kept: bool, outcome: &str| {
+            flow(app);
+            if kept {
+                app.on_event(Event::Updated);
+            }
+            app.on_event(Event::Done(Ok(outcome.into())));
+        };
+        sent(&mut app, true, "The thermostat kept the changes, which restarts nestlocal:\nwrite etc/nestlocal/options");
+        assert_eq!(app.screen_name(), "Done");
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_done_title")), "{shown:?}");
+        assert!(shown.iter().any(|t| t.starts_with("The thermostat kept the changes")), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("setup.next_mount")), "it never left its base: {shown:?}");
+        assert_eq!(app.remote.as_ref().unwrap().1.info.version, app_nestlocal_version(), "it runs this app's nestlocal");
+
+        sent(&mut app, false, tr!("wifi.nothing"));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == tr!("setup.wifi_unchanged_title")), "{shown:?}");
+
+        // Changes declined in the question: back on Review, no failure.
+        flow(&mut app);
+        let (reply, answer) = std::sync::mpsc::channel();
+        app.on_event(Event::Confirm("Sending these changes".into(), reply));
+        let context = egui::Context::default();
+        install_fonts(&context);
+        shown_on(&context, &mut app);
+        click_on(&context, &mut app, tr!("common.cancel"));
+        assert_eq!(answer.try_recv(), Ok(false));
+        app.on_event(Event::Done(Ok(tr!("wifi.not_sent").into())));
+        assert_eq!(app.screen_name(), "Step(Review)");
+    }
+
+    #[test]
+    fn a_usb_patch_that_ends_well_as_its_download_wait_is_cancelled_shows_done() {
+        let mut app = App { page: Page::SetUp, task: Some(Task::SetUp), flow_run: true, cancelled: true,
+                            step: setup::Step::Review, ..App::default() };
+        app.logs.outcome = Some(Ok("patched".into()));
+        assert_eq!(app.screen_name(), "Done");
+        app.logs.outcome = Some(Err("cancelled".into()));
+        assert_eq!(app.screen_name(), "Step(Review)");
+    }
+
+    #[test]
+    fn disconnect_waits_for_the_run_to_end() {
+        let mut app = App { page: Page::SetUp, ..App::default() };
+        app.wifi.address = "kitchen".into();
+        app.on_event(Event::Read("kitchen".into(), remote(Device::Diamond3, "v0.4.1", false)));
+        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.task = Some(Task::WifiPatch);
+        app.popup_dismissed = true;
+        let context = egui::Context::default();
+        install_fonts(&context);
+        click_on(&context, &mut app, tr!("wifi.disconnect"));
+        assert!(app.wifi_connected(), "disabled while a run is going");
+    }
+
+    #[test]
+    fn the_review_steps_version_line_names_the_unit_its_nestlocal_and_this_apps() {
+        let ours = app_nestlocal_version();
+        let mut app = App { page: Page::SetUp, step: setup::Step::Review, ..App::default() };
+        let line = |shown: &[String]| shown.iter().find(|t| t.starts_with("Nest gen 3 (diamond3) · ")).cloned();
+        assert_eq!(line(&texts(&render_frames(&mut app, WINDOW, 2))), None, "nothing until connected");
+
+        app.wifi.address = "kitchen".into();
+        app.on_event(Event::Read("kitchen".into(), remote(Device::Diamond3, "v0.4.1-32-g10a3ece", false)));
+        let shown = line(&texts(&render_frames(&mut app, WINDOW, 2))).expect("the version line");
+        assert_eq!(shown, tr!("wifi.version", device = "Nest gen 3 (diamond3)", unit = "v0.4.1-32-g10a3ece", app = ours));
+        // Connect says it in its own words, under the ring.
+        app.step = setup::Step::Connect;
+        assert_eq!(line(&texts(&render_frames(&mut app, WINDOW, 2))), None);
+        app.step = setup::Step::Review;
+
+        app.on_event(Event::Read("kitchen".into(), remote(Device::Diamond3, "v0.4.1-32-g10a3ece", true)));
+        let shown = line(&texts(&render_frames(&mut app, WINDOW, 2))).expect("the version line");
+        assert_eq!(shown, tr!("wifi.version_on_trial", device = "Nest gen 3 (diamond3)", unit = "v0.4.1-32-g10a3ece", app = ours));
+
+        // A kept update runs this app's nestlocal.
+        app.on_event(Event::Updated);
+        let shown = line(&texts(&render_frames(&mut app, WINDOW, 2))).expect("the version line");
+        assert_eq!(shown, tr!("wifi.version", device = "Nest gen 3 (diamond3)", unit = ours, app = ours));
+    }
+
+    #[test]
+    fn the_status_bar_names_a_unit_connected_over_wifi_and_not_its_connect_as_done() {
+        let has = |shown: &[String], text: &str| shown.iter().any(|t| t == text);
+        let mut app = App { page: Page::SetUp, bus: Watcher::fixed(Bus::Nothing), ..App::default() };
+        app.wifi.address = "192.168.1.40".into();
+        app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, "v0.4.1", false)));
+        app.task = Some(Task::WifiRead);
+        app.logs.outcome = Some(Ok("read".into()));
+        let wifi = tr!("status.wifi", device = Device::J49.description(), host = "192.168.1.40");
+        let done = tr!("status.done", task = Task::WifiRead.title());
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, &wifi), "{shown:?}");
+        assert!(!has(&shown, tr!("bus.disconnected")) && !has(&shown, &done), "{shown:?}");
+
+        // A unit on USB as well: both, USB's named as such.
+        app.bus = on_usb(Device::Diamond3);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, &tr!("status.usb", unit = Device::Diamond3.description())) && has(&shown, &wifi), "{shown:?}");
+
+        // A Connect that failed still says so.
+        app.logs.outcome = Some(Err("no answer".into()));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, &tr!("status.failed", task = Task::WifiRead.title())), "{shown:?}");
+
+        // Disconnected: USB alone, as before.
+        app.wifi_disconnect();
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, Device::Diamond3.description()) && !has(&shown, &wifi), "{shown:?}");
+    }
+
+    #[test]
+    fn connected_over_wifi_the_connect_step_shows_that_unit_on_its_base_until_disconnect() {
+        let usb = [tr!("setup.connect_title"), tr!("setup.connect_1"), tr!("setup.connect_2"), tr!("setup.connect_3"),
+                   tr!("setup.wifi_about")];
+        let wifi = [tr!("setup.wifi_connect_title"), tr!("setup.wifi_connect_1"), tr!("setup.wifi_connect_2"),
+                    tr!("setup.wifi_connect_3"), tr!("setup.wifi_connected"), tr!("setup.wifi_disconnect_for_usb")];
+        let (or_over, over) = (tr!("setup.group.wifi").to_uppercase(), tr!("setup.group.wifi_connected").to_uppercase());
+        let has = |shown: &[String], text: &str| shown.iter().any(|t| t == text);
+        let mut app = App { page: Page::SetUp, steps_without_unit: false, bus: Watcher::fixed(Bus::Nothing), ..App::default() };
+        let output = render_frames(&mut app, WINDOW, 2);
+        assert_eq!(output.viewport_output[&egui::ViewportId::ROOT].repaint_delay, Duration::ZERO, "searching");
+        let shown = texts(&output);
+        for text in usb.iter().chain([&tr!("setup.plug_in"), &tr!("setup.waiting_for_unit")]) {
+            assert!(has(&shown, text), "{text}: {shown:?}");
+        }
+        for text in wifi {
+            assert!(!has(&shown, text), "{text}: {shown:?}");
+        }
+        assert!(has(&shown, &or_over) && !has(&shown, &over), "{shown:?}");
+
+        // Connected, with nothing on USB: the unit as found, on its base, and
+        // its nestlocal beside this app's; nothing searching.
+        app.wifi.address = "192.168.1.40".into();
+        app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, "v0.4.1", false)));
+        let output = render_frames(&mut app, WINDOW, 2);
+        let shown = texts(&output);
+        for text in wifi.iter().chain([&tr!("setup.gen2"), &tr!("setup.learning_thermostat")]) {
+            assert!(has(&shown, text), "{text}: {shown:?}");
+        }
+        for text in usb.iter().chain([&tr!("setup.plug_in"), &tr!("setup.data_cable"), &tr!("setup.waiting_for_unit"),
+                                      &tr!("setup.wifi_also_usb")]) {
+            assert!(!has(&shown, text), "{text}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|t| t.contains("this app's")), "the card's long line is gone: {shown:?}");
+        assert!(has(&shown, &over) && !has(&shown, &or_over), "the way in use: {shown:?}");
+        let lines = |unit: &str, status: Option<String>| {
+            let first = tr!("setup.wifi_nestlocal", version = unit);
+            status.map_or(first.clone(), |status| format!("{first}\n{status}"))
+        };
+        let available = app_nestlocal_known().map(|app| tr!("setup.wifi_update_available", version = app));
+        assert!(has(&shown, &lines("v0.4.1", available)), "{shown:?}");
+        let repaint = |output: &egui::FullOutput| output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        assert!(repaint(&output) > Duration::ZERO, "no search going round: {:?}", repaint(&output));
+
+        // On trial; up to date; a unit that names no version.
+        app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, "v0.4.1", true)));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, &lines("v0.4.1", Some(tr!("setup.wifi_on_trial").into()))), "{shown:?}");
+        if let Some(ours) = app_nestlocal_known() {
+            app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, ours, false)));
+            let shown = texts(&render_frames(&mut app, WINDOW, 2));
+            assert!(has(&shown, &lines(ours, Some(tr!("setup.wifi_up_to_date").into()))), "{shown:?}");
+            if unfr0zen_host::push::newer_than("v999.0.0", ours) {
+                app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, "v999.0.0", false)));
+                let shown = texts(&render_frames(&mut app, WINDOW, 2));
+                assert!(has(&shown, &lines("v999.0.0", Some(tr!("setup.wifi_newer", version = ours)))), "{shown:?}");
+            }
+        }
+        app.on_event(Event::Read("192.168.1.40".into(), remote(Device::J49, "", false)));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(has(&shown, &lines(tr!("wifi.unknown_version"), None)), "{shown:?}");
+
+        // A unit on USB too: the flow still goes over Wi-Fi, and says so.
+        app.bus = on_usb(Device::Diamond3);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        for text in wifi.iter().chain([&tr!("setup.wifi_also_usb"), &tr!("setup.gen2")]) {
+            assert!(has(&shown, text), "{text}: {shown:?}");
+        }
+        assert!(!has(&shown, tr!("setup.found_unit")), "{shown:?}");
+
+        // A Thermostat E on USB is not a unit the flow could use: no warning.
+        app.bus = on_usb(Device::Onyx);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(!has(&shown, tr!("setup.wifi_also_usb")), "{shown:?}");
+        app.bus = on_usb(Device::Diamond3);
+
+        // Disconnect: the USB step and the unit on USB.
+        app.wifi_disconnect();
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        for text in usb.iter().chain([&tr!("setup.found_unit"), &tr!("setup.gen3"), &or_over.as_str()]) {
+            assert!(has(&shown, text), "{text}: {shown:?}");
+        }
+        for text in wifi.iter().chain([&tr!("setup.wifi_also_usb")]) {
+            assert!(!has(&shown, text), "{text}: {shown:?}");
+        }
+    }
+
+    #[test]
+    fn force_shows_in_the_developer_options_only_while_connected() {
+        let mut app = App { page: Page::SetUp, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == tr!("form.backplate_sim")), "the options are out: {shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("wifi.force")), "{shown:?}");
+        app.wifi.address = "kitchen".into();
+        app.on_event(Event::Read("kitchen".into(), remote(Device::Diamond3, "v0.4.1", false)));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == tr!("wifi.force")), "{shown:?}");
+        app.wifi.force = true;
+        app.wifi_disconnect();
+        assert!(!app.wifi.force, "a new connection starts without it");
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(!shown.iter().any(|t| t == tr!("wifi.force")), "{shown:?}");
+    }
+
+    #[test]
+    fn the_wifi_tasks_belong_to_the_patch_flow() {
+        assert_eq!(Page::MAIN, [Page::SetUp, Page::Backups, Page::Logs, Page::About]);
+        for task in [Task::WifiRead, Task::WifiPatch] {
+            assert_eq!(task.page(), Page::SetUp);
+        }
+        // Connect's progress shows in its card, not as the run's card.
+        let mut app = App { page: Page::SetUp, task: Some(Task::WifiRead), ..App::default() };
+        app.logs.outcome = Some(Err("refused".into()));
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == "refused"), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == tr!("run.failed_title")), "no run card: {shown:?}");
+    }
+
+    #[test]
+    fn connect_needs_an_address_and_update_a_connection() {
+        let mut app = App { page: Page::SetUp, ..App::default() };
+        for task in [Task::WifiRead, Task::WifiPatch] {
+            app.start(task.clone());
+            assert!(!app.running());
+            assert_eq!(app.task, Some(task));
+            let error = app.logs.outcome.clone().unwrap().unwrap_err();
+            assert!(error.contains("is not a unit's address"), "{error}");
+        }
+
+        // Updating needs the steps to hold that unit's settings first.
+        app.wifi.address = "192.168.1.50".into();
+        app.start(Task::WifiPatch);
+        assert!(!app.running());
+        assert_eq!(app.logs.outcome.clone().unwrap().unwrap_err(), tr!("wifi.read_first"));
+        app.on_event(Event::Read("192.168.1.50".into(), remote(Device::J49, "v0.5.0", false)));
+        assert!(app.wifi_connected() && app.form.locked);
+        assert!(app.form.inputs().zigbee && app.form.inputs().usb_shell, "the steps hold the unit's settings");
+        // A unit on USB frees the gen 2's settings for a USB run.
+        app.bus = on_usb(Device::Diamond3);
+        render(&mut app, WINDOW);
+        assert!(app.wifi_connected() && !app.form.locked);
+        app.bus = bus::Watcher::fixed(bus::Bus::Nothing);
+        app.on_event(Event::Read("192.168.1.50".into(), remote(Device::J49, "v0.5.0", false)));
+        assert!(app.form.locked);
+        // Another address no longer stands for the unit read.
+        app.wifi.address = "192.168.1.51".into();
+        render(&mut app, WINDOW);
+        assert!(!app.wifi_connected() && !app.form.locked);
+        assert!(!app.form.inputs().zigbee, "the steps are back as they were");
+    }
+
+    #[test]
+    fn a_wifi_run_gets_the_code_typed_on_send_and_none_on_cancel() {
+        use unfr0zen_host::push::Code;
+        let context = egui::Context::default();
+        install_fonts(&context);
+        // On a page of its own the step would only show on the run's card.
+        let mut app = App { page: Page::Backups, task: Some(Task::WifiRead), ..App::default() };
+        app.run = Some(Run::with_code(|code, progress| {
+            let Code::Ask(ask) = code else { unreachable!("the window is asked") };
+            progress("Connecting to nestlocal at 192.168.1.50:8443");
+            let first = ask("Enter the code the thermostat shows");
+            let second = ask("Wrong code: enter the code the thermostat shows");
+            Ok(format!("{first:?} then {second:?}"))
+        }));
+        let until = |app: &mut App, done: fn(&App) -> bool| {
+            let start = Instant::now();
+            while !done(app) {
+                assert!(start.elapsed() < Duration::from_secs(10), "the run did not get there");
+                std::thread::sleep(Duration::from_millis(10));
+                frame_on(&context, app, Vec::new());
+            }
+            texts(&frame_on(&context, app, Vec::new()))
+        };
+        let shown = until(&mut app, |app| app.wifi.asking());
+        assert!(shown.iter().any(|t| t == "Enter the update code"), "{shown:?}");
+        assert!(shown.iter().any(|t| t == "Enter the code the thermostat shows"), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Connecting to nestlocal at 192.168.1.50:8443"), "the question, not the card: {shown:?}");
+        frame_on(&context, &mut app, vec![egui::Event::Text("40718263".into())]);
+        click_on(&context, &mut app, "Send");
+        let shown = until(&mut app, |app| app.wifi.asking());
+        assert!(shown.iter().any(|t| t == "Wrong code: enter the code the thermostat shows"), "{shown:?}");
+        click_on(&context, &mut app, "Cancel");
+        assert!(app.cancelled && !app.wifi.asking());
+        until(&mut app, |app| !app.running());
+        assert_eq!(app.logs.outcome, Some(Ok(r#"Some("40718263") then None"#.into())));
+        assert_eq!(app.logs.rows.len(), 1);
+        assert_eq!(app.logs.rows[0].label, "Connecting to nestlocal at 192.168.1.50:8443");
+        assert_eq!(app.logs.rows[0].done.map(|(_, ok)| ok), Some(true), "the last step ends as the run does");
+    }
+
     #[test]
     fn the_flow_steps_through_and_skips_the_integrations() {
         let mut app = App { bus: on_usb(Device::Diamond3), ..App::default() };
@@ -2704,6 +3368,13 @@ mod tests {
         let flow = |step| App { bus: gen3(), step, ..App::default() };
         shot("1-connect", &mut flow(setup::Step::Connect), WINDOW);
         shot("1-connect-waiting", &mut App::default(), WINDOW);
+        // Connected over Wi-Fi: the Connect step's card, and Review's Update.
+        let mut wifi = flow(setup::Step::Connect);
+        wifi.wifi.address = "192.168.1.50".into();
+        wifi.on_event(Event::Read("192.168.1.50".into(), remote(Device::Diamond3, "v0.5.0", false)));
+        shot("1-connect-wifi", &mut wifi, WINDOW);
+        wifi.step = setup::Step::Review;
+        shot("4-review-wifi", &mut wifi, WINDOW);
         shot("2-integrations", &mut flow(setup::Step::Integrations), WINDOW);
         let mut chosen = flow(setup::Step::Integrations);
         chosen.form.mqtt.on = true;
@@ -2785,6 +3456,7 @@ mod tests {
         // Without the version, which names a commit.
         let shot = |name: &str, app: &mut App| {
             app.version = "";
+            app.mac_title_bar = true;
             snapshot::render(WINDOW, 2.0, 6, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
         };
         let mut integrations = App { bus: on_usb(Device::Diamond3), step: setup::Step::Integrations, ..App::default() };
@@ -2809,6 +3481,7 @@ mod tests {
         // The install guide's: the setup flow from connecting to done.
         let dialog = |name: &str, app: &mut App| {
             app.version = "";
+            app.mac_title_bar = true;
             snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
         };
         let flow = |step| App { bus: on_usb(Device::Diamond3), step, ..App::default() };
@@ -2845,6 +3518,28 @@ mod tests {
         done.flow_backup = Some("nand-20261113-1012.bin".into());
         done.logs.outcome = Some(Ok("set up".into()));
         shot("guide-done", &mut done);
+    }
+
+    #[test]
+    fn the_macos_title_bar_leaves_the_traffic_lights_room_and_draws_no_caption_buttons() {
+        for mac in [true, false] {
+            let mut app = App { mac_title_bar: mac, ..App::default() };
+            let output = render_frames(&mut app, WINDOW, 2);
+            let name = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == NAME => Some(t.pos.x),
+                _ => None,
+            }).expect("the name is drawn");
+            let captions = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::LineSegment { points, .. }
+                    if points.iter().all(|p| p.y < TITLE_HEIGHT && p.x > WINDOW[0] - 2.0 * CAPTION_BUTTON))).count();
+            if mac {
+                assert!(name >= 14.0 + TRAFFIC_LIGHTS, "the name clears the traffic lights: {name}");
+                assert_eq!(captions, 0, "no minimise or close");
+            } else {
+                assert!(name < 14.0 + TRAFFIC_LIGHTS, "the name starts at the left: {name}");
+                assert!(captions >= 2, "close draws its cross: {captions}");
+            }
+        }
     }
 
     #[test]
@@ -3358,6 +4053,35 @@ mod tests {
         let mut past = App { page: Page::Logs, history: vec![run], history_selected: Some("20261104-120000".into()), ..App::default() };
         assert_eq!(size_of(&mut past, "Load recovery U-Boot"), Some(RUN_STEP_FONT));
         assert_eq!(size_of(&mut past, "1.2s"), Some(RUN_STEP_FONT));
+    }
+
+    #[test]
+    fn a_long_step_wraps_beside_its_time_rather_than_under_it() {
+        let label = "On the thermostat, press Allow (or Allow and trust), then enter the code it shows, \
+                     which takes a while to read at the width of the run pane";
+        let placed = |app: &mut App| {
+            let output = render_frames(app, WINDOW, 3);
+            let rect = |want: &dyn Fn(&str) -> bool| output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if want(&t.galley.job.text) => {
+                    Some((t.galley.rect.translate(t.pos.to_vec2()), t.galley.rows.len()))
+                }
+                _ => None,
+            });
+            let (text, rows) = rect(&|text| text == label).expect("the step is drawn");
+            let (time, _) = rect(&|text| text.ends_with('s') && text.split('.').count() == 2
+                                     && text.trim_end_matches('s').parse::<f64>().is_ok()).expect("its time is drawn");
+            (text, rows, time)
+        };
+        let mut live = App { task: Some(Task::SetUp), page: Page::Logs, logged: true, ..App::default() };
+        live.on_event(Event::Begin(label.into()));
+        let (text, rows, time) = placed(&mut live);
+        assert!(rows > 1, "the step wraps");
+        assert!(!text.intersects(time) && text.right() <= time.left(), "the time stays clear of the step: {text:?} {time:?}");
+        let run = logs::parse("20261104-120000", Path::new("/nonexistent"),
+                              &format!("[ 1.0] Selected: Patch\n[ 2.0] {label}: done (1.2s)\n"));
+        let mut past = App { page: Page::Logs, history: vec![run], history_selected: Some("20261104-120000".into()), ..App::default() };
+        let (text, rows, time) = placed(&mut past);
+        assert!(rows > 1 && !text.intersects(time), "a past run's step wraps clear of its time too");
     }
 
     #[test]

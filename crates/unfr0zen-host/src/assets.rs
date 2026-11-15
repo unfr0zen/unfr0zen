@@ -3,6 +3,7 @@
 //! WAD for --doom, and the gen 3's customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
+use std::sync::OnceLock;
 
 use unfr0zen_core::nestlocal::Overlay;
 
@@ -13,7 +14,7 @@ const APPLY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unfr0zen-apply.gz
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
 /// The gen 1's and gen 2's Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
-/// The library nlsleepd preloads for Matter, every generation's.
+/// The library nlsleepd preloads for Matter and the update API, every generation's.
 pub const WAKE_FILTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libwakefilter.so"));
 /// The library nlclient preloads beside nestlocal, so it reaches nestlocal without Wi-Fi.
 pub const LOCAL_CLOUD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/liblocalcloud.so"));
@@ -32,6 +33,12 @@ pub fn busybox() -> Vec<u8> {
 /// The static ARMv7 nestlocal.
 pub fn nestlocal() -> Vec<u8> {
     gunzip(NESTLOCAL)
+}
+
+/// nestlocal, unzipped once and kept: for a process that asks for it again.
+pub fn cached_nestlocal() -> &'static [u8] {
+    static UNZIPPED: OnceLock<Vec<u8>> = OnceLock::new();
+    UNZIPPED.get_or_init(nestlocal)
 }
 
 /// The static ARMv7 unfr0zen-apply, for the setup bundle.

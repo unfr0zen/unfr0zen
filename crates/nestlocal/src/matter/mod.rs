@@ -674,7 +674,7 @@ async fn mdns<C: Crypto + Copy>(matter: &Matter<'_>, crypto: C, serial: &str,
                 let list = wake_patterns::list(budget, mac(&on.name), &on.ipv6, &operational_instances(matter));
                 if listed.as_ref() != Some(&list) {
                     // Again next time when it fails, logged once.
-                    match wake_patterns::write(&list) {
+                    match wake_patterns::write(std::path::Path::new(wake_patterns::LIST), &list) {
                         Ok(()) => (listed, failing) = (Some(list), false),
                         Err(e) if !failing => {
                             logf!("matter: {}: {e}; controllers will not wake the unit", wake_patterns::LIST);
@@ -709,7 +709,7 @@ fn operational_instances(matter: &Matter<'_>) -> Vec<String> {
 }
 
 /// The interface's Ethernet address, all zeros when it has none.
-fn mac(interface: &str) -> [u8; 6] {
+pub(crate) fn mac(interface: &str) -> [u8; 6] {
     let text = std::fs::read_to_string(format!("/sys/class/net/{interface}/address")).unwrap_or_default();
     let mut mac = [0; 6];
     for (byte, hex) in mac.iter_mut().zip(text.trim().split(':')) {

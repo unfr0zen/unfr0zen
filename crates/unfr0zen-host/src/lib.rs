@@ -15,8 +15,13 @@ mod machine;
 pub mod nand;
 mod onyx;
 pub mod progress;
+pub mod push;
+pub mod remote;
+pub mod session;
+pub mod trust;
 pub mod update;
 pub mod usb;
+pub mod wifi_patch;
 
 pub use device::{CancelFlag, Device, WAIT_USB_BOOT_STAGE};
 pub use flow::{mask_url, run, run_after_backup, Config, SetupInputs};

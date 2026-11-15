@@ -248,7 +248,7 @@ fn check_unit(progress: &mut dyn Progress, config: &Config, usb: Device, silicon
     let nlmodel = env.get("nlmodel").unwrap_or_default().to_string();
     progress.device(&format!("{}: {silicon}", device.description()));
     progress.status(&format!("Generation: {} (nlmodel {})", device.description(), if nlmodel.is_empty() { "unset" } else { &nlmodel }));
-    unsupported(device, &config.options)?;
+    setup::check_device(device, &config.options)?;
     let order = env.boot_order()?;
     progress.status(&format!("Installed boot order: {} then {}", order[0], order[1]));
     let slot = order[0];
@@ -482,21 +482,6 @@ fn upper_kernel(nand: &mut dyn Nand, slot: Slot, options: &setup::Options) -> Re
     }
 }
 
-/// Refuses what a Diamond cannot run: its CC2530 radio uses UART, and it has
-/// no kernel with a USB serial port.
-fn unsupported(device: Device, options: &setup::Options) -> Result<()> {
-    if device != Device::Diamond {
-        return Ok(());
-    }
-    if options.thread.is_some() || options.zigbee {
-        return Err(failure("Diamond's CC2530 radio uses UART; --matter-thread and --zigbee need a separate radio implementation"));
-    }
-    if options.usb_shell {
-        return Err(failure("Diamond needs its own kernel for --usb-shell"));
-    }
-    Ok(())
-}
-
 /// Boots the application firmware from whatever the unit was left in. On
 /// 0451:d00e it is nearly always a flasher an interrupted run left behind,
 /// idle or still sending a reply nobody read: the reply is drained and the
@@ -569,7 +554,7 @@ fn rom_gone(timeout: Duration) -> Result<bool> {
 /// Refuses a run this build cannot do, before the unit is touched.
 fn check(config: &Config) -> Result<()> {
     if let Some(device) = config.omap {
-        unsupported(device, &config.options)?;
+        setup::check_device(device, &config.options)?;
     }
     if config.options.usb_shell && assets::KERNEL.is_empty() {
         return Err(failure("this build has no j49 kernel with a USB serial port (it needs Docker to build); drop --usb-shell"));
@@ -585,7 +570,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
                   cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
     let usb = unit.device;
     check(config)?;
-    unsupported(usb, &config.options)?;
+    setup::check_device(usb, &config.options)?;
     if assets::KERNEL.is_empty() {
         return Err(failure("this build has no j49 kernel for the initramfs (it needs Docker to build)"));
     }

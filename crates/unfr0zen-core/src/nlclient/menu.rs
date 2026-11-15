@@ -1,8 +1,10 @@
-//! The settings menu's entries: Zigbee, Matter, Themes and Doom after its
-//! first entry, each only with its feature on, and UNFR0ZEN in Legal Info's
-//! place. Each takes the name of a stock screen whose factory the screen
-//! object replaces (custom_root in platform/common/nlclient/src/custom_flow.h);
-//! those stock screens (Nest app, Software, Nest Pro, Lock) leave the menu.
+//! The settings menu's entries: Zigbee, Matter, Themes, Doom and Update after
+//! its first entry, each only with its feature on, and UNFR0ZEN in Legal
+//! Info's place. Each takes the name of a stock screen whose factory the
+//! screen object replaces (custom_root in
+//! platform/common/nlclient/src/custom_flow.h); those stock screens (Nest app,
+//! Software, Nest Pro, Lock, and Utility, which Nest's servers run) leave the
+//! menu.
 //!
 //! The menu is a static list of screen names, between two "temperature"
 //! entries, that nlclient reads in a loop of fixed length: the list is
@@ -15,7 +17,7 @@ use crate::{device, Result};
 
 /// The stock screens the entries take the place of, in the order of
 /// [`Section`], then UNFR0ZEN's.
-pub const HOSTS: [&str; 5] = ["account", "update", "proinfoscreen", "templock", "legalinfo"];
+pub const HOSTS: [&str; 6] = ["account", "update", "proinfoscreen", "templock", "utility", "legalinfo"];
 
 /// An entry shown only with its feature on, in the menu's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,11 +26,12 @@ pub enum Section {
     Matter,
     Themes,
     Doom,
+    Update,
 }
 
 impl Section {
     /// Every section, in the menu's order.
-    pub const ALL: [Section; 4] = [Section::Zigbee, Section::Matter, Section::Themes, Section::Doom];
+    pub const ALL: [Section; 5] = [Section::Zigbee, Section::Matter, Section::Themes, Section::Doom, Section::Update];
 
     fn host(self) -> &'static str {
         HOSTS[self as usize]
@@ -47,7 +50,8 @@ pub fn arranged(stock: &[String], sections: &[Section]) -> Result<Vec<String>> {
             return device(format!("settings menu does not hold {host} once"));
         }
     }
-    let mut names: Vec<String> = stock.iter().filter(|n| !HOSTS[..4].contains(&n.as_str())).cloned().collect();
+    let hosts = &HOSTS[..Section::ALL.len()];
+    let mut names: Vec<String> = stock.iter().filter(|n| !hosts.contains(&n.as_str())).cloned().collect();
     for (at, section) in Section::ALL.iter().filter(|s| sections.contains(s)).enumerate() {
         names.insert(1 + at, section.host().to_string());
     }
@@ -139,14 +143,16 @@ mod tests {
     #[test]
     fn the_sections_follow_the_first_entry_and_unfr0zen_takes_legal_infos_place() {
         let stock = names(&["temperature", "schedule", "account", "wifi", "templock", "proinfoscreen", "update",
-                            "systeminfo", "legalinfo", "reset", "temperature"]);
+                            "utility", "systeminfo", "legalinfo", "reset", "temperature"]);
         assert_eq!(arranged(&stock, &[Section::Doom, Section::Zigbee]).unwrap(),
                    names(&["temperature", "account", "templock", "schedule", "wifi", "systeminfo", "legalinfo",
                            "reset", "temperature"]));
         assert_eq!(arranged(&stock, &[]).unwrap(),
                    names(&["temperature", "schedule", "wifi", "systeminfo", "legalinfo", "reset", "temperature"]));
-        assert_eq!(arranged(&stock, &[Section::Matter, Section::Themes, Section::Doom, Section::Zigbee]).unwrap()[1..5],
-                   names(&["account", "update", "proinfoscreen", "templock"]));
+        assert_eq!(arranged(&stock, &[Section::Update, Section::Matter, Section::Themes, Section::Doom, Section::Zigbee])
+                       .unwrap()[1..6],
+                   names(&["account", "update", "proinfoscreen", "templock", "utility"]));
+        assert_eq!(arranged(&stock, &[Section::Update]).unwrap()[..3], names(&["temperature", "utility", "schedule"]));
         let mut missing = stock.clone();
         missing.retain(|n| n != "templock");
         assert!(arranged(&missing, &[]).is_err());

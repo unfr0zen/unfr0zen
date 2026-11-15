@@ -48,6 +48,15 @@ pub const NAME_FILE: &str = "etc/nestlocal/device-name";
 pub const RANDOM_SEED: &str = "etc/nestlocal/random-seed";
 const INIT: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.init"));
 const MONITRC: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.monitrc"));
+/// Run before each start by nestlocal.init: puts the previous binary back
+/// after an update over Wi-Fi that does not come up.
+const UPDATE_GUARD: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal-update-guard"));
+/// The port nestlocal's update API listens on, with --update-api.
+pub const UPDATE_PORT: u16 = 8443;
+/// The files this overlay installs beside nestlocal, as a version a pushed
+/// nestlocal checks it can run with (its update API reports it).
+pub const OVERLAY_VERSION_FILE: &str = "etc/nestlocal/overlay-version";
+const OVERLAY_VERSION: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/overlay-version"));
 
 /// The stock files the overlay edits, as the unit has them.
 /// nestlocal's options; present once nestlocal is installed.
@@ -67,7 +76,7 @@ fn regex(pattern: &str) -> Regex {
 pub type NamedFile = (String, u32, Vec<u8>);
 
 /// The broker unfr0zen --mqtt and its options name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Mqtt {
     pub url: String,
     pub user: Option<String>,
@@ -202,9 +211,9 @@ fn verhoeff(digits: &str) -> u8 {
 }
 
 /// nestlocal's options file: MQTT's options (or none: nestlocal's own
-/// default broker is not this unit's), Matter's and Zigbee's, the device
-/// name (None keeps the unit's), and the files they name.
-pub fn options(mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool, name: Option<&str>)
+/// default broker is not this unit's), Matter's, Zigbee's and the update
+/// API's, the device name (None keeps the unit's), and the files they name.
+pub fn options(mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool, update: bool, name: Option<&str>)
                -> Result<(Vec<u8>, Vec<NamedFile>)> {
     let (mut line, mut files) = match mqtt {
         Some(mqtt) => {
@@ -218,6 +227,9 @@ pub fn options(mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool, name:
     }
     if zigbee {
         line += " -zigbee";
+    }
+    if update {
+        line += &format!(" -update-listen 0.0.0.0:{UPDATE_PORT}");
     }
     if let Some(name) = name {
         check_device_name(name)?;
@@ -487,8 +499,9 @@ pub struct Overlay {
 
 /// The nestlocal overlay for a unit, from its own stock files (contents and
 /// mode); the files it edits keep the unit's mode.
+#[allow(clippy::too_many_arguments)]
 pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool,
-               name: Option<&str>, binary: Vec<u8>, pki: &Pki) -> Result<Overlay> {
+               update: bool, name: Option<&str>, binary: Vec<u8>, pki: &Pki) -> Result<Overlay> {
     let text = |name: &str| -> Result<String> {
         let (data, _) = stock(name).map_or_else(|| device(format!("{name} is missing from the unit")), Ok)?;
         String::from_utf8(data).or_else(|_| device(format!("{name} is not text")))
@@ -503,7 +516,7 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
             seed
         }
     };
-    let (options, secrets) = options(mqtt, matter, zigbee, name)?;
+    let (options, secrets) = options(mqtt, matter, zigbee, update, name)?;
     let product = configure_matter_ble(edit_product_config(&text("etc/nestlabs/product.config")?)?,
         matter.is_some(), stock(BLE_FIRMWARE).map(|(data, _)| data).as_deref());
     let mut files = vec![
@@ -513,6 +526,8 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
         (OPTIONS.to_string(), 0o644, options),
         (RANDOM_SEED.to_string(), 0o600, seed),
         ("etc/init.d/nestlocal".to_string(), 0o755, INIT.to_vec()),
+        ("etc/init.d/nestlocal-update-guard".to_string(), 0o755, UPDATE_GUARD.to_vec()),
+        (OVERLAY_VERSION_FILE.to_string(), 0o644, OVERLAY_VERSION.to_vec()),
         ("etc/monit.d/nestlocal.monitrc".to_string(), 0o600, MONITRC.to_vec()),
         ("etc/init.d/rcS".to_string(), mode("etc/init.d/rcS", 0o750), edit_rcs(&text("etc/init.d/rcS")?)?.into_bytes()),
         ("etc/monitrc".to_string(), mode("etc/monitrc", 0o600), edit_monitrc(&text("etc/monitrc")?, zigbee)?.into_bytes()),
@@ -559,7 +574,7 @@ mod tests {
             .replace("/media/system-config/nestlocal.options", legacy.to_str().unwrap());
         let selected = || {
             let output = std::process::Command::new("sh").arg("-c")
-                .arg(format!("{script}\ncat \"$OPTIONS\""))
+                .arg(format!("{script}\noptions\ncat \"$OPTIONS\""))
                 .output().unwrap();
             assert!(output.status.success());
             String::from_utf8(output.stdout).unwrap()
@@ -596,14 +611,37 @@ mod tests {
     fn options_for_mqtt_matter_or_both() {
         let matter = Matter { passcode: 34970112, discriminator: 1234 };
         let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
-        let line = |mqtt, matter| String::from_utf8(options(mqtt, matter, false, None).unwrap().0).unwrap();
+        let line = |mqtt, matter| String::from_utf8(options(mqtt, matter, false, false, None).unwrap().0).unwrap();
         assert_eq!(line(Some(&mqtt), None), "-mqtt tcp://broker:1883\n");
         assert_eq!(line(Some(&mqtt), Some(&matter)),
                    "-mqtt tcp://broker:1883 -matter -matter-passcode 34970112 -matter-discriminator 1234\n");
         // Matter alone: no broker at all, not nestlocal's default one.
         assert_eq!(line(None, Some(&matter)), "-mqtt= -matter -matter-passcode 34970112 -matter-discriminator 1234\n");
-        assert_eq!(String::from_utf8(options(Some(&mqtt), None, true, None).unwrap().0).unwrap(),
+        assert_eq!(String::from_utf8(options(Some(&mqtt), None, true, false, None).unwrap().0).unwrap(),
                    "-mqtt tcp://broker:1883 -zigbee\n");
+    }
+
+    #[test]
+    fn update_api_adds_the_listener() {
+        let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
+        assert_eq!(String::from_utf8(options(Some(&mqtt), None, true, true, None).unwrap().0).unwrap(),
+                   format!("-mqtt tcp://broker:1883 -zigbee -update-listen 0.0.0.0:{UPDATE_PORT}\n"));
+        assert!(!String::from_utf8(options(Some(&mqtt), None, false, false, None).unwrap().0).unwrap().contains("-update-listen"));
+    }
+
+    #[test]
+    fn the_overlay_carries_the_update_guard() {
+        let (one, _) = pkis();
+        let files = stock();
+        for update in [false, true] {
+            let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, update, None, b"ARMV7".to_vec(), one).unwrap();
+            let guard = made.files.iter().find(|(name, _, _)| name == "etc/init.d/nestlocal-update-guard").unwrap();
+            assert_eq!((guard.1, guard.2.as_slice()), (0o755, UPDATE_GUARD), "update {update}");
+            let version = made.files.iter().find(|(name, _, _)| name == OVERLAY_VERSION_FILE).unwrap();
+            assert_eq!(String::from_utf8_lossy(&version.2).trim().parse::<u32>().ok(), Some(1), "update {update}");
+            let options = &made.files.iter().find(|(name, _, _)| name == OPTIONS).unwrap().2;
+            assert_eq!(String::from_utf8_lossy(options).contains("-update-listen"), update);
+        }
     }
 
     #[test]
@@ -736,13 +774,13 @@ mod tests {
     #[test]
     fn home_assistant_names() {
         let mqtt = Mqtt { url: "broker".into(), entity_root: Some("nest_famrm".into()), ..Mqtt::default() };
-        let (line, files) = options(Some(&mqtt), None, false, Some(" Nest FamRm ")).unwrap();
+        let (line, files) = options(Some(&mqtt), None, false, false, Some(" Nest FamRm ")).unwrap();
         assert_eq!(String::from_utf8(line).unwrap(),
                    "-mqtt tcp://broker:1883 -ha-entity-root nest_famrm -device-name-file /etc/nestlocal/device-name\n");
         assert_eq!(files, [(NAME_FILE.into(), 0o644, b"Nest FamRm\n".to_vec())]);
         // Matter takes the name alone too.
         let matter = Matter::from_pairing_code(DEFAULT_MATTER_CODE).unwrap();
-        let (line, _) = options(None, Some(&matter), false, Some("Nest <serial>")).unwrap();
+        let (line, _) = options(None, Some(&matter), false, false, Some("Nest <serial>")).unwrap();
         assert!(String::from_utf8(line).unwrap().trim_end().ends_with(" -device-name-file /etc/nestlocal/device-name"));
         for name in ["Nest <serial>", "<serial>", &"x".repeat(32), &format!("{}<serial>", "x".repeat(16))] {
             assert!(check_device_name(name).is_ok(), "{name:?}");
@@ -757,7 +795,7 @@ mod tests {
             assert!(mqtt_options(&Mqtt { entity_root: Some(root.into()), ..mqtt.clone() }).is_err(), "{root:?}");
         }
         for name in ["", "  ", "two\nlines", &"x".repeat(33), &format!("{}<serial>", "x".repeat(17)), &"é".repeat(17)] {
-            assert!(options(Some(&mqtt), None, false, Some(name)).is_err(), "{name:?}");
+            assert!(options(Some(&mqtt), None, false, false, Some(name)).is_err(), "{name:?}");
         }
     }
 
@@ -778,7 +816,7 @@ mod tests {
         let (one, _) = pkis();
         let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
         let mut files = stock();
-        let first = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
+        let first = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, false, None, b"ARMV7".to_vec(), one).unwrap();
         let by_name: BTreeMap<_, _> = first.files.iter().map(|(n, m, d)| (n.clone(), (*m, d.clone()))).collect();
         let rcs = String::from_utf8(by_name["etc/init.d/rcS"].1.clone()).unwrap();
         assert!(rcs.find(RCS_LINE).unwrap() < rcs.find(RCS_BEFORE).unwrap());
@@ -793,7 +831,7 @@ mod tests {
         }
         assert!(!String::from_utf8_lossy(&by_name["etc/monitrc"].1).contains(WPANTUND_LINE));
         assert_eq!(by_name["etc/init.d/networking-defines"].1, WITHOUT_WPAN.as_bytes());
-        let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
+        let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, false, None, b"ARMV7".to_vec(), one).unwrap();
         assert_eq!(again.files, first.files);
     }
 
@@ -802,7 +840,7 @@ mod tests {
         let (pki, _) = pkis();
         let mut files = stock();
         let make = |files: &BTreeMap<String, Vec<u8>>| {
-            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), pki)
+            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, false, None, b"ARMV7".to_vec(), pki)
         };
         let seed = |overlay: Overlay| overlay.files.into_iter().find(|(name, _, _)| name == RANDOM_SEED).unwrap().2;
         assert_ne!(seed(make(&files).unwrap()), seed(make(&files).unwrap()));
@@ -819,7 +857,7 @@ mod tests {
         files.remove(UNLOCK_BUNDLE);
         files.insert("etc/nestlabs/client.config".into(),
                      b"<a key=\"cloudregisterurl\" value=\"http://homeassistant.local:9543/entry\"/>\n".to_vec());
-        let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), one).unwrap();
+        let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, false, None, b"ARMV7".to_vec(), one).unwrap();
         let by_name: BTreeMap<_, _> = made.files.iter().map(|(n, _, d)| (n.clone(), d.clone())).collect();
         assert!(!by_name.contains_key(UNLOCK_BUNDLE));
         assert_eq!(String::from_utf8_lossy(&by_name["etc/nestlabs/client.config"]),

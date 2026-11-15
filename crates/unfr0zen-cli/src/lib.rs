@@ -14,7 +14,9 @@ use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
+use unfr0zen_host::push::Code;
 use unfr0zen_host::update;
+use unfr0zen_host::wifi_patch;
 use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, SetupInputs};
 
 use ui::TerminalProgress;
@@ -33,6 +35,18 @@ fn help_styles() -> clap::builder::Styles {
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
+    /// set up the unit at HOST over Wi-Fi instead of USB, with the options below as its full settings; a missing --root-password keeps the unit's; it must run nestlocal with --update-api
+    #[arg(long, value_name = "IP", conflicts_with_all = ["nand_image", "entry_point", "device"])]
+    wifi: Option<String>,
+    /// with --wifi: the 8-digit code the thermostat shows after Allow (or on Settings → UPDATE → Allow update), instead of typing it when asked
+    #[arg(long, value_name = "CODE", requires = "wifi")]
+    code: Option<String>,
+    /// with --wifi: send even an older nestlocal than the unit's
+    #[arg(long, requires = "wifi")]
+    force: bool,
+    /// with --wifi: list the changes the unit would take, and send nothing; it reads the unit's settings, so it still needs Allow or the code on the thermostat (or a laptop the thermostat trusts)
+    #[arg(long, requires = "wifi")]
+    dry_run: bool,
     /// seconds to wait after the front button prompt
     #[arg(long, alias = "wait-sdp", default_value_t = 120, global = true)]
     wait_usb: u64,
@@ -117,6 +131,9 @@ struct Args {
     /// gen 1 and gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
     #[arg(long, help_heading = "Root filesystem options")]
     dark_theme: bool,
+    /// let a newer unfr0zen replace nestlocal over Wi-Fi, with the code the thermostat shows once you press Allow there (TCP port 8443); trusted laptops need no code; needs --mqtt, --matter or --zigbee
+    #[arg(long, help_heading = "Root filesystem options")]
+    update_api: bool,
     /// run nlclient's backplate simulator: 1H1C, simulated temperature
     #[arg(long, help_heading = "Root filesystem options")]
     backplate_sim: bool,
@@ -166,6 +183,28 @@ enum Command {
     Restore { image: PathBuf },
     /// Replace this executable with the latest release from GitHub, if newer
     Update,
+    /// Send this app's nestlocal to a unit set up with --update-api, over Wi-Fi. The thermostat asks
+    /// to allow it, then shows the code this asks for; with --code, open the window there first
+    /// (Settings → UPDATE → Allow update)
+    ///
+    /// A developer command: it replaces the nestlocal binary alone. The unit's unfr0zen version
+    /// (/etc/unfr0zen/version, and the one in /etc/unfr0zen/options.json) stays as it was, so Home
+    /// Assistant's update entity still shows the old version, and a release update may replace this
+    /// nestlocal even with an older one. `unfr0zen --wifi` and the app's Update keep the versions in step.
+    NestlocalUpdate {
+        /// the unit's IPv4 address or name (your router lists it; Settings → UPDATE shows it)
+        #[arg(long, value_name = "IP")]
+        host: String,
+        /// the 8-digit code the thermostat shows after Allow (or on Settings → UPDATE → Allow update), instead of typing it when asked
+        #[arg(long, value_name = "CODE")]
+        code: Option<String>,
+        /// send this app's nestlocal even if it is older than the unit's, or needs files a newer USB install puts there
+        #[arg(long)]
+        force: bool,
+        /// print the unit's settings as setup options (secrets masked) and its generation, and send nothing
+        #[arg(long, conflicts_with = "force")]
+        show: bool,
+    },
 }
 
 fn parse_device(value: &str) -> Result<Device, String> {
@@ -177,6 +216,51 @@ fn parse_device(value: &str) -> Result<Device, String> {
     }
 }
 
+
+/// The code a run over Wi-Fi uses: --code's, else asked for on the
+/// terminal. Asking opens the window first, so without a terminal to type in
+/// only this laptop's trust can key the session, and a run that needs a code
+/// fails with no_code.
+fn wifi_code<'a>(code: Option<&'a str>, terminal: bool, ask: &'a dyn Fn(&str) -> Option<String>, no_code: &'a str) -> Code<'a> {
+    match (code, terminal) {
+        (Some(code), _) => Code::Given(code),
+        (None, true) => Code::Ask(ask),
+        (None, false) => Code::Unavailable(no_code),
+    }
+}
+
+/// wifi_code for this process: asked for on stdin when it is a terminal.
+fn terminal_code<'a>(code: Option<&'a str>, no_code: &'a str) -> Code<'a> {
+    use std::io::IsTerminal;
+    wifi_code(code, std::io::stdin().is_terminal(), &ask_code, no_code)
+}
+
+/// Why a run that needs a code has none.
+const NO_TERMINAL: &str = "pass --code when not run in a terminal";
+
+/// What a run over Wi-Fi reports.
+fn wifi_message(outcome: &wifi_patch::Outcome, dry_run: bool) -> String {
+    use unfr0zen_host::wifi_patch::{changes_text, Class};
+    let what = match outcome.class {
+        None => return "Nothing to change: the unit has these settings".into(),
+        Some(Class::Restart) => "restarts nestlocal",
+        Some(Class::Reboot) => "reboots the unit",
+    };
+    let changes = changes_text(&outcome.changes);
+    if dry_run {
+        format!("Dry run, nothing sent. Sending these changes {what}:\n{changes}")
+    } else {
+        format!("The unit kept the update, which {what}:\n{changes}")
+    }
+}
+
+/// Asks on the terminal for the update window's code; none at its end.
+fn ask_code(prompt: &str) -> Option<String> {
+    print!("⠿ {prompt}: ");
+    let _ = std::io::stdout().flush();
+    let mut code = String::new();
+    std::io::stdin().read_line(&mut code).ok().filter(|&n| n > 0).map(|_| code)
+}
 
 /// Asks on the terminal before a restore overwrites NAND.
 fn confirm_restore(what: &str) -> bool {
@@ -202,6 +286,8 @@ impl Args {
             mqtt_ca: self.mqtt_ca.clone(),
             device_name: self.device_name.clone(),
             ha_entity_root: self.ha_entity_root.clone(),
+            mqtt_ca_pem: None,
+            ssh_public_key_text: None,
             matter: self.matter,
             matter_thread: self.matter_thread,
             matter_code: self.matter_code.clone(),
@@ -216,6 +302,7 @@ impl Args {
             ssh_public_key: self.ssh_public_key.clone(),
             ssh_key_only: self.ssh_key_only,
             usb_shell: self.usb_shell,
+            update_api: self.update_api,
         }
     }
 }
@@ -226,7 +313,7 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
     /// How the value of a flag is shown; None for flags shown as given.
     fn shown(flag: &str, value: &str) -> Option<String> {
         match flag {
-            "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" => Some("***".into()),
+            "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" | "--code" => Some("***".into()),
             "--mqtt" => Some(mask_url(value)),
             "--mqtt-ca" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" =>
                 Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned()),
@@ -296,6 +383,24 @@ pub fn main() {
     if let Some(Command::Update) = args.command {
         finish(update());
     }
+    if let Some(Command::NestlocalUpdate { host, code, force, show }) = &args.command {
+        use unfr0zen_host::push::push;
+        let no_code = format!("nestlocal-update: {NO_TERMINAL}");
+        let code = terminal_code(code.as_deref(), &no_code);
+        if *show {
+            finish(wifi_patch::read_settings(host, code, &ui::waiting).map(|unit| {
+                format!("{}\n{}", unit.device.description(), wifi_patch::inputs_from(&unit.settings).describe())
+            }));
+        }
+        finish(push(host, code, &unfr0zen_host::assets::nestlocal(), *force, &ui::waiting));
+    }
+    if let Some(host) = &args.wifi {
+        let no_code = format!("--wifi: {NO_TERMINAL}");
+        let code = terminal_code(args.code.as_deref(), &no_code);
+        let inputs = args.setup_inputs();
+        finish(wifi_patch::patch(host, code, &inputs, args.dry_run, args.force, &ui::waiting)
+            .map(|outcome| wifi_message(&outcome, args.dry_run)));
+    }
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
     let work_dir = args.work_dir.clone().unwrap_or_else(|| data_dir.join("runs"));
 
@@ -329,6 +434,7 @@ pub fn main() {
             nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Update) => update(),
+        Some(Command::NestlocalUpdate { .. }) => unreachable!("handled before USB setup"),
     };
     finish(result);
 }
@@ -426,6 +532,12 @@ mod logged_arguments_tests {
         assert_eq!(logged_arguments(args.iter().map(|a| a.to_string())),
                    "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
                     --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem");
+        let push = ["nestlocal-update", "--host", "192.168.1.50", "--code", "40718263"];
+        assert_eq!(logged_arguments(push.iter().map(|a| a.to_string())),
+                   "Arguments: nestlocal-update --host 192.168.1.50 --code ***");
+        let wifi = ["--wifi", "192.168.1.50", "--code", "40718263", "--matter"];
+        assert_eq!(logged_arguments(wifi.iter().map(|a| a.to_string())),
+                   "Arguments: --wifi 192.168.1.50 --code *** --matter");
     }
 }
 
@@ -454,6 +566,71 @@ mod entry_point_tests {
             let after = [&["unfr0zen", "backup"][..], option].concat();
             assert!(Args::try_parse_from(&after).is_ok(), "{after:?}");
         }
+    }
+
+    #[test]
+    fn nestlocal_update_takes_the_host_and_asks_for_a_code_not_given() {
+        use super::Command;
+        let args = Args::try_parse_from(["unfr0zen", "nestlocal-update", "--host", "192.168.1.50", "--code", "40718263"]).unwrap();
+        assert!(matches!(args.command, Some(Command::NestlocalUpdate { ref host, code: Some(ref code), force: false, show: false })
+                         if host == "192.168.1.50" && code == "40718263"));
+        let args = Args::try_parse_from(["unfr0zen", "nestlocal-update", "--host", "192.168.1.50"]).unwrap();
+        assert!(matches!(args.command, Some(Command::NestlocalUpdate { code: None, .. })), "the code is asked for");
+        assert!(Args::try_parse_from(["unfr0zen", "nestlocal-update", "--code", "40718263"]).is_err());
+    }
+
+    #[test]
+    fn wifi_takes_the_patch_flags() {
+        let args = Args::try_parse_from(["unfr0zen", "--wifi", "192.168.1.50", "--code", "40718263", "--force", "--dry-run",
+                                         "--mqtt", "mqtt://broker.lan", "--matter", "--update-api"]).unwrap();
+        assert_eq!(args.wifi.as_deref(), Some("192.168.1.50"));
+        assert_eq!(args.code.as_deref(), Some("40718263"));
+        assert!(args.force && args.dry_run);
+        let inputs = args.setup_inputs();
+        assert!(inputs.matter && inputs.update_api);
+        assert_eq!(inputs.root_password, None, "a missing root password keeps the unit's");
+        assert!(Args::try_parse_from(["unfr0zen", "--code", "40718263"]).is_err(), "--code needs --wifi");
+        assert!(Args::try_parse_from(["unfr0zen", "--force"]).is_err(), "--force needs --wifi");
+        assert!(Args::try_parse_from(["unfr0zen", "--dry-run"]).is_err(), "--dry-run needs --wifi");
+    }
+
+    #[test]
+    fn wifi_refuses_a_command() {
+        for line in [&["unfr0zen", "--wifi", "192.168.1.50", "restore", "nand.bin"][..],
+                     &["unfr0zen", "restore", "nand.bin", "--wifi", "192.168.1.50"],
+                     &["unfr0zen", "--wifi", "192.168.1.50", "backup"],
+                     &["unfr0zen", "--wifi", "192.168.1.50", "update"],
+                     &["unfr0zen", "--wifi", "192.168.1.50", "nestlocal-update", "--host", "192.168.1.50"]] {
+            let error = Args::try_parse_from(line).unwrap_err().to_string();
+            assert!(error.contains("--wifi"), "{line:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn wifi_refuses_usb_only_flags() {
+        for flag in [&["--nand-image", "nand.bin"][..], &["--entry-point", "official-loader"], &["--device", "j49"]] {
+            let line = [&["unfr0zen", "--wifi", "192.168.1.50"][..], flag].concat();
+            assert!(Args::try_parse_from(&line).is_err(), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn without_a_terminal_only_a_trust_keys_a_session_with_no_code() {
+        use super::{wifi_code, Code};
+        let ask = |_: &str| None;
+        assert!(matches!(wifi_code(None, false, &ask, "no code"), Code::Unavailable("no code")));
+        assert!(matches!(wifi_code(None, true, &ask, "no code"), Code::Ask(_)));
+        assert!(matches!(wifi_code(Some("40718263"), false, &ask, "no code"), Code::Given("40718263")));
+    }
+
+    #[test]
+    fn show_parses() {
+        use super::Command;
+        let args = Args::try_parse_from(["unfr0zen", "nestlocal-update", "--host", "192.168.1.50", "--show"]).unwrap();
+        assert!(matches!(args.command, Some(Command::NestlocalUpdate { show: true, force: false, .. })));
+        let args = Args::try_parse_from(["unfr0zen", "nestlocal-update", "--host", "192.168.1.50"]).unwrap();
+        assert!(matches!(args.command, Some(Command::NestlocalUpdate { show: false, .. })));
+        assert!(Args::try_parse_from(["unfr0zen", "nestlocal-update", "--host", "h", "--show", "--force"]).is_err());
     }
 
     #[test]

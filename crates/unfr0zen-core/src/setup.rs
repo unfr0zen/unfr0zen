@@ -1,8 +1,8 @@
 //! The root filesystem setup, applied to a mounted slot from host copies of
 //! the files it edits: only the differences reach the unit. Port of
-//! scripts/patch_root0.py's edits and unfr0zen.py's patch_on_device.
+//! scripts/patch_root0.py's edits and unfr0zen.py's set_up_on_device.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::{STANDARD, STANDARD_NO_PAD}, Engine};
@@ -16,9 +16,9 @@ use crate::{device, Device, Result};
 pub const DEFAULT_ROOT_PASSWORD: &str = "unfr0zen";
 pub const DEFAULT_NTP_SERVER: &str = "pool.ntp.org";
 /// ntpd and connman's fallback name the time server; 6.4-8 has no ntpd.
-const NTP_LINES: [(&str, &str); 2] = [("etc/ntp.conf", "server "), ("etc/connman/main.conf", "FallbackTimeservers = ")];
+pub(crate) const NTP_LINES: [(&str, &str); 2] = [("etc/ntp.conf", "server "), ("etc/connman/main.conf", "FallbackTimeservers = ")];
 /// nlclient's backplate simulator: run it as 1H1C with made-up temperature and humidity.
-const BACKPLATE_SIM: [&str; 3] = ["backplatesimulationrun", "backplatesimulationhvactype", "backplatesimulatetempandhum"];
+pub(crate) const BACKPLATE_SIM: [&str; 3] = ["backplatesimulationrun", "backplatesimulationhvactype", "backplatesimulatetempandhum"];
 /// A Heat Link model (Display-3.x, Display-5.x) whose radio nestlocal holds
 /// has no Heat Link any more: nlclient would block on its loss. Asked for,
 /// rcS sets using_wwn_boiler in nlclient's settings before it starts, so it
@@ -54,7 +54,7 @@ const ROOT_RW_LINES: [(&str, &str, &str); 2] = [
 /// (transport, logs, weather), so with it gone nlclient learns no others.
 const CLOUD_HOSTS: [&str; 7] = ["frontdoor.nest.com", "home.nest.com", "www.nest.com", "time.nest.com", "tvd.nest.com",
                                 "clients3.google.com", "embeddedassistant.googleapis.com"];
-const HOSTS_BEGIN: &str = "# unfr0zen: block cloud\n";
+pub(crate) const HOSTS_BEGIN: &str = "# unfr0zen: block cloud\n";
 const HOSTS_END: &str = "# unfr0zen: end\n";
 pub(crate) const PROFILE: &str = "root/.profile";
 const SHELL_BEGIN: &str = "# unfr0zen: shell\n";
@@ -82,6 +82,19 @@ const CHECK_URLS: (&[u8], &[u8]) = (b"http://clients3.google.com/generate_204\0"
                                     b"http://cp.cloudflare.com/generate_204\0\0\0");
 /// A password, CA or device name from an earlier build must not outlive it.
 const STALE_SECRETS: [&str; 3] = [nestlocal::PASSWORD_FILE, nestlocal::CA_FILE, nestlocal::NAME_FILE];
+/// A Wi-Fi update set's journal and staging list (crates/nestlocal/src/
+/// wifi_update/bundle.rs), which name the copies it keeps beside the files it
+/// changes.
+const UPDATE_JOURNAL: &str = "etc/nestlocal/update/journal";
+const UPDATE_STAGING: &str = "etc/nestlocal/update/staging";
+/// What Wi-Fi updates leave on the unit, stale once a USB patch writes the
+/// whole state: without a journal, the guard drops a set's marker and keeps
+/// what the patch wrote, so a USB run wins over a set on trial. Beside these,
+/// the copies the journal and staging list name (update_copies).
+const UPDATE_LEFTOVERS: [&str; 4] =
+    [UPDATE_JOURNAL, UPDATE_STAGING, "nestlabs/sbin/nestlocal.previous", "nestlabs/sbin/nestlocal.new"];
+/// The suffixes of a set's rollback copy and staged copy of a file.
+const UPDATE_COPIES: [&str; 2] = [".unfr0zen-previous", ".unfr0zen-new"];
 
 /// Host copies of the volume's files: name, (contents, mode).
 pub type Tree = BTreeMap<String, (Vec<u8>, u32)>;
@@ -157,8 +170,9 @@ fn set_up_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()>
     Ok(())
 }
 
-/// nlsleepd started with the wake pattern library for a unit with Matter, so
-/// that a controller looking the sleeping unit up wakes it; as stock without.
+/// nlsleepd started with the wake pattern library for a unit with Matter or
+/// the update API, so that a controller looking the sleeping unit up, or an
+/// app connecting to it, wakes it; as stock without.
 fn set_up_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
     let (stock, preloaded) = NLSLEEPD_START;
     let mut script = text(tree, NLSLEEP)?.replace(preloaded, stock);
@@ -187,7 +201,7 @@ pub fn root_hash(password: &str) -> Result<String> {
     Ok(format!("$6${salt}${hash}"))
 }
 
-const AUTHORIZED_KEYS: &str = "root/.ssh/authorized_keys";
+pub(crate) const AUTHORIZED_KEYS: &str = "root/.ssh/authorized_keys";
 
 /// Checks one OpenSSH public key and normalizes its type and base64 encoding.
 pub fn ssh_public_key(data: &[u8]) -> Result<String> {
@@ -337,6 +351,12 @@ pub fn set_up_wwn_boiler(tree: &mut Tree, enabled: bool) -> Result<()> {
     install_wwn_boiler(tree, content, enabled)
 }
 
+/// rcS's boiler block, setting using_wwn_boiler or taking it back.
+pub(crate) fn wwn_block(enabled: bool) -> String {
+    let script = if enabled { WWN_ON } else { WWN_OFF };
+    format!("{WWN_BEGIN}{}{WWN_END}", script.replace("SETTINGS", WWN_SETTINGS).replace("MARKER", WWN_MARKER))
+}
+
 fn install_wwn_boiler(tree: &mut Tree, mut content: String, enabled: bool) -> Result<()> {
     let anchor = ["${INITDIR}/nestlocal start\n${INITDIR}/nestlabs start\n", "${INITDIR}/nestlabs start\n"]
         .into_iter().find(|anchor| content.contains(anchor))
@@ -344,9 +364,7 @@ fn install_wwn_boiler(tree: &mut Tree, mut content: String, enabled: bool) -> Re
     if content.matches(anchor).count() != 1 {
         return device("etc/init.d/rcS: expected one nestlabs start line");
     }
-    let script = if enabled { WWN_ON } else { WWN_OFF };
-    let block = format!("{WWN_BEGIN}{}{WWN_END}", script.replace("SETTINGS", WWN_SETTINGS).replace("MARKER", WWN_MARKER));
-    content = content.replace(anchor, &format!("{block}{anchor}"));
+    content = content.replace(anchor, &format!("{}{anchor}", wwn_block(enabled)));
     put(tree, "etc/init.d/rcS", content);
     check_mode(tree, "etc/init.d/rcS", 0o750)
 }
@@ -450,8 +468,9 @@ pub struct Options {
     pub matter: Option<Matter>,
     /// The name MQTT and Matter give the unit; None keeps the unit's.
     pub device_name: Option<String>,
-    /// The library nlsleepd preloads for Matter (platform/common/wakefilter):
-    /// installed with Matter on a gen 2 or gen 3, removed without.
+    /// The library nlsleepd preloads for Matter and the update API
+    /// (platform/common/wakefilter): installed with either on a gen 2 or
+    /// gen 3, removed without both.
     pub wake_filter: Vec<u8>,
     /// The library preloaded into nlclient on a unit running nestlocal
     /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
@@ -502,7 +521,38 @@ pub struct Options {
     /// The USB root shell: an ACM port with a root shell on it. Without it
     /// the unit shows only mass storage over USB.
     pub usb_shell: bool,
+    /// nestlocal's update API: an update window, opened on the UPDATE
+    /// settings entry or over the network, in which a newer unfr0zen can replace
+    /// nestlocal over Wi-Fi with the code the screen shows.
+    pub update_api: bool,
 }
+
+/// Refuses what a generation cannot run, for the USB and Wi-Fi runs alike: a
+/// Diamond's CC2530 radio uses UART, and it has no kernel with a USB serial
+/// port; the dark theme is the gen 1's and gen 2's, the home screen themes
+/// the gen 3's.
+pub fn check_device(target: Device, options: &Options) -> Result<()> {
+    if target == Device::Diamond3 && options.dark_theme {
+        return device("--dark-theme is only for the 1st and 2nd generation");
+    }
+    if target != Device::Diamond3 && options.theme.is_some() {
+        return device("--themes is only for the 3rd generation");
+    }
+    if target != Device::Diamond {
+        return Ok(());
+    }
+    if options.thread.is_some() || options.zigbee {
+        return device("Diamond's CC2530 radio uses UART; --matter-thread and --zigbee need a separate radio implementation");
+    }
+    if options.usb_shell {
+        return device("Diamond needs its own kernel for --usb-shell");
+    }
+    Ok(())
+}
+
+/// Why --update-api is refused: only nestlocal serves the update API, and
+/// it keeps the unit awake for the window only beside MQTT, Matter or Zigbee.
+pub const UPDATE_API_NEEDS_NESTLOCAL: &str = "--update-api needs nestlocal (--mqtt, --matter or --zigbee)";
 
 /// One change to the volume: action, SHA-256 before and after.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -520,6 +570,27 @@ pub fn changes_text(changes: &[Change]) -> String {
 }
 
 type Originals = BTreeMap<String, Option<(String, u32, String)>>;
+
+/// The rollback and staged copies of each file a set's journal or staging
+/// list (in tree) names. Names that are not plain paths inside the volume
+/// are passed over.
+fn update_copies(tree: &Tree) -> Vec<String> {
+    let mut copies = BTreeSet::new();
+    for list in [UPDATE_JOURNAL, UPDATE_STAGING] {
+        let Some((data, _)) = tree.get(list) else { continue };
+        for line in String::from_utf8_lossy(data).lines() {
+            let mut words = line.split(' ');
+            let (Some("write" | "remove" | "new"), Some(path)) = (words.next(), words.next()) else { continue };
+            let plain = path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+                && path.bytes().all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b));
+            if plain {
+                let file = UPDATE_COPIES.iter().find_map(|suffix| path.strip_suffix(suffix)).unwrap_or(path);
+                copies.extend(UPDATE_COPIES.map(|suffix| format!("{file}{suffix}")));
+            }
+        }
+    }
+    copies.into_iter().collect()
+}
 
 /// Records the unit's files: contents into the tree, or only their SHA-256.
 fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, names: &[&str],
@@ -594,6 +665,9 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
     if options.theme.is_some() && target != Device::Diamond3 {
         return device("customizable home screen themes are for the gen 3");
     }
+    if options.update_api && options.mqtt.is_none() && options.matter.is_none() && !options.zigbee {
+        return device(UPDATE_API_NEEDS_NESTLOCAL);
+    }
     let public_key = options.ssh_public_key.as_deref().map(|key| ssh_public_key(key.as_bytes())).transpose()?;
     // What patch_root0.check_source asks of an extracted tree: here, that the
     // mount is a real application root before anything is written into it.
@@ -606,7 +680,8 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
     let sections: Vec<_> = [(options.zigbee, crate::nlclient::menu::Section::Zigbee),
                             (options.matter.is_some(), crate::nlclient::menu::Section::Matter),
                             (options.theme.is_some(), crate::nlclient::menu::Section::Themes),
-                            (options.doom.is_some(), crate::nlclient::menu::Section::Doom)]
+                            (options.doom.is_some(), crate::nlclient::menu::Section::Doom),
+                            (options.update_api, crate::nlclient::menu::Section::Update)]
         .into_iter().filter(|(on, _)| *on).map(|(_, section)| section).collect();
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source, &sections)?;
@@ -662,12 +737,13 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
             None => new_pki()?,
         };
         overlay = Some(nestlocal::overlay(|name| tree.get(name).cloned(), options.mqtt.as_ref(),
-                                          options.matter.as_ref(), options.zigbee || options.thread.is_some(),
+                                          options.matter.as_ref(), options.zigbee || options.thread.is_some(), options.update_api,
                                           options.device_name.as_deref(), nestlocal_binary, &pki)?);
         if let Some(thread) = options.thread.as_mut() {
             let overlay = overlay.as_mut().unwrap();
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
-            *line = nestlocal::options(options.mqtt.as_ref(), options.matter.as_ref(), false, options.device_name.as_deref())?.0;
+            *line = nestlocal::options(options.mqtt.as_ref(), options.matter.as_ref(), false, options.update_api,
+                                       options.device_name.as_deref())?.0;
             line.pop();
             line.extend_from_slice(b" -matter-thread\n");
             overlay.files.append(&mut thread.files);
@@ -713,6 +789,14 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
             *name = scratch::directory(name).to_string();
         }
     }
+    fetch(volume, &mut tree, &mut originals, &[UPDATE_JOURNAL, UPDATE_STAGING], false, true)?;
+    let update_copies = update_copies(&tree);
+    let copies: Vec<&str> = update_copies.iter().map(String::as_str).collect();
+    fetch(volume, &mut tree, &mut originals, &UPDATE_LEFTOVERS, false, false)?;
+    fetch(volume, &mut tree, &mut originals, &copies, false, false)?;
+    for name in UPDATE_LEFTOVERS.iter().chain(&copies) {
+        tree.remove(*name);
+    }
     let mut directories = Vec::new();
     if let Some(overlay) = overlay.as_mut() {
         fetch(volume, &mut tree, &mut originals, &STALE_SECRETS, false, false)?;
@@ -735,7 +819,7 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
     if matches!(target, Device::Diamond | Device::Diamond3 | Device::J49) {
         fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
         fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
-        let wake = options.matter.is_some() && !options.wake_filter.is_empty();
+        let wake = (options.matter.is_some() || options.update_api) && !options.wake_filter.is_empty();
         if wake {
             tree.insert(WAKE_FILTER.into(), (std::mem::take(&mut options.wake_filter), 0o755));
         }
@@ -915,7 +999,7 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
             writes.push((name.clone(), data, owner, *mode));
         }
     }
-    let removals: Vec<&str> = STALE_SECRETS.iter().copied()
+    let removals: Vec<&str> = STALE_SECRETS.iter().copied().chain(UPDATE_LEFTOVERS).chain(copies)
         .chain([WAKE_FILTER, LOCAL_CLOUD, moved(APPLY), THEME_PRELOAD, moved(THEME_LIBRARY), crate::nlclient::theme::BINDINGS])
         .chain(legacy.iter().copied())
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name)).collect();
@@ -1172,16 +1256,15 @@ fn patch_boot_artwork(volume: &mut impl Volume, tree: &mut Tree, originals: &mut
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use std::collections::BTreeSet;
     use crate::diamond3::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
     use crate::shell::{Digests, File};
     use std::io::Read;
 
     /// The mounted slot, in memory.
-    struct FakeVolume {
-        files: BTreeMap<String, (String, u32, Vec<u8>)>,
+    pub(crate) struct FakeVolume {
+        pub(crate) files: BTreeMap<String, (String, u32, Vec<u8>)>,
         directories: BTreeMap<String, String>,
         free: u64,
         binary: String,
@@ -1193,7 +1276,7 @@ mod tests {
         scratch_free: u64,
     }
 
-    fn stock() -> Vec<(&'static str, u32, String)> {
+    pub(crate) fn stock() -> Vec<(&'static str, u32, String)> {
         vec![
             ("etc/shadow", 0o640, "root:*:16000:0:99999:7:::\ndaemon:*:16000:0:99999:7:::\n".into()),
             ("etc/inittab", 0o644, format!("::sysinit:/etc/init.d/rcS\n{OLD_GETTY}\n")),
@@ -1212,7 +1295,7 @@ mod tests {
                                    -a \"${NLCLIENTAPP}\" -- `find_configs ${NESTLABSCONFDIR} ${CONFFILENAMES}`\n ;;\n";
 
     impl FakeVolume {
-        fn new(files: Vec<(&str, u32, String)>) -> Self {
+        pub(crate) fn new(files: Vec<(&str, u32, String)>) -> Self {
             FakeVolume {
                 files: files.into_iter().map(|(n, m, t)| (n.to_string(), ("0:0".to_string(), m, t.into_bytes()))).collect(),
                 directories: BTreeMap::new(), free: 1 << 30, binary: "0 755".into(), commands: Vec::new(), readback: None,
@@ -1284,13 +1367,32 @@ mod tests {
         assert!(volume.commands.is_empty());
     }
 
-    fn public_key(kind: &str, fields: &[&[u8]]) -> String {
+    pub(crate) fn public_key(kind: &str, fields: &[&[u8]]) -> String {
         let mut blob = Vec::new();
         for value in std::iter::once(kind.as_bytes()).chain(fields.iter().copied()) {
             blob.extend_from_slice(&(value.len() as u32).to_be_bytes());
             blob.extend_from_slice(value);
         }
         format!("{kind} {}", STANDARD.encode(blob))
+    }
+
+    #[test]
+    fn check_device_refuses_what_the_generation_cannot_run() {
+        let matter = Some(Matter { passcode: 20202021, discriminator: 3840 });
+        let thread = Some(Overlay::default());
+        for refused in [Options { zigbee: true, ..options() }, Options { matter, thread, ..options() },
+                        Options { usb_shell: true, ..options() }] {
+            assert!(check_device(Device::Diamond, &refused).is_err(), "{refused:?}");
+            assert!(check_device(Device::J49, &refused).is_ok(), "{refused:?}");
+        }
+        assert!(check_device(Device::Diamond3, &Options { dark_theme: true, ..options() }).is_err());
+        assert!(check_device(Device::Diamond3, &Options { zigbee: true, usb_shell: true, ..options() }).is_ok());
+        assert!(check_device(Device::Diamond, &Options { matter, ssh: true, external_temperature: true, dark_theme: true,
+                                                         ..options() }).is_ok());
+        for device in [Device::Diamond, Device::J49] {
+            assert!(check_device(device, &Options { theme: Some(Overlay::default()), ..options() }).is_err());
+        }
+        assert!(check_device(Device::Diamond3, &Options { theme: Some(Overlay::default()), ..options() }).is_ok());
     }
 
     #[test]
@@ -1372,6 +1474,25 @@ mod tests {
         assert!(volume.commands.is_empty());
     }
 
+    #[test]
+    fn update_api_without_nestlocal_is_refused() {
+        let mut volume = FakeVolume::new(stock());
+        let error = set_up(&mut volume, &Options { update_api: true, ..options() }, false).unwrap_err();
+        assert!(error.to_string().contains("--update-api needs nestlocal"), "{error}");
+        assert!(volume.commands.is_empty());
+        // Doom alone runs nestlocal, but nothing keeps the unit awake for the window.
+        let doom = Some(Overlay { files: vec![("nestlabs/sbin/doom".into(), 0o755, b"DOOM".to_vec())], directories: Vec::new() });
+        let error = set_up(&mut volume, &Options { update_api: true, doom, ..options() }, false).unwrap_err();
+        assert!(error.to_string().contains("--update-api needs nestlocal"), "{error}");
+        assert!(volume.commands.is_empty());
+        let pki = nestlocal::generate_pki().unwrap();
+        let mut volume = nestlocal_unit(Some(&pki));
+        let mqtt = Some(Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() });
+        set_up(&mut volume, &Options { update_api: true, mqtt, ..options() }, false).unwrap();
+        assert!(volume.text(nestlocal::OPTIONS).contains(" -update-listen 0.0.0.0:8443"));
+        assert_eq!(volume.files["etc/init.d/nestlocal-update-guard"].1, 0o755);
+    }
+
     /// The lines around nlsleepd's start in the script of every release seen (5.9.4-5 to 6.5-14).
     const SCRIPT: &str = "start_nlsleepd () {\n log_info \"Service initiation\"\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" \
                           -a ${NLSLEEPD_APP} -- `${CAT} ${CONFDIR}/${NLSLEEPD_NAME}.options 2> ${NULL}`\n}\n";
@@ -1404,7 +1525,7 @@ mod tests {
         assert_eq!(script(&tree), "start_nlsleepd () {\n nlsleepd &\n}\n");
     }
 
-    fn options() -> Options {
+    pub(crate) fn options() -> Options {
         Options { root_hash: "$6$salt$hash".into(), local_cloud: b"\x7fELF local cloud".to_vec(), ..Options::default() }
     }
 
@@ -1458,6 +1579,36 @@ mod tests {
         assert!(!names(&set_up(&mut volume, &options, false).unwrap()).contains(WAKE_FILTER));
         let changes = set_up(&mut volume, &Options { matter: None, mqtt: Some(Mqtt { url: "tcp://b:1883".into(), user: None,
             password: None, tls: false, ca: None, entity_root: None }), ..options }, false).unwrap();
+        assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
+        assert!(!volume.files.contains_key(WAKE_FILTER));
+        assert_eq!(volume.text(NLSLEEP), script);
+    }
+
+    /// A unit with nestlocal for MQTT and nlsleepd's stock init script.
+    fn mqtt_unit(pki: &Pki) -> (FakeVolume, Options, &'static str) {
+        let mut volume = nestlocal_unit(Some(pki));
+        let script = "start_nlsleepd () {\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} -- `${CAT} x`\n}\n";
+        volume.files.insert(NLSLEEP.into(), ("0:0".into(), 0o755, script.as_bytes().to_vec()));
+        let mqtt = Some(Mqtt { url: "tcp://b:1883".into(), user: None, password: None, tls: false, ca: None, entity_root: None });
+        (volume, Options { mqtt, wake_filter: b"\x7fELF library".to_vec(), ..options() }, script)
+    }
+
+    #[test]
+    fn the_update_api_alone_installs_the_wake_filter() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let (mut volume, options, _) = mqtt_unit(&pki);
+        let changes = set_up(&mut volume, &Options { update_api: true, ..options }, false).unwrap();
+        assert!(names(&changes).contains(WAKE_FILTER));
+        assert_eq!(volume.files[WAKE_FILTER].2, b"\x7fELF library");
+        assert!(volume.text(NLSLEEP).contains(" LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} "));
+    }
+
+    #[test]
+    fn neither_matter_nor_the_update_api_removes_it() {
+        let pki = nestlocal::generate_pki().unwrap();
+        let (mut volume, options, script) = mqtt_unit(&pki);
+        set_up(&mut volume, &Options { update_api: true, ..options.clone() }, false).unwrap();
+        let changes = set_up(&mut volume, &options, false).unwrap();
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);
@@ -1844,7 +1995,35 @@ mod tests {
         assert!(!names(&set_up(&mut bare, &options(), false).unwrap()).contains(PROFILE));
     }
 
-    fn nestlocal_unit(pki: Option<&Pki>) -> FakeVolume {
+    #[test]
+    fn a_usb_patch_removes_a_wifi_sets_journal_and_backups() {
+        let mut files = stock();
+        files.push(("etc/monitrc", 0o600, "set daemon 30\n".into()));
+        files.push(("etc/monitrc.unfr0zen-previous", 0o600, "set daemon 60\n".into()));
+        files.push(("etc/old.unfr0zen-previous", 0o644, "removed by the set\n".into()));
+        files.push(("etc/x.unfr0zen-new", 0o600, "staged, never swapped\n".into()));
+        files.push(("etc/nestlocal/update/journal", 0o644, "unfr0zen-update 1\nclass reboot\nstate swapped\nmkdir etc/made\n\
+            write etc/monitrc etc/monitrc.unfr0zen-previous\nwrite etc/created -\nremove etc/old etc/old.unfr0zen-previous\n\
+            write ../boot/x -\nwrite /etc/y -\n".into()));
+        files.push(("etc/nestlocal/update/staging", 0o644, "new etc/x.unfr0zen-new\n".into()));
+        // What a nestlocal-only update leaves: stale beside the binary.
+        files.push(("nestlabs/sbin/nestlocal.previous", 0o755, "older".into()));
+        files.push(("nestlabs/sbin/nestlocal.new", 0o755, "killed upload".into()));
+        let mut volume = FakeVolume::new(files);
+        let changes = set_up_on_device(&mut volume, Device::Diamond3, &options(), b"", &mut no_pki, false,
+                                      &|source, sections| crate::nlclient::build(source, b"", sections)).unwrap();
+        let removed: BTreeSet<&str> = changes.iter().filter(|c| c.action == "remove").map(|c| c.name.as_str()).collect();
+        let leftovers = ["etc/nestlocal/update/journal", "etc/nestlocal/update/staging", "etc/monitrc.unfr0zen-previous",
+                         "etc/old.unfr0zen-previous", "etc/x.unfr0zen-new",
+                         "nestlabs/sbin/nestlocal.previous", "nestlabs/sbin/nestlocal.new"];
+        assert_eq!(removed, BTreeSet::from(leftovers));
+        for leftover in leftovers {
+            assert!(!volume.files.contains_key(leftover), "{leftover}");
+        }
+        assert_eq!(volume.text("etc/monitrc"), "set daemon 30\n", "what the set swapped in stays until the patch writes it");
+    }
+
+    pub(crate) fn nestlocal_unit(pki: Option<&Pki>) -> FakeVolume {
         let mut files = stock();
         files[7].2 += &format!("<a key=\"cloudregisterurl\" value=\"{}\"/>\n", nestlocal::STOCK_URL);
         files.push(("etc/monitrc", 0o600, "set daemon 30\ninclude /etc/monit.d/wpantund.monitrc\n".into()));

@@ -10,6 +10,8 @@ aes = "0.9"
 bytes = "1"
 ccm = "0.6"
 png = "0.17"
+ring = "0.17"
+spake2 = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 http-body = "1"
 http-body-util = "0.1"
@@ -18,6 +20,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 libc = "0.2"
 log = "0.4"
 md-5 = "0.10"
+nestlocal-update-wire = { path = "../update-wire" }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-native-certs = "0.8"
 serde = { version = "1", features = ["derive"] }

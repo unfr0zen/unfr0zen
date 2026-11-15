@@ -25,7 +25,9 @@ mod mqtttls;
 mod naming;
 mod nlsettings;
 mod occupancy;
+mod private_file;
 mod sensor;
+mod handover;
 mod scratch;
 mod screen;
 mod store;
@@ -33,6 +35,7 @@ mod settings_ui;
 mod structure;
 mod thread_sleep;
 mod update;
+mod wifi_update;
 mod wake;
 mod weather;
 mod zigbee;
@@ -103,6 +106,9 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if config.check_options {
+        return;
+    }
     if config.syslog {
         #[cfg(unix)]
         if let Err(e) = logger::to_syslog() {
@@ -131,9 +137,15 @@ fn main() {
         }
         return;
     }
-    // Without Matter, nlsleepd's library must not set its patterns.
+    // Without Matter, which lists its own patterns, nlsleepd's wake list
+    // holds the update API's port once run() knows the Wi-Fi interface's
+    // address, or nothing.
     if !config.matter {
         let _ = std::fs::remove_file(matter::wake_patterns::LIST);
+    }
+    // Without the update API, no laptop stays trusted to update the unit.
+    if config.update_listen.is_empty() {
+        wifi_update::trust::revoke(std::path::Path::new("/"));
     }
 
     #[cfg(target_os = "linux")]
@@ -147,6 +159,26 @@ fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
         .unwrap_or_else(|e| fatal!("{e}"));
     runtime.block_on(run(config));
+}
+
+/// Whether nestlocal lists the update API's port in nlsleepd's wake list:
+/// with the update API and an interface to wake on, and without Matter,
+/// whose port an app knocks on instead.
+fn lists_update_port(config: &flags::Config) -> bool {
+    !config.matter && !config.update_listen.is_empty() && !config.wake_iface.is_empty()
+}
+
+/// Keeps the update API's port in nlsleepd's wake list at the Wi-Fi
+/// interface's address: every 5 s until it has one, then every 30 s, as
+/// Matter keeps its own.
+fn list_update_port(interface: String) {
+    tokio::spawn(async move {
+        let mut list = matter::wake_patterns::UpdatePort::new(matter::wake_patterns::LIST);
+        loop {
+            let listed = list.refresh(&interface, matter::mac(&interface));
+            tokio::time::sleep(std::time::Duration::from_secs(if listed { 30 } else { 5 })).await;
+        }
+    });
 }
 
 /// nlclient's settings file, as it should be when nlclient starts.
@@ -237,6 +269,10 @@ async fn run(config: flags::Config) {
         brightness::republish(&store, &config.serial);
         let _ = std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b"");
     }
+    handover::clear_stale(settings_ui::dir());
+    if lists_update_port(&config) {
+        list_update_port(config.wake_iface.clone());
+    }
     if !config.ntp_server.is_empty() {
         tokio::spawn(clock::keep_clock(config.ntp_server.clone()));
     }
@@ -297,10 +333,36 @@ async fn run(config: flags::Config) {
         wake::start(broker_port, config.matter, config.zigbee,
                     config.wake_iface.clone(), move || if let Some(bridge) = &bridge { bridge.woke() });
     }
-    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) { logf!("settings UI: {e}"); }
+    let update = !config.update_listen.is_empty();
+    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes, update) { logf!("settings UI: {e}"); }
     if device::current().name == "diamond3" {
         scratch::check();
     }
+    // nlclient commits the device bucket sent it again, which hands its
+    // screen over and runs its downlink_activity (taking any pending
+    // display.request). Being newer, the resend can undo a device-bucket
+    // change nlclient has not uploaded yet (Eco, the fan timer, a hot water
+    // boost): hence at most one a minute, and none just after it changed it.
+    let nudge: wifi_update::Nudge = {
+        let resender = store::Resender::new(store.clone(), format!("device.{}", config.serial));
+        Arc::new(move || resender.resend(std::time::Instant::now()))
+    };
+    if update {
+        let shared = wifi_update::Shared {
+            window: Arc::new(wifi_update::window::Window::new()),
+            display: Arc::new(wifi_update::display::start(settings_ui::dir().into())),
+            prompt: Arc::new(wifi_update::prompt::Prompt::remembering(wifi_update::prompt::STRIKES_FILE.into())),
+            trusted: Arc::new(std::sync::Mutex::new(wifi_update::trust::Store::open(std::path::Path::new(wifi_update::trust::FILE)))),
+            nudge: Some(nudge.clone()),
+        };
+        wifi_update::watch_requests(shared.clone(), config.wake_iface.clone());
+        let (listen, restart): (String, wifi_update::Restart) = (config.update_listen.clone(), Arc::new(wifi_update::restart));
+        tokio::spawn(async move {
+            let stopped = wifi_update::serve(listen, shared, wifi_update::bundle::Paths::unit(), restart).await;
+            logf!("wifi-update: {stopped}");
+        });
+    }
+    wifi_update::watch_trial(live.clone(), wifi_update::bundle::Paths::unit(), config.wake_iface.clone(), Some(nudge));
     if config.doom {
         doom::start();
     }
@@ -326,4 +388,23 @@ async fn run(config: flags::Config) {
     });
     let stopped = cloud.serve(&config.listen, tls).await;
     fatal!("{stopped}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(args: &str) -> flags::Config {
+        flags::parse(&args.split_whitespace().map(String::from).collect::<Vec<_>>()).unwrap()
+    }
+
+    #[test]
+    fn matter_off_and_the_update_api_on_writes_the_update_pattern() {
+        assert!(lists_update_port(&config("-mqtt tcp://broker:1883 -update-listen 0.0.0.0:8443")));
+        // Matter lists its own; without the update API, or an interface to
+        // wake on, there is nothing to list.
+        assert!(!lists_update_port(&config("-matter -update-listen 0.0.0.0:8443")));
+        assert!(!lists_update_port(&config("-mqtt tcp://broker:1883")));
+        assert!(!lists_update_port(&config("-mqtt tcp://broker:1883 -update-listen 0.0.0.0:8443 -wake-iface=")));
+    }
 }

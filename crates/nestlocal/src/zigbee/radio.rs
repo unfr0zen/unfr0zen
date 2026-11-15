@@ -38,7 +38,9 @@ pub fn install() -> Result<(), String> {
     logf!("zigbee: installing the radio's firmware, version {version}");
     let path = std::env::temp_dir().join("nestlocal-radio.bin");
     std::fs::write(&path, crate::device::radio()?.zigbee_image).map_err(|e| format!("{}: {e}", path.display()))?;
+    let flashing = crate::wifi_update::flashing();
     let out = Command::new(LOADER).arg("--app-easyload").arg(&path).output();
+    drop(flashing);
     let _ = std::fs::remove_file(&path);
     let out = out.map_err(|e| format!("{LOADER}: {e}"))?;
     // zb-loader checks each block's CRC once written, then asks the radio for

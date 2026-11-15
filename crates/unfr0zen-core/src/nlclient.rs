@@ -26,7 +26,7 @@ pub const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/pl
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";
 pub const GLYPH_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
 /// The other settings entries' menu glyphs, for every section.
-pub const SECTION_GLYPHS: [(&str, &[u8]); 4] = [
+pub const SECTION_GLYPHS: [(&str, &[u8]); 5] = [
     ("nestlabs/share/images/G_unfr0zen_zigbee_80px.png",
      include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/zigbee-glyph.png"))),
     ("nestlabs/share/images/G_unfr0zen_matter_80px.png",
@@ -35,6 +35,8 @@ pub const SECTION_GLYPHS: [(&str, &[u8]); 4] = [
      include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/themes-glyph.png"))),
     ("nestlabs/share/images/G_unfr0zen_doom_80px.png",
      include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/doom-glyph.png"))),
+    ("nestlabs/share/images/G_unfr0zen_update_80px.png",
+     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/update-glyph.png"))),
 ];
 
 pub struct Edit { pub offset: usize, pub before: Vec<u8>, pub after: Vec<u8> }

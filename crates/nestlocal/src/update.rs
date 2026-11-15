@@ -248,6 +248,14 @@ impl Updates {
         if self.installing.swap(true, Ordering::Relaxed) {
             return logf!("update: already installing");
         }
+        // Not beside an update over Wi-Fi: one being sent, or on trial.
+        let hold = match crate::wifi_update::hold_install() {
+            Ok(hold) => hold,
+            Err(why) => {
+                self.installing.store(false, Ordering::Relaxed);
+                return logf!("update: {what} not installed: {why}");
+            }
+        };
         self.changed();
         let updates = self.clone();
         tokio::spawn(async move {
@@ -255,7 +263,14 @@ impl Updates {
                 Ok(()) => {
                     logf!("update: {what} installed; restarting");
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    let _ = std::process::Command::new("reboot").status();
+                    let rebooted = hold.restart(|| match std::process::Command::new("reboot").status() {
+                        Ok(status) if status.success() => Ok(()),
+                        Ok(status) => Err(format!("reboot: {status}")),
+                        Err(e) => Err(format!("reboot: {e}")),
+                    });
+                    if let Err(e) = rebooted {
+                        logf!("update: {what} installed, but the restart failed: {e}; restart the thermostat to run it");
+                    }
                 }
                 Err(e) => {
                     logf!("update: {e}");

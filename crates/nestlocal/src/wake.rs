@@ -401,7 +401,7 @@ impl SleepClient {
     /// while holding it awake or while the radio has something to say.
     #[zbus(name = "RequestSleep")]
     async fn request_sleep(&self) -> (String, bool) {
-        if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked()) || (self.zigbee && crate::zigbee::wakeup::pending()) || crate::thread_sleep::blocked() {
+        if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked()) || (self.zigbee && crate::zigbee::wakeup::pending()) || crate::thread_sleep::blocked() || crate::wifi_update::sleep_blocked() {
             return (ENTITY_PATH.into(), false);
         }
         if self.wake.is_some() {

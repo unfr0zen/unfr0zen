@@ -38,6 +38,7 @@ impl Uart {
             }
         }
         let temporary = format!("/var/run/unfr0zen/ble-{}.bin", std::process::id());
+        let flashing = crate::wifi_update::flashing();
         let loaded = (|| {
             let mut file = OpenOptions::new().create_new(true).write(true).mode(0o600).open(&temporary)?;
             file.write_all(&firmware)?;
@@ -57,6 +58,7 @@ impl Uart {
                 std::thread::sleep(Duration::from_millis(20));
             }
         })();
+        drop(flashing);
         let _ = std::fs::remove_file(&temporary);
         loaded?;
         let file = OpenOptions::new().read(true).write(true)

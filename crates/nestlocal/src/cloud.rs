@@ -483,6 +483,35 @@ mod tests {
         assert!(body.contains(r#""object_key":"device.S","value":{"t":21}"#), "{body}");
     }
 
+    #[tokio::test]
+    async fn a_resend_reaches_a_held_subscribe_once_and_its_next_subscribe_is_held() {
+        let mut c = cloud();
+        c.hold = Duration::from_millis(300);
+        c.store.merge("device.S", &fields!{"t" => 20}, 1, 100, true);
+        c.store.merge("shared.S", &fields!{"x" => 1}, 1, 100, true);
+        let subscribe = |rev: i64, ts: i64| format!(r#"{{"chunked":true,"objects":[{{"object_key":"device.S","object_revision":{rev},"object_timestamp":{ts}}}]}}"#);
+        let r = c.respond(&Method::POST, &"/transport/v7/subscribe".parse().unwrap(), &HeaderMap::new(), subscribe(1, 100).as_bytes()).await;
+        let store = c.store.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(store.resend("shared.S")); // not watched: ignored
+            assert!(store.resend("device.S"));
+        });
+        let body = r.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        let held = c.store.get("device.S").unwrap();
+        assert_eq!(body, format!(r#"{{"objects":[{{"object_revision":2,"object_timestamp":{},"object_key":"device.S","value":{{"t":20}}}}]}}"#,
+                                 held.timestamp));
+        // nlclient took it: its next subscribe reports it, and is held, not
+        // answered again, until the hold runs out.
+        let started = std::time::Instant::now();
+        let r = c.respond(&Method::POST, &"/transport/v7/subscribe".parse().unwrap(), &HeaderMap::new(),
+                          subscribe(held.revision, held.timestamp).as_bytes()).await;
+        let body = r.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.is_empty(), "{body:?}");
+        assert!(started.elapsed() >= Duration::from_millis(250));
+    }
+
     #[test]
     fn queries_and_auth() {
         assert_eq!(query_value(Some("query=94304%2CUS"), "query"), "94304,US");

@@ -255,9 +255,11 @@ fn fetch_master() -> io::Result<(OwnedFd, bool)> {
 /// use for BLE: left in its boot ROM the chip would draw more.
 fn sleep_real_chip(ble: &'static Ble) {
     let reset = reset_dir(ble);
+    let flashing = crate::wifi_update::flashing();
     let status = std::process::Command::new("/nestlabs/sbin/da-loader")
         .args([ble.node, SLEEP_FIRMWARE, "57600", "no-rtscts", &reset])
         .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+    drop(flashing);
     match status {
         Ok(status) if status.success() => logf!("external temperature: the BLE chip sleeps"),
         Ok(status) => logf!("external temperature: BLE chip's sleep firmware: {status}"),

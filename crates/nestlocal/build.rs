@@ -15,6 +15,22 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wno-unused-command-line-argument");
     }
 
+    // The version wifi_update/mod.rs reports and marks the binary with: the
+    // build's (UNFR0ZEN_BUILD_VERSION), else the repository's tag.
+    println!("cargo:rerun-if-env-changed=UNFR0ZEN_BUILD_VERSION");
+    let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&root).output().ok()
+        .filter(|out| out.status.success()).map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
+    if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
+        for file in ["HEAD", "packed-refs", "refs"] {
+            println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join(file).display());
+        }
+    }
+    let version = std::env::var("UNFR0ZEN_BUILD_VERSION").ok().filter(|v| !v.is_empty())
+        .or_else(|| git(&["describe", "--tags", "--always"]))
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=NESTLOCAL_VERSION={version}");
+
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     for (variable, name) in [("NESTLOCAL_RADIO", "radio-em3581.bin"), ("NESTLOCAL_RADIO_EM357", "radio-em357.bin")] {
         println!("cargo:rerun-if-env-changed={variable}");

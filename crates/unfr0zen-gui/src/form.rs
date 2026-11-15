@@ -8,6 +8,7 @@ use std::time::Duration;
 use eframe::egui;
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::flow::default_data_dir;
+use unfr0zen_host::wifi_patch::{inputs_from, Remote};
 use unfr0zen_host::{Config, Device, SetupInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
 
 use crate::bus::Bus;
@@ -25,6 +26,8 @@ pub struct Form {
     mqtt_password: String,
     mqtt_tls: bool,
     mqtt_ca: FilePick,
+    /// The CA a Wi-Fi read found on the unit, sent while no file replaces it.
+    mqtt_ca_pem: Option<Vec<u8>>,
     /// The device name MQTT and Matter give the unit, and Home Assistant's
     /// entity ID root; empty keeps the unit's.
     device_name: String,
@@ -36,6 +39,8 @@ pub struct Form {
     pub entry_point: EntryPoint,
     pub ssh: bool,
     pub usb_shell: bool,
+    /// nestlocal's update API, for changes over Wi-Fi.
+    update_api: bool,
     root_password: String,
     /// Back up the whole NAND before setting up (the review step's choice).
     pub backup_first: bool,
@@ -52,10 +57,52 @@ pub struct Form {
     external_temperature: bool,
     dark_theme: bool,
     ssh_key: FilePick,
+    /// The key a Wi-Fi read found the unit authorizing, sent while no file
+    /// replaces it.
+    ssh_key_text: Option<String>,
     /// SSH also takes root's password; off, keys only.
     pub ssh_password_login: bool,
     /// Why the last Create a key for me failed.
     ssh_key_error: Option<String>,
+    /// The device of the unit whose settings were read over Wi-Fi.
+    wifi_device: Option<Device>,
+    /// The form holds a gen 2's settings read over Wi-Fi: its USB console
+    /// and dark theme also choose its kernel, so they keep the unit's values
+    /// until a unit is on USB.
+    pub locked: bool,
+    /// The settings as they were before a Wi-Fi read filled the form, for
+    /// Disconnect to put back.
+    usb: Option<Saved>,
+}
+
+/// The settings a Wi-Fi read puts in the form.
+struct Saved {
+    backplate_sim: bool,
+    allow_unsigned_updates: bool,
+    block_cloud: bool,
+    ntp: Toggle,
+    mqtt: Toggle,
+    mqtt_user: String,
+    mqtt_password: String,
+    mqtt_tls: bool,
+    mqtt_ca: Option<PathBuf>,
+    mqtt_ca_pem: Option<Vec<u8>>,
+    device_name: String,
+    ha_entity_root: String,
+    matter: MatterCode,
+    matter_thread: bool,
+    zigbee: bool,
+    wwn_boiler: bool,
+    doom: bool,
+    external_temperature: bool,
+    dark_theme: bool,
+    ssh: bool,
+    ssh_key: Option<PathBuf>,
+    ssh_key_text: Option<String>,
+    ssh_password_login: bool,
+    usb_shell: bool,
+    update_api: bool,
+    root_password: String,
 }
 
 /// A file chosen with the platform's picker: the path, and the dialog a
@@ -116,6 +163,7 @@ impl FilePick {
 }
 
 /// Matter, with the pairing code to enter on the phone (prefilled).
+#[derive(Clone)]
 pub struct MatterCode {
     pub on: bool,
     pub code: String,
@@ -128,7 +176,7 @@ impl Default for MatterCode {
 }
 
 /// An option that is off, or on with a value.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Toggle {
     pub on: bool,
     pub value: String,
@@ -148,7 +196,23 @@ impl Form {
         self.zigbee || (self.matter.on && self.matter_thread)
     }
 
+    /// nestlocal keeps the unit awake for the update window only beside
+    /// MQTT, Matter or Zigbee.
+    fn serves_updates(&self) -> bool {
+        self.mqtt.on || self.matter.on || self.zigbee
+    }
+
+    /// The inputs for a USB run, to the device asked for or last on the bus.
     pub fn inputs(&self) -> SetupInputs {
+        self.inputs_for(self.device.or(self.last_device))
+    }
+
+    /// The inputs for a Wi-Fi send, to the unit read, whatever is on USB.
+    pub fn wifi_inputs(&self) -> SetupInputs {
+        self.inputs_for(self.wifi_device)
+    }
+
+    fn inputs_for(&self, device: Option<Device>) -> SetupInputs {
         let text = |s: &str| (!s.is_empty()).then(|| s.to_string());
         SetupInputs {
             root_password: text(&self.root_password),
@@ -162,6 +226,7 @@ impl Form {
             mqtt_tls: self.mqtt.on && self.mqtt_tls,
             // The CA field only shows under TLS, so it only sends under TLS.
             mqtt_ca: (self.mqtt.on && self.mqtt_tls).then(|| self.mqtt_ca.path.clone()).flatten(),
+            mqtt_ca_pem: (self.mqtt.on && self.mqtt_tls && self.mqtt_ca.path.is_none()).then(|| self.mqtt_ca_pem.clone()).flatten(),
             device_name: self.names_device().then(|| text(self.device_name.trim())).flatten(),
             ha_entity_root: self.mqtt.on.then(|| text(self.ha_entity_root.trim())).flatten(),
             matter: self.matter.on,
@@ -173,14 +238,135 @@ impl Form {
             // Only for the gen 3 the switch was offered for.
             themes: self.themes && self.device.or(self.last_device) == Some(Device::Diamond3),
             doom: self.doom,
-            external_temperature: self.external_temperature && self.supports_external_temperature(),
-            // Only for the gen 1 or gen 2 the checkbox was offered for.
-            dark_theme: self.dark_theme && matches!(self.device.or(self.last_device), Some(Device::Diamond | Device::J49)),
+            external_temperature: self.external_temperature && takes_external_temperature(device),
+            // Only for the gen 1 or gen 2 the switch was offered for.
+            dark_theme: self.dark_theme && matches!(device, Some(Device::Diamond | Device::J49)),
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
+            ssh_public_key_text: (self.ssh && self.ssh_key.path.is_none()).then(|| self.ssh_key_text.clone()).flatten(),
             ssh_key_only: self.ssh && !self.ssh_password_login,
             usb_shell: self.usb_shell,
+            // Greyed out, and not sent, without MQTT, Matter or Zigbee.
+            update_api: self.update_api && self.serves_updates(),
         }
+    }
+
+    /// Puts the settings a Wi-Fi read found on the unit in the form. The
+    /// root password goes blank, which keeps the unit's; the run's own
+    /// choices (the device, the entry point, the backup) stay as they are.
+    /// The settings the form held for USB are kept for Disconnect.
+    pub fn fill(&mut self, remote: &Remote) {
+        if self.usb.is_none() {
+            self.usb = Some(self.saved());
+        }
+        let inputs = inputs_from(&remote.settings);
+        let toggle = |value: Option<String>| Toggle { on: value.is_some(), value: value.unwrap_or_default() };
+        self.backplate_sim = inputs.backplate_sim;
+        self.allow_unsigned_updates = inputs.allow_unsigned_updates;
+        self.block_cloud = inputs.block_cloud;
+        self.ntp = toggle(inputs.ntp_server);
+        self.mqtt = toggle(inputs.mqtt);
+        self.mqtt_user = inputs.mqtt_user.unwrap_or_default();
+        self.mqtt_password = inputs.mqtt_password.unwrap_or_default();
+        self.mqtt_tls = inputs.mqtt_tls;
+        self.mqtt_ca.path = None;
+        self.mqtt_ca_pem = inputs.mqtt_ca_pem;
+        self.device_name = inputs.device_name.unwrap_or_default();
+        self.ha_entity_root = inputs.ha_entity_root.unwrap_or_default();
+        self.matter = MatterCode { on: inputs.matter, code: inputs.matter_code.unwrap_or_else(|| DEFAULT_MATTER_CODE.into()) };
+        self.matter_thread = inputs.matter_thread;
+        self.zigbee = inputs.zigbee;
+        self.wwn_boiler = inputs.wwn_boiler;
+        self.doom = inputs.doom;
+        self.external_temperature = inputs.external_temperature;
+        self.dark_theme = inputs.dark_theme;
+        self.ssh = inputs.ssh;
+        self.ssh_key.path = None;
+        self.ssh_key_text = inputs.ssh_public_key_text;
+        self.ssh_password_login = !inputs.ssh_key_only;
+        self.usb_shell = inputs.usb_shell;
+        self.update_api = inputs.update_api;
+        self.root_password.clear();
+        // The unit read is the Wi-Fi send's: a USB run's device stays the
+        // one asked for or seen on the bus.
+        self.wifi_device = Some(remote.device);
+        self.locked = matches!(remote.device, Device::Diamond | Device::J49);
+    }
+
+    /// The form no longer stands for the unit read: its gen 2 settings are
+    /// the person's to change again.
+    pub fn unlock(&mut self) {
+        self.locked = false;
+    }
+
+    /// Back to USB: the settings the form held before the Wi-Fi read, and
+    /// nothing locked.
+    pub fn disconnect(&mut self) {
+        if let Some(saved) = self.usb.take() {
+            self.restore(saved);
+        }
+        self.wifi_device = None;
+        self.unlock();
+    }
+
+    fn saved(&self) -> Saved {
+        Saved {
+            backplate_sim: self.backplate_sim,
+            allow_unsigned_updates: self.allow_unsigned_updates,
+            block_cloud: self.block_cloud,
+            ntp: self.ntp.clone(),
+            mqtt: self.mqtt.clone(),
+            mqtt_user: self.mqtt_user.clone(),
+            mqtt_password: self.mqtt_password.clone(),
+            mqtt_tls: self.mqtt_tls,
+            mqtt_ca: self.mqtt_ca.path.clone(),
+            mqtt_ca_pem: self.mqtt_ca_pem.clone(),
+            device_name: self.device_name.clone(),
+            ha_entity_root: self.ha_entity_root.clone(),
+            matter: self.matter.clone(),
+            matter_thread: self.matter_thread,
+            zigbee: self.zigbee,
+            wwn_boiler: self.wwn_boiler,
+            doom: self.doom,
+            external_temperature: self.external_temperature,
+            dark_theme: self.dark_theme,
+            ssh: self.ssh,
+            ssh_key: self.ssh_key.path.clone(),
+            ssh_key_text: self.ssh_key_text.clone(),
+            ssh_password_login: self.ssh_password_login,
+            usb_shell: self.usb_shell,
+            update_api: self.update_api,
+            root_password: self.root_password.clone(),
+        }
+    }
+
+    fn restore(&mut self, saved: Saved) {
+        self.backplate_sim = saved.backplate_sim;
+        self.allow_unsigned_updates = saved.allow_unsigned_updates;
+        self.block_cloud = saved.block_cloud;
+        self.ntp = saved.ntp;
+        self.mqtt = saved.mqtt;
+        self.mqtt_user = saved.mqtt_user;
+        self.mqtt_password = saved.mqtt_password;
+        self.mqtt_tls = saved.mqtt_tls;
+        self.mqtt_ca.path = saved.mqtt_ca;
+        self.mqtt_ca_pem = saved.mqtt_ca_pem;
+        self.device_name = saved.device_name;
+        self.ha_entity_root = saved.ha_entity_root;
+        self.matter = saved.matter;
+        self.matter_thread = saved.matter_thread;
+        self.zigbee = saved.zigbee;
+        self.wwn_boiler = saved.wwn_boiler;
+        self.doom = saved.doom;
+        self.external_temperature = saved.external_temperature;
+        self.dark_theme = saved.dark_theme;
+        self.ssh = saved.ssh;
+        self.ssh_key.path = saved.ssh_key;
+        self.ssh_key_text = saved.ssh_key_text;
+        self.ssh_password_login = saved.ssh_password_login;
+        self.usb_shell = saved.usb_shell;
+        self.update_api = saved.update_api;
+        self.root_password = saved.root_password;
     }
 
     pub fn config(&self) -> Result<Config, String> {
@@ -208,6 +394,13 @@ impl Form {
     fn drain_dialogs(&mut self) {
         for pick in [&mut self.mqtt_ca, &mut self.ssh_key] {
             pick.drain();
+        }
+        // A file chosen replaces what a Wi-Fi read found on the unit.
+        if self.mqtt_ca.path.is_some() {
+            self.mqtt_ca_pem = None;
+        }
+        if self.ssh_key.path.is_some() {
+            self.ssh_key_text = None;
         }
     }
 
@@ -243,7 +436,7 @@ impl Form {
     /// Whether the features step can be left: SSH needs a way in, a key or
     /// password login.
     pub fn features_done(&self) -> bool {
-        !self.ssh || self.ssh_password_login || self.ssh_key.path.is_some()
+        !self.ssh || self.ssh_password_login || self.ssh_key.path.is_some() || self.ssh_key_text.is_some()
     }
 
     /// Whether any integration is chosen; with none, the step is skipped.
@@ -265,6 +458,16 @@ impl Form {
             steps.push((crate::tr!("setup.next_zigbee"), crate::tr!("setup.next_zigbee_about").to_string()));
         }
         steps
+    }
+
+    /// What to do once a Wi-Fi run sent the settings, for Done: a card per
+    /// integration chosen, the unit staying on its base; none when it kept
+    /// nothing.
+    pub fn wifi_next_steps(&self, kept: bool) -> Vec<(&'static str, String)> {
+        if !kept {
+            return Vec::new();
+        }
+        self.next_steps().into_iter().skip(1).collect()
     }
 
     /// The integrations step: MQTT, Matter and Zigbee, and what rides on them.
@@ -297,6 +500,11 @@ impl Form {
                 ui.label(crate::tr!("setup.mqtt_tls"));
                 if self.mqtt_tls {
                     self.mqtt_ca.ui(ui, crate::tr!("form.mqtt.ca_certificate"), crate::tr!("form.file.certificate"), &["pem", "crt"]);
+                    // The unit's own CA, as a chosen file shows.
+                    if self.mqtt_ca.path.is_none() && self.mqtt_ca_pem.is_some() {
+                        unit_file(ui, &mut self.mqtt_ca_pem, crate::tr!("form.mqtt.unit_ca"), crate::tr!("form.mqtt.unit_ca_hint"),
+                                  crate::tr!("form.mqtt.unit_ca_clear_hint"));
+                    }
                 }
             });
         });
@@ -419,6 +627,11 @@ impl Form {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::tr!("setup.ssh_key")).color(crate::MUTED));
                 self.ssh_key.ui(ui, crate::tr!("form.file.choose"), crate::tr!("form.file.openssh_public_key"), &["pub"]);
+                // The key a Wi-Fi read found the unit authorizing.
+                if self.ssh_key.path.is_none() && self.ssh_key_text.is_some() {
+                    unit_file(ui, &mut self.ssh_key_text, crate::tr!("form.unit_ssh_key"), crate::tr!("form.unit_ssh_key_hint"),
+                              crate::tr!("form.unit_ssh_key_clear_hint"));
+                }
             });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -451,19 +664,30 @@ impl Form {
                 crate::code_line(ui, &ssh_command(self.ssh_key.path.as_deref()));
             });
         });
+        // A gen 2 read over Wi-Fi keeps its USB console: it also chooses the kernel.
+        let (free, about) = if self.locked {
+            (false, crate::tr!("form.locked_wifi"))
+        } else {
+            (true, crate::tr!("setup.usb_console_about"))
+        };
         if both {
-            crate::toggle_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"));
+            crate::toggle_card(ui, &mut self.usb_shell, free, crate::tr!("setup.usb_console"), about);
             crate::card(ui, |ui| ssh_password_field(ui, &mut self.root_password));
             ui.add_space(10.0);
         } else {
-            crate::option_card(ui, &mut self.usb_shell, true, crate::tr!("setup.usb_console"), crate::tr!("setup.usb_console_about"),
+            crate::option_card(ui, &mut self.usb_shell, free, crate::tr!("setup.usb_console"), about,
                                |ui| root_password_field(ui, &mut self.root_password));
         }
+        // Changes over Wi-Fi, later: nestlocal serves them beside an integration.
+        let serves = self.serves_updates();
+        crate::toggle_card(ui, &mut self.update_api, serves, crate::tr!("form.update_api"),
+                           if serves { crate::tr!("form.update_api_hint") } else { crate::tr!("form.update_api_needs_integration_hint") });
 
         crate::group(ui, crate::tr!("setup.group.extras"));
-        // Offered only with a gen 1 or gen 2 chosen or on the bus.
-        if matches!(self.known_device(bus), Some(Device::Diamond | Device::J49)) {
-            crate::toggle_card(ui, &mut self.dark_theme, true, crate::tr!("form.dark_theme"), crate::tr!("form.dark_theme_hint"));
+        // Offered only with a gen 1 or gen 2 chosen, on the bus or read over Wi-Fi.
+        if self.locked || matches!(self.known_device(bus), Some(Device::Diamond | Device::J49)) {
+            let about = if self.locked { crate::tr!("form.locked_wifi") } else { crate::tr!("form.dark_theme_hint") };
+            crate::toggle_card(ui, &mut self.dark_theme, !self.locked, crate::tr!("form.dark_theme"), about);
         }
         // Offered only with a gen 3 chosen or on the bus.
         if self.known_device(bus) == Some(Device::Diamond3) {
@@ -493,6 +717,7 @@ impl Form {
         let mut extras: Vec<&str> = Vec::new();
         if self.ssh { extras.push(crate::tr!("setup.ssh")); }
         if self.usb_shell { extras.push(crate::tr!("setup.usb_console")); }
+        if self.inputs().update_api { extras.push(crate::tr!("form.update_api")); }
         if self.inputs().dark_theme { extras.push(crate::tr!("form.dark_theme")); }
         if self.inputs().themes { extras.push(crate::tr!("form.themes")); }
         if self.doom { extras.push(crate::tr!("form.doom")); }
@@ -503,7 +728,7 @@ impl Form {
     /// Whether the external temperature option applies: to every generation,
     /// and to any unit while none is known.
     fn supports_external_temperature(&self) -> bool {
-        matches!(self.device.or(self.last_device), None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
+        takes_external_temperature(self.device.or(self.last_device))
     }
 
     /// Whether the external temperature switch can be turned on: a unit that
@@ -542,8 +767,12 @@ impl Form {
     }
 
     /// Puts the entry point back to auto when the device changes for
-    /// another; a unit unplugged, or several on the bus, is no change.
+    /// another; a unit unplugged, or several on the bus, is no change. A
+    /// unit on USB frees the settings a Wi-Fi read locked, for a USB run.
     pub fn track_device(&mut self, bus: &Bus) {
+        if !matches!(bus, Bus::Nothing) {
+            self.unlock();
+        }
         if let Some(device) = self.known_device(bus) {
             if self.last_device.is_some_and(|last| last != device) {
                 self.entry_point = EntryPoint::Auto;
@@ -557,8 +786,13 @@ impl Form {
     }
 
     /// The developer options, folded away on the review step: the CLI's
-    /// options a run rarely needs, as the steps draw theirs.
-    pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
+    /// options a run rarely needs, as the steps draw theirs. `force` is
+    /// Wi-Fi's Force, offered while connected over Wi-Fi.
+    pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus, force: Option<&mut bool>) {
+        if let Some(force) = force {
+            crate::switch_row(ui, force, crate::tr!("wifi.force"), crate::tr!("wifi.force_hint"));
+            ui.add_space(4.0);
+        }
         crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("form.backplate_sim"), crate::tr!("form.backplate_sim_hint"));
         ui.add_space(4.0);
         crate::switch_row(ui, &mut self.allow_unsigned_updates, crate::tr!("form.unsigned_updates"),
@@ -581,6 +815,21 @@ impl Form {
         }).on_hover_text(crate::tr!("form.entry_point_choice_hint"))
             .on_disabled_hover_text(crate::tr!("form.entry_point_disabled_hint"));
     }
+}
+
+/// Whether the external temperature option applies to the device: every
+/// generation, or any while none is known.
+fn takes_external_temperature(device: Option<Device>) -> bool {
+    matches!(device, None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
+}
+
+/// What a Wi-Fi read found on the unit in place of a chosen file, as a
+/// chosen file shows: its name, and a clear button.
+fn unit_file<T>(ui: &mut egui::Ui, found: &mut Option<T>, name: &str, hint: &str, clear_hint: &str) {
+    if ui.small_button(crate::tr!("form.file.clear")).on_hover_text(clear_hint).clicked() {
+        *found = None;
+    }
+    ui.add(egui::Label::new(egui::RichText::new(name).weak().size(12.0)).truncate()).on_hover_text(hint);
 }
 
 /// The items, joined, or None.
@@ -692,6 +941,8 @@ fn with_serial(serial: &Option<String>, root: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unfr0zen_core::nestlocal::{Matter, Mqtt};
+    use unfr0zen_core::settings::UnitSettings;
 
     /// The texts the integrations step draws for the form, and where.
     fn integrations_texts(form: &mut Form) -> Vec<(String, f32)> {
@@ -1026,5 +1277,257 @@ mod tests {
         form.device = Some(Device::Diamond3);
         assert!(!form.inputs().dark_theme, "only for a gen 1 or gen 2");
         assert!(!form.dialog_pending());
+    }
+
+    #[test]
+    fn the_update_api_goes_only_with_nestlocal() {
+        let mut form = Form { update_api: true, ..Form::default() };
+        assert!(!form.inputs().update_api);
+        assert!(!form.config().unwrap().options.update_api);
+        form.doom = true;
+        assert!(!form.inputs().update_api, "Doom alone does not keep the unit awake");
+        form.zigbee = true;
+        assert!(form.config().unwrap().options.update_api);
+        assert!(form.summary().iter().any(|(_, value, _)| value.contains(crate::tr!("form.update_api"))));
+    }
+
+    const CA: &[u8] = b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB";
+
+    /// A unit as a Wi-Fi read finds it.
+    pub(crate) fn remote(device: Device, settings: UnitSettings) -> Remote {
+        let nlmodel = match device {
+            Device::J49 => "Display-2",
+            Device::Diamond => "Diamond-1",
+            _ => "Display-3.4",
+        };
+        let info = serde_json::from_value(serde_json::json!({"nlmodel": nlmodel, "version": "v0.5.0", "overlay": 1,
+                                                              "free_bytes": 1 << 20, "shell_binary": "/bin/sh", "pending": false}))
+            .unwrap();
+        Remote { device, settings, info, usb_reason: None }
+    }
+
+    /// Every setting a unit can have on, with Matter over Thread.
+    fn every_setting() -> UnitSettings {
+        UnitSettings {
+            mqtt: Some(Mqtt { url: "tcp://broker.lan:8883".into(), user: Some("nest".into()), password: Some("s3cret".into()),
+                              tls: true, ca: Some(CA.to_vec()), entity_root: Some("nest_hall".into()) }),
+            matter: Some(Matter { passcode: 58596013, discriminator: 0xa5c }),
+            matter_thread: true,
+            doom: true,
+            external_temperature: true,
+            update_api: true,
+            device_name: Some("Hall".into()),
+            ntp_server: Some("ntp.lan".into()),
+            backplate_sim: true,
+            block_cloud: true,
+            wwn_boiler: true,
+            ssh: true,
+            ssh_key_only: true,
+            ssh_public_key: Some(KEY.into()),
+            unsigned_updates: true,
+            usb_shell: true,
+            dark_theme: Some(false),
+            root_hash: Some("$6$unit$hash".into()),
+            ..UnitSettings::default()
+        }
+    }
+
+    /// One frame of the features step, or the integrations step, with events.
+    fn step_frame(context: &egui::Context, form: &mut Form, features: bool, events: Vec<egui::Event>) -> egui::FullOutput {
+        context.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2400.0))),
+            events,
+            ..Default::default()
+        }, |ui| if features { form.features_ui(ui, &Bus::Nothing) } else { form.integrations_ui(ui) })
+    }
+
+    fn step_texts(form: &mut Form, features: bool) -> Vec<String> {
+        let context = egui::Context::default();
+        crate::install_fonts(&context);
+        crate::install_style(&context);
+        step_frame(&context, form, features, Vec::new());
+        step_frame(&context, form, features, Vec::new()).shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+            _ => None,
+        }).collect()
+    }
+
+    /// Clicks at what `at` finds in a frame of the step.
+    fn click_at(form: &mut Form, features: bool, at: impl Fn(&egui::FullOutput) -> egui::Pos2) {
+        let context = egui::Context::default();
+        crate::install_fonts(&context);
+        crate::install_style(&context);
+        step_frame(&context, form, features, Vec::new());
+        let at = at(&step_frame(&context, form, features, Vec::new()));
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        step_frame(&context, form, features, vec![egui::Event::PointerMoved(at)]);
+        step_frame(&context, form, features, vec![press(true)]);
+        step_frame(&context, form, features, vec![press(false)]);
+    }
+
+    /// Where the step drew the text `label`.
+    fn text_rect(output: &egui::FullOutput, label: &str) -> egui::Rect {
+        output.shapes.iter().rev().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(t) if t.galley.job.text == label => Some(t.galley.rect.translate(t.pos.to_vec2())),
+            _ => None,
+        }).unwrap_or_else(|| panic!("{label} is drawn"))
+    }
+
+    /// Clicks the switch of the card titled `title` on the features step.
+    fn click_switch(form: &mut Form, title: &str) {
+        let title = title.to_string();
+        click_at(form, true, move |output| {
+            let top = text_rect(output, &title).top();
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(r) if r.rect.width() == 44.0 && r.rect.height() == 26.0
+                    && (r.rect.top() - top).abs() < 30.0 => Some(r.rect.center()),
+                _ => None,
+            }).unwrap_or_else(|| panic!("{title}'s switch is drawn"))
+        });
+    }
+
+    #[test]
+    fn fill_maps_every_setting_into_the_form() {
+        let zigbee = UnitSettings { mqtt: None, matter: None, matter_thread: false, zigbee: true, usb_shell: false, device_name: None,
+                                    dark_theme: Some(true), ntp_server: None, block_cloud: false, ssh_key_only: false,
+                                    unsigned_updates: false, ..every_setting() };
+        for (device, settings) in [(Device::Diamond3, every_setting()), (Device::J49, zigbee)] {
+            // What was typed before the read gives way to the unit's settings.
+            let mut form = Form { root_password: "typed".into(), zigbee: !settings.zigbee, doom: false,
+                                  mqtt: Toggle { on: true, value: "old.lan".into() }, device_name: "Old".into(), ..Form::default() };
+            form.fill(&remote(device, settings.clone()));
+            assert_eq!(format!("{:?}", form.wifi_inputs()), format!("{:?}", inputs_from(&settings)), "{device:?}");
+            assert!(form.wifi_inputs().root_password.is_none(), "a blank root password keeps the unit's");
+            assert!(form.features_done(), "the unit's key lets SSH in");
+        }
+    }
+
+    #[test]
+    fn a_j49_over_wifi_locks_its_usb_console_and_dark_theme() {
+        let settings = UnitSettings { dark_theme: Some(true), ..every_setting() };
+        let mut form = Form::default();
+        form.fill(&remote(Device::J49, settings.clone()));
+        assert!(form.locked);
+        click_switch(&mut form, crate::tr!("setup.usb_console"));
+        click_switch(&mut form, crate::tr!("form.dark_theme"));
+        assert!(form.usb_shell && form.dark_theme, "greyed out, the unit's values stay");
+        let inputs = form.wifi_inputs();
+        assert!(inputs.usb_shell && inputs.dark_theme, "sent as the unit has them");
+
+        form.fill(&remote(Device::Diamond3, settings));
+        assert!(!form.locked, "a gen 3's kernel does not depend on them");
+        click_switch(&mut form, crate::tr!("setup.usb_console"));
+        assert!(!form.usb_shell);
+        form.fill(&remote(Device::J49, every_setting()));
+        form.unlock();
+        click_switch(&mut form, crate::tr!("setup.usb_console"));
+        assert!(!form.usb_shell, "unlocked once the form no longer stands for the unit");
+    }
+
+    #[test]
+    fn disconnect_puts_back_the_form_held_before_the_read() {
+        let mut form = Form { ntp: Toggle { on: true, value: "pool.lan".into() }, root_password: "hunter2".into(),
+                              device_name: "Mine".into(), ..Form::new() };
+        form.mqtt_ca.path = Some("ca.pem".into());
+        let before = format!("{:?}", form.inputs());
+        form.fill(&remote(Device::J49, every_setting()));
+        assert!(form.locked && form.inputs().matter);
+        // A second read keeps the form from before the first.
+        form.fill(&remote(Device::Diamond3, every_setting()));
+        form.disconnect();
+        assert!(!form.locked);
+        assert_eq!(format!("{:?}", form.inputs()), before);
+        assert_eq!(form.wifi_device, None);
+        // Nothing read: Disconnect leaves the form as it is.
+        form.disconnect();
+        assert_eq!(format!("{:?}", form.inputs()), before);
+    }
+
+    #[test]
+    fn a_unit_on_usb_frees_what_a_j49_read_over_wifi_locked() {
+        use crate::bus::Seen;
+        let on_usb = |device| Bus::One(Seen { device, mode: "app", port: "1".into(), id: (0, 0), serial: None });
+        let settings = UnitSettings { usb_shell: false, dark_theme: Some(true), ..every_setting() };
+        let mut form = Form::default();
+        form.fill(&remote(Device::J49, settings.clone()));
+        form.track_device(&Bus::Nothing);
+        assert!(form.locked, "locked while nothing is on USB");
+
+        // A gen 3 on USB: a USB run neither offers nor sends it the gen 2's
+        // dark theme, while a Wi-Fi send to the gen 2 read keeps it.
+        form.track_device(&on_usb(Device::Diamond3));
+        assert!(!form.locked);
+        assert!(!form.inputs().dark_theme, "not to a gen 3");
+        assert!(form.wifi_inputs().dark_theme && !form.wifi_inputs().usb_shell);
+
+        // The gen 2 itself on USB: a USB run changes its USB console.
+        form.fill(&remote(Device::J49, settings));
+        form.track_device(&on_usb(Device::J49));
+        click_switch(&mut form, crate::tr!("setup.usb_console"));
+        let inputs = form.inputs();
+        assert!(inputs.usb_shell && inputs.dark_theme);
+    }
+
+    #[test]
+    fn a_j49_read_over_wifi_leaves_the_usb_runs_device_to_the_bus() {
+        use crate::bus::Seen;
+        let settings = UnitSettings { dark_theme: Some(true), ..every_setting() };
+        let mut form = Form::default();
+        form.fill(&remote(Device::J49, settings.clone()));
+        form.track_device(&Bus::Nothing);
+        // A USB run started before any unit is on USB: whichever unit then
+        // comes is not sent the gen 2's dark theme.
+        assert!(!form.inputs().dark_theme);
+        assert!(!form.config().unwrap().options.dark_theme);
+        assert!(form.wifi_inputs().dark_theme, "the Wi-Fi send keeps it");
+
+        // A gen 3 on USB keeps its entry point across the read.
+        let gen3 = Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0, 0), serial: None });
+        let mut form = Form::default();
+        form.track_device(&gen3);
+        form.entry_point = EntryPoint::Cve20177936;
+        form.fill(&remote(Device::J49, settings));
+        form.track_device(&gen3);
+        assert_eq!(form.entry_point, EntryPoint::Cve20177936);
+    }
+
+    #[test]
+    fn the_units_ca_and_key_are_kept_until_cleared_or_replaced() {
+        let mut form = Form::default();
+        form.fill(&remote(Device::Diamond3, every_setting()));
+        assert_eq!(form.inputs().mqtt_ca_pem.as_deref(), Some(CA));
+        assert_eq!(form.inputs().ssh_public_key_text.as_deref(), Some(KEY));
+        assert!(form.inputs().mqtt_ca.is_none() && form.inputs().ssh_public_key.is_none());
+        assert!(step_texts(&mut form, false).iter().any(|text| text == crate::tr!("form.mqtt.unit_ca")));
+        assert!(step_texts(&mut form, true).iter().any(|text| text == crate::tr!("form.unit_ssh_key")));
+        form.mqtt_tls = false;
+        assert!(form.inputs().mqtt_ca_pem.is_none(), "the CA only goes under TLS");
+        form.mqtt_tls = true;
+
+        // A file chosen in its place replaces it, also once the file is cleared.
+        form.mqtt_ca.path = Some("ca.pem".into());
+        form.ssh_key.path = Some("key.pub".into());
+        step_texts(&mut form, false);
+        let inputs = form.inputs();
+        assert_eq!(inputs.mqtt_ca.as_deref(), Some(std::path::Path::new("ca.pem")));
+        assert!(inputs.mqtt_ca_pem.is_none() && inputs.ssh_public_key_text.is_none());
+        form.mqtt_ca.path = None;
+        form.ssh_key.path = None;
+        assert!(form.inputs().mqtt_ca_pem.is_none() && form.inputs().mqtt_ca.is_none());
+        assert!(form.inputs().ssh_public_key_text.is_none());
+
+        form.fill(&remote(Device::Diamond3, every_setting()));
+        click_at(&mut form, false, |output| {
+            let ca = text_rect(output, crate::tr!("form.mqtt.unit_ca"));
+            let clear = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == crate::tr!("form.file.clear")
+                    && (t.pos.y - ca.top()).abs() < 12.0 => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
+                _ => None,
+            });
+            clear.expect("the clear button beside the unit's CA")
+        });
+        assert!(form.inputs().mqtt_ca_pem.is_none(), "cleared");
+        assert!(!step_texts(&mut form, false).iter().any(|text| text == crate::tr!("form.mqtt.unit_ca")));
     }
 }
