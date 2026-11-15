@@ -22,7 +22,7 @@ use crate::{device, Device, Error, Result};
 pub const FORMAT: u32 = 1;
 /// The public key releases sign their bundles with (utils/bundle/release.pub);
 /// a unit installs an update only when it is signed by it.
-pub const RELEASE_KEY: &str = include_str!("../../../utils/bundle/release.pub");
+pub const RELEASE_KEY: &str = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/utils/bundle/release.pub"));
 pub const MANIFEST: &str = "manifest.json";
 pub const SIGNATURE: &str = "manifest.sig";
 /// The patch engine, a static ARMv7 binary.

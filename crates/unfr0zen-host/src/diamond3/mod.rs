@@ -170,7 +170,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
         let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");
         let files = crate::initramfs::files(Device::Diamond3, &options.version, settings)?;
-        let image = initramfs::build(&crate::assets::busybox(), unfr0zen_core::diamond3::INIT, &files);
+        let image = initramfs::build(&crate::assets::busybox(), assets::INIT, &files);
         fs::write(run_dir.join("initramfs.cpio.gz"), &image)?;
         Ok(image)
     })?;

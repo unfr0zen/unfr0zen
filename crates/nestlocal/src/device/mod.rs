@@ -80,7 +80,7 @@ mod tests {
     /// radio; without, there is none.
     #[test]
     fn each_embedded_image_carries_the_makefiles_version() {
-        let makefile = include_str!("../../../../platform/common/radio/Makefile");
+        let makefile = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/radio/Makefile"));
         let wanted: u16 = makefile.lines().find_map(|l| l.strip_prefix("VERSION = ")).unwrap().trim().parse().unwrap();
         for device in [&diamond3::DEVICE, &j49::DEVICE] {
             let radio = &device.radio;

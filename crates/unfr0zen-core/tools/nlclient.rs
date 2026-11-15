@@ -43,8 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "size": size, "symbols": manifest["symbols"]},
             "toolchain": args[3].to_string_lossy(),
         });
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../platform/common/nlclient/tests/golden")
+        let path = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("platform/common/nlclient/tests/golden")
             .join(format!("{}.json", unfr0zen_core::shell::sha256_hex(&source)));
         std::fs::write(&path, serde_json::to_vec_pretty(&golden)?)?;
         println!("{}", path.display());

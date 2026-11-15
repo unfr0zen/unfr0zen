@@ -64,7 +64,7 @@ impl Font {
 }
 
 /// Bundled with the binary, so the fallback face can always draw.
-const FALLBACK_FONT: &[u8] = include_bytes!("../../fonts/Inter-Regular.ttf");
+const FALLBACK_FONT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/fonts/Inter-Regular.ttf"));
 
 /// A theme's fonts by name, with the fallback. A file named more than once
 /// is loaded once: a parsed face holds every glyph's outline, megabytes the

@@ -327,7 +327,7 @@ fn route_image(progress: &mut dyn Progress, config: &Config, nand: &mut dyn Nand
 
 /// The initramfs a unit's run boots: the generations' shared bundle, the
 /// run's options and the host's random bytes, with the OMAP busybox and
-/// /init (unfr0zen_core::j49::boot).
+/// /init.
 fn build_initramfs(config: &Config, run_dir: &Path) -> Result<Vec<u8>> {
     let options = &config.options;
     let nestlocal = options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
@@ -335,7 +335,7 @@ fn build_initramfs(config: &Config, run_dir: &Path) -> Result<Vec<u8>> {
     let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
     let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");
     let files = crate::initramfs::files(Device::J49, &options.version, settings)?;
-    let image = initramfs::build(&assets::busybox(), boot::INIT, &files);
+    let image = initramfs::build(&assets::busybox(), assets::INIT, &files);
     fs::write(run_dir.join("initramfs.cpio.gz"), &image)?;
     Ok(image)
 }
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn the_dark_logo_goes_first_and_without_the_option_comes_back_off() {
-        let Ok(stock) = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/j49/uImage")) else {
+        let Ok(stock) = fs::read(Path::new(env!("UNFR0ZEN_ROOT")).join("build/j49/uImage")) else {
             eprintln!("No build/j49/uImage; skipping");
             return;
         };

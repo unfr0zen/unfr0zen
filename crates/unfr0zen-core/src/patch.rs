@@ -664,7 +664,7 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
             *monit = String::from_utf8(monit.clone()).unwrap()
                 .replace("start program = \"/etc/init.d/nestlocal start\"",
                          "start program = \"/etc/init.d/nestlocal start\" with timeout 180 seconds").into_bytes();
-            monit.extend_from_slice(include_bytes!("../../nestlocal/rootfs/thread.monitrc"));
+            monit.extend_from_slice(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/thread.monitrc")));
         }
         if let Some(doom) = options.doom.as_mut() {
             let overlay = overlay.as_mut().unwrap();
@@ -1397,7 +1397,7 @@ mod tests {
     fn patch(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
         patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build/custom-screen.o")))?;
+                .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o")))?;
             crate::nlclient::build(source, &object)
         })
     }
@@ -1500,7 +1500,7 @@ mod tests {
     #[test]
     fn themes_preload_into_nlclient_bound_to_its_build_and_are_withdrawn_when_off() {
         let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.work/firmware"));
+            .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
         let Ok(stock_nlclient) = std::fs::read(firmware.join("nlclient-gen3-6.5-14")) else {
             assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
             return;
@@ -1595,7 +1595,7 @@ mod tests {
 
     #[test]
     fn j49_external_temperature_is_conditional_idempotent_and_reversible() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::path::Path::new(env!("UNFR0ZEN_ROOT"));
         let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(std::path::PathBuf::from)
             .unwrap_or_else(|| root.join(".work/firmware"));
         let object = std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)

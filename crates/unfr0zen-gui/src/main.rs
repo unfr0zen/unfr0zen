@@ -101,9 +101,9 @@ fn main() -> eframe::Result<()> {
     // eframe sets this as the macOS application icon too, over the bundle's
     // .icns, so macOS gets the same rounded-square icon the .icns holds.
     #[cfg(target_os = "macos")]
-    let png = include_bytes!("../../../assets/icon/unfr0zen-macos.png");
+    let png = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen-macos.png"));
     #[cfg(not(target_os = "macos"))]
-    let png = include_bytes!("../../../assets/icon/unfr0zen.png");
+    let png = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen.png"));
     if let Ok(icon) = eframe::icon_data::from_png_bytes(png) {
         viewport = viewport.with_icon(icon);
     }
@@ -230,7 +230,7 @@ fn no_id_shift_outlines(ctx: &egui::Context) {
 /// last for the glyphs they lack.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    const DM_SANS: &[u8] = include_bytes!("../../../assets/fonts/DMSans-Variable.ttf");
+    const DM_SANS: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/DMSans-Variable.ttf"));
     // A cut of DM Sans: its optical size and weight.
     let cut = |size: f32, weight: f32| Arc::new(egui::FontData::from_static(DM_SANS).tweak(egui::FontTweak {
         coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
@@ -239,9 +239,9 @@ fn install_fonts(ctx: &egui::Context) {
     fonts.font_data.insert("DMSans".into(), cut(14.0, 400.0));
     fonts.font_data.insert("DMSans-Medium".into(), cut(14.0, 500.0));
     fonts.font_data.insert("Outfit".into(),
-                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/Outfit-Light.ttf"))));
+                           Arc::new(egui::FontData::from_static(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/Outfit-Light.ttf")))));
     fonts.font_data.insert("JetBrainsMono".into(),
-                           Arc::new(egui::FontData::from_static(include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"))));
+                           Arc::new(egui::FontData::from_static(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/JetBrainsMono-Regular.ttf")))));
     fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "DMSans".into());
     fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".into());
     let fallback = fonts.families[&egui::FontFamily::Proportional].clone();

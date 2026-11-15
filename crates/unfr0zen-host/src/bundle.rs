@@ -12,9 +12,6 @@ use unfr0zen_core::{Device, Result};
 use crate::assets;
 use crate::flow::failure;
 
-const PRE_PATCH: &[u8] = include_bytes!("../../../platform/diamond3/bundle/pre-patch.sh");
-const POST_PATCH: &[u8] = include_bytes!("../../../platform/diamond3/bundle/post-patch.sh");
-const OMAP_PRE_PATCH: &[u8] = include_bytes!("../../../platform/j49/bundle/pre-patch.sh");
 
 /// The bundle for a device: nestlocal, the libraries and objects the patch
 /// installs or links, Thread's and Doom's overlays, and unfr0zen-apply and
@@ -43,8 +40,8 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     let mut files = common();
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
-        (bundle::PRE_PATCH.to_string(), (0o755, OMAP_PRE_PATCH.to_vec())),
-        (bundle::POST_PATCH.to_string(), (0o755, POST_PATCH.to_vec())),
+        (bundle::PRE_PATCH.to_string(), (0o755, crate::j49::assets::PRE_PATCH.to_vec())),
+        (bundle::POST_PATCH.to_string(), (0o755, crate::diamond3::assets::POST_PATCH.to_vec())),
     ]);
     files.insert(bundle::RCS_SCREEN.into(), (0o644, assets::J49_RCS_SCREEN.to_vec()));
     let mut directories = BTreeMap::new();
@@ -60,8 +57,8 @@ fn diamond3() -> (Files, BTreeMap<String, u32>) {
     let mut files = common();
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
-        (bundle::PRE_PATCH.to_string(), (0o755, PRE_PATCH.to_vec())),
-        (bundle::POST_PATCH.to_string(), (0o755, POST_PATCH.to_vec())),
+        (bundle::PRE_PATCH.to_string(), (0o755, crate::diamond3::assets::PRE_PATCH.to_vec())),
+        (bundle::POST_PATCH.to_string(), (0o755, crate::diamond3::assets::POST_PATCH.to_vec())),
     ]);
     let mut directories = BTreeMap::new();
     let thread = assets::with_thread_radio(&assets::thread(), crate::diamond3::assets::THREAD_RADIO,
@@ -114,7 +111,7 @@ mod tests {
     fn the_gen_2_bundle_brings_its_thread_image_ssh_server_sensors_view_and_engine() {
         let bundle = assemble(Device::J49, "1.0.0").unwrap();
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
-        assert_eq!(bundle.file(bundle::PRE_PATCH).unwrap(), OMAP_PRE_PATCH);
+        assert_eq!(bundle.file(bundle::PRE_PATCH).unwrap(), crate::j49::assets::PRE_PATCH);
         let settings = Settings { thread: true, ssh: true, external_temperature: true, matter: Some(bundle::MatterSettings {
             passcode: 20202021, discriminator: 3840 }), ..Settings::default() };
         let options = settings.options(&bundle).unwrap();

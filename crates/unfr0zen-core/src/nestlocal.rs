@@ -46,8 +46,8 @@ pub const CA_FILE: &str = "etc/nestlocal/mqtt-ca.pem";
 /// word-splits the options.
 pub const NAME_FILE: &str = "etc/nestlocal/device-name";
 pub const RANDOM_SEED: &str = "etc/nestlocal/random-seed";
-const INIT: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.init");
-const MONITRC: &[u8] = include_bytes!("../../nestlocal/rootfs/nestlocal.monitrc");
+const INIT: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.init"));
+const MONITRC: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/nestlocal.monitrc"));
 
 /// The stock files the overlay edits, as the unit has them.
 /// nestlocal's options; present once nestlocal is installed.

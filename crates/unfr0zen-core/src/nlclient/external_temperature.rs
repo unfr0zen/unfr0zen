@@ -301,8 +301,8 @@ mod tests {
 
     #[test]
     fn emitted_payload_matches_the_independent_assembler_golden() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json")).unwrap();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
+            "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
         assert_eq!(STOCK_SHA, golden["stock_sha256"].as_str().unwrap());
         let address = golden["entry"].as_u64().unwrap() as u32;
         let mut code = startup(address).unwrap();

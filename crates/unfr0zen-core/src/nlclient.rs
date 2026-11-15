@@ -21,9 +21,9 @@ pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";
 /// A file, so the screen's object and its goldens do not change per revision.
 pub const VERSION: &str = "etc/unfr0zen/version";
 pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
-pub const ICON_BYTES: &[u8] = include_bytes!("../../../platform/common/nlclient/assets/unfr0zen.png");
+pub const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen.png"));
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";
-pub const GLYPH_BYTES: &[u8] = include_bytes!("../../../platform/common/nlclient/assets/unfr0zen-glyph.png");
+pub const GLYPH_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
 
 pub struct Edit { pub offset: usize, pub before: Vec<u8>, pub after: Vec<u8> }
 pub struct Patch {

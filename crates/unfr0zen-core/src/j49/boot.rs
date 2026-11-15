@@ -20,9 +20,6 @@ const INITRAMFS_END: u32 = 0x8400_0000 - (8 << 20);
 const ATAGS_LIMIT: usize = 1024;
 const SDRAM: (u32, u32) = (0x8000_0000, 64 << 20);
 
-/// The gen 1's and gen 2's /init.
-pub const INIT: &[u8] = include_bytes!("../../../../platform/j49/initramfs-init");
-
 /// The machine number each board's kernel takes (arch/arm/tools/mach-types).
 pub fn machine(target: Device) -> Result<u32> {
     match target {

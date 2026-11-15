@@ -417,7 +417,7 @@ fn custom_screen(root: &Path, out: &Path) {
 }
 
 fn main() {
-    let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..").canonicalize().unwrap();
+    let root = PathBuf::from(env!("UNFR0ZEN_ROOT")).canonicalize().unwrap();
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     build_firmware(&root);
     firmware(&root, &out);
