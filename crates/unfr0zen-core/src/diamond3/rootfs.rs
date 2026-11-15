@@ -99,8 +99,12 @@ fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
     Ok(())
 }
 
-/// sshd_config's root login with SSH on and root's password refused: keys only.
-const KEY_ONLY_LOGIN: &str = "PermitRootLogin prohibit-password\n";
+/// sshd_config's root login with SSH on and root's password refused: keys
+/// only, in the spelling the stock OpenSSH 6.0 accepts.
+const KEY_ONLY_LOGIN: &str = "PermitRootLogin without-password\n";
+/// The same setting in OpenSSH 7.0's spelling, which 6.0's sshd refuses to
+/// start with; units patched by v0.5.0 and older carry it.
+const NEWER_KEY_ONLY_LOGIN: &str = "PermitRootLogin prohibit-password\n";
 
 /// An SSH server at boot, root logins with a key and, with `password_login`,
 /// root's password, and an ECDSA host key current clients accept. Without
@@ -121,8 +125,8 @@ pub fn patch_ssh(tree: &mut Tree, enabled: bool, password_login: bool) -> Result
     put(tree, "etc/init.d/rcS", rcs);
     for (i, (name, mode, stock, ssh)) in SSH_EDITS.into_iter().enumerate() {
         let mut content = text(tree, name)?;
-        // The root login line has two SSH forms: with the password, or keys only.
-        let forms: &[&str] = if i == 0 { &[ssh, KEY_ONLY_LOGIN] } else { &[ssh] };
+        // The root login line has SSH forms with the password, or keys only.
+        let forms: &[&str] = if i == 0 { &[ssh, KEY_ONLY_LOGIN, NEWER_KEY_ONLY_LOGIN] } else { &[ssh] };
         for form in forms {
             if content.matches(form).count() == 1 {
                 content = content.replace(form, stock);
