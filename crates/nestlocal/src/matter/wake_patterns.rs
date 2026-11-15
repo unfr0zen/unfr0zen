@@ -2,13 +2,13 @@
 //! chip wakes the unit for the frames its patterns match, and nlsleepd sets
 //! them before each sleep:
 //! - a controller's messages, unicast UDP to Matter's port. The gen 3's
-//!   nlsleepd takes the port (wake.rs registers it); the gen 2's has no such
+//!   nlsleepd takes the port (wake.rs registers it); the gen 1's and gen 2's have no such
 //!   call, and these patterns are listed here.
 //! - a controller that has lost the unit's address asks for it first, by
 //!   multicast, which no pattern of nlsleepd's matches: a DNS-SD query for
 //!   the unit's operational instance (mDNS, UDP 5353), and an IPv6 neighbour
 //!   solicitation for one of its addresses. The chips answer ARP themselves.
-//!   The gen 2's WL1271 passes no multicast frame while the unit sleeps,
+//!   The gen 1's and gen 2's WL127x passes no multicast frame while the unit sleeps,
 //!   whatever its patterns: it answers those on its own wakes.
 //!
 //! nestlocal lists a pattern for each in `LIST`, and the library preloaded
@@ -47,9 +47,9 @@ pub struct Budget {
 impl Budget {
     pub fn of(generation: u8) -> Budget {
         match generation {
-            // The gen 2's WL1271 takes 7 patterns of up to 91 bytes; nlsleepd
-            // sets 3: the Wi-Fi rekey and the broker's connection twice.
-            2 => Budget { patterns: 4, length: 91, matter_port: true, multicast: false },
+            // The gen 1's and gen 2's WL127x takes 7 patterns of up to 91 bytes;
+            // nlsleepd sets 3: the Wi-Fi rekey and the broker's connection twice.
+            1 | 2 => Budget { patterns: 4, length: 91, matter_port: true, multicast: false },
             // The gen 3's BCM43340 takes 8 of up to 128; nlsleepd sets 4: the
             // rekey, the broker's connection, Matter's port over IPv4 and IPv6.
             _ => Budget { patterns: 4, length: 128, matter_port: false, multicast: true },
@@ -159,7 +159,7 @@ pub fn list(budget: Budget, mac: [u8; 6], addresses: &[Ipv6Addr], instances: &[S
     patterns.iter().map(Pattern::line).collect()
 }
 
-/// `LIST` holds Matter's port for an Ethernet address: what a gen 2 needs
+/// `LIST` holds Matter's port for an Ethernet address: what a gen 1 or gen 2 needs
 /// before it sleeps.
 pub fn matter_port_listed() -> bool {
     let port = format!("{:04x}", rs_matter::MATTER_PORT);

@@ -3,7 +3,7 @@ version: 2.1
 # nestlocal and thread-rcp for the thermostat, carrying the radio images and
 # every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
 # from the cache, where the jobs upstream in the workflow stored them. The
-# patch bundle's unfr0zen-apply builds here too, with the same toolchain, and
+# setup bundle's unfr0zen-apply builds here too, with the same toolchain, and
 # the gen 3's theme preload and theme library (platform/common/theme).
 
 jobs:

@@ -2,7 +2,7 @@
 name = "unfr0zen-apply"
 version = "0.1.0"
 edition.workspace = true
-description = "Applies a patch bundle to a root volume, on the unit"
+description = "Applies a setup bundle to a root volume, on the unit"
 
 [dependencies]
 unfr0zen-core = { path = "../unfr0zen-core" }

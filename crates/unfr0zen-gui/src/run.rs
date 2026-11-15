@@ -24,7 +24,7 @@ pub enum Event {
     Transfer { done: u64, next: u64, total: u64 },
     /// The job waits for a yes or no to the question before it writes.
     Confirm(String, Sender<bool>),
-    /// A patch run entered this phase; the one before it is done.
+    /// A setup run entered this phase; the one before it is done.
     Phase(Phase),
     /// The run finished: the final status, or the error text.
     Done(Result<String, String>),
@@ -73,7 +73,7 @@ pub struct Run {
 }
 
 impl Run {
-    /// The recovery flow that patches the unit, with the whole NAND backed
+    /// The recovery flow that sets up the unit, with the whole NAND backed
     /// up to `backup` first, in the same recovery session.
     pub fn start(config: Config, backup: Option<PathBuf>) -> Self {
         Self::spawn(move |progress, _, cancel| run_after_backup(&config, backup.as_deref(), progress, &cancel))

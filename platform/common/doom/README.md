@@ -1,6 +1,6 @@
 # Doom on the thermostat
 
-Doom (the shareware episode) on the gen 3 and the gen 2, in place of their UI: unfr0zen's
+Doom (the shareware episode) on every generation, in place of its UI: unfr0zen's
 `--doom` installs it, and **UNFR0ZEN → Doom → Play** on the thermostat launches it.
 Built from [doomgeneric](https://github.com/ozkl/doomgeneric)
 (`platform/common/doom/doomgeneric`, a submodule) with this unit's platform layer,
@@ -26,9 +26,10 @@ On the unit:
 The game:
 
 - Picture: 320x200 scaled to the face's width; on the gen 3 (480x300) the
-  circle cuts the status bar's outer corners, on the gen 2 it is shown as is.
-- Controls: in a level you walk forward all along, the wheel (the gen 2's
-  ring) turns and the button (the gen 2's glass press) fires; use is pressed now and then, so doors and switches open as you
+  circle cuts the status bar's outer corners, on the gen 1 and gen 2 it is
+  shown as is.
+- Controls: in a level you walk forward all along, the wheel (the gen 1's
+  and gen 2's ring) turns and the button (their glass press) fires; use is pressed now and then, so doors and switches open as you
   walk into them. Dead, the button restarts. In the menus the wheel moves and
   the button selects, answering yes to questions. Holding the button for three
   seconds quits.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # nestlocal and thread-rcp for the thermostat, ARMv7 binaries against the
-# gen 2's glibc 2.19 (which the gen 3's 2.31 also runs; the gen 3's GPU
+# gen 1's and gen 2's glibc 2.19 (which the gen 3's 2.31 also runs; the gen 3's GPU
 # libraries, which nestlocal loads at run time for the theme, are glibc
 # shared objects) into build/thread, with nestlocal copied to
 # build/nestlocal-armv7 for the app.
@@ -24,8 +24,8 @@ mkdir -p build/thread
 sh platform/common/wakefilter/build.sh build/wakefilter
 sh platform/common/localcloud/build.sh build/localcloud
 sh platform/common/theme/build.sh build/theme
-# For the Cortex-A8 (the gen 2's; the gen 3's A9 runs it too). A
-# fixed-address executable, bound lazily: the gen 2's glibc 2.19 loader
+# For the Cortex-A8 (the gen 1's and gen 2's; the gen 3's A9 runs it too).
+# A fixed-address executable, bound lazily: their glibc 2.19 loader
 # crashes binding a Rust binary now, and its 2.6.37 kernel maps a PIE among
 # the libraries, where the loader crashes now and then (client-ng's
 # findings, whose build this follows).

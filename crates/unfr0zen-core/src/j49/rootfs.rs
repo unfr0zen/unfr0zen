@@ -1,12 +1,12 @@
-//! The j49's part of the root filesystem patch. Its USB gadget is built into
+//! The gen 1's and gen 2's part of the root filesystem setup. Its USB gadget is built into
 //! the kernel and it has no SSH server: the root shell is a script inittab
 //! starts, SSH a server the run brings, and its busybox 1.19 ash takes none of
 //! root's profile additions (no alias, no prompt substitution).
 
-use crate::patch::{check_mode, patch_shell, put, text, Options, Rootfs, Tree, PROFILE};
+use crate::setup::{check_mode, set_up_shell, put, text, Options, Rootfs, Tree, PROFILE};
 use crate::{device, Result};
 
-/// The files the patch requires.
+/// The files the setup requires.
 pub const FILES: [&str; 5] = ["etc/shadow", "etc/inittab", "etc/init.d/rcS", "etc/init.d/rcH", "etc/nestlabs/client.config"];
 /// A root shell on the USB serial port (ttyGS0, which only a kernel built
 /// with CONFIG_USB_DYNAMIC_ACM has): a script started at sysinit, as busybox
@@ -34,7 +34,7 @@ pub(crate) static ROOTFS: Rootfs = Rootfs {
     // NoLongerEvil's installer leaves etc/shadow readable by all.
     shadow_modes: &[0o640, 0o644],
     optional_files,
-    patch,
+    set_up,
 };
 
 fn optional_files(options: &Options) -> Vec<String> {
@@ -42,21 +42,21 @@ fn optional_files(options: &Options) -> Vec<String> {
     std::iter::once(SHELL_SCRIPT.to_string()).chain(server).collect()
 }
 
-fn patch(tree: &mut Tree, options: &Options) -> Result<()> {
-    patch_usb_shell(tree, options.usb_shell)?;
+fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
+    set_up_usb_shell(tree, options.usb_shell)?;
     let server = options.ssh_server.as_ref().filter(|_| options.ssh);
     if options.ssh && server.is_none() {
-        return device("--ssh on a j49 needs its SSH server's files");
+        return device("--ssh on a gen 1 or gen 2 needs its SSH server's files");
     }
-    patch_ssh(tree, server, !options.ssh_key_only)?;
+    set_up_ssh(tree, server, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {
-        patch_shell(tree, false)?;
+        set_up_shell(tree, false)?;
     }
     Ok(())
 }
 
 /// The root shell's script and its entry at the top of inittab, or no entry.
-pub(crate) fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
+pub(crate) fn set_up_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
     let mut inittab = text(tree, "etc/inittab")?.replace(SHELL_LINE, "").replace(GEN2_GETTY, "");
     if inittab.contains("ttyGS0") {
         return device("etc/inittab: a ttyGS0 line that is not unfr0zen's");
@@ -71,7 +71,7 @@ pub(crate) fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
 
 /// With a server given, its files and their start in rcS, after stock's sshd
 /// line (whose sshd is absent); without, no start.
-pub(crate) fn patch_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overlay>, password_login: bool) -> Result<()> {
+pub(crate) fn set_up_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overlay>, password_login: bool) -> Result<()> {
     let (anchor, start) = SSH_START;
     let mut rcs = text(tree, "etc/init.d/rcS")?.replace(&format!("{anchor}{start}"), anchor);
     if rcs.contains(start) || rcs.matches(anchor).count() != 1 {
@@ -99,7 +99,7 @@ pub(crate) fn patch_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overl
 mod tests {
     use super::*;
     use crate::nestlocal::Overlay;
-    use crate::patch::patch_root_password;
+    use crate::setup::set_up_root_password;
 
     #[test]
     fn a_j49_gets_its_root_shell_at_sysinit_and_loses_it_again() {
@@ -108,21 +108,21 @@ mod tests {
             ("etc/shadow".to_string(), (b"root:*:1:0:99999:7:::\n".to_vec(), 0o644)),
             ("etc/inittab".to_string(), (stock.as_bytes().to_vec(), 0o644)),
         ]);
-        patch_root_password(&mut tree, "$6$s$h", ROOTFS.shadow_modes).unwrap();
-        patch_usb_shell(&mut tree, true).unwrap();
+        set_up_root_password(&mut tree, "$6$s$h", ROOTFS.shadow_modes).unwrap();
+        set_up_usb_shell(&mut tree, true).unwrap();
         let inittab = String::from_utf8(tree["etc/inittab"].0.clone()).unwrap();
         assert_eq!(inittab, format!("{SHELL_LINE}{stock}"));
         assert_eq!(tree[SHELL_SCRIPT], (SHELL.as_bytes().to_vec(), 0o755));
         assert!(SHELL.contains("\n    sleep 5\ndone &\n"));
         assert!(String::from_utf8_lossy(&tree["etc/shadow"].0).starts_with("root:$6$s$h:"));
-        patch_usb_shell(&mut tree, true).unwrap();
+        set_up_usb_shell(&mut tree, true).unwrap();
         assert_eq!(tree["etc/inittab"].0, inittab.as_bytes(), "a second run adds no second line");
         // unfr0zen-gen2.py's login gives way to the shell, or to nothing.
         tree.insert("etc/inittab".into(), (format!("{GEN2_GETTY}{stock}").into_bytes(), 0o644));
-        patch_usb_shell(&mut tree, false).unwrap();
+        set_up_usb_shell(&mut tree, false).unwrap();
         assert_eq!(tree["etc/inittab"].0, stock.as_bytes());
         tree.insert("etc/inittab".into(), (format!("ttyGS0::respawn:/bin/sh\n{stock}").into_bytes(), 0o644));
-        assert!(patch_usb_shell(&mut tree, true).is_err());
+        assert!(set_up_usb_shell(&mut tree, true).is_err());
     }
 
     #[test]
@@ -130,13 +130,13 @@ mod tests {
         let stock = "a\n${INITDIR}/sshd start\nb\n";
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (stock.as_bytes().to_vec(), 0o750))]);
         let server = Overlay { directories: vec![], files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] };
-        patch_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(&server), true).unwrap();
         let started = "a\n${INITDIR}/sshd start\n${INITDIR}/unfr0zen-ssh start\nb\n";
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes());
         assert_eq!(tree["usr/sbin/dropbearmulti"], (b"ELF".to_vec(), 0o755));
-        patch_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(&server), true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes(), "once");
-        patch_ssh(&mut tree, None, true).unwrap();
+        set_up_ssh(&mut tree, None, true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, stock.as_bytes());
     }
 
@@ -145,10 +145,10 @@ mod tests {
         let init = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/ssh.init"));
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (b"a\n${INITDIR}/sshd start\nb\n".to_vec(), 0o750))]);
         let server = Overlay { directories: vec![], files: vec![(SSH_INIT.into(), 0o755, init.as_bytes().to_vec())] };
-        patch_ssh(&mut tree, Some(&server), false).unwrap();
-        let patched = String::from_utf8(tree[SSH_INIT].0.clone()).unwrap();
-        assert!(patched.contains(" -s -P \"$PIDFILE\""), "{patched}");
-        patch_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(&server), false).unwrap();
+        let keys_only = String::from_utf8(tree[SSH_INIT].0.clone()).unwrap();
+        assert!(keys_only.contains(" -s -P \"$PIDFILE\""), "{keys_only}");
+        set_up_ssh(&mut tree, Some(&server), true).unwrap();
         assert_eq!(tree[SSH_INIT].0, init.as_bytes(), "password login again: the script as shipped");
     }
 }

@@ -1,6 +1,7 @@
-//! Gen 2's settings screens in the gen 3's dark palette: black backgrounds,
-//! white text, the gen 3's blue selection and grey unselected rows. The colours
-//! are the ones the gen 3's nlclient sets in the same functions.
+//! The gen 1's and gen 2's settings screens in the gen 3's dark palette:
+//! black backgrounds, white text, the gen 3's blue selection and grey
+//! unselected rows. The colours are the ones the gen 3's nlclient sets in the
+//! same functions.
 use super::elf::{word, Elf};
 use crate::{device, shell::sha256_hex, Result};
 
@@ -135,7 +136,7 @@ pub fn reviewed(stock: &[u8]) -> bool {
 /// words at these addresses differ from stock is refused before any write.
 pub fn patch(stock: &[u8], output: &mut [u8]) -> Result<()> {
     if !reviewed(stock) {
-        return device("j49 dark theme requires the reviewed nlclient 5.9.4-5 binary");
+        return device("the dark theme requires the reviewed nlclient 5.9.4-5 binary");
     }
     let elf = Elf::parse(stock)?;
     let mut writes = Vec::new();
@@ -143,7 +144,7 @@ pub fn patch(stock: &[u8], output: &mut [u8]) -> Result<()> {
         let offset = elf.offset(address)?;
         let before = word(stock, offset)?;
         if before == after || word(output, offset)? != before {
-            return device("j49 dark theme patch site changed");
+            return device("the dark theme patch site changed");
         }
         writes.push((offset, after));
     }

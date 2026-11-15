@@ -12,7 +12,7 @@ setpoints.
 | `theme.c` → `/nestlabs/lib/libunfr0zen-theme.so` | Preloaded into nlclient beside `liblocalcloud.so`. Hooks the dial's, its figures', the background's and the thermostat screen's vtable slots, replaces the dial's draw with the theme's, and asks nlclient for a redraw each frame while the theme moves, about once a second while it stands still. |
 | `crates/nestlocal-theme` → `libnestlocal_theme.so` | The theme host and painters (femtovg and batched quads, LuaJIT), loaded by the preload on nlclient's GL thread. |
 | `crates/nestlocal/src/theme.rs` (`-themes`) | Offers the installed themes on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets, the fields of MQTT's state topic and Home Assistant's weather. |
-| `unfr0zen-core`'s `nlclient::theme` | Writes `/etc/unfr0zen/theme.bindings` for the unit's stock nlclient at the patch. |
+| `unfr0zen-core`'s `nlclient::theme` | Writes `/etc/unfr0zen/theme.bindings` for the unit's stock nlclient at setup. |
 
 ## How the theme is drawn
 
@@ -70,7 +70,7 @@ is shown, and that theme's later frames go through it too.
 Discovery finds the dial, its event handler, its figures and the natives the
 preload calls in any build; the background layer, brightness manager, views,
 displayed temperature and humidity, and the leaf come from the builds reviewed
-by hand (`REVIEWED` in `nlclient/theme.rs`). Another build is refused at the patch. The preload
+by hand (`REVIEWED` in `nlclient/theme.rs`). Another build is refused at setup. The preload
 hooks nothing without a complete `/etc/unfr0zen/theme.bindings` (`name value`
 lines) or when a vtable slot does not hold the stock method it names.
 

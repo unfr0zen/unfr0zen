@@ -1,5 +1,5 @@
-//! The j49 kernel's boot logo, Nest's cream disc with the blue house
-//! (CONFIG_LOGO_DIAMOND_CLUT224), recoloured onto black for the dark theme:
+//! The gen 1's and gen 2's kernel boot logo, Nest's cream disc with the blue
+//! house (CONFIG_LOGO_DIAMOND_CLUT224), recoloured onto black for the dark theme:
 //! only its palette changes, inside the gzip-compressed zImage of a U-Boot
 //! image.
 //!

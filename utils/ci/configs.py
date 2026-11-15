@@ -103,7 +103,7 @@ MODULES = {
     # The radio module brings nestlocal.sh and the Makefile nestlocal reads;
     # nestlocal.sh also builds the wake pattern and local cloud libraries the
     # app installs, and the theme preload with nestlocal's theme library. Its job
-    # builds unfr0zen-apply as well, the patch engine on unfr0zen-core.
+    # builds unfr0zen-apply as well, the setup engine on unfr0zen-core.
     "nestlocal": {"paths": ["crates/nestlocal", "crates/nestlocal-theme", "crates/unfr0zen-apply", "crates/unfr0zen-core",
                             "platform/common/wakefilter", "platform/common/localcloud", "platform/common/theme",
                             "utils/bundle", "Cargo.toml", "Cargo.lock", ".cargo"],

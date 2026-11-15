@@ -4,7 +4,7 @@
 //! paired one is, whose beacons come from an external thermometer's readings
 //! (set/external_temperature, or a Zigbee or Matter write) through a stand-in
 //! for the BLE chip (port.rs, chip.rs, beacon.rs) on gen 3, or a patched
-//! loopback RCS input (socket.rs) on gen 2. Both use the same paired identity
+//! loopback RCS input (socket.rs) on gen 1 and gen 2. Both use the same paired identity
 //! and room assignment through nlclient's cloud buckets.
 
 pub mod beacon;
@@ -45,10 +45,10 @@ const SELECT_AFTER: Duration = Duration::from_secs(2);
 const SELECT_AFTER: Duration = Duration::from_millis(10);
 const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
 
-/// The sensor's description. Gen 2's Sensors view names it after its room,
-/// where a description would be a second label.
+/// The sensor's description. The gen 1's and gen 2's Sensors view names it
+/// after its room, where a description would be a second label.
 fn description() -> &'static str {
-    if crate::device::current().generation == 2 { "" } else { "External" }
+    if crate::device::current().omap() { "" } else { "External" }
 }
 
 /// Who the sensor is, kept between runs: the key only nlclient and nestlocal
@@ -168,7 +168,7 @@ pub struct Sensor {
     /// Interrupts the port's wait for a new reading (port.rs).
     notify: OnceLock<Box<dyn Fn() + Send + Sync>>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
-    /// Gen 2 selects only after its native manager accepts the first sample.
+    /// Gen 1 and gen 2 select only after their native manager accepts the first sample.
     select_after_delivery: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// The temperature of the beacon before any reading, °C.
     introduction: OnceLock<Box<dyn Fn() -> Option<f64> + Send + Sync>>,
@@ -561,7 +561,7 @@ pub fn selected(store: &Store, serial: &str, bucket: &str) -> bool {
 }
 
 /// The unit's room, as its device bucket names it. With nlclient's settings
-/// (gen 2), their `device_where_id` comes first.
+/// (gen 1 and gen 2), their `device_where_id` comes first.
 pub fn where_id(store: &Store, serial: &str, settings: Option<&Path>) -> Option<String> {
     settings.and_then(|settings| std::fs::read(settings).ok()).and_then(|bytes| {
         let value = nlsettings::value(&bytes, "device_where_id")?;

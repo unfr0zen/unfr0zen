@@ -11,7 +11,7 @@
  * the panel's rate while the theme moves, and about once a second while it
  * stands still, as a redraw that never lights the display.
  *
- * Where everything is comes from BINDINGS, written by the patch for the
+ * Where everything is comes from BINDINGS, written by the setup for the
  * unit's own nlclient (unfr0zen-core's nlclient::theme); nothing is hooked
  * unless the vtable slots hold the stock methods it names. */
 #define _GNU_SOURCE
@@ -114,7 +114,7 @@ typedef void (*draw_scaled_fn)(void *, int, int, void *, int, int, void *);
 static float from_fixed(int value) { return value / 65536.0f; }
 
 /* --- Bindings ------------------------------------------------------------ */
-/* The bindings, by the names the patch writes. */
+/* The bindings, by the names the setup writes. */
 static uintptr_t dial_slot, dial_draw, dial_event_slot, dial_event, figures_slot, figures_draw;
 static uintptr_t background_slot, background_draw, brightness_manager, read_als, settings_view_vtable;
 static uintptr_t thermostat_view_vtable, view_offset, current_temperature, current_humidity, leaf_slot;

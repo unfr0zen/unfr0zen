@@ -1,4 +1,4 @@
-//! The root-filesystem patch, applied to a mounted slot from host copies of
+//! The root filesystem setup, applied to a mounted slot from host copies of
 //! the files it edits: only the differences reach the unit. Port of
 //! scripts/patch_root0.py's edits and unfr0zen.py's patch_on_device.
 
@@ -103,7 +103,7 @@ pub(crate) fn put(tree: &mut Tree, name: &str, text: String) {
 pub(crate) fn check_mode(tree: &Tree, name: &str, mode: u32) -> Result<()> {
     match tree.get(name) {
         Some((_, actual)) if actual & 0o7777 == mode => Ok(()),
-        _ => device(format!("patched {name} must be root-owned, mode {mode:o}")),
+        _ => device(format!("{name} must be root-owned, mode {mode:o}")),
     }
 }
 
@@ -121,7 +121,7 @@ const NLSLEEPD_START: (&str, &str) = (
 
 /// The last run's settings (bundle::Settings), for a run without the host.
 pub const RECORD: &str = "etc/unfr0zen/options.json";
-/// unfr0zen-apply, kept on a unit that patches itself (the gen 3) to install
+/// unfr0zen-apply, kept on a unit that sets itself up (the gen 3) to install
 /// updates: the trusted code that checks a new bundle before running it.
 pub const APPLY: &str = "nestlabs/sbin/unfr0zen-apply";
 
@@ -144,7 +144,7 @@ const NLCLIENT_START: (&str, &str, &str) = (
 
 /// nlclient started with the local cloud library on a unit running
 /// nestlocal, and the theme preload too with `theme`; as stock without.
-fn patch_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()> {
+fn set_up_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()> {
     let (stock, preloaded, with_theme) = NLCLIENT_START;
     let mut script = text(tree, NESTLABS)?.replace(with_theme, stock).replace(preloaded, stock);
     if enabled {
@@ -159,7 +159,7 @@ fn patch_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()> 
 
 /// nlsleepd started with the wake pattern library for a unit with Matter, so
 /// that a controller looking the sleeping unit up wakes it; as stock without.
-fn patch_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
+fn set_up_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
     let (stock, preloaded) = NLSLEEPD_START;
     let mut script = text(tree, NLSLEEP)?.replace(preloaded, stock);
     if enabled {
@@ -225,7 +225,7 @@ pub fn ssh_public_key(data: &[u8]) -> Result<String> {
     Ok(format!("{kind} {}", STANDARD.encode(blob)))
 }
 
-fn patch_authorized_key(tree: &mut Tree, key: &str) -> Result<()> {
+fn set_up_authorized_key(tree: &mut Tree, key: &str) -> Result<()> {
     let mut contents = if tree.contains_key(AUTHORIZED_KEYS) { text(tree, AUTHORIZED_KEYS)? } else { String::new() };
     let present = contents.lines().any(|line| {
         let mut fields = line.split_whitespace();
@@ -246,7 +246,7 @@ pub fn check_ntp_server(host: &str) -> Result<()> {
     if HOST.is_match(host) { Ok(()) } else { device(format!("not a host name: {host}")) }
 }
 
-pub(crate) fn patch_root_password(tree: &mut Tree, password_hash: &str, modes: &[u32]) -> Result<()> {
+pub(crate) fn set_up_root_password(tree: &mut Tree, password_hash: &str, modes: &[u32]) -> Result<()> {
     let shadow = text(tree, "etc/shadow")?;
     let roots = shadow.split_inclusive('\n').filter(|line| line.starts_with("root:")).count();
     if roots != 1 {
@@ -263,11 +263,11 @@ pub(crate) fn patch_root_password(tree: &mut Tree, password_hash: &str, modes: &
     put(tree, "etc/shadow", shadow);
     match tree.get("etc/shadow") {
         Some((_, mode)) if modes.contains(&(mode & 0o7777)) => Ok(()),
-        _ => device("patched etc/shadow must be root-owned, mode 640"),
+        _ => device("etc/shadow must be root-owned, mode 640"),
     }
 }
 
-pub fn patch_ntp(tree: &mut Tree, server: &str) -> Result<()> {
+pub fn set_up_ntp(tree: &mut Tree, server: &str) -> Result<()> {
     let present: Vec<_> = NTP_LINES.iter().filter(|(name, _)| tree.contains_key(*name)).collect();
     if present.is_empty() {
         return device("neither etc/ntp.conf nor etc/connman/main.conf is in the image");
@@ -286,7 +286,7 @@ pub fn patch_ntp(tree: &mut Tree, server: &str) -> Result<()> {
 
 /// Without the flag the simulator is set off, as in stock, so a run without
 /// it undoes an earlier one.
-pub fn patch_backplate_sim(tree: &mut Tree, enabled: bool) -> Result<()> {
+pub fn set_up_backplate_sim(tree: &mut Tree, enabled: bool) -> Result<()> {
     let mut content = text(tree, "etc/nestlabs/client.config")?;
     let value = if enabled { "1" } else { "0" };
     for key in BACKPLATE_SIM {
@@ -302,7 +302,7 @@ pub fn patch_backplate_sim(tree: &mut Tree, enabled: bool) -> Result<()> {
 
 /// Remounts root read-write at boot, and adds umountroot at shutdown so a
 /// reboot leaves it clean. Without the flag both lines are taken out.
-pub fn patch_root_rw(tree: &mut Tree, enabled: bool) -> Result<()> {
+pub fn set_up_root_rw(tree: &mut Tree, enabled: bool) -> Result<()> {
     for (name, anchor, line) in ROOT_RW_LINES {
         let mut content = text(tree, name)?;
         if content.matches(anchor).count() != 1 {
@@ -323,7 +323,7 @@ pub fn patch_root_rw(tree: &mut Tree, enabled: bool) -> Result<()> {
 
 /// Puts the Works With Nest boiler block in rcS, setting using_wwn_boiler
 /// when asked and taking it back when not (WWN_ON, WWN_OFF).
-pub fn patch_wwn_boiler(tree: &mut Tree, enabled: bool) -> Result<()> {
+pub fn set_up_wwn_boiler(tree: &mut Tree, enabled: bool) -> Result<()> {
     let mut content = text(tree, "etc/init.d/rcS")?;
     let Some(start) = content.find(WWN_BEGIN) else {
         if !enabled {
@@ -353,7 +353,7 @@ fn install_wwn_boiler(tree: &mut Tree, mut content: String, enabled: bool) -> Re
 
 /// Resolves the cloud's names to nowhere in etc/hosts, which the resolver reads
 /// before DNS. Without the flag the block is taken out.
-pub fn patch_block_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
+pub fn set_up_block_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
     let mut content = text(tree, "etc/hosts")?;
     if let Some(start) = content.find(HOSTS_BEGIN) {
         let end = content[start..].find(HOSTS_END)
@@ -377,7 +377,7 @@ pub fn patch_block_cloud(tree: &mut Tree, enabled: bool) -> Result<()> {
 /// root's shell: a coloured prompt with the user and working directory, and
 /// the usual aliases, at the end of root/.profile. Disabled, the block is
 /// taken out.
-pub fn patch_shell(tree: &mut Tree, enabled: bool) -> Result<()> {
+pub fn set_up_shell(tree: &mut Tree, enabled: bool) -> Result<()> {
     let mut content = text(tree, PROFILE)?;
     if let Some(start) = content.find(SHELL_BEGIN) {
         let end = content[start..].find(SHELL_END)
@@ -412,16 +412,16 @@ fn patch_check_url(data: &mut [u8], name: &str, block_cloud: bool) -> Result<()>
     Ok(())
 }
 
-/// A device's part of the root filesystem patch.
+/// A device's part of the root filesystem setup.
 pub(crate) struct Rootfs {
-    /// The files the patch requires.
+    /// The files the setup requires.
     pub files: &'static [&'static str],
     /// The modes etc/shadow may have.
     pub shadow_modes: &'static [u32],
-    /// Files the patch may add, for the run's options.
+    /// Files the setup may add, for the run's options.
     pub optional_files: fn(&Options) -> Vec<String>,
     /// The USB root shell, SSH and root's shell profile, as the device has them.
-    pub patch: fn(&mut Tree, &Options) -> Result<()>,
+    pub set_up: fn(&mut Tree, &Options) -> Result<()>,
 }
 
 fn rootfs(target: Device) -> Result<&'static Rootfs> {
@@ -457,10 +457,10 @@ pub struct Options {
     /// (platform/common/localcloud), so nlclient reaches it without Wi-Fi.
     pub local_cloud: Vec<u8>,
     /// unfr0zen-apply for a unit that installs updates; empty for one that
-    /// cannot (the gen 1 and gen 2, patched from the host).
+    /// cannot (the gen 1 and gen 2, set up from the host).
     pub apply: Vec<u8>,
     /// The unit installs updates whatever signs them, not only those the
-    /// release key signs: a developer's. Kept in the record; the patch
+    /// release key signs: a developer's. Kept in the record; the setup
     /// itself does nothing with it.
     pub unsigned_updates: bool,
     /// The run's settings as etc/unfr0zen/options.json keeps them (mode 600:
@@ -482,12 +482,12 @@ pub struct Options {
     /// by nestlocal on the UNFR0ZEN screen.
     pub theme: Option<Overlay>,
     /// Regulate from nestlocal's virtual sensor: BLE on gen 3, or the
-    /// reviewed native RCS input and Sensors selector patch on gen 2.
+    /// reviewed native RCS input and Sensors selector patch on gen 1 and gen 2.
     pub external_temperature: bool,
-    /// The relocatable native Sensors view helper, linked only on j49.
+    /// The relocatable native Sensors view helper, linked only on gen 1 and gen 2.
     pub external_temperature_screen: Vec<u8>,
-    /// Gen 2's settings screens in the gen 3's dark palette, through the
-    /// reviewed nlclient 5.9.4-5 patch; other generations ignore it.
+    /// The gen 1's and gen 2's settings screens in the gen 3's dark palette,
+    /// through the reviewed nlclient 5.9.4-5 patch; the gen 3 ignores it.
     pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
@@ -549,7 +549,7 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
     Ok(())
 }
 
-/// Patches host copies of the device's files in patch_root0.py's order, with
+/// Sets up host copies of the device's files in patch_root0.py's order, with
 /// every option it takes, then (unless dry_run) applies the differences on
 /// the unit and verifies them on flash. The host never parses UBIFS.
 ///
@@ -558,17 +558,17 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 /// build_screen: the settings screen's undo journal for the unit's stock
 /// nlclient, as nlclient::build makes it.
 #[allow(clippy::too_many_arguments)]
-pub fn patch_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
+pub fn set_up_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
                        new_pki: &mut dyn FnMut() -> Result<Pki>,
                        dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
-    patch_owned(volume, target, options.clone(), nestlocal_binary.to_vec(), new_pki, dry_run, build_screen)
+    set_up_owned(volume, target, options.clone(), nestlocal_binary.to_vec(), new_pki, dry_run, build_screen)
 }
 
-/// patch_on_device, moving the options' and nestlocal's files into the patch
-/// rather than copying them: the 64 MB OMAP units patching themselves
+/// set_up_on_device, moving the options' and nestlocal's files into the setup
+/// rather than copying them: the 64 MB OMAP units setting themselves up
 /// cannot hold both.
 #[allow(clippy::too_many_arguments)]
-pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Options, nestlocal_binary: Vec<u8>,
+pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Options, nestlocal_binary: Vec<u8>,
                    new_pki: &mut dyn FnMut() -> Result<Pki>,
                    dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
@@ -599,7 +599,7 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source)?;
         let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
-        let dark_theme = target == Device::J49 && options.dark_theme;
+        let dark_theme = matches!(target, Device::Diamond | Device::J49) && options.dark_theme;
         if !options.block_cloud && !external_temperature && !dark_theme {
             return Ok(journal);
         }
@@ -619,14 +619,14 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
     fetch(volume, &mut tree, &mut originals, rootfs.files, true, true)?;
     let optional = (rootfs.optional_files)(&options);
     fetch(volume, &mut tree, &mut originals, &optional.iter().map(String::as_str).collect::<Vec<_>>(), false, false)?;
-    patch_root_password(&mut tree, &options.root_hash, rootfs.shadow_modes)?;
+    set_up_root_password(&mut tree, &options.root_hash, rootfs.shadow_modes)?;
     if public_key.is_some() {
         fetch(volume, &mut tree, &mut originals, &[AUTHORIZED_KEYS], false, true)?;
     }
     if let Some(server) = &options.ntp_server {
         let names: Vec<&str> = NTP_LINES.iter().map(|(name, _)| *name).collect();
         fetch(volume, &mut tree, &mut originals, &names, false, true)?;
-        patch_ntp(&mut tree, if server.is_empty() { DEFAULT_NTP_SERVER } else { server })?;
+        set_up_ntp(&mut tree, if server.is_empty() { DEFAULT_NTP_SERVER } else { server })?;
     }
     let mut overlay = None;
     // An installed nestlocal is the unit's cloud, so it stays; a run with no
@@ -714,13 +714,13 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
         }
         directories = std::mem::take(&mut overlay.directories);
     }
-    patch_backplate_sim(&mut tree, options.backplate_sim)?;
+    set_up_backplate_sim(&mut tree, options.backplate_sim)?;
     fetch(volume, &mut tree, &mut originals, &["etc/hosts"], options.block_cloud, true)?;
     if tree.contains_key("etc/hosts") {
-        patch_block_cloud(&mut tree, options.block_cloud)?;
+        set_up_block_cloud(&mut tree, options.block_cloud)?;
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
-    if matches!(target, Device::Diamond3 | Device::J49) {
+    if matches!(target, Device::Diamond | Device::Diamond3 | Device::J49) {
         fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
         fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
         let wake = options.matter.is_some() && !options.wake_filter.is_empty();
@@ -728,7 +728,7 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
             tree.insert(WAKE_FILTER.into(), (std::mem::take(&mut options.wake_filter), 0o755));
         }
         if tree.contains_key(NLSLEEP) {
-            patch_wake_patterns(&mut tree, wake)?;
+            set_up_wake_patterns(&mut tree, wake)?;
         }
     }
     if !options.record.is_empty() {
@@ -753,15 +753,15 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
         tree.insert(LOCAL_CLOUD.into(), (std::mem::take(&mut options.local_cloud), 0o755));
     }
     if tree.contains_key(NESTLABS) {
-        patch_local_cloud(&mut tree, overlay.is_some(), options.theme.is_some())?;
+        set_up_local_cloud(&mut tree, overlay.is_some(), options.theme.is_some())?;
     } else if overlay.is_some() {
         return device(format!("{NESTLABS} is missing: nlclient could not reach nestlocal"));
     }
-    patch_root_rw(&mut tree, true)?;
-    patch_wwn_boiler(&mut tree, options.wwn_boiler)?;
-    (rootfs.patch)(&mut tree, &options)?;
+    set_up_root_rw(&mut tree, true)?;
+    set_up_wwn_boiler(&mut tree, options.wwn_boiler)?;
+    (rootfs.set_up)(&mut tree, &options)?;
     if let Some(key) = &public_key {
-        patch_authorized_key(&mut tree, key)?;
+        set_up_authorized_key(&mut tree, key)?;
         directories.retain(|(name, _)| name != "root/.ssh");
         directories.push(("root/.ssh".into(), 0o700));
     }
@@ -771,12 +771,12 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
         return device("customizable home screen themes need nlclient");
     }
     if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && screen.is_none() {
-        return device("j49 external temperature requires nlclient");
+        return device("the external temperature requires nlclient");
     }
-    if target == Device::J49 && options.dark_theme && screen.is_none() {
-        return device("j49 dark theme requires nlclient");
+    if matches!(target, Device::Diamond | Device::J49) && options.dark_theme && screen.is_none() {
+        return device("the dark theme requires nlclient");
     }
-    // The stock nlclient's backup, and where an older patch left it: the gen
+    // The stock nlclient's backup, and where an older setup left it: the gen
     // 3's moves from the root volume to scratch (migrate_backups).
     let original_to = moved(crate::nlclient::ORIGINAL);
     fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ORIGINAL, original_to], false, false)?;
@@ -813,13 +813,13 @@ pub fn patch_owned(volume: &mut impl Volume, target: Device, mut options: Option
             else if previous.stock_sha != *sha { return device("nlclient undo journal does not match the executable"); }
         }
         if matches!(target, Device::Diamond | Device::J49) && options.external_temperature && !source.starts_with(b"\x7fELF") {
-            return device("j49 external temperature requires an ARM ELF nlclient");
+            return device("the external temperature requires an ARM ELF nlclient");
         }
-        if target == Device::J49 && options.dark_theme && !source.starts_with(b"\x7fELF") {
-            return device("j49 dark theme requires an ARM ELF nlclient");
+        if matches!(target, Device::Diamond | Device::J49) && options.dark_theme && !source.starts_with(b"\x7fELF") {
+            return device("the dark theme requires an ARM ELF nlclient");
         }
         if source.starts_with(b"\x7fELF") {
-            // Preserve the stock executable once, including on devices patched
+            // Preserve the stock executable once, including on devices set up
             // by older versions where only the undo journal was retained.
             if let Some((_, _, backup_sha)) = originals.get(original_at).and_then(Option::as_ref) {
                 if *backup_sha != sha256_hex(&source) {
@@ -1058,7 +1058,7 @@ fn check_staging_space(volume: &mut impl Volume, name: &str, size: u64) -> Resul
     Ok(())
 }
 
-/// Copies the stock backups an older patch kept on the gen 3's root volume to
+/// Copies the stock backups an older setup kept on the gen 3's root volume to
 /// scratch, unless scratch has them: the copy is written and read back
 /// before the root volume's goes (with the other moved files). A backup on
 /// both that differs is left to the user.
@@ -1122,7 +1122,7 @@ fn patch_boot_artwork(volume: &mut impl Volume, tree: &mut Tree, originals: &mut
         let Some((source, mode)) = tree.get(name) else { continue; };
         let (source, mode) = (source.clone(), *mode);
         if name == "boot/kernel_fdt.itb" {
-            // Vendor FIT signatures cannot be regenerated by the patcher.
+            // Vendor FIT signatures cannot be regenerated by the setup.
             fetch(volume, tree, originals, &[backup], false, true)?;
             if let Some((original, _)) = tree.get(backup) {
                 if crate::boot_branding::recolor(name, original)?.is_some_and(|branded| branded == source) {
@@ -1257,9 +1257,9 @@ mod tests {
     }
 
     #[test]
-    fn onyx_is_rejected_before_patching() {
+    fn onyx_is_rejected_before_setting_up() {
         let mut volume = FakeVolume::new(Vec::new());
-        let error = patch_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
+        let error = set_up_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
             &mut || panic!("unsupported device must not create keys"), false,
             &|_| panic!("unsupported device must not build a screen")).unwrap_err();
         assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
@@ -1318,7 +1318,7 @@ mod tests {
                 let options = Options { ssh: true, ssh_public_key: Some(format!("{key} user@host")),
                     ssh_server: Some(Overlay { directories: vec![], files: vec![
                         ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
-                let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
+                let run = |volume: &mut FakeVolume, options: &Options, dry_run| set_up_on_device(
                     volume, target, options, b"", &mut no_pki, dry_run,
                     &|source| crate::nlclient::build(source, b""));
                 let before = volume.files.clone();
@@ -1347,10 +1347,10 @@ mod tests {
         let key = public_key("ssh-ed25519", &[&[1; 32]]);
         let mut volume = FakeVolume::new(stock());
         let options = Options { ssh_public_key: Some(key), ..options() };
-        assert!(patch(&mut volume, &options, false).unwrap_err().to_string().contains("needs --ssh"));
+        assert!(set_up(&mut volume, &options, false).unwrap_err().to_string().contains("needs --ssh"));
         volume.files.insert(AUTHORIZED_KEYS.into(), ("1000:1000".into(), 0o600, b"keep".to_vec()));
         let options = Options { ssh: true, ..options };
-        assert!(patch(&mut volume, &options, false).unwrap_err().to_string().contains("not owned by root"));
+        assert!(set_up(&mut volume, &options, false).unwrap_err().to_string().contains("not owned by root"));
         assert!(volume.commands.is_empty());
     }
 
@@ -1366,14 +1366,14 @@ mod tests {
     fn matter_preloads_the_wake_pattern_library_into_nlsleepd_and_off_again_takes_it_out() {
         let mut tree = Tree::new();
         tree.insert(NLSLEEP.into(), (SCRIPT.as_bytes().to_vec(), 0o755));
-        patch_wake_patterns(&mut tree, true).unwrap();
+        set_up_wake_patterns(&mut tree, true).unwrap();
         let preloaded = script(&tree);
         assert!(preloaded.contains("\n LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} -- "));
         assert_eq!(tree[NLSLEEP].1, 0o755);
         // Again changes nothing.
-        patch_wake_patterns(&mut tree, true).unwrap();
+        set_up_wake_patterns(&mut tree, true).unwrap();
         assert_eq!(script(&tree), preloaded);
-        patch_wake_patterns(&mut tree, false).unwrap();
+        set_up_wake_patterns(&mut tree, false).unwrap();
         assert_eq!(script(&tree), SCRIPT);
     }
 
@@ -1381,8 +1381,8 @@ mod tests {
     fn a_script_that_starts_nlsleepd_another_way_is_refused_for_matter_and_left_alone_without() {
         let mut tree = Tree::new();
         tree.insert(NLSLEEP.into(), (b"start_nlsleepd () {\n nlsleepd &\n}\n".to_vec(), 0o755));
-        assert!(patch_wake_patterns(&mut tree, true).unwrap_err().to_string().contains("starting nlsleepd"));
-        patch_wake_patterns(&mut tree, false).unwrap();
+        assert!(set_up_wake_patterns(&mut tree, true).unwrap_err().to_string().contains("starting nlsleepd"));
+        set_up_wake_patterns(&mut tree, false).unwrap();
         assert_eq!(script(&tree), "start_nlsleepd () {\n nlsleepd &\n}\n");
     }
 
@@ -1394,8 +1394,8 @@ mod tests {
         panic!("a key set was made for a unit that has its own")
     }
 
-    fn patch(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-        patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
+    fn set_up(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
+        set_up_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o")))?;
             crate::nlclient::build(source, &object)
@@ -1414,12 +1414,12 @@ mod tests {
                                directories: Vec::new() };
         let options = Options { matter: Some(Matter::from_pairing_code(nestlocal::DEFAULT_MATTER_CODE).unwrap()),
                                 thread: Some(thread), ..options() };
-        patch(&mut volume, &options, false).unwrap();
+        set_up(&mut volume, &options, false).unwrap();
         let line = volume.text(nestlocal::OPTIONS);
         assert!(line.contains("-matter-thread") && !line.contains("-zigbee"));
         assert!(!volume.text("etc/monitrc").contains("include /etc/monit.d/wpantund.monitrc"));
         assert!(volume.text("etc/monit.d/nestlocal.monitrc").contains("nestlocal-thread-daemon"));
-        patch(&mut volume, &Options { thread: None, ..options }, false).unwrap();
+        set_up(&mut volume, &Options { thread: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-matter-thread"));
         assert!(!volume.text("etc/monit.d/nestlocal.monitrc").contains("nestlocal-thread-daemon"));
     }
@@ -1432,13 +1432,13 @@ mod tests {
         volume.files.insert(NLSLEEP.into(), ("0:0".into(), 0o755, script.as_bytes().to_vec()));
         let matter = Some(Matter::from_pairing_code(nestlocal::DEFAULT_MATTER_CODE).unwrap());
         let options = Options { matter, wake_filter: b"\x7fELF library".to_vec(), ..options() };
-        let changes = patch(&mut volume, &options, false).unwrap();
+        let changes = set_up(&mut volume, &options, false).unwrap();
         assert!(names(&changes).contains(WAKE_FILTER));
         assert_eq!((volume.files[WAKE_FILTER].1, volume.files[WAKE_FILTER].2.as_slice()), (0o755, &b"\x7fELF library"[..]));
         assert!(volume.text(NLSLEEP).contains(" LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} "));
         // Again changes neither.
-        assert!(!names(&patch(&mut volume, &options, false).unwrap()).contains(WAKE_FILTER));
-        let changes = patch(&mut volume, &Options { matter: None, mqtt: Some(Mqtt { url: "tcp://b:1883".into(), user: None,
+        assert!(!names(&set_up(&mut volume, &options, false).unwrap()).contains(WAKE_FILTER));
+        let changes = set_up(&mut volume, &Options { matter: None, mqtt: Some(Mqtt { url: "tcp://b:1883".into(), user: None,
             password: None, tls: false, ca: None, entity_root: None }), ..options }, false).unwrap();
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
@@ -1450,12 +1450,12 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
-        let changes = patch(&mut volume, &updates, false).unwrap();
+        let changes = set_up(&mut volume, &updates, false).unwrap();
         let engine = scratch::name(APPLY);
         assert!(changes.iter().any(|c| c.name == engine && c.action == "create"));
         assert_eq!((volume.files[engine].1, volume.files[engine].2.as_slice()), (0o755, &b"\x7fELF apply"[..]));
-        // A host-patched unit (no engine in its bundle) loses one an earlier run left.
-        let changes = patch(&mut volume, &Options { apply: Vec::new(), ..updates }, false).unwrap();
+        // A unit set up from the host (no engine in its bundle) loses one an earlier run left.
+        let changes = set_up(&mut volume, &Options { apply: Vec::new(), ..updates }, false).unwrap();
         assert!(changes.iter().any(|c| c.name == engine && c.action == "remove"));
     }
 
@@ -1464,15 +1464,15 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         let updates = Options { zigbee: true, apply: b"\x7fELF apply".to_vec(), ..options() };
-        patch(&mut volume, &updates, false).unwrap();
-        // Where an older patch left them.
+        set_up(&mut volume, &updates, false).unwrap();
+        // Where an older setup left them.
         for (root, on_scratch) in [("nestlabs/sbin/nestlocal", scratch::name("nestlabs/sbin/nestlocal")),
                                    (APPLY, scratch::name(APPLY))] {
             let file = volume.files.remove(on_scratch).unwrap();
             volume.files.insert(root.into(), ("0:0".into(), 0o755, b"OLD".to_vec()));
             assert_eq!(file.2, if root == APPLY { &b"\x7fELF apply"[..] } else { b"ARMV7" });
         }
-        let changes = patch(&mut volume, &updates, false).unwrap();
+        let changes = set_up(&mut volume, &updates, false).unwrap();
         for root in ["nestlabs/sbin/nestlocal", APPLY] {
             assert!(changes.iter().any(|c| c.name == root && c.action == "remove"), "{root}");
             assert!(!volume.files.contains_key(root), "{root}");
@@ -1481,20 +1481,20 @@ mod tests {
         assert_eq!(volume.files[scratch::name("nestlabs/sbin/nestlocal")].2, b"ARMV7");
         let manifest = volume.text(scratch::MANIFEST);
         assert!(manifest.contains("  bin/nestlocal\n") && manifest.contains("  bin/unfr0zen-apply\n"), "{manifest}");
-        assert!(patch(&mut volume, &updates, false).unwrap().is_empty(), "a second run changes nothing");
+        assert!(set_up(&mut volume, &updates, false).unwrap().is_empty(), "a second run changes nothing");
     }
 
     #[test]
     fn the_runs_settings_stay_on_the_unit_readable_by_root_alone() {
         let mut volume = FakeVolume::new(stock());
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         assert!(!volume.files.contains_key(RECORD));
         let record = Options { record: b"{\"zigbee\": true}\n".to_vec(), ..options() };
-        let changes = patch(&mut volume, &record, false).unwrap();
+        let changes = set_up(&mut volume, &record, false).unwrap();
         assert!(changes.iter().any(|c| c.name == RECORD && c.action == "create"));
         assert_eq!((volume.files[RECORD].1, volume.files[RECORD].2.as_slice()), (0o600, &b"{\"zigbee\": true}\n"[..]));
         assert_eq!(volume.directories["etc/unfr0zen"], "0:0 755");
-        assert!(!names(&patch(&mut volume, &record, false).unwrap()).contains(RECORD));
+        assert!(!names(&set_up(&mut volume, &record, false).unwrap()).contains(RECORD));
     }
 
     #[test]
@@ -1512,7 +1512,7 @@ mod tests {
                                          (THEME_LIBRARY.into(), 0o755, b"\x7fELF library".to_vec())],
                              directories: Vec::new() };
         let on = Options { theme: Some(theme), ..options() };
-        patch(&mut volume, &on, false).unwrap();
+        set_up(&mut volume, &on, false).unwrap();
         assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -themes"));
         assert!(volume.text(NESTLABS).contains(NLCLIENT_START.2));
         assert_eq!(volume.files[THEME_PRELOAD].2, b"\x7fELF preload");
@@ -1520,16 +1520,16 @@ mod tests {
         assert!(!volume.files.contains_key(THEME_LIBRARY), "kept off the root volume");
         let bindings = &volume.files[crate::nlclient::theme::BINDINGS];
         assert_eq!((bindings.1, &bindings.2), (0o644, &crate::nlclient::theme::bindings(&stock_nlclient).unwrap()));
-        assert!(names(&patch(&mut volume, &on, false).unwrap()).is_empty(), "a second run changes nothing");
+        assert!(names(&set_up(&mut volume, &on, false).unwrap()).is_empty(), "a second run changes nothing");
         // Off: nlclient starts without the preload, unbound, and its libraries go.
-        let changes = patch(&mut volume, &Options { theme: None, ..on.clone() }, false).unwrap();
+        let changes = set_up(&mut volume, &Options { theme: None, ..on.clone() }, false).unwrap();
         for name in [THEME_PRELOAD, scratch::name(THEME_LIBRARY), crate::nlclient::theme::BINDINGS] {
             assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name}");
         }
         assert!(!volume.text(nestlocal::OPTIONS).contains("-themes"));
         assert!(volume.text(NESTLABS).contains(NLCLIENT_START.1) && !volume.text(NESTLABS).contains("libunfr0zen-theme"));
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
-        let error = patch_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_| unreachable!())
+        let error = set_up_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_| unreachable!())
             .unwrap_err();
         assert!(error.to_string().contains("gen 3"), "{error}");
     }
@@ -1539,16 +1539,16 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         let zigbee = Options { zigbee: true, ..options() };
-        let changes = patch(&mut volume, &zigbee, false).unwrap();
+        let changes = set_up(&mut volume, &zigbee, false).unwrap();
         assert!(names(&changes).contains(LOCAL_CLOUD) && names(&changes).contains(NESTLABS));
         assert_eq!((volume.files[LOCAL_CLOUD].1, volume.files[LOCAL_CLOUD].2.as_slice()), (0o755, &b"\x7fELF local cloud"[..]));
         assert!(volume.text(NESTLABS).contains("\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a "));
         // Again changes neither, and turning every integration off keeps nestlocal, nlclient's cloud.
-        let again = names(&patch(&mut volume, &zigbee, false).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
+        let again = names(&set_up(&mut volume, &zigbee, false).unwrap()).into_iter().map(String::from).collect::<Vec<_>>();
         assert!(!again.iter().any(|name| name == LOCAL_CLOUD || name == NESTLABS), "{again:?}");
-        patch(&mut volume, &Options { zigbee: false, ..zigbee.clone() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: false, ..zigbee.clone() }, false).unwrap();
         assert!(volume.text(NESTLABS).contains("LD_PRELOAD=/nestlabs/lib/liblocalcloud.so"));
-        let error = patch(&mut volume, &Options { local_cloud: Vec::new(), ..zigbee }, false).unwrap_err();
+        let error = set_up(&mut volume, &Options { local_cloud: Vec::new(), ..zigbee }, false).unwrap_err();
         assert!(error.to_string().contains("local cloud library"), "{error}");
 
         // A unit without nestlocal: the library goes and nlclient starts as stock.
@@ -1556,7 +1556,7 @@ mod tests {
         volume.files.insert(NESTLABS.into(), ("0:0".into(), 0o755,
             NESTLABS_SCRIPT.replace(" ${STARTDAEMON} -q -b -p", " LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p").into_bytes()));
         volume.files.insert(LOCAL_CLOUD.into(), ("0:0".into(), 0o755, b"\x7fELF old".to_vec()));
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(changes.iter().any(|c| c.name == LOCAL_CLOUD && c.action == "remove"));
         assert_eq!(volume.text(NESTLABS), NESTLABS_SCRIPT);
     }
@@ -1566,10 +1566,10 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         let options = Options { external_temperature: true, ..options() };
-        patch(&mut volume, &options, false).unwrap();
+        set_up(&mut volume, &options, false).unwrap();
         assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -external-temperature"));
         assert!(!volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"1\""));
-        patch(&mut volume, &Options { external_temperature: false, ..options }, false).unwrap();
+        set_up(&mut volume, &Options { external_temperature: false, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("external-temperature"));
     }
 
@@ -1584,10 +1584,10 @@ mod tests {
                 volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, binary));
             }
             let before = volume.files.clone();
-            let error = patch_on_device(&mut volume, target,
+            let error = set_up_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
                 false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
-            assert!(error.to_string().contains("j49 external temperature"), "{error}");
+            assert!(error.to_string().contains("the external temperature requires"), "{error}");
             assert_eq!(volume.files, before);
             assert!(volume.commands.is_empty());
         }
@@ -1612,7 +1612,7 @@ mod tests {
             volume.files.insert("etc/hosts".into(), ("0:0".into(), 0o644, b"127.0.0.1 localhost\n".to_vec()));
             volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
             volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source.clone()));
-            let run = |volume: &mut FakeVolume, options: &Options, dry_run| patch_on_device(
+            let run = |volume: &mut FakeVolume, options: &Options, dry_run| set_up_on_device(
                 volume, Device::J49, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| crate::nlclient::build(source, &object));
             let off = Options { block_cloud, external_temperature_screen: rcs_object.clone(),
@@ -1649,11 +1649,11 @@ mod tests {
                 let pki = nestlocal::generate_pki().unwrap();
                 let mut volume = nestlocal_unit(Some(&pki));
                 volume.files.get_mut("etc/nestlabs/product.config").unwrap().2 = installed.clone().into_bytes();
-                patch(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
+                set_up(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
                 assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
-                patch(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
+                set_up(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false).unwrap();
                 assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
-                patch(&mut volume, &Options { mqtt: left_on, ..options() }, false).unwrap();
+                set_up(&mut volume, &Options { mqtt: left_on, ..options() }, false).unwrap();
                 assert_eq!(volume.text("etc/nestlabs/product.config"), original);
             }
         }
@@ -1666,19 +1666,19 @@ mod tests {
         let doom = Overlay { files: vec![("nestlabs/sbin/doom".into(), 0o755, b"DOOM".to_vec())],
                              directories: vec![("usr/share/doom".into(), 0o755)] };
         let options = Options { doom: Some(doom), ..options() };
-        patch(&mut volume, &options, false).unwrap();
+        set_up(&mut volume, &options, false).unwrap();
         assert!(volume.text(nestlocal::OPTIONS).trim_end().ends_with(" -doom"));
         assert_eq!(volume.text("media/scratch/.unfr0zen/doom/doom"), "DOOM");
         assert!(!volume.files.contains_key("nestlabs/sbin/doom"));
         assert_eq!(volume.directories["media/scratch/.unfr0zen/doom"], "0:0 755");
-        patch(&mut volume, &Options { doom: None, ..options }, false).unwrap();
+        set_up(&mut volume, &Options { doom: None, ..options }, false).unwrap();
         assert!(!volume.text(nestlocal::OPTIONS).contains("-doom"));
     }
 
     #[test]
     fn dry_run_writes_nothing() {
         let mut volume = FakeVolume::new(stock());
-        let changes = patch(&mut volume, &options(), true).unwrap();
+        let changes = set_up(&mut volume, &options(), true).unwrap();
         // Without SSH, sshd's own files stay stock and are not written.
         let unchanged = ["etc/nestlabs/client.config", "etc/ssh/sshd_config", "etc/init.d/sshd"];
         let expected: BTreeSet<&str> = ROOT_SHELL_FILES.iter().copied().filter(|n| !unchanged.contains(n)).collect();
@@ -1689,10 +1689,10 @@ mod tests {
     }
 
     #[test]
-    fn writes_patched_files_and_keeps_owner_and_mode() {
+    fn writes_set_up_files_and_keeps_owner_and_mode() {
         let mut volume = FakeVolume::new(stock());
         volume.files.get_mut("etc/shadow").unwrap().0 = "0:42".into();
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.commands.first().unwrap(), "remount rw");
         assert_eq!(volume.commands.last().unwrap(), "remount ro");
         assert!(volume.text("etc/shadow").starts_with("root:$6$salt$hash:16000"));
@@ -1709,11 +1709,11 @@ mod tests {
     }
 
     #[test]
-    fn a_patched_volume_is_left_alone() {
+    fn a_set_up_volume_is_left_alone() {
         let mut volume = FakeVolume::new(stock());
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         volume.commands.clear();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
     }
 
@@ -1721,11 +1721,11 @@ mod tests {
     fn refuses_files_not_owned_by_root_and_a_volume_without_its_shell() {
         let mut volume = FakeVolume::new(stock());
         volume.files.get_mut("etc/inittab").unwrap().0 = "1000:1000".into();
-        assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("not owned by root"));
+        assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("not owned by root"));
         for binary in ["", "0 644", "1000 755"] {
             let mut volume = FakeVolume::new(stock());
             volume.binary = binary.into();
-            assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("bin/busybox or bin/toybox"));
+            assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("bin/busybox or bin/toybox"));
             assert!(volume.commands.is_empty());
         }
     }
@@ -1748,15 +1748,15 @@ mod tests {
     fn readback_mismatch_and_too_little_space_fail() {
         let mut volume = FakeVolume::new(stock());
         volume.readback = Some("0".repeat(64));
-        assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("readback from flash"));
+        assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("readback from flash"));
         let mut volume = FakeVolume::new(stock());
         volume.free = 4096;
-        assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("free space"));
+        assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("free space"));
         assert!(volume.commands.is_empty());
     }
 
     #[test]
-    fn unexpected_stock_files_stop_the_patch_before_any_write() {
+    fn unexpected_stock_files_stop_the_setup_before_any_write() {
         type Mutation = fn(&mut File<Vec<u8>>);
         let cases: Vec<(&str, Mutation, &str)> = vec![
             ("etc/shadow", |f| f.2.extend_from_slice(b"root:*:1:0:99999:7:::\n"), "one root account"),
@@ -1771,7 +1771,7 @@ mod tests {
             files.push(("etc/hosts", 0o644, "127.0.0.1 localhost\n".into()));
             let mut volume = FakeVolume::new(files);
             change(volume.files.get_mut(name).unwrap());
-            let failure = patch(&mut volume, &Options { block_cloud: true, ..options() }, false).unwrap_err();
+            let failure = set_up(&mut volume, &Options { block_cloud: true, ..options() }, false).unwrap_err();
             assert!(failure.to_string().contains(error), "{name}: {failure}");
             assert!(volume.commands.is_empty(), "{name}");
         }
@@ -1782,7 +1782,7 @@ mod tests {
         let mut files = stock();
         files.push(("etc/connman/main.conf", 0o644, "[General]\nFallbackTimeservers = time.nest.com\n".into()));
         let mut volume = FakeVolume::new(files);
-        let changes = patch(&mut volume, &Options { ntp_server: Some(String::new()), ..options() }, false).unwrap();
+        let changes = set_up(&mut volume, &Options { ntp_server: Some(String::new()), ..options() }, false).unwrap();
         assert!(names(&changes).contains("etc/connman/main.conf"));
         assert!(volume.text("etc/connman/main.conf").contains("FallbackTimeservers = pool.ntp.org\n"));
         assert!(!volume.files.contains_key("etc/ntp.conf"));
@@ -1795,17 +1795,17 @@ mod tests {
         files.push(("etc/hosts", 0o644, HOSTS.into()));
         let mut volume = FakeVolume::new(files);
         let blocked = Options { block_cloud: true, ..options() };
-        assert!(names(&patch(&mut volume, &blocked, false).unwrap()).contains("etc/hosts"));
+        assert!(names(&set_up(&mut volume, &blocked, false).unwrap()).contains("etc/hosts"));
         let hosts = volume.text("etc/hosts");
         assert!(hosts.starts_with(HOSTS));
         assert!(hosts.contains("0.0.0.0 frontdoor.nest.com\n:: frontdoor.nest.com\n"));
-        assert!(!names(&patch(&mut volume, &blocked, false).unwrap()).contains("etc/hosts"));
-        patch(&mut volume, &options(), false).unwrap();
+        assert!(!names(&set_up(&mut volume, &blocked, false).unwrap()).contains("etc/hosts"));
+        set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.text("etc/hosts"), HOSTS);
         // A unit without etc/hosts is fine until the block is asked for.
         let mut bare = FakeVolume::new(stock());
-        patch(&mut bare, &options(), false).unwrap();
-        assert!(patch(&mut bare, &blocked, false).unwrap_err().to_string().contains("etc/hosts"));
+        set_up(&mut bare, &options(), false).unwrap();
+        assert!(set_up(&mut bare, &blocked, false).unwrap_err().to_string().contains("etc/hosts"));
     }
 
     #[test]
@@ -1814,16 +1814,16 @@ mod tests {
         let mut files = stock();
         files.push((PROFILE, 0o644, PROFILE_TEXT.into()));
         let mut volume = FakeVolume::new(files);
-        assert!(names(&patch(&mut volume, &options(), false).unwrap()).contains(PROFILE));
-        let patched = format!("{PROFILE_TEXT}{SHELL_BEGIN}{SHELL}{SHELL_END}");
-        assert_eq!(volume.text(PROFILE), patched);
-        assert!(!names(&patch(&mut volume, &options(), false).unwrap()).contains(PROFILE));
-        let mut tree = Tree::from([(PROFILE.to_string(), (patched.into_bytes(), 0o644))]);
-        patch_shell(&mut tree, false).unwrap();
+        assert!(names(&set_up(&mut volume, &options(), false).unwrap()).contains(PROFILE));
+        let profile = format!("{PROFILE_TEXT}{SHELL_BEGIN}{SHELL}{SHELL_END}");
+        assert_eq!(volume.text(PROFILE), profile);
+        assert!(!names(&set_up(&mut volume, &options(), false).unwrap()).contains(PROFILE));
+        let mut tree = Tree::from([(PROFILE.to_string(), (profile.into_bytes(), 0o644))]);
+        set_up_shell(&mut tree, false).unwrap();
         assert_eq!(text(&tree, PROFILE).unwrap(), PROFILE_TEXT);
         // A unit without root/.profile keeps its stock shell.
         let mut bare = FakeVolume::new(stock());
-        assert!(!names(&patch(&mut bare, &options(), false).unwrap()).contains(PROFILE));
+        assert!(!names(&set_up(&mut bare, &options(), false).unwrap()).contains(PROFILE));
     }
 
     fn nestlocal_unit(pki: Option<&Pki>) -> FakeVolume {
@@ -1847,7 +1847,7 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mqtt = Mqtt { url: "broker".into(), user: Some("u".into()), password: Some("p".into()), ..Mqtt::default() };
         let mut volume = nestlocal_unit(Some(&pki));
-        let changes = patch(&mut volume, &Options { mqtt: Some(mqtt.clone()), ..options() }, false).unwrap();
+        let changes = set_up(&mut volume, &Options { mqtt: Some(mqtt.clone()), ..options() }, false).unwrap();
         assert!(!names(&changes).contains("etc/nestlocal/server.crt"));
         assert_eq!(volume.files["etc/nestlocal/server.key"].2, pki.server_key);
         assert_eq!(volume.text("etc/nestlocal/mqtt.password"), "p\n");
@@ -1856,7 +1856,7 @@ mod tests {
         // A unit without nestlocal gets the key set it is given.
         let mut fresh = nestlocal_unit(None);
         let mut made = 0;
-        patch_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
+        set_up_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
                         &mut || { made += 1; Ok(pki.clone()) }, false,
                         &|source| crate::nlclient::build(source, b"")).unwrap();
         assert_eq!(made, 1);
@@ -1869,13 +1869,13 @@ mod tests {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
         // Nest's radio: rcS has no block.
-        patch(&mut volume, &Options { mqtt: Some(Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() }), ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { mqtt: Some(Mqtt { url: "tcp://b:1883".into(), ..Mqtt::default() }), ..options() }, false).unwrap();
         let without = volume.text("etc/init.d/rcS");
         assert!(!without.contains(WWN_BEGIN));
         // Zigbee alone does not ask for it.
-        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
         assert!(!volume.text("etc/init.d/rcS").contains(WWN_BEGIN));
-        patch(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
         let rcs = volume.text("etc/init.d/rcS");
         let block = &rcs[rcs.find(WWN_BEGIN).unwrap()..rcs.find(WWN_END).unwrap() + WWN_END.len()];
         assert_eq!(rcs.replace(block, ""), without);
@@ -1886,12 +1886,12 @@ mod tests {
         // nestlabs's on the next run; the same run changes nothing.
         assert!(rcs.contains(&format!("{WWN_END}${{INITDIR}}/nestlocal start\n${{INITDIR}}/nestlabs start\n")), "{rcs}");
         assert_eq!(volume.files["etc/init.d/rcS"].1, 0o750);
-        patch(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: true, wwn_boiler: true, ..options() }, false).unwrap();
         assert_eq!(volume.text("etc/init.d/rcS"), rcs);
         // Not asked for any more, the radio still ours: the block takes the
         // key back once, then the marker, and stays the only change around
         // nestlabs's line.
-        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
         let rcs = volume.text("etc/init.d/rcS");
         assert_eq!(rcs.matches(WWN_BEGIN).count(), 1);
         assert!(rcs.contains("if [ -f /media/user-config/.unfr0zen-wwn-boiler ]; then\n  sed -i '/<s key=\"using_wwn_boiler\" /d' /media/user-config/settings.config\n  rm -f /media/user-config/.unfr0zen-wwn-boiler\nfi\n"));
@@ -1903,12 +1903,12 @@ mod tests {
     fn a_run_with_no_integration_turns_an_installed_nestlocals_off() {
         let pki = nestlocal::generate_pki().unwrap();
         let mut volume = nestlocal_unit(Some(&pki));
-        patch(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { zigbee: true, ..options() }, false).unwrap();
         assert!(!volume.text("etc/monitrc").contains("wpantund"));
         assert!(volume.text("etc/nestlocal/options").contains("-zigbee"));
         // Nothing ticked: nestlocal stays, as the unit's cloud, with Nest's
         // Thread radio set-up back and no integration of its own.
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         assert!(volume.text("etc/monitrc").contains("include /etc/monit.d/wpantund.monitrc\n"));
         assert!(volume.text("etc/init.d/networking-defines").contains("wpan"));
         let line = volume.text("etc/nestlocal/options");
@@ -1916,7 +1916,7 @@ mod tests {
         assert!(volume.text("etc/init.d/rcS").contains("${INITDIR}/nestlocal start\n"));
         // A unit that never had nestlocal does not get it.
         let mut stock_unit = nestlocal_unit(None);
-        patch(&mut stock_unit, &options(), false).unwrap();
+        set_up(&mut stock_unit, &options(), false).unwrap();
         assert!(!stock_unit.files.contains_key("etc/nestlocal/options"));
     }
 
@@ -1935,47 +1935,47 @@ mod tests {
             assert!(inittab.contains(SHELL_LINES.0) && !inittab.contains('#'), "{inittab}");
             assert_eq!(volume.text("etc/init.d/usb-gadget"), stock_gadget);
         };
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         off(&volume);
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
-        patch(&mut volume, &Options { usb_shell: true, ..options() }, false).unwrap();
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
+        set_up(&mut volume, &Options { usb_shell: true, ..options() }, false).unwrap();
         on(&volume);
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         off(&volume);
-        patch(&mut volume, &Options { usb_shell: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { usb_shell: true, ..options() }, false).unwrap();
         on(&volume);
         // SSH does not depend on it: unlocked still says yes.
         assert_eq!(volume.text("usr/sbin/unlocked"), "#!/bin/sh\necho 1\n");
-        // A unit patched before the login shell gets it, on or off.
+        // A unit set up before the login shell gets it, on or off.
         for (plain, line) in [("ttyGS0::respawn:/bin/sh\n", SHELL_LINES.0), ("#ttyGS0::respawn:/bin/sh\n", SHELL_LINES.1)] {
             let mut earlier = FakeVolume::new(stock());
             earlier.files.get_mut("etc/inittab").unwrap().2 = format!("::sysinit:/etc/init.d/rcS\n{plain}").into_bytes();
-            patch(&mut earlier, &Options { usb_shell: true, ..options() }, false).unwrap();
+            set_up(&mut earlier, &Options { usb_shell: true, ..options() }, false).unwrap();
             on(&earlier);
-            patch(&mut earlier, &options(), false).unwrap();
+            set_up(&mut earlier, &options(), false).unwrap();
             off(&earlier);
             assert!(!earlier.text("etc/inittab").contains(plain.trim_start_matches('#')), "{line}");
         }
         // A usb-gadget without the ACM line is not one this edit knows.
         let mut odd = FakeVolume::new(stock());
         odd.files.get_mut("etc/init.d/usb-gadget").unwrap().2 = b"USB_GADGET_MOD=g_mass_storage\n".to_vec();
-        assert!(patch(&mut odd, &options(), false).unwrap_err().to_string().contains("g_acm_ms"));
+        assert!(set_up(&mut odd, &options(), false).unwrap_err().to_string().contains("g_acm_ms"));
     }
 
     #[test]
     fn ssh_without_password_login_takes_keys_only_and_needs_a_key() {
         let mut volume = FakeVolume::new(stock());
         let key = Some(public_key("ssh-ed25519", &[&[1; 32]]));
-        assert!(patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ..options() }, false).is_err(), "no key: no way in");
-        patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
+        assert!(set_up(&mut volume, &Options { ssh: true, ssh_key_only: true, ..options() }, false).is_err(), "no key: no way in");
+        set_up(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
         assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin without-password\n"), "OpenSSH 6.0's spelling");
         let config = volume.text("etc/ssh/sshd_config").replace("without-password", "prohibit-password");
         volume.files.get_mut("etc/ssh/sshd_config").unwrap().2 = config.into_bytes();
-        patch(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
-        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin without-password\n"), "older patch's line replaced");
-        patch(&mut volume, &Options { ssh: true, ssh_public_key: key, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { ssh: true, ssh_key_only: true, ssh_public_key: key.clone(), ..options() }, false).unwrap();
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin without-password\n"), "older setup's line replaced");
+        set_up(&mut volume, &Options { ssh: true, ssh_public_key: key, ..options() }, false).unwrap();
         assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin yes\n"), "password login allowed again");
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin no\n"), "SSH off: stock");
     }
 
@@ -1995,26 +1995,26 @@ mod tests {
             assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin yes\n"));
             assert!(volume.text("etc/init.d/sshd").contains("CreateKeyIfAbsent ecdsa"));
         };
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         off(&volume);
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
-        patch(&mut volume, &Options { ssh: true, ..options() }, false).unwrap();
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
+        set_up(&mut volume, &Options { ssh: true, ..options() }, false).unwrap();
         on(&volume);
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         off(&volume);
-        patch(&mut volume, &Options { ssh: true, ..options() }, false).unwrap();
+        set_up(&mut volume, &Options { ssh: true, ..options() }, false).unwrap();
         on(&volume);
         // An rcS that does not start sshd is not one this edit knows.
         let mut odd = FakeVolume::new(stock());
         odd.files.get_mut("etc/init.d/rcS").unwrap().2 = b"a\n${INITDIR}/mountfs start\n${INITDIR}/nestlabs start\n".to_vec();
-        assert!(patch(&mut odd, &options(), false).unwrap_err().to_string().contains("sshd start"));
+        assert!(set_up(&mut odd, &options(), false).unwrap_err().to_string().contains("sshd start"));
     }
 
     #[test]
     fn unsupported_nlclient_is_left_unchanged() {
         let mut volume = FakeVolume::new(stock());
         volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, b"other firmware".to_vec()));
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(!names(&changes).contains(crate::nlclient::BINARY));
         assert!(!volume.files.contains_key(crate::nlclient::JOURNAL));
         assert_eq!(volume.files[crate::nlclient::BINARY].2, b"other firmware");
@@ -2026,12 +2026,12 @@ mod tests {
         let source = std::fs::read(std::env::var("NLCLIENT_STOCK").expect("NLCLIENT_STOCK")).unwrap();
         let mut volume = FakeVolume::new(stock());
         volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source));
-        let changes = patch(&mut volume, &options(), true).unwrap();
+        let changes = set_up(&mut volume, &options(), true).unwrap();
         assert!(volume.commands.is_empty());
         assert!(names(&changes).contains(crate::nlclient::BINARY));
         assert!(names(&changes).contains(crate::nlclient::ORIGINAL));
         assert!(!volume.files.contains_key(crate::nlclient::ORIGINAL));
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(names(&changes).contains(crate::nlclient::ICON));
         assert_eq!(volume.files[crate::nlclient::GLYPH].2, crate::nlclient::GLYPH_BYTES);
         let journal = &volume.files[crate::nlclient::JOURNAL].2;
@@ -2042,11 +2042,11 @@ mod tests {
         let binary_write = volume.commands.iter().position(|c| c.starts_with(&format!("write {} ", crate::nlclient::BINARY))).unwrap();
         assert!(backup_write < binary_write);
         volume.commands.clear();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
         // Upgrade older installations that only have the undo journal.
         volume.files.remove(crate::nlclient::ORIGINAL);
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(names(&changes), BTreeSet::from([crate::nlclient::ORIGINAL]));
         assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, restored);
         // Even existing backup permissions are preserved on later runs.
@@ -2066,16 +2066,16 @@ mod tests {
         zip.write_all(&old_journal).unwrap();
         volume.files.get_mut(crate::nlclient::JOURNAL).unwrap().2 = zip.finish().unwrap();
         volume.files.get_mut(crate::nlclient::BINARY).unwrap().2 = old_binary;
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(names(&changes).contains(crate::nlclient::BINARY));
         assert_eq!(volume.files[crate::nlclient::JOURNAL].2, current_journal);
         assert_eq!(volume.files[crate::nlclient::ORIGINAL], ("0:0".into(), 0o400, restored));
         assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {} ", crate::nlclient::ORIGINAL))));
-        assert!(patch(&mut volume, &options(), true).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), true).unwrap().is_empty());
         // An unexpected existing backup is never replaced.
         volume.files.get_mut(crate::nlclient::ORIGINAL).unwrap().2 = b"keep me".to_vec();
         volume.commands.clear();
-        assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
+        assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
         assert!(volume.commands.is_empty());
         assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, b"keep me");
     }
@@ -2086,7 +2086,7 @@ mod tests {
         for (name, _) in crate::boot_branding::FILES {
             volume.files.insert(name.into(), ("0:0".into(), 0o644, b"custom artwork".to_vec()));
         }
-        let changes = patch(&mut volume, &options(), false).unwrap();
+        let changes = set_up(&mut volume, &options(), false).unwrap();
         for (name, backup) in crate::boot_branding::FILES {
             assert!(!names(&changes).contains(name));
             assert_eq!(volume.files[name].2, b"custom artwork");
@@ -2104,13 +2104,13 @@ mod tests {
             stock_art.insert(*name, source.clone());
             volume.files.insert((*name).into(), ("0:0".into(), 0o644, source));
         }
-        let dry = patch(&mut volume, &options(), true).unwrap();
+        let dry = set_up(&mut volume, &options(), true).unwrap();
         assert!(volume.commands.is_empty());
         for &(name, backup) in &crate::boot_branding::FILES[..2] {
             assert!(names(&dry).contains(name) && names(&dry).contains(backup));
             assert!(!volume.files.contains_key(backup));
         }
-        assert_eq!(patch(&mut volume, &options(), false).unwrap(), dry);
+        assert_eq!(set_up(&mut volume, &options(), false).unwrap(), dry);
         let (kernel, kernel_backup) = crate::boot_branding::FILES[2];
         assert_eq!(volume.files[kernel].2, stock_art[kernel]);
         assert!(!volume.files.contains_key(kernel_backup));
@@ -2122,20 +2122,20 @@ mod tests {
             assert!(before < after);
         }
         volume.commands.clear();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
         // A restored original can be recolored using its existing untouched backup.
         let (name, backup) = crate::boot_branding::FILES[0];
         volume.files.get_mut(name).unwrap().2 = stock_art[name].clone();
         volume.files.get_mut(backup).unwrap().1 = 0o400;
-        let changed = patch(&mut volume, &options(), false).unwrap();
+        let changed = set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(names(&changed), BTreeSet::from([name]));
         assert_eq!(volume.files[backup].1, 0o400);
         assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {backup} "))));
         // A backup from another firmware is preserved along with its live artwork.
         volume.files.get_mut(name).unwrap().2 = stock_art[name].clone();
         volume.files.get_mut(backup).unwrap().2 = b"keep this backup".to_vec();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert_eq!(volume.files[name].2, stock_art[name]);
         assert_eq!(volume.files[backup].2, b"keep this backup");
     }
@@ -2147,22 +2147,22 @@ mod tests {
         let original = std::fs::read(dir.join("kernel-stock.itb")).unwrap();
         let branded = crate::boot_branding::recolor(name, &original).unwrap().unwrap();
         let mut volume = FakeVolume::new(stock());
-        patch(&mut volume, &options(), false).unwrap();
+        set_up(&mut volume, &options(), false).unwrap();
         volume.commands.clear();
         volume.files.insert(name.into(), ("0:0".into(), 0o644, branded.clone()));
         volume.files.insert(backup.into(), ("0:0".into(), 0o400, original.clone()));
-        let dry = patch(&mut volume, &options(), true).unwrap();
+        let dry = set_up(&mut volume, &options(), true).unwrap();
         assert_eq!(names(&dry), BTreeSet::from([name]));
         assert!(volume.commands.is_empty());
         assert_eq!(volume.files[name].2, branded);
-        assert_eq!(patch(&mut volume, &options(), false).unwrap(), dry);
+        assert_eq!(set_up(&mut volume, &options(), false).unwrap(), dry);
         assert_eq!(volume.files[name].2, original);
         assert_eq!(volume.files[backup], ("0:0".into(), 0o400, original));
         volume.commands.clear();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
         volume.files.get_mut(name).unwrap().2 = b"custom kernel".to_vec();
-        assert!(patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert_eq!(volume.files[name].2, b"custom kernel");
     }
 
@@ -2174,7 +2174,7 @@ mod tests {
         let mut volume = FakeVolume::new(stock());
         volume.files.insert(name.into(), ("0:0".into(), 0o644, source.clone()));
         volume.failing = Some(backup);
-        assert!(patch(&mut volume, &options(), false).is_err());
+        assert!(set_up(&mut volume, &options(), false).is_err());
         assert_eq!(volume.files[name].2, source);
         assert!(!volume.files.contains_key(backup));
     }
@@ -2190,8 +2190,8 @@ mod tests {
             *self.0.borrow_mut() = journal.clone();
             journal
         }
-        fn patch(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-            patch_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run,
+        fn set_up(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
+            set_up_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run,
                 &|source| {
                     if source != self.stock() { return device("fake screen builder received different firmware"); }
                     Ok(self.0.borrow().clone())
@@ -2218,19 +2218,19 @@ mod tests {
         let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
         let journal = build.makes(&output);
         let mut volume = with_nlclient(build.stock());
-        let changes = build.patch(&mut volume, &options(), true).unwrap();
+        let changes = build.set_up(&mut volume, &options(), true).unwrap();
         for name in [BINARY, backup, JOURNAL, ICON, GLYPH, "etc/unfr0zen/"] {
             assert!(names(&changes).contains(name), "{name}");
         }
         assert!(volume.commands.is_empty());
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.files[BINARY], ("0:0".into(), 0o755, output));
         assert_eq!(volume.files[backup], ("0:0".into(), 0o600, build.stock()));
         assert_eq!(volume.files[JOURNAL].2, journal);
         assert!(position(&volume, backup) < position(&volume, BINARY));
         assert!(position(&volume, BINARY) < position(&volume, JOURNAL));
         volume.commands.clear();
-        assert!(build.patch(&mut volume, &options(), false).unwrap().is_empty());
+        assert!(build.set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
     }
 
@@ -2242,9 +2242,9 @@ mod tests {
         let build = FakeBuild::new();
         let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
         build.makes(&output);
-        // A unit an older patch left with everything on its root volume.
+        // A unit an older setup left with everything on its root volume.
         let mut volume = with_nlclient(build.stock());
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         let backup = volume.files.remove(scratch::name(ORIGINAL)).unwrap();
         volume.files.insert(ORIGINAL.into(), backup.clone());
         volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, connmand.clone()));
@@ -2253,7 +2253,7 @@ mod tests {
         volume.files.insert("usr/share/doom/doom1.wad".into(), ("0:0".into(), 0o644, b"WAD".to_vec()));
         volume.files.remove(scratch::MANIFEST);
         volume.commands.clear();
-        let changes = build.patch(&mut volume, &options(), false).unwrap();
+        let changes = build.set_up(&mut volume, &options(), false).unwrap();
         for name in [ORIGINAL, CONNMAND_ORIGINAL, "nestlabs/sbin/doom", "usr/share/doom/doom1.wad"] {
             assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name}");
             assert!(!volume.files.contains_key(name), "{name}");
@@ -2269,19 +2269,19 @@ mod tests {
         assert_eq!(manifest, format!("{}  backup/connmand.original\n{}  backup/nlclient.original\n",
                                      sha256_hex(&connmand), sha256_hex(&backup.2)));
         assert_eq!(volume.directories[scratch::DIR], "0:0 755");
-        assert!(build.patch(&mut volume, &options(), false).unwrap().is_empty(), "a second run changes nothing");
+        assert!(build.set_up(&mut volume, &options(), false).unwrap().is_empty(), "a second run changes nothing");
     }
 
     #[test]
-    fn differing_backups_on_root_and_scratch_stop_the_patch_before_any_write() {
+    fn differing_backups_on_root_and_scratch_stop_the_setup_before_any_write() {
         use crate::nlclient::ORIGINAL;
         let build = FakeBuild::new();
         build.makes(&[&build.stock()[..], b"screen"].concat());
         let mut volume = with_nlclient(build.stock());
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         volume.files.insert(ORIGINAL.into(), ("0:0".into(), 0o600, b"\x7fELF another stock".to_vec()));
         volume.commands.clear();
-        let error = build.patch(&mut volume, &options(), false).unwrap_err().to_string();
+        let error = build.set_up(&mut volume, &options(), false).unwrap_err().to_string();
         assert!(error.contains("different backups"), "{error}");
         assert!(volume.commands.is_empty());
     }
@@ -2292,13 +2292,13 @@ mod tests {
         build.makes(&[&build.stock()[..], b"screen"].concat());
         let mut volume = with_nlclient(build.stock());
         volume.scratch_free = 1000;
-        let error = build.patch(&mut volume, &options(), false).unwrap_err().to_string();
+        let error = build.set_up(&mut volume, &options(), false).unwrap_err().to_string();
         assert!(error.starts_with("Scratch has too little free space"), "{error}");
         assert!(volume.commands.is_empty());
         // Room on scratch, and on the root volume for its own writes alone.
         volume.scratch_free = 1 << 30;
         volume.free = (1 << 20) + (1 << 17);
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         assert!(volume.files.contains_key(scratch::name(crate::nlclient::ORIGINAL)));
     }
 
@@ -2309,9 +2309,9 @@ mod tests {
         build.makes(&[&build.stock()[..], b"UNFR0ZEN screen"].concat());
         let mut volume = with_nlclient(build.stock());
         let first = Options { version: "v1.2-3-gabc1234".into(), ..options() };
-        build.patch(&mut volume, &first, false).unwrap();
+        build.set_up(&mut volume, &first, false).unwrap();
         assert_eq!(volume.files[VERSION], ("0:0".into(), 0o644, b"unfr0zen v1.2-3-gabc1234\n".to_vec()));
-        let changes = build.patch(&mut volume, &Options { version: "v1.3".into(), ..first }, false).unwrap();
+        let changes = build.set_up(&mut volume, &Options { version: "v1.3".into(), ..first }, false).unwrap();
         assert_eq!(changes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [VERSION]);
         assert_eq!(volume.files[VERSION].2, b"unfr0zen v1.3\n");
     }
@@ -2330,7 +2330,7 @@ mod tests {
         volume.files.insert("etc/hosts".into(), ("0:0".into(), 0o644, b"127.0.0.1 localhost\n".to_vec()));
         let contains = |data: &[u8], url: &[u8]| data.windows(url.len()).any(|w| w == url);
         let blocked = Options { block_cloud: true, ..options() };
-        build.patch(&mut volume, &blocked, false).unwrap();
+        build.set_up(&mut volume, &blocked, false).unwrap();
         for name in [CONNMAND, BINARY] {
             let data = &volume.files[name].2;
             assert!(contains(data, cloudflare) && !contains(data, google), "{name}");
@@ -2340,22 +2340,22 @@ mod tests {
         assert!(position(&volume, backup) < position(&volume, CONNMAND));
         let journal = Patch::parse(&volume.files[JOURNAL].2).unwrap();
         assert_eq!(journal.apply(&volume.files[BINARY].2, true).unwrap(), build.stock());
-        assert!(build.patch(&mut volume, &blocked, false).unwrap().is_empty());
-        build.patch(&mut volume, &options(), false).unwrap();
+        assert!(build.set_up(&mut volume, &blocked, false).unwrap().is_empty());
+        build.set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(volume.files[CONNMAND].2, connmand);
         assert_eq!(volume.files[backup].2, connmand);
         assert_eq!(volume.files[BINARY].2, output);
         // A backup of some other connmand is never overwritten, nor patched over.
         volume.files.get_mut(backup).unwrap().2 = b"other connmand".to_vec();
-        assert!(build.patch(&mut volume, &blocked, false).unwrap_err().to_string().contains("connmand original backup"));
+        assert!(build.set_up(&mut volume, &blocked, false).unwrap_err().to_string().contains("connmand original backup"));
         assert_eq!(volume.files[CONNMAND].2, connmand);
         volume.files.remove(backup);
         // A connmand without the URL is left alone; one with it twice is refused.
         volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, b"\x7fELF connmand\0".to_vec()));
-        build.patch(&mut volume, &blocked, false).unwrap();
+        build.set_up(&mut volume, &blocked, false).unwrap();
         assert_eq!(volume.files[CONNMAND].2, b"\x7fELF connmand\0");
         volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, [google, google].concat()));
-        assert!(build.patch(&mut volume, &blocked, false).unwrap_err().to_string().contains(CONNMAND));
+        assert!(build.set_up(&mut volume, &blocked, false).unwrap_err().to_string().contains(CONNMAND));
     }
 
     #[test]
@@ -2366,10 +2366,10 @@ mod tests {
         let first = [&build.stock()[..], b"first screen"].concat();
         let old_journal = build.makes(&first);
         let mut volume = with_nlclient(build.stock());
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         build.makes(&[&build.stock()[..], b"second screen"].concat());
         volume.failing = Some(BINARY);
-        assert!(build.patch(&mut volume, &options(), false).unwrap_err().to_string().contains("no space left"));
+        assert!(build.set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("no space left"));
         assert_eq!(volume.files[BINARY].2, first);
         assert_eq!(volume.files[JOURNAL].2, old_journal);
         assert_eq!(volume.files[backup].2, build.stock());
@@ -2384,23 +2384,23 @@ mod tests {
         let first_journal = build.makes(&first);
         let mut volume = with_nlclient(build.stock());
         volume.failing = Some(JOURNAL);
-        assert!(build.patch(&mut volume, &options(), false).unwrap_err().to_string().contains("no space left"));
+        assert!(build.set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("no space left"));
         assert_eq!(volume.files[BINARY].2, first);
         assert!(!volume.files.contains_key(JOURNAL));
         volume.failing = None;
         volume.commands.clear();
-        let changes = build.patch(&mut volume, &options(), false).unwrap();
+        let changes = build.set_up(&mut volume, &options(), false).unwrap();
         assert_eq!(names(&changes), BTreeSet::from([JOURNAL]));
         assert_eq!(volume.files[JOURNAL].2, first_journal);
         // The same after an upgrade whose new journal did not reach flash.
         let second = [&build.stock()[..], b"second"].concat();
         let second_journal = build.makes(&second);
         volume.failing = Some(JOURNAL);
-        assert!(build.patch(&mut volume, &options(), false).is_err());
+        assert!(build.set_up(&mut volume, &options(), false).is_err());
         assert_eq!((&volume.files[BINARY].2, &volume.files[JOURNAL].2), (&second, &first_journal));
         volume.failing = None;
         volume.commands.clear();
-        assert_eq!(names(&build.patch(&mut volume, &options(), false).unwrap()), BTreeSet::from([JOURNAL]));
+        assert_eq!(names(&build.set_up(&mut volume, &options(), false).unwrap()), BTreeSet::from([JOURNAL]));
         assert_eq!(volume.files[JOURNAL].2, second_journal);
         assert_eq!(volume.files[backup], ("0:0".into(), 0o600, build.stock()));
         assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {backup} ")) || c.starts_with(&format!("write {BINARY} "))));
@@ -2408,7 +2408,7 @@ mod tests {
         build.makes(&[&build.stock()[..], b"third"].concat());
         volume.files.remove(JOURNAL);
         volume.commands.clear();
-        assert!(build.patch(&mut volume, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
+        assert!(build.set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
         assert!(volume.commands.is_empty());
     }
 
@@ -2423,12 +2423,12 @@ mod tests {
         first.extend_from_slice(b"first screen, longer than the second");
         build.makes(&first);
         let mut volume = with_nlclient(build.stock());
-        build.patch(&mut volume, &options(), false).unwrap();
+        build.set_up(&mut volume, &options(), false).unwrap();
         volume.files.get_mut(backup).unwrap().1 = 0o400;
         let second = [&build.stock()[..], b"second"].concat();
         let journal = build.makes(&second);
         volume.commands.clear();
-        let changes = build.patch(&mut volume, &options(), false).unwrap();
+        let changes = build.set_up(&mut volume, &options(), false).unwrap();
         let screen = changes.iter().find(|c| c.name == BINARY).unwrap();
         assert_eq!((screen.old.clone(), screen.new.clone()), (Some(sha256_hex(&first)), Some(sha256_hex(&second))));
         assert_eq!(volume.files[BINARY].2, second);
@@ -2438,18 +2438,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecognised_journal_or_backup_stops_the_patch_before_any_write() {
+    fn an_unrecognised_journal_or_backup_stops_the_setup_before_any_write() {
         use crate::nlclient::{JOURNAL, ORIGINAL};
         let build = FakeBuild::new();
         build.makes(&[&build.stock()[..], b"screen"].concat());
         let mut foreign = with_nlclient(build.stock());
         let other = crate::nlclient::tests::journal(b"\x7fELF other firmware", b"\x7fELF other firmware+");
         foreign.files.insert(JOURNAL.into(), ("0:0".into(), 0o600, other));
-        assert!(build.patch(&mut foreign, &options(), false).unwrap_err().to_string().contains("undo journal does not match"));
+        assert!(build.set_up(&mut foreign, &options(), false).unwrap_err().to_string().contains("undo journal does not match"));
         assert!(foreign.commands.is_empty());
         let mut kept = with_nlclient(build.stock());
         kept.files.insert(ORIGINAL.into(), ("0:0".into(), 0o600, b"keep me".to_vec()));
-        assert!(build.patch(&mut kept, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
+        assert!(build.set_up(&mut kept, &options(), false).unwrap_err().to_string().contains("original backup does not match"));
         assert!(kept.commands.is_empty());
         assert_eq!(kept.files[ORIGINAL].2, b"keep me");
     }
@@ -2459,7 +2459,7 @@ mod tests {
         for (owner, mode) in [("1000:0", 0o755), ("0:0", 0o644)] {
             let mut volume = FakeVolume::new(stock());
             volume.files.insert(crate::nlclient::BINARY.into(), (owner.into(), mode, b"\x7fELF".to_vec()));
-            assert!(patch(&mut volume, &options(), false).unwrap_err().to_string().contains("root-owned executable"));
+            assert!(set_up(&mut volume, &options(), false).unwrap_err().to_string().contains("root-owned executable"));
             assert!(volume.commands.is_empty());
         }
     }

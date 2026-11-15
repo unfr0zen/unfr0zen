@@ -164,12 +164,12 @@ fn a_new_nestlocal_takes_the_old_ones_blocks_when_it_does_not_fit_beside_them() 
     assert_eq!(cut.read("etc/inittab").unwrap().unwrap(), inittab);
 }
 
-/// The whole patch, as a run applies it, on both slots: everything it writes
+/// The whole setup, as a run applies it, on both slots: everything it writes
 /// reads back from the programmed pages through a fresh scan.
 #[test]
-fn the_patch_applies_to_both_slots() {
+fn the_setup_applies_to_both_slots() {
     use unfr0zen_core::nestlocal::{generate_pki, Matter, Mqtt};
-    use unfr0zen_core::patch::{patch_on_device, root_hash, Options};
+    use unfr0zen_core::setup::{set_up_on_device, root_hash, Options};
     use unfr0zen_core::Device;
     let Some(image) = image() else { return };
     let object = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o");
@@ -198,7 +198,7 @@ fn the_patch_applies_to_both_slots() {
         };
         let dark = unfr0zen_core::nlclient::dark_theme::reviewed(&stock);
         let options = Options { dark_theme: dark, ..options.clone() };
-        let changes = patch_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
+        let changes = set_up_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
                                       false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
         let (free, used) = volume.usage();
         let plan = volume.programmed().unwrap();
@@ -229,7 +229,7 @@ fn the_patch_applies_to_both_slots() {
         }
         // A second run finds everything in place.
         let mut again = jffs2::Slot::load(volume.programmed().unwrap().raw).unwrap();
-        let second = patch_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
+        let second = set_up_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
                                      false, &build_screen).unwrap();
         let rewritten: Vec<&str> = second.iter().map(|c| c.name.as_str()).collect();
         assert!(rewritten.iter().all(|name| *name == "etc/shadow" || *name == "etc/nestlocal/server.crt" || *name == "etc/nestlocal/server.key"), "{which}: {rewritten:?}");

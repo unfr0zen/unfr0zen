@@ -10,7 +10,7 @@ pub static DEVICE: Device = Device {
     // 0x08002000 with its address table at 0x08004000, past Nest's 16 KiB
     // bootloader. Nest's wpantund.conf has TXPowerMode 2: the alternate
     // transmit path, into the board's amplifier.
-    radio: Radio {
+    radio: Some(Radio {
         spi: "/dev/spidev_em35x",
         reset: "/sys/bus/platform/devices/0.em35x-gpios/reset",
         host_int: "/sys/bus/platform/devices/0.em35x-gpios/irq",
@@ -20,7 +20,7 @@ pub static DEVICE: Device = Device {
         version_at: 0x2058,
         selects_zigbee: true,
         tx_power_mode: 0x0002,
-    },
+    }),
     ble: Some(Ble {
         uart: "/dev/ttyble0",
         node: "/dev/ttymxc4",

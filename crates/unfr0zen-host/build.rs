@@ -3,14 +3,14 @@
 //!
 //! - the diamond3's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
-//! - the j49's NAND flasher, dropbear, the busybox of its initramfs, kernel and the x-loader its boot ROM
-//!   takes over USB, and the gen 1's x-loader, built there too;
+//! - the gen 1's and gen 2's NAND flasher, dropbear, initramfs busybox and
+//!   kernels, and each one's x-loader its boot ROM takes over USB, built there too;
 //! - Debian's static ARMv7 busybox for the initramfs (busybox-static
 //!   1.37.0-6+b9 armhf, by SHA-256; the same .deb unfr0zen.py caches in
 //!   .work/initramfs, fetched with curl when absent);
 //! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/,
 //!   made again (`utils/build-firmware.sh nestlocal`) when its sources are newer;
-//! - unfr0zen-apply for the patch bundle, built there too, and made again
+//! - unfr0zen-apply for the setup bundle, built there too, and made again
 //!   (`utils/build-firmware.sh apply`) when its or unfr0zen-core's sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way),

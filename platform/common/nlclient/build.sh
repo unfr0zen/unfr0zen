@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the UNFR0ZEN screen and optional j49 RCS screen as relocatable ARMv7
 # objects: the app links them against the unit's nlclient, so no compiler or
-# linker is needed when the finished app patches a unit. Needs clang.
+# linker is needed when the finished app sets up a unit. Needs clang.
 #
 #     sh platform/common/nlclient/build.sh OUT
 set -eu

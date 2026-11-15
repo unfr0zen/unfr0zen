@@ -35,7 +35,7 @@ impl Run {
         self.dir.join("unfr0zen.log")
     }
 
-    /// The task alone: "Patch", "Back up NAND".
+    /// The task alone: "Set up", "Back up NAND".
     pub fn title(&self) -> &str {
         self.task.split(", ").next().unwrap_or(&self.task)
     }
@@ -111,21 +111,21 @@ mod tests {
 
     const LOG: &str = "[   3.100] unfr0zen v0.2.6-20-ge1bd43f, built for macos aarch64
 [   3.101] OS: macOS 27.2 (26B123)
-[   3.102] Selected: Patch, --ntp-server pool.ntp.org --ssh
+[   3.102] Selected: Set up, --ntp-server pool.ntp.org --ssh
 [   3.150] HAB enabled
 [   3.200] Load recovery U-Boot
 [   3.300] USB: [\"10-3.2 15a2:0071\"], waiting on 10-3.2
 [   6.400] Load recovery U-Boot: done (3.2s)
-[   6.401] Patch nlclient, hosts and nestlocal
-[  18.200] Patch nlclient, hosts and nestlocal: failed (11.8s): the volume has too little free space
+[   6.401] Set up nlclient, hosts and nestlocal
+[  18.200] Set up nlclient, hosts and nestlocal: failed (11.8s): the volume has too little free space
 ";
 
     #[test]
     fn a_log_reads_back_into_its_task_steps_and_failure() {
         let run = parse("20261104-120000", Path::new("/tmp/x"), LOG);
         assert_eq!(run.version, "v0.2.6-20-ge1bd43f");
-        assert_eq!(run.title(), "Patch");
-        assert_eq!(run.task, "Patch, --ntp-server pool.ntp.org --ssh");
+        assert_eq!(run.title(), "Set up");
+        assert_eq!(run.task, "Set up, --ntp-server pool.ntp.org --ssh");
         assert_eq!(run.steps.len(), 2, "status lines such as HAB enabled are not steps: {:?}", run.steps);
         assert_eq!(run.steps[0], Step { label: "Load recovery U-Boot".into(), elapsed: 3.2, ok: true });
         assert!(!run.steps[1].ok);

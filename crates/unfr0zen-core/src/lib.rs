@@ -13,7 +13,7 @@ pub mod j49;
 pub mod local;
 pub mod nestlocal;
 pub mod nlclient;
-pub mod patch;
+pub mod setup;
 pub mod shell;
 mod slot;
 

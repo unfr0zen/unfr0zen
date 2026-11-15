@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds Doom (doomgeneric with doomgeneric_nest.c) for the gen 3 and the
-# gen 2 as one static ARMv7 binary, as nestlocal is: build/doom-armv7.
+# Builds Doom (doomgeneric with doomgeneric_nest.c) for every generation
+# as one static ARMv7 binary, as nestlocal is: build/doom-armv7.
 # utils/build-firmware.sh runs it with the firmware; the app embeds the
 # binary and installs it for --doom. The WAD is the app's
 # (crates/unfr0zen-host/build.rs).

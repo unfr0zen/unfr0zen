@@ -296,7 +296,7 @@ fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
     const APS_UNICAST_MESSAGE_COUNT: u8 = 0x03;
     // The coordinator binds each of the unit's clusters to itself, and a full
     // report is a message for each.
-    let tx_power_mode = crate::device::current().radio.tx_power_mode;
+    let tx_power_mode = crate::device::radio()?.tx_power_mode;
     let configuration = [(STACK_PROFILE, 2), (SECURITY_LEVEL, 5), (TX_POWER_MODE, tx_power_mode),
                          (BINDING_TABLE_SIZE, 16), (APS_UNICAST_MESSAGE_COUNT, 20)];
     for (config, value) in configuration {

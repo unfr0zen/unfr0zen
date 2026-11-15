@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds liblocalcloud.so, the library preloaded into nlclient on a unit
 # running nestlocal (localcloud.c), into OUT: one for every unit, so for the
-# gen 2's Cortex-A8. Needs zig, on PATH or as python3's ziglang module (the
+# gen 1's and gen 2's Cortex-A8. Needs zig, on PATH or as python3's ziglang module (the
 # build image has the module).
 #
 #     platform/common/localcloud/build.sh OUT

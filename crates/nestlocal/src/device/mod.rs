@@ -1,6 +1,7 @@
 //! The unit nestlocal runs on: what differs between the Nest generations,
 //! each in its own module, and which one this is.
 
+mod diamond;
 mod diamond3;
 mod j49;
 
@@ -53,9 +54,10 @@ pub struct Ble {
 
 pub struct Device {
     pub name: &'static str,
-    /// The Nest Learning Thermostat generation: 2 or 3.
+    /// The Nest Learning Thermostat generation: 1, 2 or 3.
     pub generation: u8,
-    pub radio: Radio,
+    /// The 802.15.4 radio nestlocal drives, where it has one.
+    pub radio: Option<Radio>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub ble: Option<Ble>,
     /// The round display's width in pixels, which the settings screen's
@@ -63,12 +65,38 @@ pub struct Device {
     pub display: usize,
 }
 
-/// This unit. The gen2 is told by its radio's platform device.
+impl Device {
+    /// The gen 1 and gen 2: an AM3703 with a WL127x, the same nlclient and
+    /// the same sleep.
+    pub fn omap(&self) -> bool {
+        self.generation <= 2
+    }
+}
+
+/// This unit. The gen1 is told by the model its U-Boot adds to the kernel's
+/// command line (nlmodel=Diamond-1.N), the gen2 by its radio's platform
+/// device.
 pub fn current() -> &'static Device {
     static CURRENT: OnceLock<&'static Device> = OnceLock::new();
     CURRENT.get_or_init(|| {
-        if std::path::Path::new(j49::DEVICE.radio.reset).exists() { &j49::DEVICE } else { &diamond3::DEVICE }
+        if gen1(&std::fs::read_to_string("/proc/cmdline").unwrap_or_default()) {
+            &diamond::DEVICE
+        } else if j49::DEVICE.radio.as_ref().is_some_and(|radio| std::path::Path::new(radio.reset).exists()) {
+            &j49::DEVICE
+        } else {
+            &diamond3::DEVICE
+        }
     })
+}
+
+/// Whether the kernel's command line names a gen 1's model.
+fn gen1(cmdline: &str) -> bool {
+    cmdline.split_whitespace().any(|arg| arg.strip_prefix("nlmodel=Diamond-1").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+}
+
+/// This unit's 802.15.4 radio.
+pub fn radio() -> Result<&'static Radio, String> {
+    current().radio.as_ref().ok_or_else(|| format!("the {} has no 802.15.4 radio nestlocal drives", current().name))
 }
 
 #[cfg(test)]
@@ -79,11 +107,19 @@ mod tests {
     /// version is platform/common/radio/Makefile's VERSION, which getXncpInfo reports from the
     /// radio; without, there is none.
     #[test]
+    fn a_gen_1_is_told_by_its_model_on_the_command_line() {
+        assert!(gen1("root=/dev/mtdblock7 rootfstype=jffs2 console=ttyO0,115200 nlmodel=Diamond-1.12"));
+        assert!(!gen1("root=/dev/mtdblock7 rootfstype=jffs2 console=ttyO0,115200 nlmodel=Display-2.6"));
+        assert!(!gen1("nlmodel=Diamond-10.1"));
+        assert!(!gen1(""));
+    }
+
+    #[test]
     fn each_embedded_image_carries_the_makefiles_version() {
         let makefile = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/radio/Makefile"));
         let wanted: u16 = makefile.lines().find_map(|l| l.strip_prefix("VERSION = ")).unwrap().trim().parse().unwrap();
         for device in [&diamond3::DEVICE, &j49::DEVICE] {
-            let radio = &device.radio;
+            let radio = device.radio.as_ref().unwrap();
             let version = radio.zigbee_image.get(radio.version_at..radio.version_at + 2)
                 .map(|b| u16::from_le_bytes([b[0], b[1]]));
             assert_eq!(version, (!radio.zigbee_image.is_empty()).then_some(wanted), "{}", device.name);

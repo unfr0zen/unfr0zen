@@ -1,5 +1,5 @@
-//! A device's patch bundle (unfr0zen_core::bundle), made from what the app
-//! carries: a gen 3 run sends it to the unit, a gen 1 or gen 2 run patches
+//! A device's setup bundle (unfr0zen_core::bundle), made from what the app
+//! carries: a gen 3 run sends it to the unit, a gen 1 or gen 2 run sets up
 //! the slot from it on the host, and `unfr0zen-bundle pack` writes it for a
 //! release.
 
@@ -13,7 +13,7 @@ use crate::assets;
 use crate::flow::failure;
 
 
-/// The bundle for a device: nestlocal, the libraries and objects the patch
+/// The bundle for a device: nestlocal, the libraries and objects the setup
 /// installs or links, Thread's and Doom's overlays, and unfr0zen-apply and
 /// the hook scripts, which run on the unit. The gen 3's also has the
 /// customizable themes' overlay; the gen 1's and gen 2's (one bundle, the
@@ -22,7 +22,7 @@ pub fn contents(device: Device) -> Result<(Files, BTreeMap<String, u32>)> {
     match device {
         Device::Diamond3 => Ok(diamond3()),
         Device::J49 | Device::Diamond => Ok(omap()),
-        Device::Onyx => Err(failure(format!("there is no patch bundle for the {}", device.name()))),
+        Device::Onyx => Err(failure(format!("there is no setup bundle for the {}", device.name()))),
     }
 }
 
@@ -40,8 +40,8 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     let mut files = common();
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
-        (bundle::PRE_PATCH.to_string(), (0o755, crate::j49::assets::PRE_PATCH.to_vec())),
-        (bundle::POST_PATCH.to_string(), (0o755, crate::diamond3::assets::POST_PATCH.to_vec())),
+        (bundle::PRE_SETUP.to_string(), (0o755, crate::j49::assets::PRE_SETUP.to_vec())),
+        (bundle::POST_SETUP.to_string(), (0o755, crate::diamond3::assets::POST_SETUP.to_vec())),
     ]);
     files.insert(bundle::RCS_SCREEN.into(), (0o644, assets::J49_RCS_SCREEN.to_vec()));
     let mut directories = BTreeMap::new();
@@ -57,8 +57,8 @@ fn diamond3() -> (Files, BTreeMap<String, u32>) {
     let mut files = common();
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
-        (bundle::PRE_PATCH.to_string(), (0o755, crate::diamond3::assets::PRE_PATCH.to_vec())),
-        (bundle::POST_PATCH.to_string(), (0o755, crate::diamond3::assets::POST_PATCH.to_vec())),
+        (bundle::PRE_SETUP.to_string(), (0o755, crate::diamond3::assets::PRE_SETUP.to_vec())),
+        (bundle::POST_SETUP.to_string(), (0o755, crate::diamond3::assets::POST_SETUP.to_vec())),
     ]);
     let mut directories = BTreeMap::new();
     let thread = assets::with_thread_radio(&assets::thread(), crate::diamond3::assets::THREAD_RADIO,
@@ -69,7 +69,7 @@ fn diamond3() -> (Files, BTreeMap<String, u32>) {
     (files, directories)
 }
 
-/// The bundle as unpacking would give it, for a run that patches on the host.
+/// The bundle as unpacking would give it, for a run that sets up on the host.
 pub fn assemble(device: Device, version: &str) -> Result<Bundle> {
     let (files, directories) = contents(device)?;
     Ok(Bundle::from_files(device, version, files, &directories))
@@ -111,7 +111,7 @@ mod tests {
     fn the_gen_2_bundle_brings_its_thread_image_ssh_server_sensors_view_and_engine() {
         let bundle = assemble(Device::J49, "1.0.0").unwrap();
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
-        assert_eq!(bundle.file(bundle::PRE_PATCH).unwrap(), crate::j49::assets::PRE_PATCH);
+        assert_eq!(bundle.file(bundle::PRE_SETUP).unwrap(), crate::j49::assets::PRE_SETUP);
         let settings = Settings { thread: true, ssh: true, external_temperature: true, matter: Some(bundle::MatterSettings {
             passcode: 20202021, discriminator: 3840 }), ..Settings::default() };
         let options = settings.options(&bundle).unwrap();

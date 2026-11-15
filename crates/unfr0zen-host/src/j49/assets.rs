@@ -2,7 +2,7 @@
 //! boot ROM runs from SRAM, the NAND flasher it loads, the kernel with a USB
 //! serial port (those two built in Docker, and empty in a build without it),
 //! the SSH server it has none of, its initramfs's busybox and /init, its
-//! bundle's pre-patch hook, and the EM357's Thread image.
+//! bundle's pre-setup hook, and the EM357's Thread image.
 
 use std::io::Read;
 
@@ -13,8 +13,8 @@ pub const FLASHER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nand-flashe
 pub const KERNEL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-uImage"));
 /// The gen 1's and gen 2's initramfs /init.
 pub const INIT: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/initramfs-init"));
-/// The gen 1's and gen 2's pre-patch hook; their post-patch is the gen 3's.
-pub const PRE_PATCH: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/bundle/pre-patch.sh"));
+/// The gen 1's and gen 2's pre-setup hook; their post-setup is the gen 3's.
+pub const PRE_SETUP: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/bundle/pre-setup.sh"));
 /// Gzipped, as with_thread_radio takes them.
 pub const THREAD_RADIO: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/thread-radio-em357.bin.gz"));
 pub const THREAD_RADIO_IDENTITY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/thread-radio-em357.identity.gz"));

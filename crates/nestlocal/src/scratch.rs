@@ -1,9 +1,9 @@
-//! The gen 3's scratch volume, where the patch installs unfr0zen's programs
+//! The gen 3's scratch volume, where the setup installs unfr0zen's programs
 //! and data (nestlocal, the update engine, themes, Doom, Thread, the stock
 //! backups) with a manifest of their SHA-256s (unfr0zen-core's
 //! diamond3::scratch). A scratch volume wiped since (an OTA, a factory reset)
 //! turns those features off: this says which files are gone or changed, so
-//! the log tells to patch again.
+//! the log tells to set the unit up again.
 
 use std::path::Path;
 
@@ -14,8 +14,8 @@ use crate::logf;
 const DIR: &str = "/media/scratch/.unfr0zen";
 
 /// The first of `paths` that is a file, else the last: a program on the gen
-/// 3's scratch volume, else where the gen 2 (or a unit patched before) has
-/// it.
+/// 3's scratch volume, else where the gen 1 and gen 2 (or a unit set up
+/// before) have it.
 pub fn installed(paths: &[&'static str]) -> &'static str {
     paths.iter().copied().find(|p| Path::new(p).is_file()).unwrap_or(paths[paths.len() - 1])
 }
@@ -38,13 +38,13 @@ pub fn check() {
         let dir = Path::new(DIR);
         let manifest = match std::fs::read_to_string(dir.join("manifest")) {
             Ok(manifest) => manifest,
-            Err(e) => return logf!("scratch: {DIR}/manifest: {e}; patch again to restore the files kept there"),
+            Err(e) => return logf!("scratch: {DIR}/manifest: {e}; set the unit up again to restore the files kept there"),
         };
         let damaged = damaged(dir, &manifest);
         if damaged.is_empty() {
             logf!("scratch: {} files verified", manifest.lines().count());
         } else {
-            logf!("scratch: missing or changed in {DIR}: {}; patch again to restore them", damaged.join(", "));
+            logf!("scratch: missing or changed in {DIR}: {}; set the unit up again to restore them", damaged.join(", "));
         }
     });
     if let Err(e) = spawned {

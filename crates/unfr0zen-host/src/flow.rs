@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use unfr0zen_core::nestlocal::{self, Matter, Mqtt, Pki};
 use unfr0zen_core::nlclient;
-use unfr0zen_core::patch::{self, Options};
+use unfr0zen_core::setup::{self, Options};
 use unfr0zen_core::{Error, Result};
 
 use crate::device::{self, Device};
@@ -25,10 +25,10 @@ pub(crate) fn failure(error: impl std::fmt::Display) -> Error {
     Error::Device(error.to_string())
 }
 
-/// The raw patch inputs a front end collects, validated into [`Options`] by
-/// [`PatchInputs::build`] before the unit is touched.
+/// The raw setup inputs a front end collects, validated into [`Options`] by
+/// [`SetupInputs::build`] before the unit is touched.
 #[derive(Clone, Debug, Default)]
-pub struct PatchInputs {
+pub struct SetupInputs {
     pub root_password: Option<String>,
     pub ntp_server: Option<String>,
     pub backplate_sim: bool,
@@ -90,7 +90,7 @@ pub fn mask_url(url: &str) -> String {
     }
 }
 
-impl PatchInputs {
+impl SetupInputs {
     /// The options as the CLI spells them, for the run log: secrets and the
     /// MQTT user masked, paths cut to their file names.
     pub fn describe(&self) -> String {
@@ -132,7 +132,7 @@ impl PatchInputs {
     }
 
     /// Checks the options against each other and the filesystem, and builds the
-    /// patch, all before the unit is touched. The error text is shown as is.
+    /// setup, all before the unit is touched. The error text is shown as is.
     pub fn build(&self) -> Result<Options> {
         if self.ssh_public_key.is_some() && !self.ssh {
             return Err(failure("--ssh-public-key needs --ssh"));
@@ -161,7 +161,7 @@ impl PatchInputs {
         let read = |flag: &str, path: &Path| fs::read(path)
             .map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
         if let Some(server) = self.ntp_server.as_deref().filter(|s| !s.is_empty()) {
-            patch::check_ntp_server(server)?;
+            setup::check_ntp_server(server)?;
         }
         let mqtt = match &self.mqtt {
             Some(url) => Some(Mqtt {
@@ -180,10 +180,10 @@ impl PatchInputs {
         let ssh_public_key = self.ssh_public_key.as_deref().map(|path| {
             let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
                 path.file_name().unwrap_or_default().to_string_lossy())))?;
-            patch::ssh_public_key(&data)
+            setup::ssh_public_key(&data)
         }).transpose()?;
         Ok(Options {
-            root_hash: patch::root_hash(self.root_password.as_deref().unwrap_or(patch::DEFAULT_ROOT_PASSWORD))?,
+            root_hash: setup::root_hash(self.root_password.as_deref().unwrap_or(setup::DEFAULT_ROOT_PASSWORD))?,
             version: progress::app_version().to_string(),
             ntp_server: self.ntp_server.clone().or_else(|| self.block_cloud.then(String::new)),
             backplate_sim: self.backplate_sim,
@@ -349,7 +349,7 @@ pub fn run(config: &Config, progress: &mut dyn Progress,
 }
 
 /// [`run`], with the whole NAND backed up to `backup` first, while the unit
-/// is in recovery for the patch: one entry into USB download mode for both.
+/// is in recovery for the setup: one entry into USB download mode for both.
 pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut dyn Progress,
                         cancel: &device::CancelFlag) -> Result<String> {
     if let Some(out) = backup.filter(|out| out.exists()) {
@@ -358,8 +358,8 @@ pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut d
     progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
-        Device::Diamond | Device::Diamond3 if config.options.dark_theme =>
-            Err(failure("--dark-theme is only for the 2nd generation")),
+        Device::Diamond3 if config.options.dark_theme =>
+            Err(failure("--dark-theme is only for the 1st and 2nd generation")),
         Device::Diamond | Device::J49 if config.options.theme.is_some() =>
             Err(failure("--themes is only for the 3rd generation")),
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
@@ -385,13 +385,13 @@ mod describe_tests {
 
     #[test]
     fn the_entry_point_names_its_choice() {
-        assert_eq!(PatchInputs::default().entry_point, EntryPoint::Auto);
-        let forced = PatchInputs {
+        assert_eq!(SetupInputs::default().entry_point, EntryPoint::Auto);
+        let forced = SetupInputs {
             entry_point: "cve-2017-7936".parse().unwrap(),
-            ..PatchInputs::default()
+            ..SetupInputs::default()
         };
         assert_eq!(forced.describe(), "--entry-point cve-2017-7936");
-        assert_eq!(PatchInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..PatchInputs::default() }
+        assert_eq!(SetupInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..SetupInputs::default() }
             .describe(), "--entry-point cve-2017-7932");
         let error = "nope".parse::<EntryPoint>().err().unwrap();
         assert!(error.contains("auto, cve-2017-7932, cve-2017-7936 or official-loader"), "{error}");
@@ -399,27 +399,27 @@ mod describe_tests {
 
     #[test]
     fn the_device_name_is_for_mqtt_or_matter() {
-        let alone = PatchInputs { device_name: Some("Nest FamRm".into()), ..PatchInputs::default() };
+        let alone = SetupInputs { device_name: Some("Nest FamRm".into()), ..SetupInputs::default() };
         assert!(alone.build().err().unwrap().to_string().contains("--device-name"));
-        let matter = PatchInputs { matter: true, ..alone.clone() };
+        let matter = SetupInputs { matter: true, ..alone.clone() };
         assert_eq!(matter.build().unwrap().device_name.as_deref(), Some("Nest FamRm"));
         assert_eq!(matter.describe(), "--matter --device-name \"Nest FamRm\"");
-        assert!(PatchInputs { mqtt: Some("broker".into()), ..alone.clone() }.build().is_ok());
-        assert!(PatchInputs { device_name: Some("x".repeat(33)), ..matter }.build().is_err(), "past Matter's 32");
+        assert!(SetupInputs { mqtt: Some("broker".into()), ..alone.clone() }.build().is_ok());
+        assert!(SetupInputs { device_name: Some("x".repeat(33)), ..matter }.build().is_err(), "past Matter's 32");
     }
 
     #[test]
     fn the_boiler_option_needs_a_radio_nestlocal_holds() {
-        let alone = PatchInputs { wwn_boiler: true, ..PatchInputs::default() };
+        let alone = SetupInputs { wwn_boiler: true, ..SetupInputs::default() };
         assert!(alone.build().err().unwrap().to_string().contains("--wwn-boiler"));
-        let mqtt = PatchInputs { mqtt: Some("broker".into()), ..alone.clone() };
+        let mqtt = SetupInputs { mqtt: Some("broker".into()), ..alone.clone() };
         assert!(mqtt.build().is_err(), "MQTT leaves the radio to Nest");
-        let zigbee = PatchInputs { zigbee: true, ..alone.clone() };
+        let zigbee = SetupInputs { zigbee: true, ..alone.clone() };
         assert!(zigbee.build().unwrap().wwn_boiler);
         assert_eq!(zigbee.describe(), "--zigbee --wwn-boiler");
-        let thread = PatchInputs { matter: true, matter_thread: true, ..alone };
+        let thread = SetupInputs { matter: true, matter_thread: true, ..alone };
         assert!(thread.build().unwrap().wwn_boiler);
-        assert!(!PatchInputs { zigbee: true, ..PatchInputs::default() }.build().unwrap().wwn_boiler, "off unless asked");
+        assert!(!SetupInputs { zigbee: true, ..SetupInputs::default() }.build().unwrap().wwn_boiler, "off unless asked");
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod describe_tests {
     fn public_key_input_requires_ssh_and_is_validated_before_the_run() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("id_ed25519.pub");
-        let mut inputs = PatchInputs { ssh_public_key: Some(path.clone()), ..PatchInputs::default() };
+        let mut inputs = SetupInputs { ssh_public_key: Some(path.clone()), ..SetupInputs::default() };
         assert!(inputs.build().unwrap_err().to_string().contains("needs --ssh"));
         inputs.ssh = true;
         let error = inputs.build().unwrap_err().to_string();
@@ -464,12 +464,12 @@ mod describe_tests {
 
     #[test]
     fn options_read_as_cli_flags_with_secrets_masked() {
-        let inputs = PatchInputs { zigbee: true, block_cloud: true, ntp_server: Some("time.lan".into()),
+        let inputs = SetupInputs { zigbee: true, block_cloud: true, ntp_server: Some("time.lan".into()),
             root_password: Some("hunter2".into()), mqtt: Some("tcp://bob:pw@broker.lan".into()),
-            mqtt_ca: Some(PathBuf::from("/home/bob/ca.pem")), ..PatchInputs::default() };
+            mqtt_ca: Some(PathBuf::from("/home/bob/ca.pem")), ..SetupInputs::default() };
         assert_eq!(inputs.describe(), "--ntp-server time.lan --root-password *** --mqtt tcp://***@broker.lan \
                                        --mqtt-ca ca.pem --zigbee --block-cloud");
-        assert_eq!(PatchInputs::default().describe(), "no options");
+        assert_eq!(SetupInputs::default().describe(), "no options");
         assert_eq!(mask_url("broker.lan:1883"), "broker.lan:1883");
         assert_eq!(mask_url("mqtt://u@host/path@x"), "mqtt://***@host/path@x");
     }

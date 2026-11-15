@@ -1,4 +1,4 @@
-//! The patch bundle as a release publishes it.
+//! The setup bundle as a release publishes it.
 //!
 //!     unfr0zen-bundle pack DEVICE VERSION OUT
 //!         Writes DEVICE's bundle (diamond3, or j49 for the gen 1 and gen 2)

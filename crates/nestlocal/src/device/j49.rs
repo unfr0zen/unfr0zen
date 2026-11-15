@@ -13,7 +13,7 @@ pub static DEVICE: Device = Device {
     // on the bidirectional port into its amplifier, which is EmberZNet's boost.
     // The OMAP's McSPI driver releases chip select after every message, so
     // nSSEL is driven as gpio 181, as Nest's zb-loader and /etc/init.d/ncp do.
-    radio: Radio {
+    radio: Some(Radio {
         spi: "/dev/spidev2.0",
         reset: "/sys/devices/platform/diamond-zigbee/reset#",
         host_int: "/sys/devices/platform/diamond-zigbee/interrupt",
@@ -23,7 +23,7 @@ pub static DEVICE: Device = Device {
         version_at: 0x58,
         selects_zigbee: false,
         tx_power_mode: 0x0001,
-    },
+    }),
     // No BLE.
     ble: None,
     display: 320,

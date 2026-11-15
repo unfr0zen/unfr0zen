@@ -1,6 +1,6 @@
-//! The patch bundle: one gzipped tar holding everything a patch installs
+//! The setup bundle: one gzipped tar holding everything a setup installs
 //! (nestlocal, its overlays, the UNFR0ZEN screen's object, the scripts run
-//! around the patch) and unfr0zen-apply, which runs the patch on the unit.
+//! around the setup) and unfr0zen-apply, which runs the setup on the unit.
 //! The same for every unit of a device and release: what a run asks for
 //! travels beside it as Settings.
 //!
@@ -15,7 +15,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::nestlocal::{Matter, Mqtt, Overlay, Pki};
-use crate::patch::Options;
+use crate::setup::Options;
 use crate::shell::sha256_hex;
 use crate::{device, Device, Error, Result};
 
@@ -25,20 +25,20 @@ pub const FORMAT: u32 = 1;
 pub const RELEASE_KEY: &str = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/utils/bundle/release.pub"));
 pub const MANIFEST: &str = "manifest.json";
 pub const SIGNATURE: &str = "manifest.sig";
-/// The patch engine, a static ARMv7 binary.
+/// The setup engine, a static ARMv7 binary.
 pub const APPLY: &str = "bin/unfr0zen-apply";
 pub const NESTLOCAL: &str = "assets/nestlocal";
 pub const WAKE_FILTER: &str = "assets/libwakefilter.so";
-/// Preloaded into nlclient on a unit running nestlocal (patch::Options::local_cloud).
+/// Preloaded into nlclient on a unit running nestlocal (setup::Options::local_cloud).
 pub const LOCAL_CLOUD: &str = "assets/liblocalcloud.so";
 pub const SCREEN: &str = "assets/custom-screen.o";
 /// The gen 2's native Sensors view helper, for the external temperature.
 pub const RCS_SCREEN: &str = "assets/j49-rcs-screen.o";
-/// Run before the patch reads the volume; failing, it stops the run with
+/// Run before the setup reads the volume; failing, it stops the run with
 /// nothing written.
-pub const PRE_PATCH: &str = "scripts/pre-patch.sh";
-/// Run after the patch's writes are verified on flash; failing, it fails the run.
-pub const POST_PATCH: &str = "scripts/post-patch.sh";
+pub const PRE_SETUP: &str = "scripts/pre-setup.sh";
+/// Run after the setup's writes are verified on flash; failing, it fails the run.
+pub const POST_SETUP: &str = "scripts/post-setup.sh";
 /// overlays/NAME/PATH installs PATH on the volume when the run asks for NAME.
 const OVERLAYS: &str = "overlays/";
 pub const THREAD: &str = "thread";
@@ -121,7 +121,7 @@ fn manifest(device: Device, version: &str, files: &Files, directories: &BTreeMap
 
 impl Bundle {
     /// The bundle of these files as unpack would give it, without packing it:
-    /// for a run patching on the host.
+    /// for a run setting up on the host.
     pub fn from_files(device: Device, version: &str, files: Files, directories: &BTreeMap<String, u32>) -> Bundle {
         let (manifest, manifest_bytes) = manifest(device, version, &files, directories);
         Bundle { manifest, manifest_bytes, signature: None, files }
@@ -254,8 +254,8 @@ pub fn public_key_text(key: &SigningKey) -> String {
     STANDARD.encode(key.verifying_key().to_bytes())
 }
 
-/// What one run asks of the patch, beside the bundle as options.json: the
-/// part of patch::Options the bundle cannot hold. Bytes are base64.
+/// What one run asks of the setup, beside the bundle as options.json: the
+/// part of setup::Options the bundle cannot hold. Bytes are base64.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     pub root_hash: String,
@@ -352,7 +352,7 @@ impl Settings {
         }
     }
 
-    /// The patch's options: these settings with the bundle's files.
+    /// The setup's options: these settings with the bundle's files.
     pub fn options(&self, bundle: &Bundle) -> Result<Options> {
         let matter = self.matter.map(|m| Matter { passcode: m.passcode, discriminator: m.discriminator });
         Ok(Options {
@@ -398,7 +398,7 @@ impl Settings {
     }
 
     /// These settings as the unit keeps them: without the key set, which the
-    /// unit has its own copy of once patched.
+    /// unit has its own copy of once set up.
     fn record(&self) -> Vec<u8> {
         let mut record = serde_json::to_vec_pretty(&Settings { pki: None, ..self.clone() }).expect("settings serialize");
         record.push(b'\n');
@@ -424,7 +424,7 @@ mod tests {
             (NESTLOCAL.to_string(), (0o755, b"\x7fELF nestlocal".to_vec())),
             (WAKE_FILTER.to_string(), (0o755, b"\x7fELF wake".to_vec())),
             (LOCAL_CLOUD.to_string(), (0o755, b"\x7fELF local cloud".to_vec())),
-            (PRE_PATCH.to_string(), (0o755, b"#!/bin/sh\n".to_vec())),
+            (PRE_SETUP.to_string(), (0o755, b"#!/bin/sh\n".to_vec())),
         ]);
         let mut directories = BTreeMap::new();
         add_overlay(&mut files, &mut directories, DOOM, &Overlay {
@@ -432,7 +432,7 @@ mod tests {
             directories: vec![("usr/share/doom".into(), 0o755)],
         });
         add_overlay(&mut files, &mut directories, THEME, &Overlay {
-            files: vec![(crate::patch::THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec())],
+            files: vec![(crate::setup::THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec())],
             directories: Vec::new(),
         });
         (files, directories)
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(kept, Settings { pki: None, ..settings.clone() });
         assert_eq!(format!("{:?}", Options { record: Vec::new(), ..rebuilt.clone() }), format!("{options:?}"));
         assert_eq!(rebuilt.doom.unwrap().directories, [("usr/share/doom".to_string(), 0o755)]);
-        assert_eq!(rebuilt.theme.unwrap().files[0].0, crate::patch::THEME_PRELOAD);
+        assert_eq!(rebuilt.theme.unwrap().files[0].0, crate::setup::THEME_PRELOAD);
         let thread = Settings { thread: true, ..Settings::default() };
         assert!(thread.options(&bundle).unwrap_err().to_string().contains("no thread overlay"));
     }

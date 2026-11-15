@@ -1,5 +1,6 @@
-//! The j49 (Nest gen 2, TI AM3703): its NAND as raw pages with the GPMC's
-//! BCH4 code, the U-Boot environment, and the JFFS2 root slots.
+//! The gen 1 and gen 2 (diamond and j49, TI AM3703): their NAND as raw pages
+//! with the GPMC's BCH4 code, the U-Boot environment, and the JFFS2 root
+//! slots.
 
 pub mod boot;
 pub mod flasher;

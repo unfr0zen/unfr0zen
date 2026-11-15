@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::Result;
 
 /// What the flow tells its front end as it runs.
-/// The parts of a patch run a person follows, in order; the steps inside
+/// The parts of a setup run a person follows, in order; the steps inside
 /// each are for the log.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -24,11 +24,11 @@ pub enum Phase {
     Backup,
     /// The boot order, the root volume and its firmware read.
     Check,
-    /// What the patch writes made ready: the initramfs booted, or the
-    /// patched volume built in memory.
+    /// What the setup writes made ready: the initramfs booted, or the
+    /// set-up volume built in memory.
     Prepare,
     /// The changes written to the unit.
-    Patch,
+    SetUp,
     /// The unit restarted into its application and confirmed.
     Restart,
 }
@@ -51,7 +51,7 @@ pub trait Progress: Send {
     /// `next` under way with nothing more said until they land. A front end
     /// may draw a bar.
     fn transfer(&mut self, _done: u64, _next: u64, _total: u64) {}
-    /// A patch run entered `phase`; the one before it is done.
+    /// A setup run entered `phase`; the one before it is done.
     fn phase(&mut self, _phase: Phase) {}
 }
 

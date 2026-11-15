@@ -3,7 +3,7 @@
 //! the unit's stock nlclient, the dial, its figures, the background layer
 //! and the natives the preload calls are. Discovery finds the dial and the
 //! natives in any build; the rest comes from the builds reviewed by hand.
-//! The patch writes them to BINDINGS as `name value` lines (hexadecimal
+//! The setup writes them to BINDINGS as `name value` lines (hexadecimal
 //! addresses relative to the executable's load base, or field offsets), and
 //! the preload hooks nothing unless the vtable slots hold what they name.
 
@@ -11,7 +11,7 @@ use super::discovery;
 use crate::shell::sha256_hex;
 use crate::{device, Result};
 
-/// Where the patch puts the bindings for the preload.
+/// Where the setup puts the bindings for the preload.
 pub const BINDINGS: &str = "etc/unfr0zen/theme.bindings";
 
 /// What discovery does not find, from each reviewed gen 3 build.

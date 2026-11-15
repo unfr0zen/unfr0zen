@@ -92,7 +92,7 @@ impl Liveness {
             if s.last.is_none() && !s.warned && now.duration_since(s.started) >= FIRST_CALL {
                 s.warned = true;
                 logf!("nestlocal: nlclient has not called in after {}: Zigbee, Matter and the external temperature \
-                       wait for it. nlclient reaches nestlocal with /nestlabs/lib/liblocalcloud.so preloaded (patch the \
+                       wait for it. nlclient reaches nestlocal with /nestlabs/lib/liblocalcloud.so preloaded (set up the \
                        unit with unfr0zen again), or otherwise only once on a network", crate::logger::duration(FIRST_CALL));
             }
             (changed, alive, s.on_change.clone())

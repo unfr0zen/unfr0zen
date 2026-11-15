@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn every_gui_message_key_exists_in_the_catalog() {
-        let sources = [include_str!("main.rs"), include_str!("patch.rs"), include_str!("terminal.rs"),
+        let sources = [include_str!("main.rs"), include_str!("form.rs"), include_str!("terminal.rs"),
                        include_str!("about.rs"), include_str!("macos_about.rs"), include_str!("backups.rs"),
                        include_str!("bus.rs"), include_str!("nandmap.rs"), include_str!("setup.rs")];
         let mut used = std::collections::HashSet::new();

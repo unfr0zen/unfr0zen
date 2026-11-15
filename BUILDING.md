@@ -4,11 +4,11 @@ The first firmware build needs internet access: it downloads busybox, Nest's
 kernel and x-loader sources, the Silicon Labs SDK and OpenThread at pinned
 versions.
 
-| Device | How it is patched |
+| Device | How it is set up |
 |-|-|
-| `diamond3` (gen 3) | Recovery U-Boot over the ROM's serial download, then the slot's own kernel with an initramfs patches its UBIFS root. |
+| `diamond3` (gen 3) | Recovery U-Boot over the ROM's serial download, then the slot's own kernel with an initramfs sets up its UBIFS root. |
 | `j49` (gen 2) | Nest's own x-loader over the ROM's USB boot loads a NAND flasher; the host appends the changes to the slot's JFFS2 root in its erased blocks. |
-| `diamond` (gen 1, experimental) | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path; a stock Gen 1 NAND and physical unit are still needed for validation. |
+| `diamond` (gen 1) | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path. |
 
 ## Dependencies
 
@@ -88,9 +88,9 @@ The version comes from `git describe --tag --always --dirty`.
 
 - macOS universal app bundle: `sh utils/make_macos_app.sh` → `dist/unfr0zen.app`
 - Linux desktop entry and icon: `sh utils/install_linux.sh`
-- The patch bundles: the gen 3's (`diamond3`), which the app sends the unit to
-  patch itself, and the gen 1's and gen 2's (`j49`), which it patches the
-  slot from on the host:
+- The setup bundles: the gen 3's (`diamond3`), which the app sends the unit to
+  set itself up, and the gen 1's and gen 2's (`j49`), from which it sets
+  up the slot on the host:
 
   ```sh
   cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz
@@ -101,6 +101,6 @@ The version comes from `git describe --tag --always --dirty`.
   always is, with the key in the CircleCI context `bundle-signing` (tag
   pipelines only), whose public half is `utils/bundle/release.pub`. Units
   install only updates signed by it, unless the developer option "allow
-  unsigned updates" was on when they were patched. `unfr0zen-bundle keygen KEY` makes a key (and prints
+  unsigned updates" was on when they were set up. `unfr0zen-bundle keygen KEY` makes a key (and prints
   its public half), `unfr0zen-bundle verify BUNDLE PUBLIC-KEY` checks a
   signed bundle.

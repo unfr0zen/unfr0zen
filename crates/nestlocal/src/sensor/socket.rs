@@ -1,4 +1,4 @@
-//! Gen 2 readings enter the patched nlclient over its loopback RCS input.
+//! Gen 1 and gen 2 readings enter the patched nlclient over its loopback RCS input.
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::{mpsc, Arc};
@@ -91,7 +91,7 @@ fn watch_restart(store: &Arc<crate::store::Store>, serial: &str, sensor: &Arc<Se
 }
 
 /// Retry across nlclient starts, without extending a stale reading or claiming
-/// a delivery until the input acknowledges it. No Bluetooth is used on j49.
+/// a delivery until the input acknowledges it. No Bluetooth is used on the gen 1 or gen 2.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn start(sensor: Arc<Sensor>, store: Arc<crate::store::Store>, serial: String) -> io::Result<()> {
     const RETRY: Duration = Duration::from_secs(1);
@@ -117,7 +117,7 @@ pub fn start(sensor: Arc<Sensor>, store: Arc<crate::store::Store>, serial: Strin
                     if state.reading.is_none() { state.introduced = false; }
                 }
                 if current.is_some() {
-                    // Unlike BLE startup, j49's UI also emits OFF when the
+                    // Unlike BLE startup, the gen 1's and gen 2's UI also emits OFF when the
                     // owner chooses its backplate. Only a new process should
                     // restore the external default, after accepting a sample.
                     booting.store(true, Ordering::SeqCst);

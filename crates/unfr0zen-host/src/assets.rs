@@ -1,5 +1,5 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
-//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, Doom with its
+//! nestlocal for --mqtt, unfr0zen-apply for the setup bundle, Doom with its
 //! WAD for --doom, and the gen 3's customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
@@ -11,9 +11,9 @@ const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"
 const APPLY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unfr0zen-apply.gz"));
 /// The UNFR0ZEN screen, compiled once, for linking into the unit's nlclient.
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
-/// The j49 Sensors views' registration helper, compiled for in-memory linking.
+/// The gen 1's and gen 2's Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
-/// The library nlsleepd preloads for Matter, either generation's.
+/// The library nlsleepd preloads for Matter, every generation's.
 pub const WAKE_FILTER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/libwakefilter.so"));
 /// The library nlclient preloads beside nestlocal, so it reaches nestlocal without Wi-Fi.
 pub const LOCAL_CLOUD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/liblocalcloud.so"));
@@ -34,7 +34,7 @@ pub fn nestlocal() -> Vec<u8> {
     gunzip(NESTLOCAL)
 }
 
-/// The static ARMv7 unfr0zen-apply, for the patch bundle.
+/// The static ARMv7 unfr0zen-apply, for the setup bundle.
 pub fn apply() -> Vec<u8> {
     gunzip(APPLY)
 }
@@ -61,9 +61,9 @@ const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs")
 /// themes, which go on the scratch volume with the library.
 pub fn theme() -> Overlay {
     let mut files = vec![
-        (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
+        (unfr0zen_core::setup::THEME_PRELOAD.into(), 0o755,
          gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
-        (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
+        (unfr0zen_core::setup::THEME_LIBRARY.into(), 0o755,
          gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
     ];
     files.extend(THEMES.iter().map(|(name, data)| {

@@ -91,13 +91,13 @@ if command -v docker > /dev/null || [ -f build/j49/uImage ]; then
     echo "Building j49-kernel; log: .work/build-j49-kernel.log"
     sh platform/j49/kernel.sh build/j49 > .work/build-j49-kernel.log 2>&1 || { tail -n 40 .work/build-j49-kernel.log >&2; exit 1; }
 else
-    echo "Skipping the j49 kernel: it needs Docker; the app will patch no gen 2" >&2
+    echo "Skipping the j49 kernel: it needs Docker; the app will set up no gen 2" >&2
 fi
 if command -v docker > /dev/null || [ -f build/diamond/uImage ]; then
     echo "Building diamond-kernel; log: .work/build-diamond-kernel.log"
     sh platform/j49/kernel.sh build/diamond diamond > .work/build-diamond-kernel.log 2>&1 || { tail -n 40 .work/build-diamond-kernel.log >&2; exit 1; }
 else
-    echo "Skipping the gen 1's kernel: it needs Docker; the app will patch no gen 1" >&2
+    echo "Skipping the gen 1's kernel: it needs Docker; the app will set up no gen 1" >&2
 fi
 # The radio's firmware, from Silicon Labs' SDK and OpenThread at pinned
 # commits, is built by the Thread step below; nestlocal carries it.

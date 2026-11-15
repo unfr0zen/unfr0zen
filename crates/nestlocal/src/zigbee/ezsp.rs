@@ -70,7 +70,7 @@ impl Ezsp {
         spi.reset().map_err(|e| format!("resetting the radio: {e}"))?;
         // An image from before the selection boots straight into EZSP and
         // refuses the frame; it still answers `version`, which names it.
-        if crate::device::current().radio.selects_zigbee {
+        if crate::device::radio()?.selects_zigbee {
             if let Err(e) = spi.select_zigbee() {
                 crate::logf!("zigbee: selecting Zigbee: {e}");
             }

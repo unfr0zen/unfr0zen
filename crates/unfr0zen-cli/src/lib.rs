@@ -1,4 +1,4 @@
-//! unfr0zen: recover a Nest over USB, patch its selected root volume, and
+//! unfr0zen: recover a Nest over USB, set up its selected root volume, and
 //! verify the USB root shell; or back up, verify and restore its whole NAND.
 //! The terminal front end over unfr0zen-host, which the unfr0zen executable
 //! runs when it is given arguments on Linux and macOS.
@@ -15,7 +15,7 @@ use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
-use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, PatchInputs};
+use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, SetupInputs};
 
 use ui::TerminalProgress;
 
@@ -28,7 +28,7 @@ fn help_styles() -> clap::builder::Styles {
 
 #[derive(Parser, Debug)]
 #[command(name = "unfr0zen", version = env!("UNFR0ZEN_BUILD_VERSION"), styles = help_styles(), about = "Root and free a Nest Learning Thermostat over USB.\n\n\
-    Without a command: patch the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
+    Without a command: set up the root volume the unit boots (root0 or root1), then boot it. Nothing else on the NAND \
     is written.", args_conflicts_with_subcommands = true)]
 struct Args {
     #[command(subcommand)]
@@ -42,7 +42,7 @@ struct Args {
     /// run record directory (default: the runs folder in unfr0zen's data directory)
     #[arg(long)]
     work_dir: Option<PathBuf>,
-    /// j49/diamond: patch FILE, a raw NAND image (2112-byte pages), in place instead of a unit
+    /// gen 1 and gen 2: set up FILE, a raw NAND image (2112-byte pages), in place instead of a unit
     #[arg(long, value_name = "FILE")]
     nand_image: Option<PathBuf>,
     /// the unit's generation (default: identified on USB, or from the NAND's U-Boot environment in USB download mode)
@@ -114,7 +114,7 @@ struct Args {
     /// regulate from temperatures sent over MQTT, Zigbee or Matter, using one sensor named after the thermostat's room; gen 1 and gen 2 need the reviewed 5.9.4-5 nlclient patch; gen 3 turns off its own Bluetooth, so real Nest Temperature Sensors stop working; needs --mqtt, --matter or --zigbee
     #[arg(long, help_heading = "Root filesystem options")]
     external_temperature: bool,
-    /// gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
+    /// gen 1 and gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
     #[arg(long, help_heading = "Root filesystem options")]
     dark_theme: bool,
     /// run nlclient's backplate simulator: 1H1C, simulated temperature
@@ -188,8 +188,8 @@ fn confirm_restore(what: &str) -> bool {
 }
 
 impl Args {
-    fn patch_inputs(&self) -> PatchInputs {
-        PatchInputs {
+    fn setup_inputs(&self) -> SetupInputs {
+        SetupInputs {
             root_password: self.root_password.clone(),
             ntp_server: self.ntp_server.clone(),
             backplate_sim: self.backplate_sim,
@@ -287,9 +287,9 @@ pub fn main() {
         fail("boot and uboot are diamond3-only".into());
     }
     if args.device == Some(Device::Diamond3) && args.nand_image.is_some() {
-        fail("--nand-image is a j49 or Diamond NAND image".into());
+        fail("--nand-image is a gen 1 or gen 2 NAND image".into());
     }
-    let options = args.patch_inputs().build().unwrap_or_else(|e| fail(e.to_string()));
+    let options = args.setup_inputs().build().unwrap_or_else(|e| fail(e.to_string()));
     if !args.skip_logo {
         ui::logo();
     }
@@ -410,7 +410,7 @@ mod logged_arguments_tests {
     fn public_key_flag_requires_ssh_and_logs_only_its_filename() {
         assert!(Args::try_parse_from(["unfr0zen", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).is_err());
         let args = Args::try_parse_from(["unfr0zen", "--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).unwrap();
-        assert_eq!(args.patch_inputs().ssh_public_key.unwrap(), std::path::Path::new("/home/bob/id_ed25519.pub"));
+        assert_eq!(args.setup_inputs().ssh_public_key.unwrap(), std::path::Path::new("/home/bob/id_ed25519.pub"));
         for args in [vec!["--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"],
                      vec!["--ssh", "--ssh-public-key=/home/bob/id_ed25519.pub"]] {
             let logged = logged_arguments(args.into_iter().map(str::to_string));
@@ -441,8 +441,8 @@ mod entry_point_tests {
             let args = Args::try_parse_from(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"));
             assert_eq!(args.entry_point, Some(EntryPoint::OfficialLoader), "{line:?}");
         }
-        let patch = Args::try_parse_from(["unfr0zen", "--entry-point", "official-loader"]).unwrap();
-        assert_eq!(patch.entry_point, Some(EntryPoint::OfficialLoader));
+        let setup = Args::try_parse_from(["unfr0zen", "--entry-point", "official-loader"]).unwrap();
+        assert_eq!(setup.entry_point, Some(EntryPoint::OfficialLoader));
         assert!(Args::try_parse_from(["unfr0zen", "backup", "--entry-point", "nope"]).is_err());
     }
 

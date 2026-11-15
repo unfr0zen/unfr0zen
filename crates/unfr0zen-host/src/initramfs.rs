@@ -24,7 +24,7 @@ const OUT: &str = "/unfr0zen";
 /// options (bundle::Settings, serialized), and on the gen 1 and gen 2 64
 /// random bytes from the host for unfr0zen-apply to credit the kernel with:
 /// their Linux 2.6.37 gathers too little entropy in the initramfs for the
-/// patch's random seed and salts.
+/// setup's random seed and salts.
 pub fn files(device: Device, version: &str, settings: Vec<u8>) -> Result<BTreeMap<String, Vec<u8>>> {
     // The gen 1's and gen 2's is one bundle, the j49's; apply is told which.
     let bundled = if device == Device::Diamond { Device::J49 } else { device };

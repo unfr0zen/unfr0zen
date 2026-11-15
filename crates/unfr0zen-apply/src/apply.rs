@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::json;
 use unfr0zen_core::bundle::{self, Bundle, Settings};
 use unfr0zen_core::local::LocalVolume;
-use unfr0zen_core::{nestlocal, nlclient, patch, Device, Error, Result};
+use unfr0zen_core::{nestlocal, nlclient, setup, Device, Error, Result};
 
 struct Logger;
 
@@ -56,7 +56,7 @@ pub fn main() {
 
 /// Credits the kernel's pool with the host's random bytes in `path`. An
 /// initramfs on the gen 1 and gen 2 (Linux 2.6.37, without getrandom(2))
-/// gathers too little entropy for /dev/random to be ready, which the patch's
+/// gathers too little entropy for /dev/random to be ready, which the setup's
 /// random seed and salts wait for.
 #[cfg(target_os = "linux")]
 fn credit_entropy(path: &Path) -> Result<()> {
@@ -90,7 +90,7 @@ fn device(name: &str) -> Result<Device> {
         "diamond3" => Ok(Device::Diamond3),
         "j49" => Ok(Device::J49),
         "diamond" => Ok(Device::Diamond),
-        other => Err(failure(format!("the bundle is for a {other}, which unfr0zen-apply does not patch"))),
+        other => Err(failure(format!("the bundle is for a {other}, which unfr0zen-apply does not set up"))),
     }
 }
 
@@ -122,7 +122,7 @@ fn update(path: &Path) -> Result<()> {
     let bundle = Bundle::unpack(&data)?;
     device(&bundle.manifest.device)?;
     log::info!("Update to {} for the {}", bundle.manifest.version, bundle.manifest.device);
-    let options = Path::new("/").join(patch::RECORD);
+    let options = Path::new("/").join(setup::RECORD);
     let settings = read_settings(&options)?;
     match bundle.verify(&bundle::verifying_key(bundle::RELEASE_KEY)?) {
         Ok(()) => log::info!("Signed with the release key"),
@@ -207,7 +207,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
         ("UNFR0ZEN_DRY_RUN", if dry_run { "1" } else { "0" }.to_string()),
         ("UNFR0ZEN_LIVE", if live { "1" } else { "0" }.to_string()),
     ];
-    script(&bundle, bundle::PRE_PATCH, out, &env)?;
+    script(&bundle, bundle::PRE_SETUP, out, &env)?;
 
     let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
         || options.theme.is_some() {
@@ -218,7 +218,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     };
     let screen = &bundle.file(bundle::SCREEN)?.to_vec();
     // The rest is in options now: the 64 MB OMAP units cannot hold a second copy.
-    let post_patch = bundle.file(bundle::POST_PATCH)?.to_vec();
+    let post_setup = bundle.file(bundle::POST_SETUP)?.to_vec();
     drop(bundle);
     let manifest = RefCell::new(serde_json::Value::Null);
     let build_screen = |source: &[u8]| -> Result<Vec<u8>> {
@@ -244,7 +244,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
         None => nestlocal::generate_pki(),
     };
     let mut volume = if live { LocalVolume::live(root) } else { LocalVolume::new(root) };
-    let changes = patch::patch_owned(&mut volume, target, options, nestlocal_binary, &mut new_pki, dry_run,
+    let changes = setup::set_up_owned(&mut volume, target, options, nestlocal_binary, &mut new_pki, dry_run,
                                      &build_screen)?;
     let result = json!({
         "changes": changes.iter().map(|c| json!({"name": c.name, "action": c.action, "old": c.old, "new": c.new}))
@@ -256,7 +256,7 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     if !dry_run {
         let mut env = env.to_vec();
         env.push(("UNFR0ZEN_CHANGES", changes.len().to_string()));
-        script_data(&post_patch, bundle::POST_PATCH, out, &env)?;
+        script_data(&post_setup, bundle::POST_SETUP, out, &env)?;
     }
     Ok(())
 }
