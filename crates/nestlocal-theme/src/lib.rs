@@ -110,7 +110,9 @@ impl NativeState {
         t.high = shown(self.high);
         t.mode = match self.mode { 0 => "heat", 1 => "cool", 2 => "heat-cool", 4 => "eco", _ => "off" }.into();
         t.hvac = match self.hvac { 1 => "heating", 2 => "cooling", _ => "idle" };
-        t.humidity = Some(self.humidity);
+        // nestlocal's reading, as the stock screens show it; the native
+        // one reads 0 on builds whose bound getter does not give it.
+        if t.humidity.is_none() && self.humidity > 0.0 { t.humidity = Some(self.humidity); }
         t.leaf_on = self.leaf != 0;
         t.eco = self.mode == 4;
         // The heat-cool end being edited (1, 2) or picked (3, 4) on the dial.
@@ -418,6 +420,12 @@ mod tests {
         assert_eq!(ui.thermostat.mode, "heat-cool");
         assert_eq!(ui.thermostat.hvac, "heating");
         assert_eq!(ui.thermostat.humidity, Some(47.0));
+        let mut reported = view(&Rc::new(serde_json::json!({"dev":{"current_humidity":45},"shared":{}})), 1.0, 0.0, 480.0);
+        NativeState { humidity: 0.0, ..Default::default() }.apply(&mut reported);
+        assert_eq!(reported.thermostat.humidity, Some(45.0), "nestlocal's humidity, not a native 0");
+        let mut unknown = view(&Rc::new(serde_json::json!({"dev":{},"shared":{}})), 1.0, 0.0, 480.0);
+        NativeState::default().apply(&mut unknown);
+        assert_eq!(unknown.thermostat.humidity, None);
         assert!(ui.thermostat.leaf_on);
         assert_eq!((ui.thermostat.range, ui.thermostat.range_editing), (None, false));
         for (range, expected) in [(1, (Some("low"), true)), (2, (Some("high"), true)), (3, (Some("low"), false)), (4, (Some("high"), false))] {
