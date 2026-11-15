@@ -10,7 +10,7 @@
 data=/media/data/doom
 run=/var/run/unfr0zen
 # The game and its WAD: on the gen 3's scratch volume, else (the gen 2, or a
-# unit patched before) the root volume.
+# unit set up before) the root volume.
 game=/media/scratch/.unfr0zen/doom
 if [ -x "$game/doom" ]; then
     doom=$game/doom wad=$game/doom1.wad

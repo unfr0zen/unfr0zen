@@ -7,7 +7,7 @@
 # CLI/GUI settings in /etc/nestlocal/options take precedence. Units without
 # that file can use /media/system-config/nestlocal.options.
 
-# On the gen 3's scratch volume, else (the gen 2, or a unit patched before)
+# On the gen 3's scratch volume, else (the gen 2, or a unit set up before)
 # the root volume.
 DAEMON=/media/scratch/.unfr0zen/bin/nestlocal
 [ -x "$DAEMON" ] || DAEMON=/nestlabs/sbin/nestlocal

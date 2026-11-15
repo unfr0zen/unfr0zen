@@ -5,24 +5,24 @@
 //! programs read at their stock paths (nlclient, its preloads, scripts and
 //! settings) and nestlocal's keys and options. The unit boots and heats
 //! without anything on scratch: a lost directory turns its features off
-//! until the next patch puts it back.
+//! until the next setup puts it back.
 //!
 //! Nest's boot script (cleanup_scratch in /etc/init.d/nestlabs) deletes every
 //! top-level entry of /media/scratch but dot-names and the dropbox image, so
-//! the directory is a dot-name. The patch reaches it through the root volume's
+//! the directory is a dot-name. The setup reaches it through the root volume's
 //! own mount point: the initramfs mounts ubi0:scratch at ROOT/media/scratch,
 //! and a running unit has it there.
 
 /// The directory, as a name on the root volume.
 pub const DIR: &str = "media/scratch/.unfr0zen";
-/// The files of DIR, each with its SHA-256, written by every patch:
+/// The files of DIR, each with its SHA-256, written by every setup:
 /// `sha256  name` lines, names relative to DIR.
 pub const MANIFEST: &str = "media/scratch/.unfr0zen/manifest";
 /// The Lua themes, one directory each (nestlocal's themes/).
 pub const THEMES: &str = "media/scratch/.unfr0zen/themes";
 
 /// What the gen 3 keeps on scratch, by the name it has on the root volume
-/// of the gen 2 and of units patched before.
+/// of the gen 2 and of units set up before.
 pub const MOVED: &[(&str, &str)] = &[
     ("nestlabs/sbin/nestlocal", "media/scratch/.unfr0zen/bin/nestlocal"),
     ("nestlabs/sbin/unfr0zen-apply", "media/scratch/.unfr0zen/bin/unfr0zen-apply"),

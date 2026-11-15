@@ -1,4 +1,4 @@
-//! The Patch page: one guided flow from a unit on USB to a patched one.
+//! The Set up page: one guided flow from a unit on USB to a set-up one.
 //! Connect, Integrations, Features and Review are steps the person moves
 //! through; the run started from Review shows in place of them, and its
 //! success ends on Done.
@@ -68,7 +68,7 @@ pub(crate) const OFF: egui::Color32 = egui::Color32::from_rgb(0x35, 0x3b, 0x47);
 const OK_FILL: egui::Color32 = egui::Color32::from_rgb(0x16, 0x2a, 0x1d);
 const OK_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x9e, 0xe0, 0xa3);
 
-/// What the Patch page shows now.
+/// What the Set up page shows now.
 #[derive(Debug, PartialEq, Eq)]
 enum Screen {
     Step(Step),
@@ -123,14 +123,14 @@ impl App {
         }
     }
 
-    /// Starts the run the review step asked for: the patch, with the whole
+    /// Starts the run the review step asked for: the setup, with the whole
     /// NAND backed up first when chosen, in the same entry into recovery.
     pub(crate) fn start_flow(&mut self) {
         if !self.idle() {
             return;
         }
         self.flow_backup = None;
-        self.start(if self.form.backup_first { Task::BackupPatch(self.library.fresh_path()) } else { Task::Patch });
+        self.start(if self.form.backup_first { Task::BackupSetUp(self.library.fresh_path()) } else { Task::SetUp });
         self.flow_run = true;
     }
 
@@ -142,7 +142,7 @@ impl App {
     /// The phases the flow's run goes through: Backing up only when it
     /// backs up first.
     fn flow_phases(&self) -> Vec<Phase> {
-        let backup = matches!(self.task, Some(Task::BackupPatch(_)));
+        let backup = matches!(self.task, Some(Task::BackupSetUp(_)));
         PHASES.into_iter().filter(|&phase| phase != Phase::Backup || backup).collect()
     }
 
@@ -221,12 +221,12 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if step == Step::Review {
                     let label = if self.form.backup_first {
-                        tr!("setup.start_backup_patch")
+                        tr!("setup.start_backup_setup")
                     } else {
-                        tr!("setup.start_patch")
+                        tr!("setup.start_setup")
                     };
-                    if pill_button(ui, label, true, self.idle()).on_hover_text(tr!("patch.start_hint"))
-                        .on_disabled_hover_text(tr!("patch.start_disabled")).clicked() {
+                    if pill_button(ui, label, true, self.idle()).on_hover_text(tr!("form.start_hint"))
+                        .on_disabled_hover_text(tr!("form.start_disabled")).clicked() {
                         self.start_flow();
                     }
                     ui.label(egui::RichText::new(tr!("setup.keep_plugged_in")).color(MUTED).size(13.0));
@@ -381,13 +381,13 @@ impl App {
                 let fraction = t.shown() as f32 / t.total.max(1) as f32;
                 let left = t.speed().map(|rate| ((t.total.saturating_sub(t.shown())) as f64 / rate / 60.0).ceil() as u64);
                 let under = left.map_or_else(String::new, |m| tr!("setup.minutes_left", minutes = m.max(1)));
-                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
+                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
                 (Some(fraction), label, format!("{}", (fraction * 100.0).floor() as u32), under)
             } else if self.sdp_wait.is_some() {
-                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
+                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
                 (Some(0.0), label, String::new(), String::new())
             } else {
-                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_patching") };
+                let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
                 let seconds = self.logs.rows.first().map_or(0, |r| r.started.elapsed().as_secs());
                 (None, label, format!("{}:{:02}", seconds / 60, seconds % 60), String::new())
             };
@@ -1054,9 +1054,9 @@ enum StepMark {
     Upcoming,
 }
 
-/// A patch run's phases, in order.
+/// A setup run's phases, in order.
 const PHASES: [Phase; 7] = [Phase::DownloadMode, Phase::Recovery, Phase::Backup, Phase::Check, Phase::Prepare,
-                            Phase::Patch, Phase::Restart];
+                            Phase::SetUp, Phase::Restart];
 
 /// What a phase is called beside the ring.
 fn phase_title(phase: Phase) -> &'static str {
@@ -1066,7 +1066,7 @@ fn phase_title(phase: Phase) -> &'static str {
         Phase::Backup => tr!("setup.phase.backup"),
         Phase::Check => tr!("setup.phase.check"),
         Phase::Prepare => tr!("setup.phase.prepare"),
-        Phase::Patch => tr!("setup.phase.patch"),
+        Phase::SetUp => tr!("setup.phase.setup"),
         Phase::Restart => tr!("setup.phase.restart"),
     }
 }

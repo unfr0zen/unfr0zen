@@ -9,12 +9,12 @@
 //! JFFS2 then drops as unlinked. Port of scripts/patch_root_j49.py.
 //!
 //! nestlocal's and nlclient's binaries are the exceptions, when the new copy
-//! does not fit beside the old, or when the patch as a whole did not
+//! does not fit beside the old, or when the setup as a whole did not
 //! ([`Slot::make_room_in_place`]): the name leaves the old copy first, the
 //! blocks holding nothing but the old copy are erased (and given back JFFS2's
 //! clean marker), and the new copy goes there. nestlocal's name is removed,
 //! so a write cut short in between leaves the slot without nestlocal until
-//! the patch runs again. nlclient's name is linked to the stock nlclient
+//! the setup runs again. nlclient's name is linked to the stock nlclient
 //! saved beside it, made executable for as long as it stands in, so a write
 //! cut short leaves the unit running the stock nlclient. The rest of the slot
 //! is as it was.
@@ -22,10 +22,10 @@
 //! When even that does not fit, the slot is rewritten whole
 //! ([`Slot::rewrite_whole`]): the unit's own JFFS2 leaves obsolete nodes
 //! spread over blocks it shares with live ones, and only erasing every block
-//! and writing the patched tree's live files afresh gets that space back. A
+//! and writing the set-up tree's live files afresh gets that space back. A
 //! write cut short then leaves the slot unmountable until it is written again.
 //!
-//! As a [`Volume`], the patch sees the slot as the initramfs shell shows a
+//! As a [`Volume`], the setup sees the slot as the initramfs shell shows a
 //! mounted one; [`Slot::programmed`] then gives the pages to program.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,7 +47,7 @@ const SUMMARY: u16 = 0x2006;
 const CLEAN_OOB: (usize, [u8; 8]) = (2, [0x85, 0x19, 0x03, 0x20, 0x08, 0x00, 0x00, 0x00]);
 /// Files whose old copy may be erased to make room for the new, and what
 /// their name stands for meanwhile: nothing for nestlocal's, which a unit can
-/// always do without until the patch runs again, and the saved stock nlclient
+/// always do without until the setup runs again, and the saved stock nlclient
 /// for nlclient's, without which it would have no screen.
 const REPLACED_IN_PLACE: [(&str, Option<&str>); 2] = [
     ("nestlabs/sbin/nestlocal", None),
@@ -163,7 +163,7 @@ struct Held {
     other: bool,
 }
 
-/// How to program the patched slot: `before` the erase, the blocks to
+/// How to program the set-up slot: `before` the erase, the blocks to
 /// erase, then `after` (each erased block's clean marker first, where no
 /// node starts it). Pages and blocks count from the slot's start.
 pub struct Programming {
@@ -573,15 +573,15 @@ impl Slot {
     }
 
     /// Has a nestlocal or nlclient written to the slot take its old copy's
-    /// blocks even when it fits beside them: for a patch that, as a whole,
+    /// blocks even when it fits beside them: for a setup that, as a whole,
     /// did not.
     pub fn make_room_in_place(&mut self) {
         self.always_make_room = true;
     }
 
-    /// Has the slot rewritten whole: the patch changes the tree in memory,
+    /// Has the slot rewritten whole: the setup changes the tree in memory,
     /// and the pages to program hold its live files alone, every block but
-    /// the bad ones erased first. For a patch that did not fit even with
+    /// the bad ones erased first. For a setup that did not fit even with
     /// [`Slot::make_room_in_place`].
     pub fn rewrite_whole(&mut self) {
         self.rewrite = true;
@@ -678,13 +678,13 @@ impl Volume for Slot {
         Ok((self.blocks.len().saturating_sub(SPARE_BLOCKS) * BLOCK + left) as u64)
     }
 
-    /// Nodes are placed in memory; one that does not fit fails the patch
+    /// Nodes are placed in memory; one that does not fit fails the setup
     /// before any page is programmed.
     fn checks_space(&self) -> bool {
         false
     }
 
-    /// The slot alone: what the patch puts on scratch on a mounted unit stays
+    /// The slot alone: what the setup puts on scratch on a mounted unit stays
     /// on the root volume here, where the unit's programs find it too.
     fn scratch(&self) -> bool {
         false
@@ -990,7 +990,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_patch_that_does_not_fit_beside_obsolete_nodes_fits_in_the_slot_rewritten_whole() {
+    fn a_setup_that_does_not_fit_beside_obsolete_nodes_fits_in_the_slot_rewritten_whole() {
         // Rewrites of etc/log leave obsolete nodes in blocks shared with live
         // files; three blocks are free beyond the spare ones.
         let mut slot = empty(SPARE_BLOCKS + 6);
@@ -1007,15 +1007,15 @@ pub(crate) mod tests {
         slot.inode(link, S_IFLNK | 0o777, (0, 0), 5, 0, b"keep3").unwrap();
         let raw = slot.programmed().unwrap().raw;
         let new = noise(BLOCK * 7 / 2, 9);
-        let patch = |slot: &mut Slot| slot.write("nestlabs/sbin/nestlocal", &new, "0:0", 0o755);
+        let set_up = |slot: &mut Slot| slot.write("nestlabs/sbin/nestlocal", &new, "0:0", 0o755);
         let mut appended = Slot::load(raw.clone()).unwrap();
-        assert!(patch(&mut appended).is_err() && appended.out_of_room());
+        assert!(set_up(&mut appended).is_err() && appended.out_of_room());
         let mut in_place = Slot::load(raw.clone()).unwrap();
         in_place.make_room_in_place();
-        assert!(patch(&mut in_place).is_err() && in_place.out_of_room());
+        assert!(set_up(&mut in_place).is_err() && in_place.out_of_room());
         let mut whole = Slot::load(raw).unwrap();
         whole.rewrite_whole();
-        patch(&mut whole).unwrap();
+        set_up(&mut whole).unwrap();
         let plan = whole.programmed().unwrap();
         assert_eq!(plan.erase, (0..SPARE_BLOCKS + 6).collect::<Vec<_>>());
         assert!(plan.before.is_empty());

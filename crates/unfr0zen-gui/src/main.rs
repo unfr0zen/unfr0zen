@@ -1,5 +1,5 @@
 //! unfr0zen desktop: a workbench over the same recovery flow the terminal
-//! runs (unfr0zen-host). The sidebar picks a page: the patch form, the NAND
+//! runs (unfr0zen-host). The sidebar picks a page: the setup form, the NAND
 //! backups folder, the unit on USB, the run's log, and the advanced
 //! commands. One task runs at a time, on a background thread; the status
 //! bar follows it from any page.
@@ -15,7 +15,7 @@ mod logs;
 #[cfg(target_os = "macos")]
 mod macos_about;
 mod nandmap;
-mod patch;
+mod form;
 mod run;
 mod setup;
 use setup::Look;
@@ -43,7 +43,7 @@ use unfr0zen_host::Device;
 
 use backups::Library;
 use bus::{Bus, Watcher};
-use patch::Form;
+use form::Form;
 use run::{Event, Run};
 use terminal::Terminal;
 
@@ -458,7 +458,7 @@ const WINDOW: [f32; 2] = [1080.0, 800.0];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Page {
     #[default]
-    Patch,
+    SetUp,
     Backups,
     Logs,
     About,
@@ -468,12 +468,12 @@ enum Page {
 }
 
 impl Page {
-    const MAIN: [Page; 4] = [Page::Patch, Page::Backups, Page::Logs, Page::About];
+    const MAIN: [Page; 4] = [Page::SetUp, Page::Backups, Page::Logs, Page::About];
     const ADVANCED: [Page; 2] = [Page::Boot, Page::Terminal];
 
     fn title(self) -> &'static str {
         match self {
-            Page::Patch => tr!("page.patch"),
+            Page::SetUp => tr!("page.setup"),
             Page::Backups => tr!("page.backups"),
             Page::Logs => tr!("page.logs"),
             Page::About => tr!("page.about"),
@@ -487,10 +487,10 @@ impl Page {
 /// What a run does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Task {
-    Patch,
-    /// The whole NAND backed up to the file, then the patch, with the unit
+    SetUp,
+    /// The whole NAND backed up to the file, then the setup, with the unit
     /// in recovery once for both.
-    BackupPatch(PathBuf),
+    BackupSetUp(PathBuf),
     Backup(PathBuf),
     Restore(PathBuf),
     Uboot,
@@ -500,8 +500,8 @@ enum Task {
 impl Task {
     fn title(&self) -> &'static str {
         match self {
-            Task::Patch => tr!("task.patch"),
-            Task::BackupPatch(_) => tr!("task.backup_patch"),
+            Task::SetUp => tr!("task.setup"),
+            Task::BackupSetUp(_) => tr!("task.backup_setup"),
             Task::Backup(_) => tr!("task.backup"),
             Task::Restore(_) => tr!("task.restore"),
             Task::Uboot => tr!("task.uboot"),
@@ -511,8 +511,8 @@ impl Task {
 
     fn log_title(&self) -> &'static str {
         match self {
-            Task::Patch => "Patch",
-            Task::BackupPatch(_) => "Back up NAND and patch",
+            Task::SetUp => "Set up",
+            Task::BackupSetUp(_) => "Back up NAND and set up",
             Task::Backup(_) => "Back up NAND",
             Task::Restore(_) => "Restore NAND",
             Task::Uboot => "Load recovery U-Boot",
@@ -523,7 +523,7 @@ impl Task {
     /// What the task is doing, for the run's card.
     fn doing(&self) -> &'static str {
         match self {
-            Task::Patch | Task::BackupPatch(_) => tr!("task.patching"),
+            Task::SetUp | Task::BackupSetUp(_) => tr!("task.setting_up"),
             Task::Backup(_) => tr!("task.backing_up"),
             Task::Restore(_) => tr!("task.restoring"),
             Task::Uboot => tr!("task.loading_uboot"),
@@ -534,7 +534,7 @@ impl Task {
     /// The page the task was started from, where its summary shows.
     fn page(&self) -> Page {
         match self {
-            Task::Patch | Task::BackupPatch(_) => Page::Patch,
+            Task::SetUp | Task::BackupSetUp(_) => Page::SetUp,
             Task::Backup(_) | Task::Restore(_) => Page::Backups,
             Task::Uboot => Page::Uboot,
             Task::Boot => Page::Boot,
@@ -543,13 +543,13 @@ impl Task {
 
     /// The task writes a backup into the folder, or reads one from it.
     fn is_nand(&self) -> bool {
-        matches!(self, Task::Backup(_) | Task::BackupPatch(_) | Task::Restore(_))
+        matches!(self, Task::Backup(_) | Task::BackupSetUp(_) | Task::Restore(_))
     }
 
     /// The backup the task writes.
     fn backup(&self) -> Option<&PathBuf> {
         match self {
-            Task::Backup(out) | Task::BackupPatch(out) => Some(out),
+            Task::Backup(out) | Task::BackupSetUp(out) => Some(out),
             _ => None,
         }
     }
@@ -614,12 +614,12 @@ struct App {
     sdp_wait: Option<Instant>,
     /// The review step's developer options are out.
     developer_open: bool,
-    /// The patch flow's step, while no run of its own shows.
+    /// The setup flow's step, while no run of its own shows.
     step: setup::Step,
-    /// The task under way, or the last one, was started by the patch flow:
+    /// The task under way, or the last one, was started by the setup flow:
     /// its progress and outcome show in the flow, not in the run's card.
     flow_run: bool,
-    /// The backup the flow took before its patch, once whole.
+    /// The backup the flow took before its setup, once whole.
     flow_backup: Option<PathBuf>,
     /// Counts the flow's runs ending and restarts: its pages' scroll areas
     /// are new each time, so they open at the top.
@@ -712,11 +712,11 @@ struct LogContext {
     outcome: Option<Result<String, String>>,
     /// The unit the run found: device and silicon, once read.
     device: Option<String>,
-    /// A patch run's phases so far, newest last; the last may still be open.
+    /// A setup run's phases so far, newest last; the last may still be open.
     phases: Vec<PhaseRow>,
 }
 
-/// A phase of a patch run: when it began, and how long it took and whether
+/// A phase of a setup run: when it began, and how long it took and whether
 /// it went through, once it is over.
 struct PhaseRow {
     phase: unfr0zen_host::Phase,
@@ -800,13 +800,13 @@ impl App {
         self.flow_run = false;
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
-            Task::Patch | Task::BackupPatch(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
+            Task::SetUp | Task::BackupSetUp(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
             task => format!("Selected: {}", task.log_title()),
         });
         let entry_point = self.form.entry_point;
         let run = match &task {
-            Task::Patch => self.form.config().map(|config| Run::start(config, None)),
-            Task::BackupPatch(out) => self.form.config()
+            Task::SetUp => self.form.config().map(|config| Run::start(config, None)),
+            Task::BackupSetUp(out) => self.form.config()
                 .and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone())))),
             Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
@@ -939,8 +939,8 @@ impl App {
                     self.library.refresh();
                 }
                 // The flow's backup is whole once its checksum is written,
-                // whether or not the patch after it went through.
-                if let Some(Task::BackupPatch(out)) = &self.task {
+                // whether or not the setup after it went through.
+                if let Some(Task::BackupSetUp(out)) = &self.task {
                     if unfr0zen_host::nand::checksum_path(out).exists() {
                         self.flow_backup = Some(out.clone());
                     }
@@ -1053,7 +1053,7 @@ impl App {
         let frame = egui::Frame::new().fill(BG)
             .inner_margin(egui::Margin { left: 28, right: 28, top: 16, bottom: 4 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| match self.page {
-            Page::Patch => self.setup_page(ui),
+            Page::SetUp => self.setup_page(ui),
             Page::Backups => self.backups_page(ui),
             Page::Logs => self.logs_page(ui),
             Page::Uboot => self.uboot_page(ui),
@@ -1186,7 +1186,7 @@ impl App {
             painter.galley(badge.center() - galley.size() * 0.5, galley, MUTED);
         }
         let hint = match page {
-            Page::Patch => tr!("nav.patch_hint"),
+            Page::SetUp => tr!("nav.setup_hint"),
             Page::Backups => tr!("nav.backups_hint"),
             Page::Logs => tr!("nav.logs_hint"),
             Page::About => tr!("nav.about_page_hint"),
@@ -2023,7 +2023,7 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
     };
     match page {
         // A bolt.
-        Page::Patch => path(&[(1.0, -6.0), (-4.0, 1.0), (0.0, 1.0), (-1.0, 6.0), (4.0, -1.0), (0.0, -1.0), (1.0, -6.0)]),
+        Page::SetUp => path(&[(1.0, -6.0), (-4.0, 1.0), (0.0, 1.0), (-1.0, 6.0), (4.0, -1.0), (0.0, -1.0), (1.0, -6.0)]),
         // Two drives.
         Page::Backups => {
             for y in [-5.0, 1.0] {
@@ -2489,15 +2489,15 @@ mod tests {
         assert_eq!(app.library.entries.len(), 1);
         assert_eq!(app.page, Page::Backups);
         assert!(!app.running());
-        let mut app = App { library: Library::new(dir.clone()), task: Some(Task::Patch), ..App::default() };
-        app.on_event(Event::Done(Ok("Patched".into())));
-        assert!(app.library.entries.is_empty(), "a patch does not touch the folder");
+        let mut app = App { library: Library::new(dir.clone()), task: Some(Task::SetUp), ..App::default() };
+        app.on_event(Event::Done(Ok("Set up".into())));
+        assert!(app.library.entries.is_empty(), "a setup does not touch the folder");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_task_names_the_page_its_summary_shows_on() {
-        assert_eq!(Task::Patch.page(), Page::Patch);
+        assert_eq!(Task::SetUp.page(), Page::SetUp);
         assert_eq!(Task::Backup("a".into()).page(), Page::Backups);
         assert_eq!(Task::Restore("a".into()).page(), Page::Backups);
         assert_eq!(Task::Uboot.page(), Page::Uboot);
@@ -2519,9 +2519,9 @@ mod tests {
         let mut app = App::default();
         app.form.matter.on = true;
         app.form.matter.code = "1559-813-5764".into();
-        app.start(Task::Patch);
+        app.start(Task::SetUp);
         assert!(!app.running());
-        assert_eq!(app.task, Some(Task::Patch));
+        assert_eq!(app.task, Some(Task::SetUp));
         assert!(app.logs.outcome.as_ref().unwrap().as_ref().err().unwrap().contains("check digit"));
     }
 
@@ -2560,7 +2560,7 @@ mod tests {
         let mut app = App { step: setup::Step::Features, ..release() };
         render_frames(&mut app, WINDOW, 1);
         assert_eq!(app.screen_name(), "Step(Connect)", "unplugged before the run");
-        let mut running = App { step: setup::Step::Review, flow_run: true, task: Some(Task::Patch), ..App::default() };
+        let mut running = App { step: setup::Step::Review, flow_run: true, task: Some(Task::SetUp), ..App::default() };
         running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
         render_frames(&mut running, WINDOW, 1);
         assert_eq!((running.step, running.screen_name().as_str()), (setup::Step::Review, "Running"), "a run re-enumerates the unit");
@@ -2583,7 +2583,7 @@ mod tests {
 
     #[test]
     fn a_failed_flow_stays_off_other_pages_and_another_task_takes_set_up_off_it() {
-        let mut app = App { flow_run: true, task: Some(Task::BackupPatch("nand.bin".into())), ..App::default() };
+        let mut app = App { flow_run: true, task: Some(Task::BackupSetUp("nand.bin".into())), ..App::default() };
         app.on_event(Event::Done(Err("nlclient undo journal does not match the executable".into())));
         assert_eq!(app.screen_name(), "Failed");
         // On Backups, no card repeats the flow's failure; the status bar has it.
@@ -2603,29 +2603,29 @@ mod tests {
     fn the_review_step_offers_the_backup_and_starts_the_flows_run() {
         let mut app = App { bus: on_usb(Device::Diamond3), step: setup::Step::Review, ..App::default() };
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        for label in ["Back up first?", "Back up, then patch", "Patch without a backup", "Back up and patch"] {
+        for label in ["Back up first?", "Back up, then set up", "Set up without a backup", "Back up and set up"] {
             assert!(shown.iter().any(|t| t == label), "{label}: {shown:?}");
         }
-        // Options that fail before the unit is touched start the patch at
+        // Options that fail before the unit is touched start the setup at
         // once, which reports the failure in the flow.
         app.form.matter.on = true;
         app.form.matter.code = "1559-813-5764".into();
         app.form.backup_first = false;
         app.start_flow();
         assert!(app.flow_run && !app.running());
-        assert_eq!(app.task, Some(Task::Patch));
+        assert_eq!(app.task, Some(Task::SetUp));
         assert_eq!(app.screen_name(), "Failed");
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert!(shown.iter().any(|t| t == "Patch stopped"), "{shown:?}");
-        // Patching is the flow's own phase; the run card would name it again.
-        assert_eq!(shown.iter().filter(|t| *t == "Patching").count(), 1, "no run card over the flow: {shown:?}");
+        assert!(shown.iter().any(|t| t == "Setup stopped"), "{shown:?}");
+        // Setting up is the flow's own phase; the run card would name it again.
+        assert_eq!(shown.iter().filter(|t| *t == "Setting up").count(), 1, "no run card over the flow: {shown:?}");
     }
 
     #[test]
     fn done_lists_a_next_step_per_integration_chosen() {
-        let mut app = App { flow_run: true, task: Some(Task::Patch), flow_backup: Some("nand-1.bin".into()), ..App::default() };
+        let mut app = App { flow_run: true, task: Some(Task::SetUp), flow_backup: Some("nand-1.bin".into()), ..App::default() };
         app.form.matter.on = true;
-        app.logs.outcome = Some(Ok("patched".into()));
+        app.logs.outcome = Some(Ok("set up".into()));
         assert_eq!(app.screen_name(), "Done");
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         for label in ["Your thermostat is ready", "Put it back on its base", "Pair it with Matter"] {
@@ -2635,23 +2635,23 @@ mod tests {
     }
 
     #[test]
-    fn a_backup_before_the_patch_is_one_run_listed_by_its_phases() {
-        let dir = temp_dir("backup-patch");
+    fn a_backup_before_the_setup_is_one_run_listed_by_its_phases() {
+        let dir = temp_dir("backup-setup");
         let mut app = App { library: Library::new(dir.clone()), ..App::default() };
         // Options that fail before the unit is touched keep the run off USB.
         app.form.matter.on = true;
         app.form.matter.code = "1559-813-5764".into();
         app.start_flow();
-        assert!(matches!(&app.task, Some(Task::BackupPatch(out)) if out.parent() == Some(dir.as_path())), "{:?}", app.task);
+        assert!(matches!(&app.task, Some(Task::BackupSetUp(out)) if out.parent() == Some(dir.as_path())), "{:?}", app.task);
         assert_eq!(app.screen_name(), "Failed");
         assert!(app.flow_backup.is_none(), "no backup was written");
         let out = dir.join("nand.bin");
-        let mut app = App { flow_run: true, task: Some(Task::BackupPatch(out.clone())), ..App::default() };
+        let mut app = App { flow_run: true, task: Some(Task::BackupSetUp(out.clone())), ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
         use unfr0zen_host::Phase;
         // Every phase is listed from the start, the steps inside them not.
         let titles = ["Waiting for download mode", "Starting recovery", "Backing up", "Checking your thermostat",
-                      "Preparing new features", "Patching", "Restarting"];
+                      "Preparing new features", "Setting up", "Restarting"];
         app.on_event(Event::Phase(Phase::DownloadMode));
         app.on_event(Event::Phase(Phase::Recovery));
         app.on_event(Event::Begin("Load recovery U-Boot".into()));
@@ -2661,17 +2661,17 @@ mod tests {
         app.on_event(Event::Phase(Phase::Backup));
         assert!(app.backing_up());
         app.on_event(Event::Phase(Phase::Check));
-        assert!(!app.backing_up(), "patching once the backup is done");
+        assert!(!app.backing_up(), "setting up once the backup is done");
         assert_eq!(app.logs.phases.iter().map(|row| row.done.map(|(_, ok)| ok)).collect::<Vec<_>>(),
                    [Some(true), Some(true), Some(true), None]);
-        // A patch that fails after the backup marks its phase and still
+        // A setup that fails after the backup marks its phase and still
         // names the backup.
         std::fs::write(unfr0zen_host::nand::checksum_path(&out), "sum").unwrap();
         app.on_event(Event::Done(Err("the unit came back in app mode".into())));
         assert_eq!(app.logs.phases.last().unwrap().done.map(|(_, ok)| ok), Some(false));
         assert_eq!(app.flow_backup.as_deref(), Some(out.as_path()));
         // Without a backup first, Backing up is not listed.
-        let mut plain = App { flow_run: true, task: Some(Task::Patch), ..App::default() };
+        let mut plain = App { flow_run: true, task: Some(Task::SetUp), ..App::default() };
         plain.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
         plain.on_event(Event::Phase(Phase::DownloadMode));
         let shown = texts(&render_frames(&mut plain, WINDOW, 2));
@@ -2679,7 +2679,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Each page, and each step of the patch flow, as a PNG in
+    /// Each page, and each step of the setup flow, as a PNG in
     /// $UNFR0ZEN_SNAPSHOTS, to look at:
     /// `UNFR0ZEN_SNAPSHOTS=dir cargo test -p unfr0zen-gui snapshots -- --ignored`.
     #[test]
@@ -2695,7 +2695,7 @@ mod tests {
         let dialog = |name: &str, app: &mut App| {
             snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
         };
-        for page in Page::MAIN.into_iter().chain(Page::ADVANCED).filter(|p| *p != Page::Patch) {
+        for page in Page::MAIN.into_iter().chain(Page::ADVANCED).filter(|p| *p != Page::SetUp) {
             let mut app = App::default();
             app.show(page);
             shot(&format!("{page:?}").to_lowercase(), &mut app, WINDOW);
@@ -2730,7 +2730,7 @@ mod tests {
         shot("4-review-full", &mut review, WINDOW);
         let mut running = flow(setup::Step::Review);
         running.flow_run = true;
-        running.task = Some(Task::BackupPatch("nand-20261109-1131.bin".into()));
+        running.task = Some(Task::BackupSetUp("nand-20261109-1131.bin".into()));
         running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
         running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
@@ -2742,19 +2742,19 @@ mod tests {
         done.form.mqtt.on = true;
         done.form.matter.on = true;
         done.flow_run = true;
-        done.task = Some(Task::Patch);
+        done.task = Some(Task::SetUp);
         done.flow_backup = Some("nand-20261109-1131.bin".into());
-        done.logs.outcome = Some(Ok("patched".into()));
+        done.logs.outcome = Some(Ok("set up".into()));
         shot("6-done", &mut done, WINDOW);
         let mut failed = flow(setup::Step::Review);
         failed.flow_run = true;
-        failed.task = Some(Task::Patch);
+        failed.task = Some(Task::SetUp);
         failed.logs.rows.push(Row { label: "Find the application root volume".into(), started: Instant::now(), done: Some((Duration::from_secs(2), false)) });
         failed.logs.outcome = Some(Err("no application root volume found".into()));
         shot("7-failed", &mut failed, WINDOW);
         let mut sdp = flow(setup::Step::Review);
         sdp.flow_run = true;
-        sdp.task = Some(Task::Patch);
+        sdp.task = Some(Task::SetUp);
         sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
         sdp.on_event(Event::Waiting("Hold the front panel button".into()));
         sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
@@ -2806,7 +2806,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         shot("3-backups", &mut backups);
-        // The install guide's: the patch flow from connecting to done.
+        // The install guide's: the setup flow from connecting to done.
         let dialog = |name: &str, app: &mut App| {
             app.version = "";
             snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
@@ -2823,14 +2823,14 @@ mod tests {
         shot("guide-developer", &mut developer);
         let mut sdp = flow(setup::Step::Review);
         sdp.flow_run = true;
-        sdp.task = Some(Task::Patch);
+        sdp.task = Some(Task::SetUp);
         sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
         sdp.on_event(Event::Waiting("Hold the front panel button".into()));
         sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
         dialog("guide-download-mode", &mut sdp);
         let mut running = flow(setup::Step::Review);
         running.flow_run = true;
-        running.task = Some(Task::BackupPatch("nand-20261113-1012.bin".into()));
+        running.task = Some(Task::BackupSetUp("nand-20261113-1012.bin".into()));
         running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
         running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
@@ -2841,9 +2841,9 @@ mod tests {
         let mut done = flow(setup::Step::Review);
         done.form.mqtt.on = true;
         done.flow_run = true;
-        done.task = Some(Task::Patch);
+        done.task = Some(Task::SetUp);
         done.flow_backup = Some("nand-20261113-1012.bin".into());
-        done.logs.outcome = Some(Ok("patched".into()));
+        done.logs.outcome = Some(Ok("set up".into()));
         shot("guide-done", &mut done);
     }
 
@@ -2853,7 +2853,7 @@ mod tests {
         std::fs::File::create(dir.join("nand.bin")).unwrap().set_len(512 << 20).unwrap();
         for page in Page::MAIN.into_iter().chain(Page::ADVANCED) {
             let mut app = App { library: Library::new(dir.clone()), ..App::default() };
-            app.task = Some(Task::Patch);
+            app.task = Some(Task::SetUp);
             app.logs.outcome = Some(Err("the volume has too little free space".into()));
             app.show(page);
             let output = render(&mut app, WINDOW);
@@ -2945,7 +2945,7 @@ mod tests {
 
     #[test]
     fn a_dropdowns_last_row_stays_put_under_the_pointer_with_no_scrollbar() {
-        let mut app = App { bus: on_usb(Device::Diamond3), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::Diamond3), page: Page::SetUp, step: setup::Step::Review, developer_open: true, ..App::default() };
         let context = egui::Context::default();
         install_fonts(&context);
         // The app's theme gives inactive widgets this border.
@@ -3005,7 +3005,7 @@ mod tests {
 
     #[test]
     fn the_run_card_stays_while_running_and_after_a_failure_only() {
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, ..App::default() };
+        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, ..App::default() };
         // Longer than the test runs: the fake run must not finish and retire
         // itself while the assertions below still expect it live.
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
@@ -3017,7 +3017,7 @@ mod tests {
         app.show(Page::Logs);
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert_eq!(shown.iter().filter(|t| *t == "Read NAND").count(), 1, "the Logs page shows the run itself, not the card");
-        app.show(Page::Patch);
+        app.show(Page::SetUp);
         app.run = None;
         app.on_event(Event::Done(Ok("Backed up to a path with its checksum".into())));
         assert!(card(&mut app, "Read NAND") && !card(&mut app, "Backed up to a path with its checksum"),
@@ -3031,7 +3031,7 @@ mod tests {
         app.popup_dismissed = true;
         assert!(!card(&mut app, "no unit"));
         // A wait called off ends the run without an error shown.
-        let mut app = App { task: Some(Task::Patch), page: Page::Patch, ..App::default() };
+        let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         app.sdp_wait = None;
@@ -3041,7 +3041,7 @@ mod tests {
         app.on_event(Event::Done(Err("no unit entered USB download mode".into())));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(!shown.iter().any(|t| t.contains("no unit entered")), "{shown:?}");
-        assert!(shown.iter().any(|t| t == "Patch: cancelled"));
+        assert!(shown.iter().any(|t| t == "Set up: cancelled"));
         assert!(unfr0zen_host::log_path().is_none(), "no log is kept of it");
         // The download prompt replaces the card until it is answered.
         let mut app = App { task: Some(Task::Restore("a".into())), page: Page::Backups, ..App::default() };
@@ -3073,7 +3073,7 @@ mod tests {
 
     #[test]
     fn a_failed_flow_run_left_for_the_review_brings_up_no_card() {
-        let mut app = App { task: Some(Task::Patch), page: Page::Patch, flow_run: true, finished_at: Some(Instant::now()),
+        let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, flow_run: true, finished_at: Some(Instant::now()),
                             logged: true, step: setup::Step::Review, ..App::default() };
         app.logs.outcome = Some(Err("endpoint stalled".into()));
         app.on_event(Event::Device("Nest gen 2 (j49)".into()));
@@ -3087,7 +3087,7 @@ mod tests {
 
     #[test]
     fn a_failed_run_cards_logs_link_lines_up_with_its_title() {
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, finished_at: Some(Instant::now()), logged: true, ..App::default() };
+        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, finished_at: Some(Instant::now()), logged: true, ..App::default() };
         app.logs.outcome = Some(Err("no unit".into()));
         let output = render_frames(&mut app, WINDOW, 4);
         let left = |text: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
@@ -3134,13 +3134,13 @@ mod tests {
     #[test]
     fn main_page_controls_show_hints_on_hover() {
         for (page, label, hint) in [
-            (Page::Patch, "Back up and patch", "Patch the connected thermostat with the selected options"),
+            (Page::SetUp, "Back up and set up", "Set up the connected thermostat with the selected options"),
             (Page::Boot, "Rescue", "Connect one Nest Learning Thermostat, finish any operation, close file pickers, and disconnect any open console first"),
         ] {
             let context = egui::Context::default();
             install_fonts(&context);
             // The Boot page's hint is the one it shows with no unit on USB.
-            let bus = if page == Page::Patch { on_usb(Device::Diamond3) } else { Watcher::default() };
+            let bus = if page == Page::SetUp { on_usb(Device::Diamond3) } else { Watcher::default() };
             let mut app = App { bus, page, step: setup::Step::Review, ..App::default() };
             let frame = |app: &mut App, time, events| context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
@@ -3271,7 +3271,7 @@ mod tests {
     #[test]
     fn the_entry_point_stays_chosen_while_greyed_for_another_generation() {
         let entry_point = unfr0zen_host::diamond3::usb::EntryPoint::Cve20177936;
-        let mut app = App { bus: on_usb(Device::J49), page: Page::Patch, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App { bus: on_usb(Device::J49), page: Page::SetUp, step: setup::Step::Review, developer_open: true, ..App::default() };
         app.form.entry_point = entry_point;
         let shown = texts(&render_frames(&mut app, WINDOW, 4));
         assert_eq!(app.form.entry_point, entry_point);
@@ -3291,10 +3291,10 @@ mod tests {
     #[test]
     fn the_run_cards_first_line_stays_on_one_line_uncut() {
         const LONGEST: &str = "Nest gen 3 (diamond3): i.MX6SoloX rev 1.2";
-        for task in [Task::Patch, Task::Backup("a".into()), Task::Restore("a".into()), Task::Uboot, Task::Boot] {
+        for task in [Task::SetUp, Task::Backup("a".into()), Task::Restore("a".into()), Task::Uboot, Task::Boot] {
             for failed in [false, true] {
                 let doing = task.doing();
-                let mut app = App { task: Some(task.clone()), page: Page::Patch, ..App::default() };
+                let mut app = App { task: Some(task.clone()), page: Page::SetUp, ..App::default() };
                 app.on_event(Event::Device(LONGEST.into()));
                 if failed {
                     app.finished_at = Some(Instant::now());
@@ -3315,7 +3315,7 @@ mod tests {
 
     #[test]
     fn the_run_card_grows_with_its_steps_until_its_most() {
-        let mut app = App { task: Some(Task::Patch), page: Page::Patch, ..App::default() };
+        let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
         // Every step's label visible: inside its clip rect, not scrolled
         // away. The card takes a few frames to measure itself and settle.
@@ -3348,12 +3348,12 @@ mod tests {
                 _ => None,
             })
         };
-        let mut live = App { task: Some(Task::Patch), page: Page::Logs, logged: true, ..App::default() };
+        let mut live = App { task: Some(Task::SetUp), page: Page::Logs, logged: true, ..App::default() };
         live.on_event(Event::Device("Nest gen 3 (diamond3)".into()));
         live.on_event(Event::Begin("Load recovery U-Boot".into()));
         assert_eq!(size_of(&mut live, "Load recovery U-Boot"), Some(RUN_STEP_FONT));
         assert_eq!(size_of(&mut live, "Device"), Some(RUN_STEP_FONT));
-        let text = "[ 1.0] Selected: Patch\n[ 2.0] Load recovery U-Boot: done (1.2s)\n";
+        let text = "[ 1.0] Selected: Set up\n[ 2.0] Load recovery U-Boot: done (1.2s)\n";
         let run = logs::parse("20261104-120000", Path::new("/nonexistent"), text);
         let mut past = App { page: Page::Logs, history: vec![run], history_selected: Some("20261104-120000".into()), ..App::default() };
         assert_eq!(size_of(&mut past, "Load recovery U-Boot"), Some(RUN_STEP_FONT));
@@ -3362,7 +3362,7 @@ mod tests {
 
     #[test]
     fn the_run_panes_top_part_takes_three_eighths_of_it_at_most() {
-        let mut app = App { task: Some(Task::Patch), page: Page::Logs, logged: true, ..App::default() };
+        let mut app = App { task: Some(Task::SetUp), page: Page::Logs, logged: true, ..App::default() };
         for i in 0..40 {
             app.on_event(Event::Begin(format!("Step number {i}")));
             app.on_event(Event::End { label: format!("Step number {i}"), elapsed: Duration::ZERO, ok: true });
@@ -3410,7 +3410,7 @@ mod tests {
         assert_eq!(app.history_selected.as_deref(), Some("20261105-100100"));
         // A live run heads the list on its own, so nothing is preselected.
         app.history_selected = None;
-        app.task = Some(Task::Patch);
+        app.task = Some(Task::SetUp);
         app.logged = true;
         app.preselect_latest_run();
         assert_eq!(app.history_selected, None);
@@ -3442,13 +3442,13 @@ mod tests {
         const MESSAGE: &str = "NAND backup: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
         const STEP: &str = "Check the FCB against the restored U-Boot copies";
         for (outcome, line) in [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")] {
-            let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, popup_dismissed: true, ..App::default() };
+            let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
             app.logs.outcome = Some(outcome);
             let shown = texts(&render_frames(&mut app, WINDOW, 2));
             assert!(shown.iter().any(|t| t == line), "{shown:?}");
             assert!(!shown.iter().any(|t| t.contains(MESSAGE)), "{shown:?}");
         }
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, popup_dismissed: true, ..App::default() };
+        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
         app.on_event(Event::Begin(STEP.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
@@ -3459,8 +3459,8 @@ mod tests {
     #[test]
     fn long_outcome_wraps_within_the_logs_page() {
         let message = "the volume has too little free space: 22626304 bytes available, 23236503 bytes required \
-                       including staging and reserve; free space on the unit or patch without nestlocal";
-        let mut app = App { task: Some(Task::Patch), page: Page::Logs, logged: true, ..App::default() };
+                       including staging and reserve; free space on the unit or set up without nestlocal";
+        let mut app = App { task: Some(Task::SetUp), page: Page::Logs, logged: true, ..App::default() };
         app.logs.outcome = Some(Err(message.into()));
         let output = render(&mut app, WINDOW);
         let galley = output.shapes.iter().find_map(|shape| match &shape.shape {
@@ -3529,7 +3529,7 @@ mod tests {
     fn the_texts_under_the_progress_bar_follow_the_bar_between_reports_in_three_columns() {
         const MIB: u64 = 1 << 20;
         let ago = |secs| Instant::now() - Duration::from_secs(secs);
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::Patch, ..App::default() };
+        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, ..App::default() };
         app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
         app.on_event(Event::Begin("Back up NAND".into()));
         // 2 MiB/s over the last piece, its report 4 s ago: 8 MiB past the 64.

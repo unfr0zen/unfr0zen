@@ -10,7 +10,7 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 
 > [!CAUTION]
 > **This rewrites the flash of the device that runs your heating.** A failed run
-> or a bad patch can leave the thermostat unbootable, or running without
+> or a bad setup can leave the thermostat unbootable, or running without
 > controlling your heating or cooling. Back up the NAND before the first run
 > ([Undo it](#undo-it)) and have another way to heat or cool the house while you
 > test.
@@ -76,7 +76,7 @@ network doesn't need internet access.
 | Nest Learning Thermostat (3rd generation) | 5.9.4-5, 6.3-5, 6.4-8, 6.5-14 |
 | Nest Learning Thermostat (2nd generation) | 5.9.4-5 |
 
-Other versions aren't blocked: unfr0zen patches them on their structure and
+Other versions aren't blocked: unfr0zen sets them up by their structure and
 keeps the stock nlclient beside the run log. Running a version not listed here?
 [Open an issue](https://github.com/unfr0zen/unfr0zen/issues) with the run log.
 
@@ -135,14 +135,14 @@ run or log directories include the affected path.
 </details>
 
 ## Usage
-**App:** open it, tick the integrations on the Patch page, fill in their
+**App:** open it, tick the integrations on the Set up page, fill in their
 settings (the MQTT broker, Matter's pairing code), plug in the thermostat,
 press **Start** and follow the prompts. The sidebar's other pages are Backups
 (the whole-NAND images the app keeps, with back up, restore and delete), Logs
 (every run's steps and log), About and, under Advanced, the 3rd generation's
-application boot and a serial console on a patched unit's USB root shell.
+application boot and a serial console on the USB root shell of a unit unfr0zen set up.
 
-<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Patch page's Integrations and Features steps and its Backups page."></a></p>
+<p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Set up page's Integrations and Features steps and its Backups page."></a></p>
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few things the app doesn't have
@@ -183,8 +183,8 @@ replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
 commits past a tag, or local changes) never update.
 
 ## Undo it
-- **Before the first run:** the app's Patch page offers a backup of the
-  whole NAND just before patching, with the unit in recovery once for both;
+- **Before the first run:** the app's Set up page offers a backup of the
+  whole NAND just before setting up, with the unit in recovery once for both;
   the Backups page's Back up unit (or `unfr0zen backup`) takes one on its
   own. `unfr0zen verify` compares a backup with the unit.
 - **To go back to stock:** Restore to unit (or `unfr0zen restore`) writes

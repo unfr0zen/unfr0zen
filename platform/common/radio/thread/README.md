@@ -22,7 +22,7 @@ Thread. Phone commissioning compatibility and automatic transport failover
 require device testing.
 
 The service keeps OpenThread state under `/media/data/nestlocal-thread` (0700).
-Matter's credential directory is also private when Thread is selected. Repatching
+Matter's credential directory is also private when Thread is selected. Setting up again
 without Thread disables its startup and supervision without deleting saved
 credentials. Stock wpantund is disabled while Thread or Zigbee owns the radio.
 

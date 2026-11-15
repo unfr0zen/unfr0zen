@@ -1,5 +1,5 @@
 //! Customizable home screen themes (-themes, gen 3): the themes (themes/,
-//! which the patch installs in THEMES on the scratch volume) draw the home
+//! which the setup installs in THEMES on the scratch volume) draw the home
 //! screen's dial inside nlclient, on its GPU, through the theme preload
 //! (platform/common/theme) and the theme library (theme_plugin.rs). This side
 //! offers them on the UNFR0ZEN screen's Themes page, keeps the choice, and
@@ -33,7 +33,7 @@ use crate::store::Store;
 use crate::weather::Outdoor;
 use crate::{bridge, logf, settings_ui};
 
-/// Where the patch installs the themes (unfr0zen-core's diamond3::scratch::THEMES),
+/// Where the setup installs the themes (unfr0zen-core's diamond3::scratch::THEMES),
 /// one directory each. A scratch volume wiped since leaves only stock.
 const INSTALLED: &str = "/media/scratch/.unfr0zen/themes";
 

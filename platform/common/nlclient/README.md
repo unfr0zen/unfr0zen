@@ -15,7 +15,7 @@ unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
 
 The home screen has a **192×192 unfr0zen icon**, the line “unfr0zen” with the
-version of the app that patched the unit (`/etc/unfr0zen/version`), and Matter,
+version of the app that set up the unit (`/etc/unfr0zen/version`), and Matter,
 Zigbee, Doom and Done ring choices. Pages open at the top; status updates
 preserve the viewport unless pairing completes. The larger QR has 10px of extra spacing above
 its manual code. Matter, Zigbee and Doom choices appear only for enabled integrations. nestlocal
@@ -193,11 +193,11 @@ and both hashes. It is generated per device, never used as a prebuilt shortcut:
 - `/etc/unfr0zen/nlclient.undo.gz`
 - `/etc/unfr0zen/nlclient.original` — full original executable, root-only (mode 600);
   on the gen 3 `/media/scratch/.unfr0zen/backup/nlclient.original`, on its scratch
-  volume, where a patch moves one an earlier version left on the root volume
+  volume, where a setup moves one an earlier version left on the root volume
 
 Recovery creates and verifies the full original backup before replacing
 `nlclient`. Subsequent runs preserve it without rewriting it. For devices
-patched by an earlier version, recovery reconstructs the original using the
+set up by an earlier version, recovery reconstructs the original using the
 undo journal and saves that full copy. An existing backup with a different
 hash stops patching and is left untouched.
 

@@ -3,7 +3,7 @@
 //! over USB, and the flasher, once the host has read the unit's U-Boot
 //! environment through it (which settles the generation), enters that
 //! generation's kernel with the ATAGs a boot loader would give
-//! (flasher::Flasher::boot). The initramfs then patches the root slot on the
+//! (flasher::Flasher::boot). The initramfs then sets up the root slot on the
 //! unit, as the gen 3's does.
 
 use crate::{device, Device, Result, Slot};
@@ -71,7 +71,7 @@ fn revision(nlmodel: &str) -> u32 {
     }
 }
 
-/// The ATAGs for the initramfs of `length` bytes to patch `slot`: memory,
+/// The ATAGs for the initramfs of `length` bytes to set up `slot`: memory,
 /// the initramfs, the board revision, and the command line the unit's own
 /// U-Boot would give but for the root, with unfr0zen.slot naming it.
 pub fn atags(nlmodel: &str, slot: Slot, length: usize) -> Result<Vec<u8>> {

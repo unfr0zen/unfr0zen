@@ -4,10 +4,10 @@
 //! <base>/set/update), or a bundle at a URL given instead, for a unit that
 //! cannot reach GitHub: a copy on the LAN.
 //!
-//! A release's patch bundle (unfr0zen-<device>-<tag>.tgz) goes to the
-//! engine the patch left on the unit (unfr0zen-apply update), which checks
+//! A release's setup bundle (unfr0zen-<device>-<tag>.tgz) goes to the
+//! engine the setup left on the unit (unfr0zen-apply update), which checks
 //! it against its manifest and the release key before running it; the unit
-//! then restarts into it. A unit with no engine (gen 1 and gen 2, patched
+//! then restarts into it. A unit with no engine (gen 1 and gen 2, set up
 //! from the host) reports versions only.
 //!
 //! The last answer about the latest release is kept (-update-store), so a
@@ -23,14 +23,14 @@ use serde_json::{json, Value};
 
 use crate::logf;
 
-/// The engine the patch keeps on a unit that installs updates: on the
-/// scratch volume, else where a unit patched before has it.
+/// The engine the setup keeps on a unit that installs updates: on the
+/// scratch volume, else where a unit set up before has it.
 const ENGINES: [&str; 2] = ["/media/scratch/.unfr0zen/bin/unfr0zen-apply", "/nestlabs/sbin/unfr0zen-apply"];
 
 fn engine() -> &'static str {
     crate::scratch::installed(&ENGINES)
 }
-/// "unfr0zen VERSION", written by the patch.
+/// "unfr0zen VERSION", written by the setup.
 const VERSION_FILE: &str = "/etc/unfr0zen/version";
 /// The latest release, as GitHub's API describes it.
 pub const RELEASES: &str = "https://api.github.com/repos/unfr0zen/unfr0zen/releases/latest";
@@ -231,7 +231,7 @@ impl Updates {
     /// unit's engine checks it either way.
     pub fn install(self: &Arc<Self>, request: Request) {
         if !self.can_install {
-            return logf!("update: this unit has no update engine ({}): patch it with unfr0zen", engine());
+            return logf!("update: this unit has no update engine ({}): set it up with unfr0zen", engine());
         }
         let (bundle, what) = match request {
             Request::Url(url) => (url.clone(), format!("the bundle at {url}")),
@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn the_installed_version_comes_from_the_patchs_version_file() {
+    fn the_installed_version_comes_from_the_setups_version_file() {
         assert_eq!(installed("unfr0zen v0.4.3\n").as_deref(), Some("v0.4.3"));
         assert_eq!(installed("\n"), None);
     }

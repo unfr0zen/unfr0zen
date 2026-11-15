@@ -13,7 +13,7 @@
 //! It programs only erased pages of the boot and root partitions and the
 //! environment blocks, and erases only the environment blocks and the upper
 //! halves of the boot partitions, until unlocked for a whole-NAND restore or
-//! for a patch to erase the blocks of the nestlocal it replaces. Only erased
+//! for a setup to erase the blocks of the nestlocal it replaces. Only erased
 //! pages are programmed either way.
 
 use std::time::Duration;

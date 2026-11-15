@@ -1,7 +1,7 @@
-//! The diamond3's part of the root filesystem patch: the USB root shell
+//! The diamond3's part of the root filesystem setup: the USB root shell
 //! (inittab, usb-gadget and `unlocked`), its OpenSSH, and root's shell profile.
 
-use crate::patch::{check_mode, patch_shell, put, text, Options, Rootfs, Tree, PROFILE};
+use crate::setup::{check_mode, set_up_shell, put, text, Options, Rootfs, Tree, PROFILE};
 use crate::{device, Result};
 
 pub(crate) const OLD_GETTY: &str = "null::respawn:/usr/sbin/unlocked-getty -L ttyGS0 115200";
@@ -20,7 +20,7 @@ const PLAIN_SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/bin/sh\n", "\n#ttyG
 /// locked unit has it.
 pub(crate) const GADGET_LINES: (&str, &str) = ("  USB_GADGET_MOD=g_acm_ms\n",
                                                "  USB_GADGET_MOD=g_mass_storage # unfr0zen: no USB root shell\n");
-/// The files the patch requires: the root shell's and SSH's among them.
+/// The files the setup requires: the root shell's and SSH's among them.
 pub const FILES: [&str; 9] = ["etc/shadow", "etc/inittab", "usr/sbin/unlocked", "etc/init.d/usb-gadget", "etc/init.d/rcS",
                               "etc/init.d/rcH", "etc/ssh/sshd_config", "etc/init.d/sshd", "etc/nestlabs/client.config"];
 /// (file, mode, stock text, SSH text)
@@ -41,14 +41,14 @@ pub(crate) static ROOTFS: Rootfs = Rootfs {
     files: &FILES,
     shadow_modes: &[0o640],
     optional_files: |_| Vec::new(),
-    patch,
+    set_up,
 };
 
-fn patch(tree: &mut Tree, options: &Options) -> Result<()> {
-    patch_usb_shell(tree, options.usb_shell)?;
-    patch_ssh(tree, options.ssh, !options.ssh_key_only)?;
+fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
+    set_up_usb_shell(tree, options.usb_shell)?;
+    set_up_ssh(tree, options.ssh, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {
-        patch_shell(tree, true)?;
+        set_up_shell(tree, true)?;
     }
     Ok(())
 }
@@ -56,7 +56,7 @@ fn patch(tree: &mut Tree, options: &Options) -> Result<()> {
 /// `unlocked` saying yes (which sshd needs too), and the USB root shell in
 /// place of the guarded getty. Without the shell, inittab's line is commented
 /// out and usb-gadget loads no ACM port.
-fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
+fn set_up_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
     let mut inittab = text(tree, "etc/inittab")?;
     if inittab.matches(OLD_GETTY).count() == 1 {
         inittab = inittab.replace(OLD_GETTY, NEW_SHELL);
@@ -103,14 +103,14 @@ fn patch_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
 /// only, in the spelling the stock OpenSSH 6.0 accepts.
 const KEY_ONLY_LOGIN: &str = "PermitRootLogin without-password\n";
 /// The same setting in OpenSSH 7.0's spelling, which 6.0's sshd refuses to
-/// start with; units patched by v0.5.0 and older carry it.
+/// start with; units set up by v0.5.0 and older carry it.
 const NEWER_KEY_ONLY_LOGIN: &str = "PermitRootLogin prohibit-password\n";
 
 /// An SSH server at boot, root logins with a key and, with `password_login`,
 /// root's password, and an ECDSA host key current clients accept. Without
 /// the flag rcS does not start sshd, and sshd_config and its init script are
 /// put back as stock.
-pub fn patch_ssh(tree: &mut Tree, enabled: bool, password_login: bool) -> Result<()> {
+pub fn set_up_ssh(tree: &mut Tree, enabled: bool, password_login: bool) -> Result<()> {
     let (start, off) = SSHD_START;
     let mut rcs = text(tree, "etc/init.d/rcS")?;
     if rcs.matches(off).count() == 1 {

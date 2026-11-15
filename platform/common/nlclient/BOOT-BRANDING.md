@@ -1,6 +1,6 @@
 # Automatic boot branding
 
-CLI and GUI patching automatically recolors recognized Google boot artwork with
+Setting up from the CLI or GUI automatically recolors recognized Google boot artwork with
 unfr0zen's ice palette. Shapes, alpha, sprite frames, geometry and timing stay
 unchanged. Unknown or custom assets are skipped independently, without a UI option.
 
@@ -10,8 +10,8 @@ one ARM function containing all four Google colors, validated by its instruction
 fingerprint. Those edits share nlclient's undo journal and full original backup.
 The 2019 Gen 2 and Gen 3 animation implementations do not match that fingerprint.
 
-Automatic patching preserves the vendor-signed kernel FIT. If the live FIT
-exactly matches the recolored version of its saved original, patching restores
+The setup preserves the vendor-signed kernel FIT. If the live FIT
+exactly matches the recolored version of its saved original, the setup restores
 that original and retains the backup. Custom kernels are left untouched.
 
 The developer harness can recolor the supported 6.4-8 kernel logo using a CLUT224

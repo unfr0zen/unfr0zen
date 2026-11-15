@@ -1,5 +1,5 @@
 //! The diamond3's recovery flow: from whatever USB mode the unit is in, load
-//! recovery U-Boot, boot the slot's kernel with the unfr0zen initramfs, patch
+//! recovery U-Boot, boot the slot's kernel with the unfr0zen initramfs, set up
 //! the volume from Linux on the unit, and confirm the USB root shell.
 
 pub mod assets;
@@ -16,7 +16,7 @@ use unfr0zen_core::diamond3::fastboot::Protocol;
 use unfr0zen_core::initramfs;
 use unfr0zen_core::diamond3::recovery::Recovery;
 use unfr0zen_core::bundle::Settings;
-use unfr0zen_core::patch;
+use unfr0zen_core::setup;
 use unfr0zen_core::shell::InitramfsShell;
 use unfr0zen_core::{Error, Result};
 
@@ -146,7 +146,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
 
 /// From recovery U-Boot to the confirmed root shell.
 fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &str, run_dir: &Path) -> Result<String> {
-    let options = &patch::Options {
+    let options = &setup::Options {
         thread: config.options.thread.as_ref()
             .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
         ..config.options.clone()
@@ -161,10 +161,10 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     progress.status(&format!("Application root volume: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
 
-    // The patch bundle and the run's options travel in the initramfs, over
-    // fastboot; unfr0zen-apply patches the volume from them on the unit.
+    // The setup bundle and the run's options travel in the initramfs, over
+    // fastboot; unfr0zen-apply sets up the volume from them on the unit.
     progress.phase(Phase::Prepare);
-    let initramfs = stage(progress, "Build the patch bundle and the initramfs", || -> Result<Vec<u8>> {
+    let initramfs = stage(progress, "Build the setup bundle and the initramfs", || -> Result<Vec<u8>> {
         let nestlocal = options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
             || options.theme.is_some() || options.external_temperature;
         let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
@@ -192,8 +192,8 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         let firmware = release.split_once('-').map_or(release, |(_, build)| build);
         log::info!("Firmware {firmware} (kernel release {release})");
     }
-    progress.phase(Phase::Patch);
-    let changes = stage(progress, &format!("Patch {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, Device::Diamond3))?;
+    progress.phase(Phase::SetUp);
+    let changes = stage(progress, &format!("Set up {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, Device::Diamond3))?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes)?;
     progress.phase(Phase::Restart);
     shell.restart()?;
@@ -205,7 +205,7 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         board.attach_ubi()?;
         stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
     }
-    // Without the USB root shell there is nothing to log in to: the patch's
+    // Without the USB root shell there is nothing to log in to: the setup's
     // writes were checked on the volume, and the unit coming back as its app
     // is all that is seen of the boot.
     let shell = if options.usb_shell {
@@ -219,9 +219,9 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     }
     Ok(match shell {
         Some(name) => format!("Root shell confirmed on {name} (UID 0)"),
-        None if id == usb::SDP => format!("Patched {slot}; the unit was started from its stock U-Boot. Its boot is not \
+        None if id == usb::SDP => format!("Set up {slot}; the unit was started from its stock U-Boot. Its boot is not \
                                            confirmed: the USB root shell is off"),
-        None => format!("Patched {slot}; the unit booted back to its app"),
+        None => format!("Set up {slot}; the unit booted back to its app"),
     })
 }
 

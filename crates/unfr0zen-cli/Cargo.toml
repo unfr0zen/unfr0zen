@@ -2,7 +2,7 @@
 name = "unfr0zen-cli"
 version = "0.1.0"
 edition.workspace = true
-description = "unfr0zen: recover a Nest (diamond3) over USB, patch its root volume from the unit, confirm a root shell (terminal)"
+description = "unfr0zen: recover a Nest (diamond3) over USB, set up its root volume from the unit, confirm a root shell (terminal)"
 
 [dependencies]
 unfr0zen-host = { path = "../unfr0zen-host" }

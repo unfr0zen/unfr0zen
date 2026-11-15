@@ -1,6 +1,6 @@
 //! The unfr0zen initramfs: a gzipped newc cpio with a static ARMv7 busybox,
 //! the device's /init (platform/diamond3 and platform/j49), and the files the
-//! run brings at its root (the patch bundle and its options). Port of
+//! run brings at its root (the setup bundle and its options). Port of
 //! build_initramfs in unfr0zen.py.
 
 use std::collections::BTreeMap;

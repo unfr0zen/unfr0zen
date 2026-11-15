@@ -39,7 +39,7 @@ fn with_ids(ports: Vec<Candidate>, ids: &[Id]) -> Vec<Candidate> {
     ports
 }
 
-/// The application's root shells: the USB shell of a patched unit, and the
+/// The application's root shells: the USB shell of a unit unfr0zen set up, and the
 /// gen 3's initramfs shell.
 pub const SHELLS: &[Id] = &[
     unfr0zen_host::diamond3::usb::APP_ACM, unfr0zen_host::diamond3::usb::INITRAMFS,

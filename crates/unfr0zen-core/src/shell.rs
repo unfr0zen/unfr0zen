@@ -24,7 +24,7 @@ const READ_CHUNK: usize = 256 * 1024;
 /// asked for another line of output behind it.
 const NUDGE_AFTER: Duration = Duration::from_secs(1);
 
-/// The mounted slot, as the patch sees it.
+/// The mounted slot, as the setup sees it.
 pub trait Volume {
     /// Owner, mode and contents of a regular file; None if it is absent.
     fn read(&mut self, name: &str) -> Result<Option<File<Vec<u8>>>>;
@@ -44,14 +44,14 @@ pub trait Volume {
         self.free_bytes()
     }
     /// Whether a write needs free space before it lands, checked against
-    /// free_bytes first. A volume patched in memory, which fails before
+    /// free_bytes first. A volume set up in memory, which fails before
     /// anything reaches flash when its writes do not fit, needs no check.
     fn checks_space(&self) -> bool {
         true
     }
     /// Whether the scratch volume is reachable under the volume
-    /// (media/scratch), where the patch keeps unfr0zen's programs and data
-    /// (diamond3::scratch). A root slot patched in memory has only itself.
+    /// (media/scratch), where the setup keeps unfr0zen's programs and data
+    /// (diamond3::scratch). A root slot set up in memory has only itself.
     fn scratch(&self) -> bool {
         true
     }

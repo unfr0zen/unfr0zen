@@ -1,5 +1,5 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
-//! nestlocal for --mqtt, unfr0zen-apply for the patch bundle, Doom with its
+//! nestlocal for --mqtt, unfr0zen-apply for the setup bundle, Doom with its
 //! WAD for --doom, and the gen 3's customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
@@ -34,7 +34,7 @@ pub fn nestlocal() -> Vec<u8> {
     gunzip(NESTLOCAL)
 }
 
-/// The static ARMv7 unfr0zen-apply, for the patch bundle.
+/// The static ARMv7 unfr0zen-apply, for the setup bundle.
 pub fn apply() -> Vec<u8> {
     gunzip(APPLY)
 }
@@ -61,9 +61,9 @@ const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs")
 /// themes, which go on the scratch volume with the library.
 pub fn theme() -> Overlay {
     let mut files = vec![
-        (unfr0zen_core::patch::THEME_PRELOAD.into(), 0o755,
+        (unfr0zen_core::setup::THEME_PRELOAD.into(), 0o755,
          gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
-        (unfr0zen_core::patch::THEME_LIBRARY.into(), 0o755,
+        (unfr0zen_core::setup::THEME_LIBRARY.into(), 0o755,
          gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
     ];
     files.extend(THEMES.iter().map(|(name, data)| {

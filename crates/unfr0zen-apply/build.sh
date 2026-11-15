@@ -1,6 +1,6 @@
 #!/bin/sh
 # unfr0zen-apply for the thermostat, a static ARMv7 binary, into
-# build/unfr0zen-apply-armv7 for the app's patch bundle. Run inside the build
+# build/unfr0zen-apply-armv7 for the app's setup bundle. Run inside the build
 # image, with the repository mounted at its host path.
 set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"

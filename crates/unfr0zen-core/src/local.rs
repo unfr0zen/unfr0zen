@@ -1,4 +1,4 @@
-//! A root volume mounted on the machine running the patch: unfr0zen-apply's,
+//! A root volume mounted on the machine running the setup: unfr0zen-apply's,
 //! on the unit itself. Every name is relative to the mount point.
 
 use std::fs;
@@ -23,7 +23,7 @@ impl LocalVolume {
         LocalVolume { root: root.into(), live: false }
     }
 
-    /// The root the unit is running from, patched in place for an update.
+    /// The root the unit is running from, set up in place for an update.
     pub fn live(root: impl Into<PathBuf>) -> Self {
         LocalVolume { root: root.into(), live: true }
     }

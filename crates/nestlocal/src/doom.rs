@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::{logf, settings_ui};
 
 /// The launcher: on the gen 3's scratch volume, else (the gen 2, or a unit
-/// patched before) the root volume.
+/// set up before) the root volume.
 const LAUNCHERS: [&str; 2] = ["/media/scratch/.unfr0zen/doom/unfr0zen-doom", "/nestlabs/sbin/unfr0zen-doom"];
 
 pub fn start() {

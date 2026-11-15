@@ -1,4 +1,4 @@
-//! The patch page's form: the options the run offers, as the person types
+//! The Set up page's form: the options the run offers, as the person types
 //! them, and the [`Config`] they build.
 
 use std::path::PathBuf;
@@ -8,12 +8,12 @@ use std::time::Duration;
 use eframe::egui;
 use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::flow::default_data_dir;
-use unfr0zen_host::{Config, Device, PatchInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
+use unfr0zen_host::{Config, Device, SetupInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
 
 use crate::bus::Bus;
 use crate::{spawn_dialog, WAIT_USB};
 
-/// The patch options the form offers, as strings the user types.
+/// The setup options the form offers, as strings the user types.
 #[derive(Default)]
 pub struct Form {
     backplate_sim: bool,
@@ -37,7 +37,7 @@ pub struct Form {
     pub ssh: bool,
     pub usb_shell: bool,
     root_password: String,
-    /// Back up the whole NAND before patching (the review step's choice).
+    /// Back up the whole NAND before setting up (the review step's choice).
     pub backup_first: bool,
     // The developer options: the CLI's options a run rarely needs.
     /// The device to expect instead of the one USB names.
@@ -93,7 +93,7 @@ impl FilePick {
             crate::setup::rounded_button(ui, label, crate::setup::Look::Secondary, true, egui::vec2(0.0, 26.0))
         }).inner;
         if button
-            .on_hover_text(crate::tr!("patch.file.choose_hint", kind = kind))
+            .on_hover_text(crate::tr!("form.file.choose_hint", kind = kind))
             .clicked() && self.pending.is_none() {
             let (sender, receiver) = std::sync::mpsc::channel();
             let dialog = rfd::AsyncFileDialog::new().add_filter(kind, extensions).pick_file();
@@ -105,7 +105,7 @@ impl FilePick {
     /// The chosen file's name, cut to the room left, with a clear button.
     fn chosen(&mut self, ui: &mut egui::Ui) {
         if let Some(chosen) = self.path.clone() {
-            if ui.small_button(crate::tr!("patch.file.clear")).on_hover_text(crate::tr!("patch.file.clear_hint")).clicked() {
+            if ui.small_button(crate::tr!("form.file.clear")).on_hover_text(crate::tr!("form.file.clear_hint")).clicked() {
                 self.path = None;
             }
             let name = chosen.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -148,9 +148,9 @@ impl Form {
         self.zigbee || (self.matter.on && self.matter_thread)
     }
 
-    pub fn inputs(&self) -> PatchInputs {
+    pub fn inputs(&self) -> SetupInputs {
         let text = |s: &str| (!s.is_empty()).then(|| s.to_string());
-        PatchInputs {
+        SetupInputs {
             root_password: text(&self.root_password),
             ntp_server: self.ntp.on.then(|| self.ntp.value.clone()),
             backplate_sim: self.backplate_sim,
@@ -228,16 +228,16 @@ impl Form {
     pub fn mqtt_errors(&self) -> [Option<&'static str>; 2] {
         use unfr0zen_core::nestlocal::{check_entity_root, mqtt_url};
         [
-            typed_error(&self.mqtt.value, mqtt_url(self.mqtt.value.trim()).is_ok(), crate::tr!("patch.mqtt.broker_invalid")),
+            typed_error(&self.mqtt.value, mqtt_url(self.mqtt.value.trim()).is_ok(), crate::tr!("form.mqtt.broker_invalid")),
             typed_error(&self.ha_entity_root, check_entity_root(self.ha_entity_root.trim()).is_ok(),
-                        crate::tr!("patch.mqtt.ha_entity_root_invalid")),
+                        crate::tr!("form.mqtt.ha_entity_root_invalid")),
         ]
     }
 
     /// What is wrong with the device name as typed; empty is no error.
     pub fn device_name_error(&self) -> Option<&'static str> {
         let ok = unfr0zen_core::nestlocal::check_device_name(self.device_name.trim()).is_ok();
-        typed_error(&self.device_name, ok, crate::tr!("patch.device_name_invalid"))
+        typed_error(&self.device_name, ok, crate::tr!("form.device_name_invalid"))
     }
 
     /// Whether the features step can be left: SSH needs a way in, a key or
@@ -251,7 +251,7 @@ impl Form {
         self.mqtt.on || self.matter.on || self.zigbee
     }
 
-    /// What to do once the unit is patched, for Done: put it back, then a
+    /// What to do once the unit is set up, for Done: put it back, then a
     /// card per integration chosen.
     pub fn next_steps(&self) -> Vec<(&'static str, String)> {
         let mut steps = vec![(crate::tr!("setup.next_mount"), crate::tr!("setup.next_mount_about").to_string())];
@@ -276,45 +276,45 @@ impl Form {
             // The broker across the card, the sign-in side by side under it.
             let width = ui.available_width();
             let half = (width - 14.0) / 2.0;
-            crate::checked_field(ui, crate::tr!("patch.mqtt.broker"),
+            crate::checked_field(ui, crate::tr!("form.mqtt.broker"),
                                  egui::TextEdit::singleline(&mut self.mqtt.value).hint_text("host[:port]"), width,
                                  broker_error.is_some())
-                .on_hover_text(crate::tr!("patch.mqtt.broker_hint"));
+                .on_hover_text(crate::tr!("form.mqtt.broker_hint"));
             if let Some(error) = broker_error {
                 field_error(ui, error);
             }
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
-                crate::field(ui, crate::tr!("patch.mqtt.user"),
+                crate::field(ui, crate::tr!("form.mqtt.user"),
                              egui::TextEdit::singleline(&mut self.mqtt_user).hint_text(crate::tr!("setup.optional")), half);
-                crate::field(ui, crate::tr!("patch.mqtt.password"),
+                crate::field(ui, crate::tr!("form.mqtt.password"),
                              egui::TextEdit::singleline(&mut self.mqtt_password).password(true).hint_text(crate::tr!("setup.optional")), half);
             });
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                crate::switch(ui, &mut self.mqtt_tls, true).on_hover_text(crate::tr!("patch.mqtt.tls_hint"));
+                crate::switch(ui, &mut self.mqtt_tls, true).on_hover_text(crate::tr!("form.mqtt.tls_hint"));
                 ui.label(crate::tr!("setup.mqtt_tls"));
                 if self.mqtt_tls {
-                    self.mqtt_ca.ui(ui, crate::tr!("patch.mqtt.ca_certificate"), crate::tr!("patch.file.certificate"), &["pem", "crt"]);
+                    self.mqtt_ca.ui(ui, crate::tr!("form.mqtt.ca_certificate"), crate::tr!("form.file.certificate"), &["pem", "crt"]);
                 }
             });
         });
 
         let matter_was = self.matter.on;
-        crate::option_card(ui, &mut self.matter.on, true, crate::tr!("patch.matter"), crate::tr!("setup.matter_about"), |ui| {
-            crate::field(ui, crate::tr!("patch.matter.pairing_code"),
+        crate::option_card(ui, &mut self.matter.on, true, crate::tr!("form.matter"), crate::tr!("setup.matter_about"), |ui| {
+            crate::field(ui, crate::tr!("form.matter.pairing_code"),
                          egui::TextEdit::singleline(&mut self.matter.code).hint_text(DEFAULT_MATTER_CODE), FIELD_WIDTH)
-                .on_hover_text(crate::tr!("patch.matter.pairing_code_hint"));
+                .on_hover_text(crate::tr!("form.matter.pairing_code_hint"));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 let free = !self.zigbee;
                 crate::switch(ui, &mut self.matter_thread, free).on_hover_text(if free {
-                    crate::tr!("patch.matter.thread_hint")
+                    crate::tr!("form.matter.thread_hint")
                 } else {
-                    crate::tr!("patch.matter.thread_disabled_hint")
+                    crate::tr!("form.matter.thread_disabled_hint")
                 });
-                ui.label(egui::RichText::new(crate::tr!("patch.matter.thread")).color(if free { crate::TEXT } else { crate::DIM }));
+                ui.label(egui::RichText::new(crate::tr!("form.matter.thread")).color(if free { crate::TEXT } else { crate::DIM }));
             });
             if self.matter_thread {
                 radio_warning(ui);
@@ -324,9 +324,9 @@ impl Form {
             self.matter_thread = false;
         }
         let thread = self.matter_thread;
-        crate::option_card(ui, &mut self.zigbee, !thread, crate::tr!("patch.zigbee"), crate::tr!("setup.zigbee_about"), radio_warning);
+        crate::option_card(ui, &mut self.zigbee, !thread, crate::tr!("form.zigbee"), crate::tr!("setup.zigbee_about"), radio_warning);
         if thread {
-            crate::muted_line(ui, crate::tr!("patch.zigbee_disabled_hint"));
+            crate::muted_line(ui, crate::tr!("form.zigbee_disabled_hint"));
         }
         // The names Home Assistant shows: the device's, for MQTT and Matter,
         // and the entity IDs' root, for MQTT alone.
@@ -339,11 +339,11 @@ impl Form {
                     ui.spacing_mut().item_spacing.x = 14.0;
                     device_name_field(ui, &mut self.device_name, if mqtt { half } else { FIELD_WIDTH }, name_error.is_some());
                     if mqtt {
-                        crate::checked_field(ui, crate::tr!("patch.mqtt.ha_entity_root"),
+                        crate::checked_field(ui, crate::tr!("form.mqtt.ha_entity_root"),
                                              egui::TextEdit::singleline(&mut self.ha_entity_root)
-                                                 .hint_text(crate::tr!("patch.mqtt.ha_entity_root_placeholder")), half,
+                                                 .hint_text(crate::tr!("form.mqtt.ha_entity_root_placeholder")), half,
                                              root_error.is_some())
-                            .on_hover_text(crate::tr!("patch.mqtt.ha_entity_root_hint"));
+                            .on_hover_text(crate::tr!("form.mqtt.ha_entity_root_hint"));
                     }
                 });
                 for error in [name_error, root_error.filter(|_| mqtt)].into_iter().flatten() {
@@ -355,14 +355,14 @@ impl Form {
                 // The entity IDs the root gives, as it is typed, with the
                 // serial of the unit on the bus.
                 let typed = self.ha_entity_root.trim();
-                let root = if typed.is_empty() { crate::tr!("patch.mqtt.ha_entity_root_placeholder") } else { typed };
+                let root = if typed.is_empty() { crate::tr!("form.mqtt.ha_entity_root_placeholder") } else { typed };
                 let root = with_serial(&self.serial, root);
-                crate::muted_line(ui, crate::tr!("patch.mqtt.ha_entity_ids"));
+                crate::muted_line(ui, crate::tr!("form.mqtt.ha_entity_ids"));
                 crate::code_line(ui, &format!("climate.{root}_thermostat\nsensor.{root}_current_temperature"));
                 crate::muted_line(ui, if typed.is_empty() {
-                    crate::tr!("patch.mqtt.ha_keep_about")
+                    crate::tr!("form.mqtt.ha_keep_about")
                 } else {
-                    crate::tr!("patch.mqtt.ha_move_about")
+                    crate::tr!("form.mqtt.ha_move_about")
                 });
             });
             ui.add_space(10.0);
@@ -373,8 +373,8 @@ impl Form {
         // integration to send temperatures through; a gen 3 is told its
         // Bluetooth goes.
         let label = match self.device.or(self.last_device) {
-            Some(Device::Diamond3) => crate::tr!("patch.external_temperature_ble"),
-            _ => crate::tr!("patch.external_temperature"),
+            Some(Device::Diamond3) => crate::tr!("form.external_temperature_ble"),
+            _ => crate::tr!("form.external_temperature"),
         };
         let enabled = self.external_temperature_enabled();
         let hint = self.external_temperature_hint();
@@ -385,7 +385,7 @@ impl Form {
     pub fn features_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
         self.drain_dialogs();
         crate::group(ui, crate::tr!("setup.group.privacy"));
-        let block = crate::option_card(ui, &mut self.block_cloud, true, crate::tr!("patch.block_cloud"), crate::tr!("setup.block_cloud_about"), |ui| {
+        let block = crate::option_card(ui, &mut self.block_cloud, true, crate::tr!("form.block_cloud"), crate::tr!("setup.block_cloud_about"), |ui| {
             crate::field(ui, crate::tr!("setup.time_server"),
                          egui::TextEdit::singleline(&mut self.ntp.value).hint_text(DEFAULT_NTP_SERVER), FIELD_WIDTH)
                 .on_hover_text(crate::tr!("setup.time_server_why"));
@@ -397,7 +397,7 @@ impl Form {
                 self.ntp.value = DEFAULT_NTP_SERVER.into();
             }
         } else {
-            crate::option_card(ui, &mut self.ntp.on, true, crate::tr!("patch.ntp"), crate::tr!("patch.ntp_hint"), |ui| {
+            crate::option_card(ui, &mut self.ntp.on, true, crate::tr!("form.ntp"), crate::tr!("form.ntp_hint"), |ui| {
                 crate::field(ui, crate::tr!("setup.time_server"),
                              egui::TextEdit::singleline(&mut self.ntp.value).hint_text(DEFAULT_NTP_SERVER), FIELD_WIDTH);
             });
@@ -406,7 +406,7 @@ impl Form {
         // A Heat Link model whose radio nestlocal takes heats through W1.
         if self.holds_radio() {
             crate::group(ui, crate::tr!("setup.group.heating"));
-            crate::toggle_card(ui, &mut self.wwn_boiler, true, crate::tr!("patch.wwn_boiler"), crate::tr!("patch.wwn_boiler_hint"));
+            crate::toggle_card(ui, &mut self.wwn_boiler, true, crate::tr!("form.wwn_boiler"), crate::tr!("form.wwn_boiler_hint"));
         }
 
         crate::group(ui, crate::tr!("setup.group.access"));
@@ -418,7 +418,7 @@ impl Form {
         crate::option_card(ui, &mut self.ssh, true, crate::tr!("setup.ssh"), crate::tr!("setup.ssh_about"), |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::tr!("setup.ssh_key")).color(crate::MUTED));
-                self.ssh_key.ui(ui, crate::tr!("patch.file.choose"), crate::tr!("patch.file.openssh_public_key"), &["pub"]);
+                self.ssh_key.ui(ui, crate::tr!("form.file.choose"), crate::tr!("form.file.openssh_public_key"), &["pub"]);
             });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -463,13 +463,13 @@ impl Form {
         crate::group(ui, crate::tr!("setup.group.extras"));
         // Offered only with a gen 2 chosen or on the bus.
         if self.known_device(bus) == Some(Device::J49) {
-            crate::toggle_card(ui, &mut self.dark_theme, true, crate::tr!("patch.dark_theme"), crate::tr!("patch.dark_theme_hint"));
+            crate::toggle_card(ui, &mut self.dark_theme, true, crate::tr!("form.dark_theme"), crate::tr!("form.dark_theme_hint"));
         }
         // Offered only with a gen 3 chosen or on the bus.
         if self.known_device(bus) == Some(Device::Diamond3) {
-            crate::toggle_card(ui, &mut self.themes, true, crate::tr!("patch.themes"), crate::tr!("setup.themes_about"));
+            crate::toggle_card(ui, &mut self.themes, true, crate::tr!("form.themes"), crate::tr!("setup.themes_about"));
         }
-        crate::toggle_card(ui, &mut self.doom, true, crate::tr!("patch.doom"), crate::tr!("setup.doom_about"));
+        crate::toggle_card(ui, &mut self.doom, true, crate::tr!("form.doom"), crate::tr!("setup.doom_about"));
     }
 
     /// What the run will do, a line per choice, for the review step, with
@@ -479,23 +479,23 @@ impl Form {
         let on_off = |on: bool| if on { crate::tr!("setup.on") } else { crate::tr!("setup.off") }.to_string();
         let mut rows = vec![(crate::tr!("setup.mqtt"), if self.mqtt.on { self.mqtt.value.trim().to_string() } else { on_off(false) }, Step::Integrations)];
         let mut radio: Vec<&str> = Vec::new();
-        if self.matter.on { radio.push(if self.matter_thread { crate::tr!("setup.matter_thread_short") } else { crate::tr!("patch.matter") }); }
+        if self.matter.on { radio.push(if self.matter_thread { crate::tr!("setup.matter_thread_short") } else { crate::tr!("form.matter") }); }
         if self.zigbee { radio.push(crate::tr!("setup.zigbee")); }
-        if self.inputs().external_temperature && self.external_temperature_enabled() { radio.push(crate::tr!("patch.external_temperature")); }
+        if self.inputs().external_temperature && self.external_temperature_enabled() { radio.push(crate::tr!("form.external_temperature")); }
         rows.push((crate::tr!("setup.other_integrations"), joined(&radio), Step::Integrations));
-        rows.push((crate::tr!("patch.block_cloud"), on_off(self.block_cloud), Step::Features));
+        rows.push((crate::tr!("form.block_cloud"), on_off(self.block_cloud), Step::Features));
         if self.ntp.on {
             rows.push((crate::tr!("setup.time_server"), self.ntp.value.clone(), Step::Features));
         }
         if self.holds_radio() {
-            rows.push((crate::tr!("patch.wwn_boiler"), on_off(self.wwn_boiler), Step::Features));
+            rows.push((crate::tr!("form.wwn_boiler"), on_off(self.wwn_boiler), Step::Features));
         }
         let mut extras: Vec<&str> = Vec::new();
         if self.ssh { extras.push(crate::tr!("setup.ssh")); }
         if self.usb_shell { extras.push(crate::tr!("setup.usb_console")); }
-        if self.inputs().dark_theme { extras.push(crate::tr!("patch.dark_theme")); }
-        if self.inputs().themes { extras.push(crate::tr!("patch.themes")); }
-        if self.doom { extras.push(crate::tr!("patch.doom")); }
+        if self.inputs().dark_theme { extras.push(crate::tr!("form.dark_theme")); }
+        if self.inputs().themes { extras.push(crate::tr!("form.themes")); }
+        if self.doom { extras.push(crate::tr!("form.doom")); }
         rows.push((crate::tr!("setup.extras"), joined(&extras), Step::Features));
         rows
     }
@@ -516,20 +516,20 @@ impl Form {
     /// what it does on the unit known.
     fn external_temperature_hint(&self) -> &'static str {
         if !self.supports_external_temperature() {
-            return crate::tr!("patch.external_temperature_unsupported_hint");
+            return crate::tr!("form.external_temperature_unsupported_hint");
         }
         if !self.external_temperature_enabled() {
             // Only a 3rd generation gives up its Bluetooth for it.
             return match self.device.or(self.last_device) {
-                Some(Device::Diamond3) => crate::tr!("patch.external_temperature_needs_integration_ble_hint"),
-                Some(_) => crate::tr!("patch.external_temperature_needs_integration_hint"),
-                None => crate::tr!("patch.external_temperature_needs_integration_any_hint"),
+                Some(Device::Diamond3) => crate::tr!("form.external_temperature_needs_integration_ble_hint"),
+                Some(_) => crate::tr!("form.external_temperature_needs_integration_hint"),
+                None => crate::tr!("form.external_temperature_needs_integration_any_hint"),
             };
         }
         match self.device.or(self.last_device) {
-            Some(Device::Diamond3) => crate::tr!("patch.external_temperature_ble_hint"),
-            Some(_) => crate::tr!("patch.external_temperature_hint"),
-            None => crate::tr!("patch.external_temperature_any_hint"),
+            Some(Device::Diamond3) => crate::tr!("form.external_temperature_ble_hint"),
+            Some(_) => crate::tr!("form.external_temperature_hint"),
+            None => crate::tr!("form.external_temperature_any_hint"),
         }
     }
 
@@ -559,27 +559,27 @@ impl Form {
     /// The developer options, folded away on the review step: the CLI's
     /// options a run rarely needs, as the steps draw theirs.
     pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
-        crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("patch.backplate_sim"), crate::tr!("patch.backplate_sim_hint"));
+        crate::switch_row(ui, &mut self.backplate_sim, crate::tr!("form.backplate_sim"), crate::tr!("form.backplate_sim_hint"));
         ui.add_space(4.0);
-        crate::switch_row(ui, &mut self.allow_unsigned_updates, crate::tr!("patch.unsigned_updates"),
-                          crate::tr!("patch.unsigned_updates_hint"));
+        crate::switch_row(ui, &mut self.allow_unsigned_updates, crate::tr!("form.unsigned_updates"),
+                          crate::tr!("form.unsigned_updates_hint"));
         ui.add_space(4.0);
         let width = FIELD_WIDTH;
-        crate::select(ui, crate::tr!("patch.device"), "device", width, self.device.map_or(crate::tr!("patch.auto"), Device::name), true, |ui| {
-            ui.selectable_value(&mut self.device, None, crate::tr!("patch.auto"));
+        crate::select(ui, crate::tr!("form.device"), "device", width, self.device.map_or(crate::tr!("form.auto"), Device::name), true, |ui| {
+            ui.selectable_value(&mut self.device, None, crate::tr!("form.auto"));
             for device in [Device::Diamond, Device::J49, Device::Diamond3] {
                 ui.selectable_value(&mut self.device, Some(device), device.name());
             }
-        }).on_hover_text(crate::tr!("patch.device_hint"));
+        }).on_hover_text(crate::tr!("form.device_hint"));
         // Greyed without a gen 3, keeping the choice: the unit may only
         // have been unplugged, and other generations ignore it.
         let gen3 = self.known_device(bus) == Some(Device::Diamond3);
-        crate::select(ui, crate::tr!("patch.entry_point"), "technique", width, entry_point_label(self.entry_point), gen3, |ui| {
+        crate::select(ui, crate::tr!("form.entry_point"), "technique", width, entry_point_label(self.entry_point), gen3, |ui| {
             for entry_point in [EntryPoint::Auto, EntryPoint::OfficialLoader, EntryPoint::Cve20177932, EntryPoint::Cve20177936] {
                 ui.selectable_value(&mut self.entry_point, entry_point, entry_point_label(entry_point));
             }
-        }).on_hover_text(crate::tr!("patch.entry_point_choice_hint"))
-            .on_disabled_hover_text(crate::tr!("patch.entry_point_disabled_hint"));
+        }).on_hover_text(crate::tr!("form.entry_point_choice_hint"))
+            .on_disabled_hover_text(crate::tr!("form.entry_point_disabled_hint"));
     }
 }
 
@@ -595,9 +595,9 @@ fn radio_warning(ui: &mut egui::Ui) {
 
 /// Root's password, shared by SSH and the USB console.
 fn root_password_field(ui: &mut egui::Ui, password: &mut String) {
-    crate::field(ui, crate::tr!("patch.root_password"),
+    crate::field(ui, crate::tr!("form.root_password"),
                  egui::TextEdit::singleline(password).password(true).hint_text("unfr0zen"), FIELD_WIDTH)
-        .on_hover_text(crate::tr!("patch.root_password_hint"));
+        .on_hover_text(crate::tr!("form.root_password_hint"));
 }
 
 /// Root's password where SSH takes it: warned of while it is the public
@@ -656,18 +656,18 @@ const FIELD_WIDTH: f32 = 260.0;
 /// The entry-point labels offered by the GUI, independent of CLI option names.
 fn entry_point_label(entry_point: EntryPoint) -> &'static str {
     match entry_point {
-        EntryPoint::Auto => crate::tr!("patch.auto"),
-        EntryPoint::Cve20177932 => crate::tr!("patch.technique.jump_certificates"),
-        EntryPoint::Cve20177936 => crate::tr!("patch.technique.spray_stack"),
-        EntryPoint::OfficialLoader => crate::tr!("patch.technique.official_loader"),
+        EntryPoint::Auto => crate::tr!("form.auto"),
+        EntryPoint::Cve20177932 => crate::tr!("form.technique.jump_certificates"),
+        EntryPoint::Cve20177936 => crate::tr!("form.technique.spray_stack"),
+        EntryPoint::OfficialLoader => crate::tr!("form.technique.official_loader"),
     }
 }
 
 /// The device name's field, in MQTT's card and Matter's alike.
 fn device_name_field(ui: &mut egui::Ui, name: &mut String, width: f32, invalid: bool) {
-    crate::checked_field(ui, crate::tr!("patch.device_name"),
-                         egui::TextEdit::singleline(name).hint_text(crate::tr!("patch.device_name_placeholder")), width, invalid)
-        .on_hover_text(crate::tr!("patch.device_name_hint"));
+    crate::checked_field(ui, crate::tr!("form.device_name"),
+                         egui::TextEdit::singleline(name).hint_text(crate::tr!("form.device_name_placeholder")), width, invalid)
+        .on_hover_text(crate::tr!("form.device_name_hint"));
 }
 
 /// An error for a value typed, none for one left empty.
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn the_root_password_shows_once_where_it_is_taken_or_alone_when_both_take_it() {
-        let password = crate::tr!("patch.root_password");
+        let password = crate::tr!("form.root_password");
         // SSH takes the password only with password login allowed.
         for (ssh, ssh_password_login, usb_shell, shown) in [(false, false, false, 0), (true, false, false, 0), (true, true, false, 1),
                                                             (false, false, true, 1), (true, false, true, 1), (true, true, true, 1)] {
@@ -797,8 +797,8 @@ mod tests {
 
     #[test]
     fn external_temperature_is_always_shown_and_enabled_only_for_a_unit_that_takes_it() {
-        let plain = crate::tr!("patch.external_temperature").to_string();
-        let ble = crate::tr!("patch.external_temperature_ble").to_string();
+        let plain = crate::tr!("form.external_temperature").to_string();
+        let ble = crate::tr!("form.external_temperature_ble").to_string();
         for (device, shown, enabled) in [(None, &plain, true), (Some(Device::J49), &plain, true), (Some(Device::Diamond3), &ble, true),
                                          (Some(Device::Diamond), &plain, true), (Some(Device::Onyx), &plain, false)] {
             let mut form = Form { mqtt: Toggle { on: true, value: "tcp://broker:1883".into() }, last_device: device, ..Form::default() };
@@ -816,20 +816,20 @@ mod tests {
         let hint = |form: Form| form.external_temperature_hint();
         // Greyed out for want of an integration: Bluetooth named only where it goes.
         assert_eq!(hint(Form { last_device: Some(Device::Diamond3), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_needs_integration_ble_hint"));
+                   crate::tr!("form.external_temperature_needs_integration_ble_hint"));
         assert_eq!(hint(Form { last_device: Some(Device::J49), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_needs_integration_hint"));
+                   crate::tr!("form.external_temperature_needs_integration_hint"));
         assert!(!hint(Form { last_device: Some(Device::J49), ..Form::default() }).contains("Bluetooth"));
-        assert_eq!(hint(Form::default()), crate::tr!("patch.external_temperature_needs_integration_any_hint"));
+        assert_eq!(hint(Form::default()), crate::tr!("form.external_temperature_needs_integration_any_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Onyx), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_unsupported_hint"));
+                   crate::tr!("form.external_temperature_unsupported_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_hint"));
+                   crate::tr!("form.external_temperature_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond3), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_ble_hint"));
+                   crate::tr!("form.external_temperature_ble_hint"));
         assert_eq!(hint(Form { mqtt: mqtt(), last_device: Some(Device::J49), ..Form::default() }),
-                   crate::tr!("patch.external_temperature_hint"));
-        assert_eq!(hint(Form { mqtt: mqtt(), ..Form::default() }), crate::tr!("patch.external_temperature_any_hint"));
+                   crate::tr!("form.external_temperature_hint"));
+        assert_eq!(hint(Form { mqtt: mqtt(), ..Form::default() }), crate::tr!("form.external_temperature_any_hint"));
     }
 
     #[test]
@@ -988,13 +988,13 @@ mod tests {
     #[test]
     fn the_boiler_is_a_feature_offered_with_the_radio() {
         use crate::setup::Step;
-        let boiler = |form: &Form| form.summary().into_iter().find(|(label, _, _)| *label == crate::tr!("patch.wwn_boiler"));
+        let boiler = |form: &Form| form.summary().into_iter().find(|(label, _, _)| *label == crate::tr!("form.wwn_boiler"));
         let mut form = Form { wwn_boiler: true, ..Form::default() };
         assert!(boiler(&form).is_none(), "not offered without a radio nestlocal holds");
         form.zigbee = true;
         let (_, value, step) = boiler(&form).unwrap();
         assert_eq!((value.as_str(), step), (crate::tr!("setup.on"), Step::Features));
-        assert!(!form.summary().iter().any(|(_, value, _)| value.contains(crate::tr!("patch.wwn_boiler"))
+        assert!(!form.summary().iter().any(|(_, value, _)| value.contains(crate::tr!("form.wwn_boiler"))
             && *value != crate::tr!("setup.on")), "no longer among the integrations");
     }
 

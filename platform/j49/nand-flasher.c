@@ -13,7 +13,7 @@
  * kernels and the unit's configuration cannot be written by any request,
  * and no root slot can be erased, until UNLOCK (with its magic word) lifts
  * those limits for the rest of the session: a whole-NAND restore sends it,
- * and a patch that erases the blocks of the nestlocal it replaces. A page is only programmed if it is still erased (data and ECC bytes
+ * and a setup that erases the blocks of the nestlocal it replaces. A page is only programmed if it is still erased (data and ECC bytes
  * all 0xff), so nothing already written can be changed. The GPMC write-protect
  * output is held low (protected) except while a page is programmed or a
  * block erased.

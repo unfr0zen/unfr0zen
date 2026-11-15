@@ -4,7 +4,7 @@ set -eu
 umask 077
 BIN=/nestlabs/sbin
 # The programs and the radio's Thread image: on the gen 3's scratch volume,
-# else (the gen 2, or a unit patched before) the root volume.
+# else (the gen 2, or a unit set up before) the root volume.
 SCRATCH=/media/scratch/.unfr0zen/thread
 if [ -x "$SCRATCH/ot-daemon" ]; then BIN=$SCRATCH; fi
 DAEMON=$BIN/ot-daemon

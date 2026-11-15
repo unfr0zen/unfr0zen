@@ -10,7 +10,7 @@
 //!   .work/initramfs, fetched with curl when absent);
 //! - nestlocal for --mqtt, the ARMv7 build utils/build-firmware.sh makes in build/,
 //!   made again (`utils/build-firmware.sh nestlocal`) when its sources are newer;
-//! - unfr0zen-apply for the patch bundle, built there too, and made again
+//! - unfr0zen-apply for the setup bundle, built there too, and made again
 //!   (`utils/build-firmware.sh apply`) when its or unfr0zen-core's sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way),

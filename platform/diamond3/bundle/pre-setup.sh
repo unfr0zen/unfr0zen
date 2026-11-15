@@ -6,7 +6,7 @@ set -eu
 echo "Kernel $(uname -r); root volume: $(df -k "$UNFR0ZEN_ROOT" | tail -n 1)"
 
 # unfr0zen's programs and data live on the scratch volume, which the
-# patch reaches through the root volume's own mount point for it: a running
+# setup reaches through the root volume's own mount point for it: a running
 # unit has it there, the initramfs mounts it (read-only for a dry run).
 scratch=${UNFR0ZEN_ROOT%/}/media/scratch
 if ! awk -v dir="$scratch" '$2 == dir { found = 1 } END { exit !found }' /proc/mounts; then

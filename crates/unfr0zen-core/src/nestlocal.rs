@@ -4,7 +4,7 @@
 //! A unit that already has nestlocal keeps its own certificate, key and CA
 //! when they belong together (the CA in its bundle signed the certificate,
 //! and the key matches it), so what the unit trusts and serves stays the same
-//! whichever host or tool patches it. The bundles end with exactly one
+//! whichever host or tool sets it up. The bundles end with exactly one
 //! nestlocal CA: ones an earlier build or the desktop app added go.
 
 use std::str::FromStr;
@@ -270,7 +270,7 @@ pub fn mqtt_options(mqtt: &Mqtt) -> Result<(Vec<u8>, Vec<NamedFile>)> {
     Ok((format!("{options}\n").into_bytes(), files))
 }
 
-// Each edit also accepts its own result, so a unit patched before can be patched again.
+// Each edit also accepts its own result, so a unit set up before can be set up again.
 
 /// cloudregisterurl names Nest's frontdoor on a stock unit, and on a j49
 /// NoLongerEvil installed, its own server; either way it becomes nestlocal's.

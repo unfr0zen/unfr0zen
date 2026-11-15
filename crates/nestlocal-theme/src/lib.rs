@@ -1,5 +1,5 @@
 //! The gen 3's customizable home screen themes, drawn: nestlocal's Lua themes
-//! (crates/nestlocal/themes, which the patch installs under
+//! (crates/nestlocal/themes, which the setup installs under
 //! /media/scratch/.unfr0zen/themes) in nlclient's own GLES2 context. The theme preload
 //! (platform/common/theme) loads this library into nlclient and calls
 //! nestlocal_theme_draw for each frame of the dial; the theme, with the device
@@ -34,7 +34,7 @@ use std::rc::Rc;
 use engine::{display::Geometry, guard, gpu::{quads::Quads, render::Renderer}, theme::{diagnostic, Theme, Ui, Clock, Nest, ThermostatView}};
 use serde_json::Value;
 
-/// Where the patch installs the themes, one folder each.
+/// Where the setup installs the themes, one folder each.
 const THEMES: &str = "/media/scratch/.unfr0zen/themes";
 
 /// The crash-loop guard's count (engine::guard), beside the themes: it

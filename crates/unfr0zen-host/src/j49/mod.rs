@@ -1,9 +1,9 @@
 //! The OMAP boards' recovery flow: from their boot ROM, load x-loader, then
 //! through it the NAND flasher, the kernels and the unfr0zen initramfs over
 //! USB; read the unit's U-Boot environment and install the kernel booted
-//! first through the flasher, then have it boot the initramfs, which patches
+//! first through the flasher, then have it boot the initramfs, which sets up
 //! the root slot on the unit as the gen 3's does (unfr0zen_core::j49::boot),
-//! and restart the unit. A NAND image instead has its slot patched on the
+//! and restart the unit. A NAND image instead has its slot set up on the
 //! host, by appending JFFS2 nodes into its erased blocks.
 //!
 //! Every step leaves the NAND bootable when it stops: the flasher programs
@@ -28,7 +28,7 @@ use unfr0zen_core::initramfs;
 use unfr0zen_core::j49::{boot, jffs2, kernel, logo::{self, Logo}};
 use unfr0zen_core::j49::nand::{self as layout, Environment, PAGES_PER_BLOCK, PAGE_RAW};
 use unfr0zen_core::j49::omap;
-use unfr0zen_core::patch::{self, changes_text};
+use unfr0zen_core::setup::{self, changes_text};
 use unfr0zen_core::shell::InitramfsShell;
 use unfr0zen_core::{Device, Result, Slot};
 
@@ -162,12 +162,12 @@ fn read_slot(nand: &mut dyn Nand, progress: &mut dyn Progress, slot: Slot) -> Re
     Ok(raw)
 }
 
-/// Programs the patched slot in its plan's order (the pages before the erase,
+/// Programs the set-up slot in its plan's order (the pages before the erase,
 /// the erase, the pages after), then reads every block it touched back and
 /// checks each page that holds data, and that the erased ones are.
 fn write_slot(nand: &mut dyn Nand, progress: &mut dyn Progress, slot: Slot, plan: &jffs2::Programming) -> Result<()> {
     let start = layout::slot_partition(slot).0 / layout::PAGE;
-    let patched = &plan.raw;
+    let set_up = &plan.raw;
     let pages = [&plan.before[..], &plan.after[..]].concat();
     let blocks: BTreeSet<usize> = pages.iter().map(|page| page / PAGES_PER_BLOCK).chain(plan.erase.iter().copied()).collect();
     let total = ((pages.len() + blocks.len() * PAGES_PER_BLOCK) * PAGE_RAW) as u64;
@@ -175,7 +175,7 @@ fn write_slot(nand: &mut dyn Nand, progress: &mut dyn Progress, slot: Slot, plan
     let mut program = |nand: &mut dyn Nand, progress: &mut dyn Progress, pages: &[usize]| -> Result<()> {
         for &page in pages {
             progress.transfer(done, PAGE_RAW as u64, total);
-            let status = nand.program(start + page, &patched[page * PAGE_RAW..(page + 1) * PAGE_RAW])?;
+            let status = nand.program(start + page, &set_up[page * PAGE_RAW..(page + 1) * PAGE_RAW])?;
             if status != 0 {
                 return Err(failure(format!("page {}: {}", start + page, flasher::status_text(status))));
             }
@@ -200,7 +200,7 @@ fn write_slot(nand: &mut dyn Nand, progress: &mut dyn Progress, slot: Slot, plan
         let first = block * PAGES_PER_BLOCK;
         let back = nand.read(start + first, PAGES_PER_BLOCK)?;
         for (index, got) in back.chunks(PAGE_RAW).enumerate() {
-            let want = &patched[(first + index) * PAGE_RAW..(first + index + 1) * PAGE_RAW];
+            let want = &set_up[(first + index) * PAGE_RAW..(first + index + 1) * PAGE_RAW];
             if layout::erased(want) {
                 if plan.erase.contains(&block) && !layout::erased(got) {
                     return Err(failure(format!("page {} is not erased after its block's erase", start + first + index)));
@@ -257,10 +257,10 @@ fn check_unit(progress: &mut dyn Progress, config: &Config, usb: Device, silicon
     Ok(Checked { device, slot, nlmodel })
 }
 
-/// Patches the slot on the host, in memory, by appending JFFS2 nodes, then
-/// writes it: for a NAND image, which has no Linux to patch itself. Whether
+/// Sets up the slot on the host, in memory, by appending JFFS2 nodes, then
+/// writes it: for a NAND image, which has no Linux to set itself up. Whether
 /// anything was written.
-fn patch_in_memory(progress: &mut dyn Progress, config: &Config, device: Device, slot: Slot, nand: &mut dyn Nand,
+fn set_up_in_memory(progress: &mut dyn Progress, config: &Config, device: Device, slot: Slot, nand: &mut dyn Nand,
                    run_dir: &Path) -> Result<bool> {
     // The run's options with the files of the gen 1's and gen 2's bundle,
     // the same one a release publishes.
@@ -273,40 +273,40 @@ fn patch_in_memory(progress: &mut dyn Progress, config: &Config, device: Device,
     } else {
         Vec::new()
     };
-    // The patched volume is built in memory, then written.
+    // The set-up volume is built in memory, then written.
     progress.phase(Phase::Prepare);
-    let label = format!("Patch {slot}");
+    let label = format!("Set up {slot}");
     let pki_dir = config.data_dir.join("nestlocal-pki");
-    let patch = |volume: &mut jffs2::Slot| patch::patch_on_device(volume, device, options, &nestlocal_binary,
+    let set_up = |volume: &mut jffs2::Slot| setup::set_up_on_device(volume, device, options, &nestlocal_binary,
                                                                  &mut || stored_pki(&pki_dir),
                                                                  false, &screen_builder(run_dir));
     let mut whole = false;
     let changes = stage(progress, &label, || {
-        match patch(&mut volume) {
+        match set_up(&mut volume) {
             // Too little room beside the old nestlocal or nlclient: again,
             // from the same read, with the old ones' blocks erased for the new.
             Err(error) if volume.out_of_room() => {
-                log::info!("{slot}: {error}; patching again with the old nestlocal's and nlclient's blocks erased to make room");
+                log::info!("{slot}: {error}; setting up again with the old nestlocal's and nlclient's blocks erased to make room");
                 volume = jffs2::Slot::load(raw.clone())?;
                 volume.make_room_in_place();
             }
             other => return other,
         }
-        match patch(&mut volume) {
+        match set_up(&mut volume) {
             // Still too little: the obsolete nodes the unit's JFFS2 spread
             // over shared blocks are reclaimed only by rewriting the slot.
             Err(error) if volume.out_of_room() => {
-                log::info!("{slot}: {error}; patching again with the whole slot rewritten from its live files");
+                log::info!("{slot}: {error}; setting up again with the whole slot rewritten from its live files");
                 volume = jffs2::Slot::load(raw.clone())?;
                 volume.rewrite_whole();
                 whole = true;
-                patch(&mut volume)
+                set_up(&mut volume)
             }
             other => other,
         }
     })?;
     fs::write(run_dir.join("changes.txt"), changes_text(&changes))?;
-    progress.phase(Phase::Patch);
+    progress.phase(Phase::SetUp);
     if changes.is_empty() {
         return Ok(false);
     }
@@ -341,12 +341,12 @@ fn install_kernel(progress: &mut dyn Progress, config: &Config, slot: Slot, nand
     Ok(written || first)
 }
 
-/// The image's run: its slot patched on the host, then the kernel. The slot
+/// The image's run: its slot set up on the host, then the kernel. The slot
 /// first: whatever stops after it leaves the unit booting the stock kernel,
 /// until the environment names the new one.
 fn route_image(progress: &mut dyn Progress, config: &Config, nand: &mut dyn Nand, run_dir: &Path) -> Result<Outcome> {
     let Checked { device, slot, .. } = check_unit(progress, config, Device::J49, "image", nand, run_dir)?;
-    let mut changed = patch_in_memory(progress, config, device, slot, nand, run_dir)?;
+    let mut changed = set_up_in_memory(progress, config, device, slot, nand, run_dir)?;
     changed |= install_kernel(progress, config, slot, nand)?;
     Ok(Outcome { device, slot, changed })
 }
@@ -387,7 +387,7 @@ fn payload(initramfs: &[u8]) -> Result<Vec<(&'static str, &[u8], u32)>> {
 }
 
 /// The unit's run past the flasher: the kernel installed, then the unit
-/// booted into the initramfs, which patches the slot on the unit, and
+/// booted into the initramfs, which sets up the slot on the unit, and
 /// restarted. `port` is where the unit is on USB.
 #[allow(clippy::too_many_arguments)]
 fn route_unit(progress: &mut dyn Progress, config: &Config, usb: Device, silicon: &str, mut flasher: Flasher<Pipe>,
@@ -412,7 +412,7 @@ fn route_unit(progress: &mut dyn Progress, config: &Config, usb: Device, silicon
         }
     };
     progress.phase(Phase::Prepare);
-    stage(progress, &format!("Boot the initramfs to patch {slot}"), || flasher.boot(entry, machine, &atags))?;
+    stage(progress, &format!("Boot the initramfs to set up {slot}"), || flasher.boot(entry, machine, &atags))?;
     // The flasher leaves USB as it enters the kernel.
     stage(progress, "Wait for the kernel to start", || wait_gone(port, usb::ROM, seconds(15)).map_err(|_| {
         failure("the unit stayed on USB as the flasher: the kernel did not start. Hold the front panel button for \
@@ -423,18 +423,18 @@ fn route_unit(progress: &mut dyn Progress, config: &Config, usb: Device, silicon
         InitramfsShell::connect(open_acm(app, seconds(120))?, seconds(30))
     }).map_err(|error| failure(format!("{error}. Hold the front panel button for 10 seconds to restart the unit; \
                                          nothing was written to its root slot")))?;
-    progress.phase(Phase::Patch);
-    let patched = shell.run("uname -a; cat /proc/mtd; grep \" /mnt \" /proc/mounts").and_then(|probe| {
+    progress.phase(Phase::SetUp);
+    let set_up = shell.run("uname -a; cat /proc/mtd; grep \" /mnt \" /proc/mounts").and_then(|probe| {
         probe.lines().for_each(|line| log::info!("unit: {line}"));
-        stage(progress, &format!("Patch {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, device))
+        stage(progress, &format!("Set up {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, device))
     });
     // On failure too: the slot keeps what was verified, and the unit boots
     // it. A failure stays the phase it happened in.
-    if patched.is_ok() {
+    if set_up.is_ok() {
         progress.phase(Phase::Restart);
     }
     let restarted = shell.restart();
-    let changes = patched?;
+    let changes = set_up?;
     restarted?;
     fs::write(run_dir.join("initramfs-changes.txt"), &changes)?;
     // The initramfs's USB identity is the app's: it leaves USB first.
@@ -461,7 +461,7 @@ fn wait_gone(port: &str, id: Id, timeout: Duration) -> Result<()> {
 /// and what it is: the one with the USB serial port, either kernel with the
 /// dark boot logo for the dark theme, or without either option the stock
 /// kernel in place of a dark one there. None when the upper half stays.
-fn upper_kernel(nand: &mut dyn Nand, slot: Slot, options: &patch::Options) -> Result<Option<(Vec<u8>, String)>> {
+fn upper_kernel(nand: &mut dyn Nand, slot: Slot, options: &setup::Options) -> Result<Option<(Vec<u8>, String)>> {
     let usb = "the kernel with the USB serial port";
     let stock = |nand: &mut dyn Nand| kernel::read(nand, slot, false)?
         .ok_or_else(|| failure(format!("no stock kernel in {slot}'s boot partition")));
@@ -484,7 +484,7 @@ fn upper_kernel(nand: &mut dyn Nand, slot: Slot, options: &patch::Options) -> Re
 
 /// Refuses what a Diamond cannot run: its CC2530 radio uses UART, and it has
 /// no kernel with a USB serial port.
-fn unsupported(device: Device, options: &patch::Options) -> Result<()> {
+fn unsupported(device: Device, options: &setup::Options) -> Result<()> {
     if device != Device::Diamond {
         return Ok(());
     }
@@ -598,7 +598,7 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     let log_dir = start_log(progress, &stamp)?;
     let mut hand_back = HandBack(vec![run_dir.clone(), log_dir]);
     // Before the boot ROM is asked for: it waits on USB for seconds only.
-    let initramfs = stage(progress, "Build the patch bundle and the initramfs", || build_initramfs(config, &run_dir))?;
+    let initramfs = stage(progress, "Build the setup bundle and the initramfs", || build_initramfs(config, &run_dir))?;
     let beside = payload(&initramfs)?;
     let (port, _) = find_unit(progress, config.wait_usb, unit, cancel)?;
     progress.phase(Phase::Recovery);
@@ -650,8 +650,8 @@ fn finish(progress: &mut dyn Progress, config: &Config, run_dir: &Path, outcome:
     Ok(match (shell, outcome.changed, port) {
         (Some(name), _, _) => format!("Root shell confirmed on {name} (UID 0)"),
         (None, false, _) => format!("{slot} has every change already; nothing written"),
-        (None, true, Some(_)) => format!("Patched {slot}; the unit booted back to its app"),
-        (None, true, None) => format!("Patched {slot} in the image"),
+        (None, true, Some(_)) => format!("Set up {slot}; the unit booted back to its app"),
+        (None, true, None) => format!("Set up {slot} in the image"),
     })
 }
 
@@ -676,8 +676,8 @@ mod tests {
             return;
         };
         let mut nand = boot0(&stock);
-        let neither = patch::Options::default();
-        let dark = patch::Options { dark_theme: true, ..Default::default() };
+        let neither = setup::Options::default();
+        let dark = setup::Options { dark_theme: true, ..Default::default() };
         assert!(upper_kernel(&mut nand, Slot::Root0, &neither).unwrap().is_none(), "nothing to undo");
         let (image, what) = upper_kernel(&mut nand, Slot::Root0, &dark).unwrap().unwrap();
         assert_eq!((logo::logo(&image).unwrap(), what.as_str()), (Some(Logo::Dark), "the kernel with the dark boot logo"));

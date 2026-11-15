@@ -65,7 +65,7 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
     assert!(dark_theme::patch(&changed_stock, &mut stock.clone()).is_err());
 
     // Over the ordinary settings screen and the external temperature patch,
-    // as patch_on_device composes them, and reversible through the journal.
+    // as set_up_on_device composes them, and reversible through the journal.
     let object = std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/custom-screen.o"));
     let rcs_object = std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
