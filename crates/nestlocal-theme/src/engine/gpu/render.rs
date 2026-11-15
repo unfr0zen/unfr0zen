@@ -272,6 +272,14 @@ impl Renderer {
         Ok(())
     }
 
+    /// Drops what a frame that failed left saved on the canvas (a theme's
+    /// `save`s it never restored), so the next starts from its defaults.
+    pub fn abandon(&mut self) {
+        for _ in 0..=crate::engine::theme::SAVES {
+            self.canvas.restore();
+        }
+    }
+
     /// Starts a frame: clears the panel and sets the transform from the
     /// theme's upright design units.
     pub fn begin(&mut self, geometry: &Geometry, design: f32) {

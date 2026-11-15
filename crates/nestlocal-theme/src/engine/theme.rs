@@ -79,7 +79,7 @@ const REACH: f64 = 1e6;
 const COORDS: usize = 16384;
 const TEXT_LIMIT: usize = 1024;
 const MATCHED_LIMIT: usize = 64 << 10;
-const SAVES: u32 = 64;
+pub const SAVES: u32 = 64;
 
 /// The most steps matching a pattern may take at worst (`pattern_cost`):
 /// the matcher is C, which the time limit cannot stop.
@@ -1077,25 +1077,73 @@ impl Ui {
     }
 }
 
-/// What the screen shows when no theme can draw: the target, plainly.
-pub fn fallback(painter: &mut dyn Painter, ui: &Ui, error: &str) {
+/// What the dial shows when the chosen theme cannot draw: the target, so
+/// the thermostat still reads, then the theme, why it failed and where
+/// another is picked. The ring, the button and the menus are nlclient's and
+/// work as ever. Set in the engine's own font, whatever the theme's.
+pub fn diagnostic(painter: &mut dyn Painter, ui: &Ui, theme: &str, error: &str) {
     let d = ui.design;
-    painter.fill_circle(d / 2.0, d / 2.0, d / 2.0, Color::BLACK);
-    let style = |size: f32| TextStyle {
-        font: "fallback".into(),
-        size,
-        color: Color::WHITE,
-        align: Align::Center,
-        baseline: Baseline::Middle,
-        spacing: 0.0,
-        outline: None,
-        snap: true,
+    painter.clear(Color::BLACK);
+    let mut line = |text: &str, y: f32, size: f32, color: Color| {
+        painter.text(text, d / 2.0, d * y, &TextStyle {
+            font: "diagnostic".into(),
+            size: d * size,
+            color,
+            align: Align::Center,
+            baseline: Baseline::Middle,
+            spacing: 0.0,
+            outline: None,
+            snap: true,
+        });
     };
+    let grey = |level: f32| Color { r: level, g: level, b: level, a: 1.0 };
     let target = if ui.thermostat.unit == "F" { format!("{:.0}", ui.thermostat.target) } else { format!("{:.1}", ui.thermostat.target) };
-    painter.text(&target, d / 2.0, d * 0.45, &style(d * 0.25));
-    let first_line: String = error.lines().next().unwrap_or("").chars().take(48).collect();
-    painter.text("theme error", d / 2.0, d * 0.68, &style(d * 0.05));
-    painter.text(&first_line, d / 2.0, d * 0.75, &style(d * 0.03));
+    line(&target, 0.3, 0.2, Color::WHITE);
+    line("THEME ERROR", 0.48, 0.045, Color { r: 1.0, g: 0.7, b: 0.2, a: 1.0 });
+    line(theme, 0.545, 0.04, Color::WHITE);
+    for (i, text) in wrapped(&reason(error), 36, 4).iter().enumerate() {
+        line(text, 0.615 + 0.042 * i as f32, 0.03, grey(0.75));
+    }
+    line("Settings > UNFR0ZEN > Themes", 0.84, 0.03, grey(0.5));
+}
+
+/// An error as one line: its first, without the kind Lua's errors open with.
+fn reason(error: &str) -> String {
+    let first = error.lines().next().unwrap_or("");
+    let first = ["runtime error: ", "syntax error: "].iter().find_map(|kind| first.strip_prefix(kind)).unwrap_or(first);
+    first.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `text` in lines of `width` characters at most, broken at spaces where it
+/// has them, and `lines` of them at most: the last ends in "..." when more
+/// would follow.
+fn wrapped(text: &str, width: usize, lines: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        let mut word: Vec<char> = word.chars().collect();
+        loop {
+            let room = width - out.last().map_or(width, |l| l.chars().count() + 1).min(width);
+            match out.last_mut() {
+                Some(last) if word.len() <= room => {
+                    last.push(' ');
+                    last.extend(word.iter());
+                    break;
+                }
+                _ if word.len() <= width => {
+                    out.push(word.iter().collect());
+                    break;
+                }
+                // A word longer than a line fills lines of its own.
+                _ => out.push(word.drain(..width).collect()),
+            }
+        }
+    }
+    if out.len() > lines {
+        out.truncate(lines);
+        let last = &mut out[lines - 1];
+        *last = last.chars().take(width - 3).collect::<String>() + "...";
+    }
+    out
 }
 
 
@@ -1375,3 +1423,38 @@ mod validation_tests {
     }
 }
 
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn an_error_is_one_reason_in_lines_the_dial_holds() {
+        assert_eq!(reason("runtime error: home.lua:12: attempt to index\tfield 'x'\nstack traceback:\n\t[C]"), "home.lua:12: attempt to index field 'x'");
+        assert_eq!(reason("syntax error: theme.lua:3: '}' expected"), "theme.lua:3: '}' expected");
+        assert_eq!(reason(""), "");
+        assert_eq!(wrapped("one two three four", 9, 4), ["one two", "three", "four"]);
+        assert_eq!(wrapped("abcdefghij kl", 4, 4), ["abcd", "efgh", "ij", "kl"]);
+        assert_eq!(wrapped("one two three four five", 9, 2), ["one two", "three..."]);
+        assert_eq!(wrapped("", 9, 2), [""]);
+        assert!(wrapped(&"théme ".repeat(40), 36, 4).iter().all(|l| l.chars().count() <= 36));
+    }
+
+    #[test]
+    fn the_diagnostic_shows_the_target_and_the_error() {
+        let lit = |unit: &'static str, error: &str| {
+            let mut renderer = crate::engine::soft::Renderer::new(240, 240).unwrap();
+            renderer.begin(240.0, 480.0);
+            let mut ui = Ui { design: 480.0, dial_px: 240.0, ..Default::default() };
+            (ui.thermostat.unit, ui.thermostat.target) = (unit, 21.5);
+            diagnostic(&mut renderer.painter(Path::new(".")), &ui, "Mine", error);
+            // Lit pixels above the middle (the target) and below it (the error).
+            let lit = |rows: std::ops::Range<u32>| rows.flat_map(|y| (0..240).map(move |x| (x, y)))
+                .filter(|&(x, y)| renderer.pixmap.pixel(x, y).is_some_and(|p| p.red() > 100)).count();
+            (lit(40..110), lit(110..220))
+        };
+        let (target, short) = lit("C", "runtime error: home.lua:1: boom");
+        let (_, long) = lit("F", &format!("runtime error: {}", "home.lua:1: a long reason ".repeat(8)));
+        assert!(target > 200 && short > 200, "{target} {short}");
+        assert!(long > short, "a longer reason takes more lines: {long} {short}");
+    }
+}

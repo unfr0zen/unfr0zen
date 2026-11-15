@@ -48,8 +48,12 @@ The library tells the preload when the theme needs its next frame
 (`nestlocal_theme_next`): at once while it animates, when it asked with
 `gfx:wake`, otherwise never; standing still the theme is redrawn about once a
 second to follow the clock, nestlocal's state and nlclient's model, and a turn
-of the ring asks for a frame at once. A theme that fails draws stock until
-nestlocal publishes a new `theme.native.json`, when it is tried again.
+of the ring asks for a frame at once. A theme that cannot load or draw leaves
+the dial to the library's diagnostic (the target, the theme and its error);
+the library itself failing draws stock until nestlocal publishes a new
+`theme.native.json`, when it is tried again. A theme nlclient does not survive
+3 starts in a row is refused until it is picked again
+(`/media/scratch/.unfr0zen/theme.guard`).
 
 Redraws go through nlclient's event queue as a handler returning nlClient's
 redraw result (1), which draws only while the display is lit: never the

@@ -4,11 +4,15 @@
 //! (platform/common/theme) and the theme library (theme_plugin.rs). This side
 //! offers them on the UNFR0ZEN screen's Themes page, keeps the choice, and
 //! hands the library the chosen theme with the device and shared buckets.
+//! Themes are added by hand too: the catalog follows the folder as it
+//! changes, and a theme picked again, the one shown included, is loaded
+//! again by the library (`picked`), which is how one that failed is retried.
 //!
 //! The files, under settings_ui::DIR: theme.catalog (`id<TAB>label` lines)
 //! and theme.status (the chosen theme's label) for the Themes page, which
 //! answers in theme.request; theme.native.enabled while a theme is chosen
-//! (absent for stock), theme.native.json for the library (`theme`, the
+//! (absent for stock), theme.native.json for the library (`theme`,
+//! `picked`: how many times a theme has been picked since nestlocal started, the
 //! device and shared buckets as `dev` and `shared`, `state` as MQTT's state
 //! topic has it, and `weather`: Home Assistant's outdoor readings, conditions
 //! and forecast, weather::Outdoor::known), theme-marker.png (480 pixels square, every one RGBA
@@ -84,6 +88,23 @@ fn themes(root: &Path) -> Vec<String> {
     out
 }
 
+/// What the catalog is made of: the themes offered, and when each one's
+/// theme.lua, which names it, last changed.
+fn listed(root: &Path) -> Vec<(String, Option<std::time::SystemTime>)> {
+    themes(root).into_iter().map(|name| {
+        let changed = std::fs::metadata(root.join(&name).join("theme.lua")).and_then(|f| f.modified()).ok();
+        (name, changed)
+    }).collect()
+}
+
+/// theme.catalog: an `id<TAB>label` line for each theme offered.
+fn catalog(root: &Path, listed: &[(String, Option<std::time::SystemTime>)]) -> String {
+    listed.iter().map(|(id, _)| format!("{id}\t{}\n", label(root, id))).collect()
+}
+
+/// How often the themes' folder is looked at for the catalog.
+const CATALOG_EVERY: Duration = Duration::from_secs(2);
+
 /// The marker image: the theme's size, in a colour the preload knows it by.
 fn marker() -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
@@ -97,12 +118,12 @@ fn marker() -> Result<Vec<u8>, String> {
 }
 
 /// theme.native.json: the theme and what the library draws from.
-fn state(theme: &str, dev: Value, shared: Value, weather: Fields) -> Vec<u8> {
+fn state(theme: &str, picked: u64, dev: Value, shared: Value, weather: Fields) -> Vec<u8> {
     let shown = match (&dev, &shared) {
         (Value::Object(dev), Value::Object(shared)) => Value::Object(bridge::state(dev, shared)),
         _ => Value::Null,
     };
-    json!({"theme": theme, "dev": dev, "shared": shared, "state": shown, "weather": weather}).to_string().into_bytes()
+    json!({"theme": theme, "picked": picked, "dev": dev, "shared": shared, "state": shown, "weather": weather}).to_string().into_bytes()
 }
 
 /// Makes `name` the theme shown: its label for the Themes page, and the
@@ -129,19 +150,21 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
     store.watch(move |o| if o.key == watched.0 || o.key == watched.1 { let _ = tx.send(()); });
     let spawned = std::thread::Builder::new().name("theme".into()).spawn(move || {
         let root = Path::new(INSTALLED);
-        let catalog: String = themes(root).iter().map(|id| format!("{id}\t{}\n", label(root, id))).collect();
+        let mut offered = listed(root);
+        let mut looked = std::time::Instant::now();
+        let mut picked = 0u64;
         let mut theme = std::fs::read_to_string(CHOSEN).map(|n| n.trim().to_string()).unwrap_or_default();
         if !installed(root, &theme) {
             theme = "stock".into();
         }
         let buckets = |key: &str| store.get(key).map_or(Value::Null, |o| Value::Object(o.value));
-        let publish = |theme: &str, weather: &Fields| settings_ui::publish("theme.native.json",
-            &state(theme, buckets(&device), buckets(&shared), weather.clone()));
+        let publish = |theme: &str, picked: u64, weather: &Fields| settings_ui::publish("theme.native.json",
+            &state(theme, picked, buckets(&device), buckets(&shared), weather.clone()));
         let mut weather = outdoor.known();
         let ready = marker().map_err(std::io::Error::other)
             .and_then(|png| settings_ui::publish("theme-marker.png", &png))
-            .and_then(|()| settings_ui::publish("theme.catalog", catalog.as_bytes()))
-            .and_then(|()| publish(&theme, &weather))
+            .and_then(|()| settings_ui::publish("theme.catalog", catalog(root, &offered).as_bytes()))
+            .and_then(|()| publish(&theme, picked, &weather))
             .and_then(|()| select(root, &theme))
             .and_then(|()| settings_ui::publish("theme.native.ready", b"1"));
         if let Err(e) = ready {
@@ -160,16 +183,30 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
                 weather = known;
                 changed = true;
             }
+            // The Themes page reads the catalog as it opens: a theme added
+            // or removed by hand is there by then.
+            if looked.elapsed() >= CATALOG_EVERY {
+                looked = std::time::Instant::now();
+                let now = listed(root);
+                if now != offered {
+                    offered = now;
+                    if let Err(e) = settings_ui::publish("theme.catalog", catalog(root, &offered).as_bytes()) {
+                        logf!("theme: {e}");
+                    }
+                }
+            }
             let request = Path::new(settings_ui::DIR).join("theme.request");
             if let Ok(name) = std::fs::read_to_string(&request) {
                 let _ = std::fs::remove_file(&request);
                 let name = name.trim();
-                if installed(root, name) && name != theme {
+                // The theme shown picked again is loaded again.
+                if installed(root, name) && (name != theme || name != STOCK) {
                     theme = name.to_string();
+                    picked += 1;
                     // The library is on only while its state names a theme:
                     // the state first for a theme, and for stock select
                     // alone, the state following below.
-                    let state = if theme == "stock" { Ok(()) } else { publish(&theme, &weather) };
+                    let state = if theme == "stock" { Ok(()) } else { publish(&theme, picked, &weather) };
                     if let Err(e) = std::fs::write(CHOSEN, &theme).and(state).and_then(|()| select(root, &theme)) {
                         logf!("theme: {e}");
                     }
@@ -178,7 +215,7 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
                 }
             }
             if changed {
-                if let Err(e) = publish(&theme, &weather) {
+                if let Err(e) = publish(&theme, picked, &weather) {
                     logf!("theme: {e}");
                 }
             }
@@ -241,6 +278,19 @@ mod tests {
         assert_eq!(label(&root, "mine"), "My Theme");
         assert_eq!(label(&root, "tabbed"), "tabbed", "a label is one field of a catalog line");
         assert_eq!(label(&root, "long"), "long");
+        // The catalog follows the folder: a theme added, renamed in its
+        // theme.lua, or removed.
+        let before = listed(&root);
+        assert_eq!(before, listed(&root));
+        assert!(catalog(&root, &before).contains("mine\tMy Theme\n") && catalog(&root, &before).starts_with("stock\tStock\n"));
+        theme("added", "name = \"Added\",");
+        let added = listed(&root);
+        assert!(added != before && catalog(&root, &added).contains("added\tAdded\n"));
+        let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        std::fs::File::options().write(true).open(root.join("added/theme.lua")).unwrap().set_modified(old).unwrap();
+        assert!(listed(&root) != added, "a theme.lua changed is read again");
+        std::fs::remove_dir_all(root.join("added")).unwrap();
+        assert_eq!(listed(&root).len(), before.len());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -257,13 +307,14 @@ mod tests {
     #[test]
     fn state_carries_the_theme_buckets_mqtt_state_and_weather() {
         let weather = json!({"temp_c": 4.5, "icon": "snow"}).as_object().unwrap().clone();
-        let first: Value = serde_json::from_slice(&state("hyperdrive", json!({"temperature_scale": "F"}), Value::Null,
+        let first: Value = serde_json::from_slice(&state("hyperdrive", 2, json!({"temperature_scale": "F"}), Value::Null,
                                                          weather)).unwrap();
         assert_eq!(first["theme"], "hyperdrive");
+        assert_eq!(first["picked"], 2);
         assert_eq!(first["dev"]["temperature_scale"], "F");
         assert!(first["shared"].is_null() && first["state"].is_null(), "no state before the unit reports");
         assert_eq!(first["weather"]["icon"], "snow");
-        let second: Value = serde_json::from_slice(&state("nest-gen4", json!({"temperature_scale": "C", "current_humidity": 41}),
+        let second: Value = serde_json::from_slice(&state("nest-gen4", 0, json!({"temperature_scale": "C", "current_humidity": 41}),
             json!({"target_temperature_type": "heat", "target_temperature": 20.6, "hvac_heater_state": true}), Fields::new())).unwrap();
         assert_eq!(second["state"]["mode"], "heat");
         assert_eq!(second["state"]["target"], 20.5);

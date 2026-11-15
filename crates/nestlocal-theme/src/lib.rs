@@ -6,10 +6,18 @@
 //! and shared buckets, comes from nestlocal (theme.native.json), the live
 //! setpoints, mode and heat-cool pick from the native control model through
 //! the preload (nestlocal_native_theme_v1).
+//!
+//! A theme that cannot be loaded or drawn leaves the dial to a diagnostic
+//! (engine::theme::diagnostic): the target, the theme and its error, with
+//! nlclient's menus as ever to pick another from. A theme that fails to load
+//! is tried again when it is picked again (`picked` changes), one whose frame
+//! failed with nestlocal's next state; one that takes nlclient down with it
+//! time after time is refused (engine::guard).
 #![allow(dead_code)]
 mod engine {
     pub mod display;
     pub mod ft;
+    pub mod guard;
     pub mod paint;
     pub mod theme;
     #[cfg(test)]
@@ -23,8 +31,24 @@ use std::path::Path;
 use std::time::Instant;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::rc::Rc;
-use engine::{display::Geometry, gpu::{quads::Quads, render::Renderer}, theme::{Theme, Ui, Clock, Nest, ThermostatView}};
+use engine::{display::Geometry, guard, gpu::{quads::Quads, render::Renderer}, theme::{diagnostic, Theme, Ui, Clock, Nest, ThermostatView}};
 use serde_json::Value;
+
+/// Where the patch installs the themes, one folder each.
+const THEMES: &str = "/media/scratch/.unfr0zen/themes";
+
+/// The crash-loop guard's count (engine::guard), beside the themes: it
+/// outlives a reboot. A theme that has run this long has survived its start.
+const GUARD: &str = "/media/scratch/.unfr0zen/theme.guard";
+const GUARD_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Why the chosen theme does not draw, shown in its place.
+struct Broken {
+    error: String,
+    /// The theme is loaded and a frame of it failed: it is tried again with
+    /// nestlocal's next state, which may be one it can draw.
+    frame: bool,
+}
 
 pub fn theme_id(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
@@ -104,7 +128,7 @@ impl NativeState {
 }
 type NativeReader = unsafe extern "C" fn(*mut NativeState);
 type Loader = unsafe extern "C" fn(*const c_char) -> *const c_void;
-struct Engine { native: Option<NativeReader>, renderer: Renderer, theme: Option<Theme>, name: String, started: Instant, motion: Motion, target: f32, frames: u32, timing: [f64; 4], data: Rc<Value>, revision: Option<std::time::SystemTime>, previous: Option<Ui>, animating: bool, wake: Option<f64>, retained: bool, stencil: bool }
+struct Engine { native: Option<NativeReader>, renderer: Renderer, theme: Option<Theme>, name: String, picked: u64, broken: Option<Broken>, guarded: Option<Instant>, started: Instant, motion: Motion, target: f32, frames: u32, timing: [f64; 4], data: Rc<Value>, revision: Option<std::time::SystemTime>, previous: Option<Ui>, animating: bool, wake: Option<f64>, retained: bool, stencil: bool }
 thread_local! { static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) }; }
 /// The stock picture for the weather (`unit:Weather_*.png`), from
 /// nestlocal's condition names (weather.rs's nest_icon), by day between
@@ -185,8 +209,37 @@ impl Engine {
         let renderer = Renderer::new(canvas, Some(quads), (0.0, 0.0, 480, 480))?;
         let native = address("nestlocal_native_theme_v1");
         let native = if native.is_null() { None } else { Some(std::mem::transmute::<*const c_void, NativeReader>(native)) };
-        Ok(Self { native, renderer, theme: None, name: String::new(), started: Instant::now(), motion: Motion::default(), target: f32::NAN, frames: 0, timing: [0.0; 4], data: Rc::new(Value::Null), revision: None, previous: None, animating: true, wake: None, retained: false, stencil: false })
+        Ok(Self { native, renderer, theme: None, name: String::new(), picked: 0, broken: None, guarded: None, started: Instant::now(), motion: Motion::default(), target: f32::NAN, frames: 0, timing: [0.0; 4], data: Rc::new(Value::Null), revision: None, previous: None, animating: true, wake: None, retained: false, stencil: false })
     }
+    /// Loads the theme `name` and its fonts, counted by the crash-loop guard
+    /// until it has run for GUARD_WINDOW (draw) or failed here.
+    fn load(&mut self, name: &str) -> Result<Theme, String> {
+        guard::enter(Path::new(GUARD), name)?;
+        let loaded = Theme::load(&Path::new(THEMES).join(name)).and_then(|theme| {
+            self.renderer.use_fonts(&theme.fonts)?;
+            Ok(theme)
+        });
+        match &loaded {
+            Ok(_) => self.guarded = Some(Instant::now()),
+            Err(_) => guard::leave(Path::new(GUARD)),
+        }
+        loaded
+    }
+
+    /// Paints the frame begun: the theme's, or the diagnostic's while the
+    /// theme is broken.
+    fn paint(&mut self, ui: &Ui, now: f64) -> Result<(), String> {
+        if let Some(broken) = &self.broken {
+            diagnostic(&mut self.renderer.painter(Path::new("")), ui, &self.name, &broken.error);
+            (self.animating, self.wake) = (false, None);
+            return Ok(());
+        }
+        let theme = self.theme.as_ref().ok_or("no theme loaded")?;
+        self.animating = theme.draw(&mut self.renderer.painter(&theme.dir), ui)?;
+        self.wake = theme.wake().map(|delay| now + delay.as_secs_f64());
+        Ok(())
+    }
+
     fn draw(&mut self, image: bool, target: f32) -> Result<u32, String> {
         let start = Instant::now();
         let path = "/var/run/unfr0zen/theme.native.json";
@@ -194,20 +247,43 @@ impl Engine {
         if self.revision != Some(revision) {
             self.data = Rc::new(serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?);
             self.revision = Some(revision);
+            if self.broken.as_ref().is_some_and(|broken| broken.frame) {
+                self.broken = None;
+                self.previous = None;
+            }
         }
-        let value = &self.data;
+        let value = self.data.clone();
+        let value = &value;
         let name = value["theme"].as_str().ok_or("no theme chosen")?;
         if !theme_id(name) { return Err("unknown theme".into()); }
-        let theme_changed = name != self.name;
+        let picked = value["picked"].as_u64().unwrap_or(0);
+        let theme_changed = name != self.name || picked != self.picked;
         if theme_changed {
-            let theme = Theme::load(&Path::new("/media/scratch/.unfr0zen/themes").join(name))?;
-            self.renderer.use_fonts(&theme.fonts)?;
-            self.theme = Some(theme); self.name = name.into(); self.previous = None; self.stencil = false;
-            eprintln!("THEME Lua theme={name}");
+            // Picked while this runs, not found chosen as it starts: the
+            // guard's count starts again.
+            if !self.name.is_empty() { guard::leave(Path::new(GUARD)); }
+            (self.theme, self.broken, self.guarded) = (None, None, None);
+            self.name = name.into(); self.picked = picked; self.previous = None; self.stencil = false;
+            match self.load(name) {
+                Ok(theme) => {
+                    self.theme = Some(theme);
+                    eprintln!("THEME Lua theme={name}");
+                }
+                Err(error) => {
+                    eprintln!("THEME Lua theme={name}: {error}");
+                    // The theme shown before leaves nothing behind.
+                    self.renderer.use_fonts(&[])?;
+                    self.broken = Some(Broken { error, frame: false });
+                }
+            }
         }
-        let theme = self.theme.as_ref().unwrap();
+        if self.guarded.is_some_and(|loaded| loaded.elapsed() > GUARD_WINDOW) {
+            guard::leave(Path::new(GUARD));
+            self.guarded = None;
+        }
+        let design = self.theme.as_ref().map_or(480.0, |theme| theme.design);
         let now = self.started.elapsed().as_secs_f64();
-        let mut ui = view(value, now, self.motion.target, theme.design);
+        let mut ui = view(value, now, self.motion.target, design);
         let target = if let Some(read) = self.native {
             let mut state = NativeState::default();
             unsafe { read(&mut state); }
@@ -241,13 +317,23 @@ impl Engine {
         let mut geometry = Geometry::for_framebuffer(480, 480);
         geometry.quarter_turns = 1;
         let prepared = Instant::now();
-        let mut direct = self.animating && !image && !self.stencil;
+        let mut direct = self.broken.is_none() && self.animating && !image && !self.stencil;
         self.renderer.use_external_target(direct);
-        self.renderer.begin(&geometry, theme.design);
+        self.renderer.begin(&geometry, design);
         let begun = Instant::now();
         STENCIL_USED.store(false, Ordering::Relaxed);
-        self.animating = theme.draw(&mut self.renderer.painter(&theme.dir), &ui)?;
-        self.wake = theme.wake().map(|delay| now + delay.as_secs_f64());
+        if let Err(error) = self.paint(&ui, now) {
+            // The theme's frame failed: what it drew is finished where it
+            // went, and the diagnostic drawn over all of it.
+            eprintln!("THEME Lua theme={}: {error}", self.name);
+            self.renderer.finish_texture();
+            self.renderer.abandon();
+            self.broken = Some(Broken { error, frame: true });
+            direct = false;
+            self.renderer.use_external_target(false);
+            self.renderer.begin(&geometry, design);
+            self.paint(&ui, now)?;
+        }
         let drawn = Instant::now();
         self.renderer.finish_texture();
         if direct && STENCIL_USED.load(Ordering::Relaxed) {
@@ -258,9 +344,8 @@ impl Engine {
             self.stencil = true;
             direct = false;
             self.renderer.use_external_target(false);
-            self.renderer.begin(&geometry, theme.design);
-            self.animating = theme.draw(&mut self.renderer.painter(&theme.dir), &ui)?;
-            self.wake = theme.wake().map(|delay| now + delay.as_secs_f64());
+            self.renderer.begin(&geometry, design);
+            self.paint(&ui, now)?;
             self.renderer.finish_texture();
         }
         self.retained = !direct;
