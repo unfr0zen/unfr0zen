@@ -27,7 +27,7 @@ use unfr0zen_core::j49::omap;
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
 
-use super::{find_unit, load_flasher, read_environment};
+use super::{find_unit, load_flasher_from, read_environment};
 use crate::device::Unit;
 use crate::flow::{failure, start_log, HandBack};
 use crate::nand::{checksum_path, file, read_at, read_checked, recorded_sha256, Job};
@@ -256,10 +256,11 @@ pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn 
                   confirm: &mut dyn FnMut(&str) -> bool, cancel: &super::CancelFlag) -> Result<String> {
     let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
     let usb = unit.device;
-    find_unit(progress, wait_usb, unit, cancel)?;
+    let (port, _) = find_unit(progress, wait_usb, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let mut hand_back = HandBack(vec![start_log(progress, &stamp)?]);
-    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) = stage(progress, "Load the NAND flasher over USB", || load_flasher(usb, &[]))?;
+    let (asic, mut flasher): (Vec<u8>, Flasher<Pipe>) =
+        load_flasher_from(progress, "Load the NAND flasher over USB", usb, &port, &[], wait_usb, cancel)?;
     // The generation only names the unit here; an environment a restore is
     // to repair may not parse.
     let device = read_environment(&mut flasher).ok().and_then(|env| env.device()).unwrap_or(usb);

@@ -76,11 +76,36 @@ fn xloader(device: Device) -> &'static [u8] {
     if device == Device::Diamond { crate::diamond::XLOADER } else { assets::XLOADER }
 }
 
+/// [`load_flasher`] as the stage `label`, from the unit's boot ROM on `port`,
+/// asked for first if it has left USB. A boot ROM that was on USB before the
+/// run can give up waiting as x-loader goes in: then it is asked for again,
+/// once.
+pub(crate) fn load_flasher_from(progress: &mut dyn Progress, label: &str, device: Device, port: &str,
+                                beside: &[(&str, &[u8], u32)], wait_usb: Duration,
+                                cancel: &CancelFlag) -> Result<(Vec<u8>, Flasher<Pipe>)> {
+    let mut retried = false;
+    loop {
+        if !rom_present()? {
+            progress.waiting(HOLD_BUTTON);
+            stage(progress, WAIT_USB_BOOT_STAGE,
+                  || usb::wait_device_for(&[Mode::Rom], wait_usb, Some(port), app_id(device), cancel))?;
+        }
+        let mut in_rom = true;
+        match stage(progress, label, || load_flasher(device, beside, &mut in_rom)) {
+            Err(error) if in_rom && !retried && rom_gone(seconds(2))? => {
+                log::info!("the boot ROM left USB before x-loader ran ({error}); asking for it again");
+                retried = true;
+            }
+            result => return result,
+        }
+    }
+}
+
 /// From the boot ROM to the flasher running from SDRAM: the ASIC ID,
 /// x-loader into SRAM, then x-loader (re-enumerated) loads the flasher and
 /// `beside` it (name, data, address: what the flasher boots later). Returns
-/// the ASIC ID too.
-pub(crate) fn load_flasher(device: Device, beside: &[(&str, &[u8], u32)]) -> Result<(Vec<u8>, Flasher<Pipe>)> {
+/// the ASIC ID too. `in_rom` is cleared once x-loader is in.
+fn load_flasher(device: Device, beside: &[(&str, &[u8], u32)], in_rom: &mut bool) -> Result<(Vec<u8>, Flasher<Pipe>)> {
     let xloader = xloader(device);
     if xloader.is_empty() {
         return Err(failure("this build has no x-loader (it needs Docker to build)"));
@@ -89,6 +114,7 @@ pub(crate) fn load_flasher(device: Device, beside: &[(&str, &[u8], u32)]) -> Res
     let asic = omap::probe(&mut rom)?;
     log::info!("OMAP boot ROM at {port}, ASIC ID {}", asic.iter().map(|b| format!("{b:02x}")).collect::<String>());
     omap::load_first_stage(&mut rom, xloader)?;
+    *in_rom = false;
     drop(rom);
     std::thread::sleep(Duration::from_millis(20));
     let (_, mut xloader) = usb::open_rom(seconds(60))?;
@@ -531,6 +557,18 @@ fn rom_present() -> Result<bool> {
     Ok(crate::usb::list()?.values().any(|&id| id == usb::ROM))
 }
 
+/// Whether the boot ROM leaves USB within `timeout`.
+fn rom_gone(timeout: Duration) -> Result<bool> {
+    let until = std::time::Instant::now() + timeout;
+    while rom_present()? {
+        if std::time::Instant::now() >= until {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(true)
+}
+
 /// Refuses a run this build cannot do, before the unit is touched.
 fn check(config: &Config) -> Result<()> {
     if let Some(device) = config.omap {
@@ -563,15 +601,9 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
     let initramfs = stage(progress, "Build the patch bundle and the initramfs", || build_initramfs(config, &run_dir))?;
     let beside = payload(&initramfs)?;
     let (port, _) = find_unit(progress, config.wait_usb, unit, cancel)?;
-    // A unit in its boot ROM when the run began has left it by now.
-    if !rom_present()? {
-        progress.waiting(HOLD_BUTTON);
-        stage(progress, WAIT_USB_BOOT_STAGE,
-              || usb::wait_device_for(&[Mode::Rom], config.wait_usb, Some(&port), app_id(usb), cancel))?;
-    }
     progress.phase(Phase::Recovery);
-    let (asic, mut flasher) = stage(progress, "Load the NAND flasher, kernel and initramfs over USB",
-                                    || load_flasher(usb, &beside))?;
+    let (asic, mut flasher) = load_flasher_from(progress, "Load the NAND flasher, kernel and initramfs over USB",
+                                                usb, &port, &beside, config.wait_usb, cancel)?;
     let silicon = omap::silicon(&asic, flasher.idcode);
     if let Some(out) = backup {
         progress.phase(Phase::Backup);
