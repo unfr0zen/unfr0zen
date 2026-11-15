@@ -373,8 +373,14 @@ mod tests {
     }
     #[test]
     fn existing_lua_themes_load() {
-        for name in ["hyperdrive", "nest-gen4", "analog", "lcd", "weather"] {
-            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nestlocal/themes").join(name);
+        let themes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../nestlocal/themes");
+        let mut names: Vec<String> = std::fs::read_dir(&themes).unwrap().map(|e| e.unwrap().path())
+            .filter(|p| p.join("theme.lua").is_file())
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
+        names.sort();
+        assert!(names.len() >= 5, "{names:?}");
+        for name in names {
+            let path = themes.join(&name);
             let theme = Theme::load(&path).unwrap();
             assert_eq!(theme.design, 480.0);
             assert!(!theme.fonts.is_empty());
