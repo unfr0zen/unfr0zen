@@ -29,6 +29,7 @@ fn main() {
             let device = match device {
                 "diamond3" => Device::Diamond3,
                 "j49" => Device::J49,
+                "diamond" => Device::Diamond,
                 other => fail(format!("no bundle for {other}")),
             };
             let key = std::env::var("UNFR0ZEN_BUNDLE_KEY").ok().filter(|k| !k.is_empty())

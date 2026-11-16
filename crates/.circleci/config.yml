@@ -137,8 +137,8 @@ jobs:
       # Linux binaries in tarballs, which keep them executable; Windows and the
       # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
       # without compression or extra fields so every unzipper reads them. The
-      # x86_64 Linux job adds the setup bundles, the gen 3's and the gen 1's
-      # and gen 2's. A release signs them with UNFR0ZEN_BUNDLE_KEY, from the
+      # x86_64 Linux job adds the setup bundles, the gen 3's, the gen 2's and
+      # the gen 1's, which units fetch to update themselves. A release signs them with UNFR0ZEN_BUNDLE_KEY, from the
       # bundle-signing context, which only tag pipelines can read; elsewhere
       # they are unsigned.
       - run:
@@ -154,7 +154,7 @@ jobs:
                     echo "a release signs its setup bundles: UNFR0ZEN_BUNDLE_KEY is not set" >&2
                     exit 1
                   fi
-                  for device in diamond3 j49; do
+                  for device in diamond3 j49 diamond; do
                     cargo run --locked -p unfr0zen-host --bin unfr0zen-bundle -- \
                       pack $device "$VERSION" "dist/unfr0zen-$device-$VERSION.tgz"
                   done

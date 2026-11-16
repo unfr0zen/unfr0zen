@@ -16,8 +16,9 @@ use crate::flow::failure;
 /// The bundle for a device: nestlocal, the libraries and objects the setup
 /// installs or links, Thread's and Doom's overlays, and unfr0zen-apply and
 /// the hook scripts, which run on the unit. The gen 3's also has the
-/// customizable themes' overlay; the gen 1's and gen 2's (one bundle, the
-/// j49's) the Sensors view helper and the SSH server they lack.
+/// customizable themes' overlay; the gen 1's and gen 2's, alike but each
+/// named for its device so an update sets up the right one, the Sensors
+/// view helper and the SSH server they lack.
 pub fn contents(device: Device) -> Result<(Files, BTreeMap<String, u32>)> {
     match device {
         Device::Diamond3 => Ok(diamond3()),
@@ -105,6 +106,14 @@ mod tests {
         assert!(themes.iter().all(|(name, _, _)| name.starts_with("media/scratch/.unfr0zen/themes/")));
         assert!(themes.iter().any(|(name, _, _)| name.ends_with("/nest-gen4/theme.lua")));
         assert!(pack(Device::Onyx, "1.0.0", None).is_err());
+    }
+
+    #[test]
+    fn the_gen_1_bundle_is_the_gen_2s_named_for_the_gen_1() {
+        let (gen1, gen2) = (Bundle::unpack(&pack(Device::Diamond, "1.0.0", None).unwrap()).unwrap(),
+                            Bundle::unpack(&pack(Device::J49, "1.0.0", None).unwrap()).unwrap());
+        assert_eq!((gen1.manifest.device.as_str(), gen2.manifest.device.as_str()), ("diamond", "j49"));
+        assert_eq!(gen1.files, gen2.files);
     }
 
     #[test]
