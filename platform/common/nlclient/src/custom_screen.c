@@ -43,6 +43,12 @@ DECLARE_LAYOUT(PRIMARY_SIZE);
 #define PRIMARY_SIZE LAYOUT(PRIMARY_SIZE)
 DECLARE_LAYOUT(RENAME_SYSCALL);
 #define RENAME_SYSCALL LAYOUT(RENAME_SYSCALL)
+/* The client's screen timeouts, in ms: its default (client.config's
+ * sleeptimeout) and the one in force; 0 where discovery found none. */
+DECLARE_LAYOUT(SLEEP_DEFAULT_OFFSET);
+#define SLEEP_DEFAULT_OFFSET LAYOUT(SLEEP_DEFAULT_OFFSET)
+DECLARE_LAYOUT(SLEEP_ACTIVE_OFFSET);
+#define SLEEP_ACTIVE_OFFSET LAYOUT(SLEEP_ACTIVE_OFFSET)
 /* The screen hand-over: 1 where nlclient presents through eglSwapBuffers
  * (custom_swap, the keeper thread), 2 where it pans its own fb0 mapping
  * (custom_flip, with the FB_ fields of its framebuffer object), 0 neither. */
@@ -609,10 +615,33 @@ int custom_flip(void *fb, void *surface) {
     native_usleep(FLIP_WAIT);
     return 0;
 }
-/* Replace the buckets' commits: each starts the keeper and takes wake
- * requests, as every bucket change reaches one of them. */
+/* The screen timeout nestlocal asks for (screen.timeout, in ms, which its
+ * setting's bucket change follows), as the client's default; the one in
+ * force follows when it was the default, not a screen's own. */
+#define SCREEN_TIMEOUT RUN "screen.timeout"
+#define SCREEN_TIMEOUT_MIN 1000
+#define SCREEN_TIMEOUT_MAX 86400000
+static void apply_screen_timeout(void *globals) {
+    if (!SLEEP_DEFAULT_OFFSET || !SLEEP_ACTIVE_OFFSET) return;
+    char text[16];
+    read_text(SCREEN_TIMEOUT, text, sizeof(text), "");
+    int at = 0;
+    u32 timeout = parse_number(text, &at, sizeof(text));
+    if (!at || text[at] || timeout < SCREEN_TIMEOUT_MIN || timeout > SCREEN_TIMEOUT_MAX) return;
+    void *client = stock_client(globals);
+    if (!client) return;
+    u32 old = WORD(client, SLEEP_DEFAULT_OFFSET);
+    if (old == timeout) return;
+    if (WORD(client, SLEEP_ACTIVE_OFFSET) == old) WORD(client, SLEEP_ACTIVE_OFFSET) = timeout;
+    WORD(client, SLEEP_DEFAULT_OFFSET) = timeout;
+}
+/* Replace the buckets' commits: each starts the keeper, takes wake requests
+ * and applies the screen timeout, as every bucket change reaches one of
+ * them. */
 static int after_commit(void *bucket, int result) {
-    keeper_start(PTR(bucket, BUCKET_GLOBALS_OFFSET));
+    void *globals = PTR(bucket, BUCKET_GLOBALS_OFFSET);
+    keeper_start(globals);
+    apply_screen_timeout(globals);
     downlink_activity(bucket);
     return result;
 }

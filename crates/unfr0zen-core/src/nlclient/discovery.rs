@@ -254,6 +254,84 @@ fn registry(elf: &Elf) -> Result<Registry> {
     }
     best.ok_or_else(|| crate::Error::Device("screen registration table not found".into()))
 }
+/// The client's screen timeouts: its default, client.config's sleeptimeout,
+/// and the one in force (mSleepTimeout), which it resets to the default.
+/// Found where it logs that reset: the code loads the log's format, calls
+/// the logger, then copies the default over the one in force (`ldr Rx,
+/// [Rn, #default]`, then `str Rx, [Rn, #active]`). None on a build without
+/// that shape.
+fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
+    let format = b"client: Setting mSleepTimeout - Old: %d New: %d\0";
+    let mut found = Vec::new();
+    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 2 != 0 && s.flags & 4 == 0) {
+        let data = elf.contents(section);
+        let mut at = 0;
+        while let Some(i) = data[at..].windows(format.len()).position(|w| w == format) {
+            found.push(section.address + (at + i) as u32);
+            at += i + 1;
+        }
+    }
+    let [string] = found[..] else { return None };
+    let mut pairs = Vec::new();
+    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
+        let code = elf.contents(section);
+        let word = |i: usize| code.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+        let count = code.len() / 4;
+        for i in 0..count {
+            let w = word(i).unwrap();
+            let address = section.address + i as u32 * 4;
+            // Where the format's address is formed: a literal (plus pc on a
+            // position-independent build), or a movw/movt pair.
+            let mut formed = None;
+            if w & 0xff7f_0000 == 0xe51f_0000 {
+                let pc = address + 8;
+                let literal = if w & (1 << 23) != 0 { pc.wrapping_add(w & 0xfff) } else { pc.wrapping_sub(w & 0xfff) };
+                let Ok(value) = elf.read(literal) else { continue };
+                let register = (w >> 12) & 0xf;
+                if value == string {
+                    formed = Some(i);
+                } else {
+                    formed = (i + 1..(i + 40).min(count)).find(|&j| {
+                        let x = word(j).unwrap();
+                        x & 0xffff_0ff0 == 0xe08f_0000 && x & 0xf == register
+                            && value.wrapping_add(section.address + j as u32 * 4 + 8) == string
+                    });
+                }
+            } else if w & 0xfff0_0000 == 0xe300_0000 {
+                let register = (w >> 12) & 0xf;
+                let low = ((w >> 4) & 0xf000) | (w & 0xfff);
+                formed = (i + 1..(i + 6).min(count)).find(|&j| {
+                    let x = word(j).unwrap();
+                    x & 0xfff0_f000 == 0xe340_0000 | register << 12
+                        && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == string
+                });
+            }
+            let Some(at) = formed else { continue };
+            // The logger's call, then the copy.
+            let Some(call) = (at + 1..(at + 16).min(count)).find(|&j| word(j).unwrap() >> 24 == 0xeb) else { continue };
+            for j in call + 1..(call + 6).min(count) {
+                let load = word(j).unwrap();
+                if load & 0xfff0_0000 != 0xe590_0000 {
+                    continue;
+                }
+                let (value, base) = ((load >> 12) & 0xf, (load >> 16) & 0xf);
+                if let Some(store) = (j + 1..(j + 5).min(count)).map(|k| word(k).unwrap())
+                    .find(|x| x & 0xfff0_0000 == 0xe580_0000 && (x >> 12) & 0xf == value && (x >> 16) & 0xf == base)
+                {
+                    pairs.push((load & 0xfff, store & 0xfff));
+                }
+                break;
+            }
+        }
+    }
+    pairs.sort();
+    pairs.dedup();
+    match pairs[..] {
+        [(default, active)] if default != active => Some((default, active)),
+        _ => None,
+    }
+}
+
 /// Each registered screen's factory, by its name.
 pub(super) fn screen_factories(elf: &Elf) -> Result<BTreeMap<String, u32>> {
     let table = registry(elf)?;
@@ -636,6 +714,9 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     )?;
     api.insert("native_scroll_target".into(), select[1]);
     layout.insert("GLOBALS_TIMER_OFFSET".into(), timer(&elf, &arm, &imports)?);
+    let (sleep_default, sleep_active) = sleep_timeout(&elf).unwrap_or((0, 0));
+    layout.insert("SLEEP_DEFAULT_OFFSET".into(), sleep_default);
+    layout.insert("SLEEP_ACTIVE_OFFSET".into(), sleep_active);
     downlink(&elf, &arm, &imports, &mut api, &mut layout, &mut anchors)?;
     let framebuffer = if EGL_IMPORTS.iter().all(|(key, _)| api.contains_key(*key)) {
         anchors.insert("swap_call_slot".into(), swap_call(&elf, api["native_egl_swap"])?);

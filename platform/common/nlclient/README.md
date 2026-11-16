@@ -101,6 +101,19 @@ nlclient leaves its pid in `/var/run/unfr0zen/keeper.pid` (kind 2: and its
 globals) at its first bucket commit or click on this screen; a launcher
 whose nlclient is not that pid stops nlclient instead.
 
+## Screen timeout
+
+How long the display stays lit after the last interaction is nlclient's
+`sleeptimeout` (client.config, 30 s stock), which it reads once into its
+client object: a default, and the timeout in force, which some screens set
+for themselves and nlclient resets to the default. Discovery finds both
+fields (`SLEEP_DEFAULT_OFFSET`, `SLEEP_ACTIVE_OFFSET`) where nlclient logs
+that reset, and leaves them 0 on a build without it. nestlocal writes the
+wanted timeout in ms to `/var/run/unfr0zen/screen.timeout`, then changes its
+setting in the device bucket; on the commit that follows, the screen code
+sets the default, and the timeout in force when it was the default. With no
+file, the stock timeout stays.
+
 ## The dial's theme
 
 With customizable themes installed (gen 3), nestlocal's options carry
