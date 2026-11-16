@@ -254,6 +254,76 @@ fn registry(elf: &Elf) -> Result<Registry> {
     }
     best.ok_or_else(|| crate::Error::Device("screen registration table not found".into()))
 }
+/// The address of the one string `text` (with its NUL) in the read-only
+/// data, if it is there once.
+fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
+    let mut found = Vec::new();
+    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 2 != 0 && s.flags & 4 == 0) {
+        let data = elf.contents(section);
+        let mut at = 0;
+        while let Some(i) = data[at..].windows(text.len()).position(|w| w == text) {
+            found.push(section.address + (at + i) as u32);
+            at += i + 1;
+        }
+    }
+    match found[..] { [one] => Some(one), _ => None }
+}
+
+/// The ARM code's words, by address.
+fn code_words(elf: &Elf) -> Vec<(u32, u32)> {
+    let mut words = Vec::new();
+    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
+        let data = elf.contents(section);
+        for at in (0..data.len() / 4 * 4).step_by(4) {
+            words.push((section.address + at as u32, u32::from_le_bytes(data[at..at + 4].try_into().unwrap())));
+        }
+    }
+    words
+}
+
+/// The indexes in `words` of the instructions that complete `target`'s
+/// address in a register: a literal load (plus pc on a position-independent
+/// build), or a movw/movt pair.
+fn references(elf: &Elf, words: &[(u32, u32)], target: u32) -> Vec<usize> {
+    let mut found = Vec::new();
+    for (i, &(address, w)) in words.iter().enumerate() {
+        let window = |n: usize| i + 1..(i + n).min(words.len());
+        if w & 0xff7f_0000 == 0xe51f_0000 {
+            let pc = address + 8;
+            let literal = if w & (1 << 23) != 0 { pc.wrapping_add(w & 0xfff) } else { pc.wrapping_sub(w & 0xfff) };
+            let Ok(value) = elf.read(literal) else { continue };
+            let register = (w >> 12) & 0xf;
+            if value == target {
+                found.push(i);
+            } else if let Some(j) = window(40).find(|&j| {
+                let (at, x) = words[j];
+                x & 0xffff_0ff0 == 0xe08f_0000 && x & 0xf == register && value.wrapping_add(at + 8) == target
+            }) {
+                found.push(j);
+            }
+        } else if w & 0xfff0_0000 == 0xe300_0000 {
+            let register = (w >> 12) & 0xf;
+            let low = ((w >> 4) & 0xf000) | (w & 0xfff);
+            if let Some(j) = window(6).find(|&j| {
+                let x = words[j].1;
+                x & 0xfff0_f000 == 0xe340_0000 | register << 12 && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == target
+            }) {
+                found.push(j);
+            }
+        }
+    }
+    found
+}
+
+/// The target of the BL (or B, with `link` false) instruction `w` at `at`.
+fn branch_target(at: u32, w: u32, link: bool) -> Option<u32> {
+    if w >> 24 != if link { 0xeb } else { 0xea } {
+        return None;
+    }
+    let offset = ((w & 0xff_ffff) << 8) as i32 >> 6;
+    Some(at.wrapping_add(8).wrapping_add(offset as u32))
+}
+
 /// The client's screen timeouts: its default, client.config's sleeptimeout,
 /// and the one in force (mSleepTimeout), which it resets to the default.
 /// Found where it logs that reset: the code loads the log's format, calls
@@ -261,67 +331,24 @@ fn registry(elf: &Elf) -> Result<Registry> {
 /// [Rn, #default]`, then `str Rx, [Rn, #active]`). None on a build without
 /// that shape.
 fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
-    let format = b"client: Setting mSleepTimeout - Old: %d New: %d\0";
-    let mut found = Vec::new();
-    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 2 != 0 && s.flags & 4 == 0) {
-        let data = elf.contents(section);
-        let mut at = 0;
-        while let Some(i) = data[at..].windows(format.len()).position(|w| w == format) {
-            found.push(section.address + (at + i) as u32);
-            at += i + 1;
-        }
-    }
-    let [string] = found[..] else { return None };
+    let string = string_address(elf, b"client: Setting mSleepTimeout - Old: %d New: %d\0")?;
+    let words = code_words(elf);
     let mut pairs = Vec::new();
-    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
-        let code = elf.contents(section);
-        let word = |i: usize| code.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-        let count = code.len() / 4;
-        for i in 0..count {
-            let w = word(i).unwrap();
-            let address = section.address + i as u32 * 4;
-            // Where the format's address is formed: a literal (plus pc on a
-            // position-independent build), or a movw/movt pair.
-            let mut formed = None;
-            if w & 0xff7f_0000 == 0xe51f_0000 {
-                let pc = address + 8;
-                let literal = if w & (1 << 23) != 0 { pc.wrapping_add(w & 0xfff) } else { pc.wrapping_sub(w & 0xfff) };
-                let Ok(value) = elf.read(literal) else { continue };
-                let register = (w >> 12) & 0xf;
-                if value == string {
-                    formed = Some(i);
-                } else {
-                    formed = (i + 1..(i + 40).min(count)).find(|&j| {
-                        let x = word(j).unwrap();
-                        x & 0xffff_0ff0 == 0xe08f_0000 && x & 0xf == register
-                            && value.wrapping_add(section.address + j as u32 * 4 + 8) == string
-                    });
-                }
-            } else if w & 0xfff0_0000 == 0xe300_0000 {
-                let register = (w >> 12) & 0xf;
-                let low = ((w >> 4) & 0xf000) | (w & 0xfff);
-                formed = (i + 1..(i + 6).min(count)).find(|&j| {
-                    let x = word(j).unwrap();
-                    x & 0xfff0_f000 == 0xe340_0000 | register << 12
-                        && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == string
-                });
+    for at in references(elf, &words, string) {
+        // The logger's call, then the copy.
+        let Some(call) = (at + 1..(at + 16).min(words.len())).find(|&j| words[j].1 >> 24 == 0xeb) else { continue };
+        for j in call + 1..(call + 6).min(words.len()) {
+            let load = words[j].1;
+            if load & 0xfff0_0000 != 0xe590_0000 {
+                continue;
             }
-            let Some(at) = formed else { continue };
-            // The logger's call, then the copy.
-            let Some(call) = (at + 1..(at + 16).min(count)).find(|&j| word(j).unwrap() >> 24 == 0xeb) else { continue };
-            for j in call + 1..(call + 6).min(count) {
-                let load = word(j).unwrap();
-                if load & 0xfff0_0000 != 0xe590_0000 {
-                    continue;
-                }
-                let (value, base) = ((load >> 12) & 0xf, (load >> 16) & 0xf);
-                if let Some(store) = (j + 1..(j + 5).min(count)).map(|k| word(k).unwrap())
-                    .find(|x| x & 0xfff0_0000 == 0xe580_0000 && (x >> 12) & 0xf == value && (x >> 16) & 0xf == base)
-                {
-                    pairs.push((load & 0xfff, store & 0xfff));
-                }
-                break;
+            let (value, base) = ((load >> 12) & 0xf, (load >> 16) & 0xf);
+            if let Some(store) = (j + 1..(j + 5).min(words.len())).map(|k| words[k].1)
+                .find(|x| x & 0xfff0_0000 == 0xe580_0000 && (x >> 12) & 0xf == value && (x >> 16) & 0xf == base)
+            {
+                pairs.push((load & 0xfff, store & 0xfff));
             }
+            break;
         }
     }
     pairs.sort();
@@ -330,6 +357,103 @@ fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
         [(default, active)] if default != active => Some((default, active)),
         _ => None,
     }
+}
+
+/// The display's brightness manager, as the Brightness screen drives it:
+/// its setter (SetUserBrightnessSetting: 0 low, 1 medium, 2 high, 3 auto),
+/// what applies the setting to the backlight, the globals' field holding
+/// the manager, the setting's field and the high level's (a float, in %).
+pub(super) struct Brightness {
+    pub set: u32,
+    pub apply: u32,
+    pub globals: u32,
+    pub mode: u32,
+    pub high: u32,
+}
+
+/// Found from the setter's log of an invalid value: the setter is the
+/// nearest called function before it, storing its argument at the mode's
+/// field. Its callers (the Brightness screen) get the manager from an
+/// accessor of the globals (`ldr r0, [r0, #globals]`) and then call apply,
+/// which loads the mode and, for high (2), the level at `high`.
+fn brightness(elf: &Elf) -> Option<Brightness> {
+    let string = string_address(elf, b"brightness manager: SetUserBrightnessSetting() invalid value:%d\0")?;
+    let words = code_words(elf);
+    let index = |address: u32| words.binary_search_by_key(&address, |&(a, _)| a).ok();
+    let mut callers: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (i, &(at, w)) in words.iter().enumerate() {
+        if let Some(target) = branch_target(at, w, true) {
+            callers.entry(target).or_default().push(i);
+        }
+    }
+    let [reference] = references(elf, &words, string)[..] else { return None };
+    let referenced = words[reference].0;
+    let set = *callers.range(referenced.saturating_sub(0x100)..=referenced).next_back()?.0;
+    let start = index(set)?;
+    // str r1, [rN, #mode]
+    let mode = words[start..(start + 16).min(words.len())].iter()
+        .find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1 & 0xfff;
+    let mut found = Vec::new();
+    for &call in callers.get(&set)? {
+        // bl accessor, then (within a few) bl set.
+        let Some(accessor) = (call.saturating_sub(3)..call).rev()
+            .find_map(|j| branch_target(words[j].0, words[j].1, true)) else { continue };
+        let first = index(accessor)?;
+        let Some(globals) = words[first..(first + 4).min(words.len())].iter()
+            .find(|(_, w)| w & 0xffff_f000 == 0xe590_0000).map(|(_, w)| w & 0xfff) else { continue };
+        for j in call + 1..(call + 12).min(words.len()) {
+            let Some(apply) = branch_target(words[j].0, words[j].1, true).filter(|&t| t != accessor) else { continue };
+            if let Some(high) = high_level(&words, index(apply)?, mode) {
+                found.push((apply, globals, high));
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    match found[..] {
+        [(apply, globals, high)] => Some(Brightness { set, apply, globals, mode, high }),
+        _ => None,
+    }
+}
+
+/// The offset of the level `apply` (at `words[start]`) loads for mode 2,
+/// high, after loading the mode: through a jump table (`ldrls pc, [pc, rX,
+/// lsl #2]`) or a compare with 2 and a branch.
+fn high_level(words: &[(u32, u32)], start: usize, mode: u32) -> Option<u32> {
+    let end = (start + 24).min(words.len());
+    let index = |address: u32| words.binary_search_by_key(&address, |&(a, _)| a).ok();
+    let load = (start..end).find(|&i| words[i].1 & 0xfff0_0fff == 0xe590_0000 | mode)?;
+    let register = (words[load].1 >> 12) & 0xf;
+    // vldr s0, [rN, #imm*4] at or after `from`, following one branch.
+    let level = |from: usize| -> Option<u32> {
+        let mut i = from;
+        for _ in 0..6 {
+            let (at, x) = *words.get(i)?;
+            if x & 0x0f70_ff00 == 0x0d10_0a00 && x & (1 << 23) != 0 && x >> 28 == 0xe {
+                return Some((x & 0xff) * 4);
+            }
+            if let Some(target) = branch_target(at, x, false) {
+                i = index(target)?;
+                continue;
+            }
+            i += 1;
+        }
+        None
+    };
+    for i in load + 1..end {
+        let x = words[i].1;
+        // ldrls pc, [pc, rX, lsl #2]: the table follows the next word.
+        if x == 0x979f_f100 | register {
+            return level(index(words.get(i + 2 + 2)?.1)?);
+        }
+        // cmp rX, #2, then beq target.
+        if x == 0xe350_0002 | register << 16 {
+            let (b_at, b) = *words.get(i + 1..i + 3)?.iter().find(|(_, b)| b >> 24 == 0x0a)?;
+            let offset = ((b & 0xff_ffff) << 8) as i32 >> 6;
+            return level(index(b_at.wrapping_add(8).wrapping_add(offset as u32))?);
+        }
+    }
+    None
 }
 
 /// Each registered screen's factory, by its name.
@@ -717,6 +841,18 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let (sleep_default, sleep_active) = sleep_timeout(&elf).unwrap_or((0, 0));
     layout.insert("SLEEP_DEFAULT_OFFSET".into(), sleep_default);
     layout.insert("SLEEP_ACTIVE_OFFSET".into(), sleep_active);
+    // Without the brightness manager's shape the screen code never calls
+    // its natives (BRIGHTNESS_MODE_OFFSET 0); they are bound to the screen
+    // initializer so the payload still links.
+    let bright = brightness(&elf);
+    for (key, value) in [("BRIGHTNESS_GLOBALS_OFFSET", bright.as_ref().map_or(0, |b| b.globals)),
+                         ("BRIGHTNESS_MODE_OFFSET", bright.as_ref().map_or(0, |b| b.mode)),
+                         ("BRIGHTNESS_HIGH_OFFSET", bright.as_ref().map_or(0, |b| b.high))] {
+        layout.insert(key.into(), value);
+    }
+    let unused = api["native_screen_init"];
+    api.insert("native_set_brightness".into(), bright.as_ref().map_or(unused, |b| b.set));
+    api.insert("native_apply_brightness".into(), bright.as_ref().map_or(unused, |b| b.apply));
     downlink(&elf, &arm, &imports, &mut api, &mut layout, &mut anchors)?;
     let framebuffer = if EGL_IMPORTS.iter().all(|(key, _)| api.contains_key(*key)) {
         anchors.insert("swap_call_slot".into(), swap_call(&elf, api["native_egl_swap"])?);

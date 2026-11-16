@@ -33,6 +33,9 @@
 //!   40  how long the screen stays lit after the last interaction, seconds:
 //!       Analog Output (screen.rs)
 //!   41  whether the screen stays on: Binary Output, in SWITCHES
+//!   42  the screen's brightness, %: Analog Output (brightness.rs)
+//!   43  whether the screen's brightness is automatic: Binary Output, in
+//!       SWITCHES
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //!
@@ -118,6 +121,7 @@ const FAN_SCHEDULE_END_ENDPOINT: u8 = 9;
 const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 /// Past the stages' endpoints (STAGE_ENDPOINTS, ten of them).
 const SCREEN_TIMEOUT_ENDPOINT: u8 = 40;
+const SCREEN_BRIGHTNESS_ENDPOINT: u8 = 42;
 const STAGE_ENDPOINTS: u8 = 30;
 
 /// The switches, by endpoint: their bucket field and description.
@@ -134,6 +138,7 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (19, "filter_reminder_enabled", "Filter reminder"), // with an air filter
     (29, "fan_schedule", "Fan schedule"),               // with a fan
     (41, "screen_always_on", "Screen always on"),
+    (43, "screen_brightness_auto", "Screen brightness auto"),
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -273,7 +278,9 @@ impl Nest {
                 endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
             }
         }
-        endpoints.push(Endpoint { id: SCREEN_TIMEOUT_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
+        for id in [SCREEN_TIMEOUT_ENDPOINT, SCREEN_BRIGHTNESS_ENDPOINT] {
+            endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
+        }
         for &(id, key, _) in SWITCHES {
             let present = match key {
                 "away_temperature_low_enabled" => has("can_heat"),
@@ -458,8 +465,9 @@ impl Nest {
     }
 
     /// An Analog Output: the fan timer's minutes, the fan schedule's, its
-    /// start and end hours, the screen timeout's seconds, or the target
-    /// humidity.
+    /// start and end hours, the screen timeout's seconds, the screen's
+    /// brightness (with it automatic, the percentage stored for manual, else
+    /// full), or the target humidity.
     fn analog_output(&self, endpoint: u8, attribute: u16) -> Option<Value> {
         let dev = self.view().dev;
         let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
@@ -476,6 +484,11 @@ impl Nest {
             FAN_SCHEDULE_END_ENDPOINT => ("Fan schedule end", HOURS, 0.0, 23.0, hour("fan_duty_end_time")),
             SCREEN_TIMEOUT_ENDPOINT => ("Screen timeout", SECONDS, *crate::screen::SECONDS.start() as f32,
                                         *crate::screen::SECONDS.end() as f32, crate::screen::seconds(&dev) as f64),
+            SCREEN_BRIGHTNESS_ENDPOINT => {
+                let (percent, _) = crate::brightness::reported(&dev, self.bridge.brightness.shown());
+                ("Screen brightness", PERCENT, *crate::brightness::PERCENTS.start() as f32,
+                 *crate::brightness::PERCENTS.end() as f32, percent.unwrap_or(100) as f64)
+            }
             _ => ("Target humidity", PERCENT, 10.0, 60.0, number(dev.get("target_humidity")).unwrap_or(35.0)),
         };
         Some(match attribute {
@@ -504,6 +517,9 @@ impl Nest {
             }
             (0x0055, Value::F32(v)) if endpoint == SCREEN_TIMEOUT_ENDPOINT => {
                 self.apply("screen_timeout", &(v.round() as i64).to_string())
+            }
+            (0x0055, Value::F32(v)) if endpoint == SCREEN_BRIGHTNESS_ENDPOINT => {
+                self.apply("screen_brightness", &(v.round() as i64).to_string())
             }
             (0x0055, Value::F32(v)) => self.apply("target_humidity", &format!("{}", v.round())),
             _ => status::READ_ONLY,
@@ -710,7 +726,10 @@ impl Clusters for Nest {
             (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(description, _)| Value::Str(description.into())),
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(_, on)| Value::Bool(on)),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
-            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(bridge::switch_on(&self.view().dev, key))),
+            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(match key {
+                "screen_brightness_auto" => crate::brightness::reported(&self.view().dev, self.bridge.brightness.shown()).1,
+                _ => bridge::switch_on(&self.view().dev, key),
+            })),
             (WEATHER, a) => self.weather(a),
             _ => None,
         }
@@ -770,11 +789,11 @@ mod tests {
     fn endpoints_follow_the_equipment() {
         let ids = |n: &Nest| n.endpoints.iter().map(|e| e.id).collect::<Vec<_>>();
         let n = nest(fields!{}, fields!{"can_heat" => true});
-        assert_eq!(ids(&n), [1, 2, 5, 40, 10, 11, 12, 13, 14, 41, 20, 21, 22, 23]);
+        assert_eq!(ids(&n), [1, 2, 5, 40, 42, 10, 11, 12, 13, 14, 41, 43, 20, 21, 22, 23]);
         assert!(!n.has(1, FAN));
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 20, 21, 22, 23, 24, 26]);
+        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 42, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 43, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
     }
 
@@ -1018,6 +1037,33 @@ mod tests {
         assert_eq!(crate::screen::milliseconds(&n.view().dev), Some(crate::screen::ALWAYS_ON_MS));
         assert!(n.reported().contains(&(40, ANALOG_OUTPUT, &[0x0055][..])));
         assert!(n.reported().contains(&(41, BINARY_OUTPUT, &[0x0055][..])));
+    }
+
+    #[test]
+    fn the_screen_brightness_is_an_analog_output_and_auto_a_switch() {
+        let n = nest(fields!{}, fields!{});
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x001C), Some(Value::Str("Screen brightness".into())));
+        assert_eq!((n.read(42, ANALOG_OUTPUT, 0x0045), n.read(42, ANALOG_OUTPUT, 0x0041)),
+                   (Some(Value::F32(0.0)), Some(Value::F32(100.0))));
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(PERCENT)));
+        assert_eq!(n.read(43, BINARY_OUTPUT, 0x001C), Some(Value::Str("Screen brightness auto".into())));
+        assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.write(42, ANALOG_OUTPUT, 0x0055, Value::F32(39.6)), status::SUCCESS);
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0055), Some(Value::F32(40.0)));
+        assert_eq!(crate::brightness::request(&n.view().dev).as_deref(), Some("40"));
+        for bad in [-1.0, 101.0] {
+            assert_eq!(n.write(42, ANALOG_OUTPUT, 0x0055, Value::F32(bad)), status::INVALID_VALUE, "{bad}");
+        }
+        assert_eq!(n.write(43, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0055), Some(Value::F32(40.0)), "the manual percentage, kept");
+        assert_eq!(crate::brightness::request(&n.view().dev).as_deref(), Some("auto"));
+        // What the unit shows wins, as its state file reports it.
+        n.bridge.brightness.set_shown(Some(crate::brightness::Shown::Percent(70)));
+        assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0055), Some(Value::F32(70.0)));
+        assert!(n.reported().contains(&(42, ANALOG_OUTPUT, &[0x0055][..])));
+        assert!(n.reported().contains(&(43, BINARY_OUTPUT, &[0x0055][..])));
     }
 
     #[test]

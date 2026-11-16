@@ -58,6 +58,8 @@ pub struct Bridge {
     updates: OnceLock<Arc<crate::update::Updates>>,
     /// Motion seen lately, from nlclient's event log (occupancy.rs).
     pub occupancy: Arc<Occupancy>,
+    /// The screen brightness the unit shows (brightness.rs).
+    pub brightness: Arc<crate::brightness::Watch>,
     mqtt: OnceLock<mqtt::Client>,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     naming: Mutex<Naming>,
@@ -85,6 +87,7 @@ impl Bridge {
             sensor: OnceLock::new(),
             updates: OnceLock::new(),
             occupancy: Arc::new(Occupancy::default()),
+            brightness: Arc::new(crate::brightness::Watch::default()),
             mqtt: OnceLock::new(),
             announced: Mutex::new(None),
             naming: Mutex::new(naming),
@@ -161,6 +164,12 @@ impl Bridge {
         self.store.watch(move |o| bridge.changed(o));
         let bridge = Arc::downgrade(self);
         self.occupancy.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_state();
+            }
+        });
+        let bridge = Arc::downgrade(self);
+        self.brightness.on_change(move || {
             if let Some(bridge) = bridge.upgrade() {
                 bridge.publish_state();
             }
@@ -305,10 +314,14 @@ impl Bridge {
         self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
     }
 
-    /// The state, with what no bucket holds: occupancy and the stand-in sensor.
+    /// The state, with what no bucket holds: occupancy, the brightness the
+    /// unit shows and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = state(dev, sh);
         shown.insert("occupancy".into(), self.occupancy.occupied().into());
+        let (brightness, automatic) = crate::brightness::reported(dev, self.brightness.shown());
+        shown.insert("screen_brightness".into(), brightness.map_or(Value::Null, Value::from));
+        shown.insert("screen_brightness_auto".into(), automatic.into());
         if let Some(sensor) = self.sensor.get() {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
             shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
@@ -599,6 +612,17 @@ impl Bridge {
         number_entity(&mut add, "screen_timeout", "Screen timeout", *crate::screen::SECONDS.start() as f64,
                       *crate::screen::SECONDS.end() as f64, 5.0, "s", "");
         sw(&mut add, "screen_always_on", "Screen always on", "mdi:monitor-shimmer");
+        add("number", "screen_brightness", "Screen brightness", fields!{
+            "value_template" => tmpl("screen_brightness"),
+            "command_topic" => format!("{set}screen_brightness"),
+            "min" => num(*crate::brightness::PERCENTS.start() as f64),
+            "max" => num(*crate::brightness::PERCENTS.end() as f64),
+            "step" => num(1.0),
+            "unit_of_measurement" => "%",
+            "entity_category" => "config",
+            "icon" => "mdi:brightness-6",
+        });
+        sw(&mut add, "screen_brightness_auto", "Screen brightness auto", "mdi:brightness-auto");
         add("button", "clear_schedule", "Clear Nest schedule", fields!{
             "command_topic" => format!("{set}clear_schedule"),
             "entity_category" => "config",
@@ -1111,7 +1135,7 @@ pub mod tests {
                         "fan_schedule_start" | "fan_schedule_end" => "07:00",
                         "temperature_scale" => "F",
                         "target_humidity" => "40",
-                        "screen_timeout" => "60",
+                        "screen_timeout" | "screen_brightness" => "60",
                         "clear_schedule" => "PRESS",
                         n if n.ends_with("_enabled") => "ON",
                         "away_temperature_high" => "28",
@@ -1137,6 +1161,21 @@ pub mod tests {
     }
 
     #[test]
+    fn the_state_shows_the_brightness_the_unit_shows_else_the_fields() {
+        let b = test_bridge();
+        let dev = obj(json!({crate::brightness::PERCENT: 30, crate::brightness::AUTO: false}));
+        let shown = |b: &Bridge| { let s = b.shown(&dev, &Fields::new()); (s["screen_brightness"].clone(), s["screen_brightness_auto"].clone()) };
+        assert_eq!(shown(&b), (json!(30), json!(false)));
+        b.brightness.set_shown(Some(crate::brightness::Shown::Auto));
+        assert_eq!(shown(&b), (json!(30), json!(true)));
+        b.brightness.set_shown(Some(crate::brightness::Shown::Percent(90)));
+        assert_eq!(shown(&b), (json!(90), json!(false)));
+        assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], json!(90));
+        b.brightness.set_shown(None);
+        assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], Value::Null, "nothing set or shown");
+    }
+
+    #[test]
     fn number_entities_offer_what_their_commands_take() {
         let b = test_bridge();
         let (dev, sh) = everything();
@@ -1144,7 +1183,7 @@ pub mod tests {
         let configs = b.announced.lock().unwrap().clone().unwrap();
         let numbers: Vec<Value> = configs.iter().filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
             .map(|(_, c)| serde_json::from_str(c).unwrap()).collect();
-        assert_eq!(numbers.len(), 4);
+        assert_eq!(numbers.len(), 5);
         for c in numbers {
             let name = c["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
             let (min, max) = (c["min"].as_f64().unwrap(), c["max"].as_f64().unwrap());
