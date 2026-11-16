@@ -95,7 +95,7 @@ The version comes from `git describe --tag --always --dirty`.
   own name, which a gen 1 asks a release for to update itself:
 
   ```sh
-  cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz
+  cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-ota-diamond3-VERSION.tgz
   ```
 
   Its manifest lists every file's SHA-256, which unpacking checks. With

@@ -4,7 +4,7 @@
 //! <base>/set/update), or a bundle at a URL given instead, for a unit that
 //! cannot reach GitHub: a copy on the LAN.
 //!
-//! A release's setup bundle (unfr0zen-<device>-<tag>.tgz) goes to the
+//! A release's setup bundle (unfr0zen-ota-<device>-<tag>.tgz) goes to the
 //! engine the setup left on the unit (unfr0zen-apply update), which checks
 //! it against its manifest and the release key before running it; the unit
 //! then restarts into it. A unit with no engine (gen 1 and gen 2, set up
@@ -147,7 +147,7 @@ fn save(store: &Path, release: Option<&Release>) {
 /// The release in GitHub's description of it, with this device's bundle.
 pub fn release(description: &Value, device: &str) -> Option<Release> {
     let version = description["tag_name"].as_str()?.to_string();
-    let wanted = format!("unfr0zen-{device}-{version}.tgz");
+    let wanted = format!("unfr0zen-ota-{device}-{version}.tgz");
     let bundle = description["assets"]
         .as_array()
         .into_iter()
@@ -311,8 +311,8 @@ mod tests {
     fn set_update_takes_install_or_a_bundles_url() {
         assert_eq!(request("install\n"), Some(Request::Latest));
         assert_eq!(
-            request(" http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz "),
-            Some(Request::Url("http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz".into()))
+            request(" http://nas.lan/unfr0zen-ota-diamond3-v0.5.0.tgz "),
+            Some(Request::Url("http://nas.lan/unfr0zen-ota-diamond3-v0.5.0.tgz".into()))
         );
         assert_eq!(request("https://x/b.tgz"), Some(Request::Url("https://x/b.tgz".into())));
         assert_eq!(request("file:///tmp/b.tgz"), None);
@@ -362,7 +362,7 @@ mod tests {
             "tag_name": "v0.5.0", "html_url": "https://github.com/unfr0zen/unfr0zen/releases/tag/v0.5.0",
             "assets": [
                 {"name": "unfr0zen-macos-universal-v0.5.0.zip", "browser_download_url": "https://x/app.zip"},
-                {"name": "unfr0zen-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"},
+                {"name": "unfr0zen-ota-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"},
             ],
         });
         let gen3 = release(&description, "diamond3").unwrap();

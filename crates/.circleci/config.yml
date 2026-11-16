@@ -156,7 +156,7 @@ jobs:
                   fi
                   for device in diamond3 j49 diamond; do
                     cargo run --locked -p unfr0zen-host --bin unfr0zen-bundle -- \
-                      pack $device "$VERSION" "dist/unfr0zen-$device-$VERSION.tgz"
+                      pack $device "$VERSION" "dist/unfr0zen-ota-$device-$VERSION.tgz"
                   done
                 fi ;;
               windows-*)
