@@ -5,6 +5,7 @@
 #![recursion_limit = "256"]
 
 mod bridge;
+mod brightness;
 mod clock;
 mod cloud;
 mod commands;
@@ -233,6 +234,7 @@ async fn run(config: flags::Config) {
     // the screen timeout.
     if std::fs::create_dir_all(settings_ui::DIR).is_ok() {
         screen::republish(&store, &config.serial);
+        brightness::republish(&store, &config.serial);
         let _ = std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b"");
     }
     if !config.ntp_server.is_empty() {
@@ -271,6 +273,7 @@ async fn run(config: flags::Config) {
     }
     if let Some(bridge) = &bridge {
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());
+        brightness::watch(bridge.brightness.clone());
     }
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {

@@ -49,6 +49,15 @@ DECLARE_LAYOUT(SLEEP_DEFAULT_OFFSET);
 #define SLEEP_DEFAULT_OFFSET LAYOUT(SLEEP_DEFAULT_OFFSET)
 DECLARE_LAYOUT(SLEEP_ACTIVE_OFFSET);
 #define SLEEP_ACTIVE_OFFSET LAYOUT(SLEEP_ACTIVE_OFFSET)
+/* The display's brightness manager: its field in the globals, its setting's
+ * (0 low, 1 medium, 2 high, 3 auto) and the high level's (a float, in %,
+ * after medium's and low's); the setting 0 where discovery found none. */
+DECLARE_LAYOUT(BRIGHTNESS_GLOBALS_OFFSET);
+#define BRIGHTNESS_GLOBALS_OFFSET LAYOUT(BRIGHTNESS_GLOBALS_OFFSET)
+DECLARE_LAYOUT(BRIGHTNESS_MODE_OFFSET);
+#define BRIGHTNESS_MODE_OFFSET LAYOUT(BRIGHTNESS_MODE_OFFSET)
+DECLARE_LAYOUT(BRIGHTNESS_HIGH_OFFSET);
+#define BRIGHTNESS_HIGH_OFFSET LAYOUT(BRIGHTNESS_HIGH_OFFSET)
 /* The screen hand-over: 1 where nlclient presents through eglSwapBuffers
  * (custom_swap, the keeper thread), 2 where it pans its own fb0 mapping
  * (custom_flip, with the FB_ fields of its framebuffer object), 0 neither. */
@@ -232,6 +241,8 @@ extern void native_config_layout(void *, text_config *, int, int);
 extern int native_config_y(text_config *, void *, int, int, int);
 extern void native_config_draw(void *, void *, text_config *, int, int, int, int, int, int);
 extern void native_select(void *, int);
+extern void native_set_brightness(void *, int);
+extern void native_apply_brightness(void *);
 extern void native_scroll_target(void *, float);
 extern void native_scroll_draw(void *, void *, int);
 extern int native_style(void *);
@@ -635,13 +646,67 @@ static void apply_screen_timeout(void *globals) {
     if (WORD(client, SLEEP_ACTIVE_OFFSET) == old) WORD(client, SLEEP_ACTIVE_OFFSET) = timeout;
     WORD(client, SLEEP_DEFAULT_OFFSET) = timeout;
 }
+/* The brightness nestlocal asks for (screen.brightness: "auto", or 0 to 100
+ * %), applied once per request and nlclient, so a choice on the unit's own
+ * Brightness screen stays until the next request: a level is the high
+ * setting's, in place of its own (kept in BRIGHTNESS_HIGH, which auto puts
+ * back). What the unit shows goes to screen.brightness.state. */
+#define SCREEN_BRIGHTNESS RUN "screen.brightness"
+#define BRIGHTNESS_APPLIED RUN "screen.brightness.applied"
+#define BRIGHTNESS_STATE RUN "screen.brightness.state"
+#define BRIGHTNESS_HIGH RUN "brightness.high"
+#define BRIGHTNESS_AUTO_CODE 101
+enum { BRIGHTNESS_HIGH_MODE = 2, BRIGHTNESS_AUTO_MODE = 3 };
+union level { float percent; u32 bits; };
+static void apply_brightness(void *globals) {
+    if (!BRIGHTNESS_MODE_OFFSET) return;
+    void *manager = PTR(globals, BRIGHTNESS_GLOBALS_OFFSET);
+    if (!manager) return;
+    char text[16];
+    read_text(SCREEN_BRIGHTNESS, text, sizeof(text), "");
+    int at = 0, automatic = same_text(text, "auto");
+    u32 code = automatic ? BRIGHTNESS_AUTO_CODE : parse_number(text, &at, sizeof(text));
+    u32 applied, unused, pid = (u32)native_getpid();
+    if ((automatic || (at && !text[at] && code <= 100)) &&
+        (read_numbers(BRIGHTNESS_APPLIED, &applied) != pid || applied != code)) {
+        union level high = { .percent = FLOAT(manager, BRIGHTNESS_HIGH_OFFSET) };
+        union level original = { .bits = read_numbers(BRIGHTNESS_HIGH, &unused) };
+        if (!original.bits) {
+            original = high;
+            write_numbers(BRIGHTNESS_HIGH, original.bits, 0, 0);
+        }
+        FLOAT(manager, BRIGHTNESS_HIGH_OFFSET) = automatic ? original.percent : (float)code;
+        native_set_brightness(manager, automatic ? BRIGHTNESS_AUTO_MODE : BRIGHTNESS_HIGH_MODE);
+        native_apply_brightness(manager);
+        write_numbers(BRIGHTNESS_APPLIED, pid, code, 1);
+    }
+    /* The state: auto, or the level of the setting in force. */
+    u32 mode = WORD(manager, BRIGHTNESS_MODE_OFFSET);
+    if (mode > BRIGHTNESS_AUTO_MODE) return;
+    char state[8], shown[8];
+    unsigned int length = 4;
+    if (mode == BRIGHTNESS_AUTO_MODE) {
+        bytes_copy(state, "auto", 4);
+    } else {
+        float level = FLOAT(manager, BRIGHTNESS_HIGH_OFFSET - (BRIGHTNESS_HIGH_MODE - mode) * 4);
+        length = put_number(state, (u32)(level + 0.5f));
+    }
+    state[length] = 0;
+    read_text(BRIGHTNESS_STATE, shown, sizeof(shown), "");
+    if (same_text(state, shown)) return;
+    void *file = native_fopen(BRIGHTNESS_STATE, "w");
+    if (!file) return;
+    native_fwrite(state, 1, length, file);
+    native_fclose(file);
+}
 /* Replace the buckets' commits: each starts the keeper, takes wake requests
- * and applies the screen timeout, as every bucket change reaches one of
- * them. */
+ * and applies the screen timeout and brightness, as every bucket change
+ * reaches one of them. */
 static int after_commit(void *bucket, int result) {
     void *globals = PTR(bucket, BUCKET_GLOBALS_OFFSET);
     keeper_start(globals);
     apply_screen_timeout(globals);
+    apply_brightness(globals);
     downlink_activity(bucket);
     return result;
 }

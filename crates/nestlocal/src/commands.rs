@@ -90,11 +90,14 @@ impl Bridge {
             logf!("{from}: {name}: no {key} bucket yet");
             return Err(format!("no {key} bucket yet"));
         }
-        // nlclient takes the screen timeout from its file when the change
-        // makes it commit: the file comes first.
+        // nlclient takes the screen timeout and brightness from their files
+        // when the change makes it commit: the files come first.
         let screen = &changes[0].1;
         if bucket == "device" && (screen.contains_key(crate::screen::TIMEOUT) || screen.contains_key(crate::screen::ALWAYS_ON)) {
             crate::screen::publish_with(&self.store, &self.serial, screen);
+        }
+        if bucket == "device" && crate::brightness::changes(screen) {
+            crate::brightness::publish_with(&self.store, &self.serial, screen);
         }
         if changes.iter().any(|(key, fields)| self.display_change(key, fields)) {
             // Publish before notifying held subscribes: nlclient consumes the
@@ -238,6 +241,11 @@ impl Bridge {
 
             "screen_timeout" => device(fields!{crate::screen::TIMEOUT => crate::screen::parse_seconds(arg)?}),
             "screen_always_on" => device(fields!{crate::screen::ALWAYS_ON => on_off(arg)?}),
+            "screen_brightness" => device(crate::brightness::percent_change(crate::brightness::parse_percent(arg)?)),
+            "screen_brightness_auto" => {
+                let dev = self.store.get(&format!("device.{}", self.serial)).map(|o| o.value).unwrap_or_default();
+                device(crate::brightness::auto_change(on_off(arg)?, &dev, self.brightness.shown()))
+            }
 
             "temperature_scale" => match arg {
                 "C" | "F" => device(fields!{"temperature_scale" => arg}),

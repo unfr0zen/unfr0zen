@@ -114,6 +114,22 @@ setting in the device bucket; on the commit that follows, the screen code
 sets the default, and the timeout in force when it was the default. With no
 file, the stock timeout stays.
 
+## Screen brightness
+
+nlclient's brightness manager has a setting, low, medium, high or auto
+(`userdisplaybrightness`), and a level for each (`brightness.plist`, auto
+following the ambient light). Discovery finds it where its setter logs an
+invalid value: the setter, the code that applies the setting to the
+backlight (both called by the Brightness screen), the globals' field
+holding the manager, the setting's and the high level's fields; on a build
+without them the screen code leaves brightness alone. nestlocal writes
+`auto` or a level from 0 to 100 % to `/var/run/unfr0zen/screen.brightness`;
+on the commit its setting's change brings, a level becomes the high
+setting's, its own kept in `brightness.high` for auto to put back. Each
+request applies once per nlclient (`screen.brightness.applied`), so a
+choice on the unit's Brightness screen stays until the next one. What the
+unit shows is in `screen.brightness.state`, which nestlocal reports.
+
 ## The dial's theme
 
 With customizable themes installed (gen 3), nestlocal's options carry

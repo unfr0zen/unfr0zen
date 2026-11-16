@@ -90,7 +90,7 @@ const ea = exposes.access;
 const THERMOSTAT = 1;
 const BACKPLATE = 2;
 const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4, fan_schedule_minutes: 7, fan_schedule_start: 8,
-    fan_schedule_end: 9, screen_timeout: 40};
+    fan_schedule_end: 9, screen_timeout: 40, screen_brightness: 42};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
@@ -106,6 +106,7 @@ const SWITCHES = {
     filter_reminder: 19,
     fan_schedule: 29,
     screen_always_on: 41,
+    screen_brightness_auto: 43,
 };
 // Label, icon, description.
 const SWITCH_LABELS = {
@@ -121,6 +122,7 @@ const SWITCH_LABELS = {
     filter_reminder: ['Filter reminder', 'mdi:air-filter', 'The thermostat reminds you to change the air filter'],
     fan_schedule: ['Fan schedule', 'mdi:fan-auto', 'The fan runs part of every hour, between the schedule\'s start and end'],
     screen_always_on: ['Screen always on', 'mdi:monitor-shimmer', 'The screen stays lit (a day after the last touch)'],
+    screen_brightness_auto: ['Screen brightness auto', 'mdi:brightness-auto', 'The screen\'s brightness follows the room\'s light; off goes back to screen_brightness'],
 };
 const STATES = {
     leaf: 20,
@@ -519,6 +521,11 @@ const definition = {
                 .withValueMax(600).withValueStep(5).withCategory('config').withHomeAssistant({icon: 'mdi:monitor'})
                 .withDescription('How long the screen stays lit after the last touch'));
         }
+        if (has(device, OUTPUTS.screen_brightness)) {
+            result.push(e.numeric('screen_brightness', ea.ALL).withLabel('Screen brightness').withUnit('%').withValueMin(0)
+                .withValueMax(100).withValueStep(1).withCategory('config').withHomeAssistant({icon: 'mdi:brightness-6'})
+                .withDescription('The screen\'s brightness; setting it turns screen_brightness_auto off'));
+        }
         if (has(device, OUTPUTS.target_humidity)) {
             result.push(e.numeric('target_humidity', ea.ALL).withUnit('%').withValueMin(10).withValueMax(60)
                 .withValueStep(5).withCategory('config').withDescription('Humidity the (de)humidifier aims for'));
@@ -624,14 +631,14 @@ const definition = {
             }
         };
         for (const [name, id] of Object.entries(OUTPUTS)) {
-            if (name.startsWith('fan_schedule') || name === 'screen_timeout') {
+            if (name.startsWith('fan_schedule') || name.startsWith('screen_')) {
                 await read(id, 'genAnalogOutput');
             } else {
                 await report(id, 'genAnalogOutput', ['presentValue']);
             }
         }
         for (const [name, id] of Object.entries(SWITCHES)) {
-            if (name.startsWith('hot_water') || ['filter_reminder', 'fan_schedule', 'screen_always_on'].includes(name)) {
+            if (name.startsWith('hot_water') || name.startsWith('screen_') || ['filter_reminder', 'fan_schedule'].includes(name)) {
                 await read(id, 'genBinaryOutput');
             } else {
                 await report(id, 'genBinaryOutput', ['presentValue']);

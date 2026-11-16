@@ -6,6 +6,9 @@
    "reference_sha256": "d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52",
    "layout": {
     "ACTIVITY_QUEUE_OFFSET": 324,
+    "BRIGHTNESS_GLOBALS_OFFSET": 892,
+    "BRIGHTNESS_HIGH_OFFSET": 28,
+    "BRIGHTNESS_MODE_OFFSET": 8,
     "BUCKET_GLOBALS_OFFSET": 28,
     "COMMON_OFFSET": 164,
     "GLOBALS_TIMER_OFFSET": 188,
@@ -36,6 +39,7 @@
     "layout_wrapper": "48ae9c26702fe8c7de1e2b66f910949ca6108cc10f6ac028b8415dde3345e7a5",
     "menu_title_draw": "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
     "native_activity_client": "c2464febf08633d9c3590aeaab5e575e44f5051b0a2ef0c72c1e8c48c77b6f78",
+    "native_apply_brightness": "0ddc3bc3a1d208f8c24d98559cd17e625559e5593a92f6d3c6d812c178f0398f",
     "native_attach": "ae9c42a711a1b04a317d84b166fd93313e22c3c46669dd971a52af3a8275e7da",
     "native_config_draw": "8af16f1c0d61489ac8316474e2ae585ffd0c2d58797355ce2853730292641a0a",
     "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
@@ -63,6 +67,7 @@
     "native_scroll_draw": "2db00602dcd015c5381ac2aa8699b08e7a9d687c48c2ab2f588aa167b4f1f463",
     "native_scroll_target": "e6964dcf1b017dcbeaab7efcdee87a821948c9f0d1eb7c17db1f1cdc1febf5c7",
     "native_select": "41c0d756bc0da802cf27ce3a8b794883489b2b8a557add6e5c398de0de22d444",
+    "native_set_brightness": "2ca0b924f84520f89e02b1bb1ba8f7edec67e47a5cf1998d2e0b9657b51aaa12",
     "native_shared_commit": "d09b53e11a0cdf7a70a88fdeb94acded38161a81ca63450aacc5865da9700121",
     "native_style": "0ae5bf53a4aa76920b00b82d53725c95e2a81fd6e40551ad1afe10c11030a0aa",
     "screen_composition": "63c3f84ec48ea1bdbbda964c27fd9f986c15c10269068ce714f1502080c3bfe9",
@@ -96,6 +101,7 @@
     "layout_wrapper": [],
     "menu_title_draw": [],
     "native_activity_client": [],
+    "native_apply_brightness": [],
     "native_attach": [
      "_Znwj"
     ],
@@ -162,6 +168,9 @@
     "native_scroll_draw": [],
     "native_scroll_target": [],
     "native_select": [],
+    "native_set_brightness": [
+     "_ZN10nlSettings8SetValueEPKcS1_"
+    ],
     "native_shared_commit": [
      "_ZN8nlString5ClearEv",
      "_ZN8nlStringC1ERKS_",
@@ -187,6 +196,9 @@
    "reference_sha256": "7bc7e152ecee09ed993264f6d50c134b14a5464a3b4d294671c32f9ff1ec95e3",
    "layout": {
     "ACTIVITY_QUEUE_OFFSET": 324,
+    "BRIGHTNESS_GLOBALS_OFFSET": 916,
+    "BRIGHTNESS_HIGH_OFFSET": 28,
+    "BRIGHTNESS_MODE_OFFSET": 8,
     "BUCKET_GLOBALS_OFFSET": 28,
     "COMMON_OFFSET": 164,
     "GLOBALS_TIMER_OFFSET": 216,
@@ -217,6 +229,7 @@
     "layout_wrapper": "48ae9c26702fe8c7de1e2b66f910949ca6108cc10f6ac028b8415dde3345e7a5",
     "menu_title_draw": "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
     "native_activity_client": "aeb56ecb1cdec756869af9c63ab58fad5cbff38e80be0b1009156500cedffc4e",
+    "native_apply_brightness": "0ddc3bc3a1d208f8c24d98559cd17e625559e5593a92f6d3c6d812c178f0398f",
     "native_attach": "ae9c42a711a1b04a317d84b166fd93313e22c3c46669dd971a52af3a8275e7da",
     "native_config_draw": "8af16f1c0d61489ac8316474e2ae585ffd0c2d58797355ce2853730292641a0a",
     "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
@@ -244,6 +257,7 @@
     "native_scroll_draw": "2db00602dcd015c5381ac2aa8699b08e7a9d687c48c2ab2f588aa167b4f1f463",
     "native_scroll_target": "e6964dcf1b017dcbeaab7efcdee87a821948c9f0d1eb7c17db1f1cdc1febf5c7",
     "native_select": "41c0d756bc0da802cf27ce3a8b794883489b2b8a557add6e5c398de0de22d444",
+    "native_set_brightness": "2ca0b924f84520f89e02b1bb1ba8f7edec67e47a5cf1998d2e0b9657b51aaa12",
     "native_shared_commit": "52bcd4b286ebd854ed35be196bfb4995e3556bd2921cd2a2d47200c13f2930ff",
     "native_style": "344360535892eaf34c5c919817f675c649b6e8d0919a2a01a1b40ff934c003fd",
     "screen_composition": "63c3f84ec48ea1bdbbda964c27fd9f986c15c10269068ce714f1502080c3bfe9",
@@ -277,6 +291,7 @@
     "layout_wrapper": [],
     "menu_title_draw": [],
     "native_activity_client": [],
+    "native_apply_brightness": [],
     "native_attach": [
      "_Znwj"
     ],
@@ -343,6 +358,9 @@
     "native_scroll_draw": [],
     "native_scroll_target": [],
     "native_select": [],
+    "native_set_brightness": [
+     "_ZN10nlSettings8SetValueEPKcS1_"
+    ],
     "native_shared_commit": [
      "_ZN8nlString5ClearEv",
      "_ZN8nlStringC1ERKS_",
@@ -368,6 +386,9 @@
    "reference_sha256": "bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d",
    "layout": {
     "ACTIVITY_QUEUE_OFFSET": 420,
+    "BRIGHTNESS_GLOBALS_OFFSET": 712,
+    "BRIGHTNESS_HIGH_OFFSET": 28,
+    "BRIGHTNESS_MODE_OFFSET": 8,
     "BUCKET_GLOBALS_OFFSET": 4,
     "COMMON_OFFSET": 164,
     "GLOBALS_TIMER_OFFSET": 248,
@@ -398,6 +419,7 @@
     "layout_wrapper": "d7a54d65b955a2d36a1700b3977f0e657bd5118c2dd0333ed29173ac9477ec50",
     "menu_title_draw": "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
     "native_activity_client": "445fdc6dcaa120bf4ea5021a2e4567b98d7521597ab7c78b29c4dd041786da00",
+    "native_apply_brightness": "72aa65a9e5d2bcea54c61abfad65a4f00d0157ea78288d80ec73b2659a8f005c",
     "native_attach": "1f4294de547d4d14b513d9d7240e95e318f5f71a1ed4e3650c892f5e566dbb84",
     "native_config_draw": "0e178a537373090255bc240fbfe5cdd6627dbade9e48ed9562f9d1d403954cca",
     "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
@@ -425,6 +447,7 @@
     "native_scroll_draw": "27bf2f7facb63fb00ff2578ab7965ca26708586e90e2f44e7f4ebad6c75886f1",
     "native_scroll_target": "e4a909e00c3603eeb75473ce87248edddef50c2062e2566f778c75a6ea918ce4",
     "native_select": "ff314f988396ec75fab1d0a226e08fe0c8dbc126551cc77d7670053420dbc712",
+    "native_set_brightness": "82346d6f3723dd14a04c42c1c0645c5e45d9d5d29324a1bc2200adfb70b28861",
     "native_shared_commit": "ff6d5c823fe58da9ca666e34c5589bff9641a67db6c9e363c17e990225c42d7e",
     "native_style": "3fd6d9cccef2b827f5574bca9b844e8e855b3bb3e168ca293c913ec5cc220a94",
     "screen_composition": "d5f6810fb248f1949c6c6d1c957a12f2baec644549248da1a1c79b47794416e0",
@@ -458,6 +481,7 @@
     "layout_wrapper": [],
     "menu_title_draw": [],
     "native_activity_client": [],
+    "native_apply_brightness": [],
     "native_attach": [
      "_Znwj"
     ],
@@ -524,6 +548,9 @@
     "native_scroll_draw": [],
     "native_scroll_target": [],
     "native_select": [],
+    "native_set_brightness": [
+     "_ZN10nlSettings8SetValueEPKcS1_"
+    ],
     "native_shared_commit": [
      "_ZN8nlString5ClearEv",
      "_ZN8nlStringC1ERKS_",
@@ -549,6 +576,9 @@
    "reference_sha256": "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
    "layout": {
     "ACTIVITY_QUEUE_OFFSET": 420,
+    "BRIGHTNESS_GLOBALS_OFFSET": 656,
+    "BRIGHTNESS_HIGH_OFFSET": 28,
+    "BRIGHTNESS_MODE_OFFSET": 8,
     "BUCKET_GLOBALS_OFFSET": 4,
     "COMMON_OFFSET": 164,
     "GLOBALS_TIMER_OFFSET": 184,
@@ -579,6 +609,7 @@
     "layout_wrapper": "7ceccc6836c0f62f17ac6b4829c7d82a4ab575312bdb60f5bdf7f095ea247d68",
     "menu_title_draw": "d895c47395538af626d8bc054f9e9b9b797425ab264fc69496158bbdfab4c9b0",
     "native_activity_client": "f64f1b70a8d10042c1a41caf0eb444fadb9439923a73e5fe5ac03da9519b5d50",
+    "native_apply_brightness": "84949aac40dba9760d46547187b7e42960befa3661add30df8f268438098c7cc",
     "native_attach": "c38c43dfea632e61bfe139062e1873ecc4e90ffc5f7f9b7b387d8e0614551b42",
     "native_config_draw": "50f38a06548352adf591cb9f462923b4a16fe8219d7c2aaafa0836f1f44df8d0",
     "native_config_invalidate": "931433f100f4690161f0c35a7b039353eba1ea6b6daaa6ef42b590fecad46248",
@@ -606,6 +637,7 @@
     "native_scroll_draw": "199dc2e30b61c980dbfa8903237a83993dec9caa27615038df7bf07e1ae865d0",
     "native_scroll_target": "27ac9a131266d43cfcc0f9bc686e02c9304266d2358ade2c54916cec1e8f4fff",
     "native_select": "3fae36e65165887294552721f2bcf41a2e800add2ba4720e3dc4e84013876bb1",
+    "native_set_brightness": "d5b41fba3da95776fa4bb52a3daba23efc7e84d93e3dd2dff557ddb656158ed0",
     "native_shared_commit": "bfbd3b26c8ab5b64ce24cb19aee3080d0b260a73271b707f1768d6faff53d23c",
     "native_style": "2f700652b1b67e6251dc39e21277290436160772493edad4745903433352425f",
     "screen_composition": "9ab72ae1d1a226f02ee705e5dbff702e045409825bc81095a718e25dabb9c54a",
@@ -639,6 +671,7 @@
     "layout_wrapper": [],
     "menu_title_draw": [],
     "native_activity_client": [],
+    "native_apply_brightness": [],
     "native_attach": [
      "_Znwj"
     ],
@@ -704,6 +737,9 @@
     "native_scroll_draw": [],
     "native_scroll_target": [],
     "native_select": [],
+    "native_set_brightness": [
+     "_ZN10nlSettings8SetValueEPKcS1_"
+    ],
     "native_shared_commit": [
      "_ZN8nlString5ClearEv",
      "_ZN8nlStringC1ERKS_",
@@ -729,6 +765,9 @@
    "reference_sha256": "3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2",
    "layout": {
     "ACTIVITY_QUEUE_OFFSET": 324,
+    "BRIGHTNESS_GLOBALS_OFFSET": 1204,
+    "BRIGHTNESS_HIGH_OFFSET": 28,
+    "BRIGHTNESS_MODE_OFFSET": 8,
     "BUCKET_GLOBALS_OFFSET": 28,
     "COMMON_OFFSET": 164,
     "GLOBALS_TIMER_OFFSET": 184,
@@ -759,6 +798,7 @@
     "layout_wrapper": "914972faee0009e564a1b0f5df63cc957c27e1933e3b57966442674d66696d99",
     "menu_title_draw": "c13d2aebf398e3f970467e53309266057dceee62e32dce0986d04a1f9bb541dd",
     "native_activity_client": "4af7dc66eebbe37f5a1c5ec4aea46323223e021cf6c88600cba0a4a1f9f4022d",
+    "native_apply_brightness": "0ddc3bc3a1d208f8c24d98559cd17e625559e5593a92f6d3c6d812c178f0398f",
     "native_attach": "bfe9b7e21ca8ec461fe636ccdd80c02d8c6071be9eafe8a766732845d59afe59",
     "native_config_draw": "b72b9a5a29ac305b1c99c03ecbccf8a5e311a21b51cd4a58d0dceb816ef80efd",
     "native_config_invalidate": "7fb88a493b22ccd2516ac7ab842aef1d3e69a77d53e169bf1da6d278b1715ab3",
@@ -786,6 +826,7 @@
     "native_scroll_draw": "a1d748ff1135d80dfd344b2b02834c5431bf84eda86e99f530f1ad48ae801323",
     "native_scroll_target": "beb9171f045a672ec60805b5c97bc6168a903e506cc6e95e60499481f4f1d8b0",
     "native_select": "5c2f146bb3679eeac046de3e213d014223e4e35261a237e1adeb4b4a86f4b636",
+    "native_set_brightness": "76feb18c242e23cf4d118e35433a5780960407841d87b1f7bee3a0896913f6c4",
     "native_shared_commit": "051a2443a57513705f4db84159864a9c7a7b0df790820bf538f1fcabd7340540",
     "native_style": "4353308e75625fd650c9a39c6496a7802ff439397839a8029922adfb77583aee",
     "screen_composition": "7946e2b222a83ea76b2940a118b439d059bf506d045b1bc388ac7fecd59f8ab2",
@@ -823,6 +864,7 @@
     "layout_wrapper": [],
     "menu_title_draw": [],
     "native_activity_client": [],
+    "native_apply_brightness": [],
     "native_attach": [
      "_Znwj"
     ],
@@ -890,6 +932,9 @@
     "native_scroll_draw": [],
     "native_scroll_target": [],
     "native_select": [],
+    "native_set_brightness": [
+     "_ZN10nlSettings8SetValueEPKcS1_"
+    ],
     "native_shared_commit": [
      "_ZN8nlString5ClearEv",
      "_ZN8nlStringC1ERKS_",
