@@ -254,6 +254,15 @@ fn registry(elf: &Elf) -> Result<Registry> {
     }
     best.ok_or_else(|| crate::Error::Device("screen registration table not found".into()))
 }
+/// Each registered screen's factory, by its name.
+pub(super) fn screen_factories(elf: &Elf) -> Result<BTreeMap<String, u32>> {
+    let table = registry(elf)?;
+    let mut factories = BTreeMap::new();
+    for (i, name) in table.names.iter().enumerate() {
+        factories.insert(name.clone(), elf.read(table.address + i as u32 * 8 + if table.code_first { 0 } else { 4 })?);
+    }
+    Ok(factories)
+}
 pub(super) fn settings(elf: &Elf) -> Result<(u32, Vec<String>)> {
     let screens: BTreeSet<_> = registry(elf)?.names.into_iter().collect();
     let mut candidates = Vec::new();

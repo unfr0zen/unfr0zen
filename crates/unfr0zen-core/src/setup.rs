@@ -438,7 +438,7 @@ fn rootfs(target: Device) -> Result<&'static Rootfs> {
 pub struct Options {
     /// From root_hash.
     pub root_hash: String,
-    /// The app's version, for the UNFR0ZEN screen to show.
+    /// The app's version, for the UNFR0ZEN settings entry to show.
     pub version: String,
     /// An empty name means DEFAULT_NTP_SERVER.
     pub ntp_server: Option<String>,
@@ -474,12 +474,12 @@ pub struct Options {
     /// Run a Heat Link model as heating a Works With Nest boiler through W1,
     /// for a radio nestlocal holds.
     pub wwn_boiler: bool,
-    /// Doom's files: the UNFR0ZEN screen offers it and nestlocal launches it.
+    /// Doom's files: the DOOM settings entry offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
     /// Customizable home screen themes (the gen 3): the theme preload and
     /// nestlocal's theme library (THEME_PRELOAD, THEME_LIBRARY), preloaded into
     /// nlclient, bound to the unit's nlclient (nlclient::theme), and offered
-    /// by nestlocal on the UNFR0ZEN screen.
+    /// by nestlocal in the THEMES settings entry.
     pub theme: Option<Overlay>,
     /// Regulate from nestlocal's virtual sensor: BLE on gen 3, or the
     /// reviewed native RCS input and Sensors selector patch on gen 1 and gen 2.
@@ -549,6 +549,11 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
     Ok(())
 }
 
+/// What builds the settings screen's undo journal: the unit's stock nlclient
+/// and the sections the settings menu shows.
+pub trait ScreenBuilder: Fn(&[u8], &[crate::nlclient::menu::Section]) -> Result<Vec<u8>> {}
+impl<F: Fn(&[u8], &[crate::nlclient::menu::Section]) -> Result<Vec<u8>>> ScreenBuilder for F {}
+
 /// Sets up host copies of the device's files in patch_root0.py's order, with
 /// every option it takes, then (unless dry_run) applies the differences on
 /// the unit and verifies them on flash. The host never parses UBIFS.
@@ -556,11 +561,12 @@ fn fetch(volume: &mut impl Volume, tree: &mut Tree, originals: &mut Originals, n
 /// nestlocal: the ARMv7 binary --mqtt and --matter install. new_pki: a key set for a
 /// unit without its own.
 /// build_screen: the settings screen's undo journal for the unit's stock
-/// nlclient, as nlclient::build makes it.
+/// nlclient, with the menu entries of the sections on, as nlclient::build
+/// makes it.
 #[allow(clippy::too_many_arguments)]
 pub fn set_up_on_device(volume: &mut impl Volume, target: Device, options: &Options, nestlocal_binary: &[u8],
                        new_pki: &mut dyn FnMut() -> Result<Pki>,
-                       dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
+                       dry_run: bool, build_screen: &dyn ScreenBuilder) -> Result<Vec<Change>> {
     set_up_owned(volume, target, options.clone(), nestlocal_binary.to_vec(), new_pki, dry_run, build_screen)
 }
 
@@ -570,7 +576,7 @@ pub fn set_up_on_device(volume: &mut impl Volume, target: Device, options: &Opti
 #[allow(clippy::too_many_arguments)]
 pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Options, nestlocal_binary: Vec<u8>,
                    new_pki: &mut dyn FnMut() -> Result<Pki>,
-                   dry_run: bool, build_screen: &dyn Fn(&[u8]) -> Result<Vec<u8>>) -> Result<Vec<Change>> {
+                   dry_run: bool, build_screen: &dyn ScreenBuilder) -> Result<Vec<Change>> {
     let rootfs = rootfs(target)?;
     // unfr0zen's programs and data go on the scratch volume, of every
     // generation, wherever the volume reaches it.
@@ -596,8 +602,14 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
     }
     // nlclient's journal carries its internet check URL too, so undo and
     // upgrades take it back with the screen.
+    // The settings menu shows an entry for each feature on.
+    let sections: Vec<_> = [(options.zigbee, crate::nlclient::menu::Section::Zigbee),
+                            (options.matter.is_some(), crate::nlclient::menu::Section::Matter),
+                            (options.theme.is_some(), crate::nlclient::menu::Section::Themes),
+                            (options.doom.is_some(), crate::nlclient::menu::Section::Doom)]
+        .into_iter().filter(|(on, _)| *on).map(|(_, section)| section).collect();
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
-        let journal = build_screen(source)?;
+        let journal = build_screen(source, &sections)?;
         let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
         let dark_theme = matches!(target, Device::Diamond | Device::J49) && options.dark_theme;
         if !options.block_cloud && !external_temperature && !dark_theme {
@@ -840,10 +852,16 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
             } else { current };
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ICON], false, false)?;
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::GLYPH], false, false)?;
+            for (glyph, _) in crate::nlclient::SECTION_GLYPHS {
+                fetch(volume, &mut tree, &mut originals, &[glyph], false, false)?;
+            }
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::VERSION], false, false)?;
             tree.insert(crate::nlclient::JOURNAL.into(), (journal, 0o600));
             tree.insert(crate::nlclient::ICON.into(), (crate::nlclient::ICON_BYTES.to_vec(), 0o644));
             tree.insert(crate::nlclient::GLYPH.into(), (crate::nlclient::GLYPH_BYTES.to_vec(), 0o644));
+            for (glyph, bytes) in crate::nlclient::SECTION_GLYPHS {
+                tree.insert(glyph.into(), (bytes.to_vec(), 0o644));
+            }
             tree.insert(crate::nlclient::VERSION.into(), (format!("unfr0zen {}\n", options.version).into_bytes(), 0o644));
             if originals.get(original_at).is_some_and(Option::is_none) {
                 tree.insert(original_to.into(), (source, 0o600));
@@ -855,9 +873,9 @@ pub fn set_up_owned(volume: &mut impl Volume, target: Device, mut options: Optio
                 return device("customizable home screen themes need an ARM ELF nlclient");
             }
             tree.remove(crate::nlclient::JOURNAL);
-            log::warn!("UNFR0ZEN screen skipped: nlclient is not an ELF executable");
+            log::warn!("Settings screens skipped: nlclient is not an ELF executable");
         }
-    } else { log::warn!("UNFR0ZEN screen skipped: nlclient is absent"); }
+    } else { log::warn!("Settings screens skipped: nlclient is absent"); }
     patch_connmand(volume, &mut tree, &mut originals, &mut directories, options.block_cloud, on_scratch)?;
     patch_boot_artwork(volume, &mut tree, &mut originals, &mut directories)?;
     // What moved to scratch leaves the root volume; backups are copied first.
@@ -1261,7 +1279,7 @@ mod tests {
         let mut volume = FakeVolume::new(Vec::new());
         let error = set_up_on_device(&mut volume, Device::Onyx, &Options::default(), b"",
             &mut || panic!("unsupported device must not create keys"), false,
-            &|_| panic!("unsupported device must not build a screen")).unwrap_err();
+            &|_, _| panic!("unsupported device must not build a screen")).unwrap_err();
         assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
         assert!(volume.commands.is_empty());
     }
@@ -1320,7 +1338,7 @@ mod tests {
                         ("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] }), ..options() };
                 let run = |volume: &mut FakeVolume, options: &Options, dry_run| set_up_on_device(
                     volume, target, options, b"", &mut no_pki, dry_run,
-                    &|source| crate::nlclient::build(source, b""));
+                    &|source, sections| crate::nlclient::build(source, b"", sections));
                 let before = volume.files.clone();
                 let before_directories = volume.directories.clone();
                 let planned = run(&mut volume, &options, true).unwrap();
@@ -1395,10 +1413,10 @@ mod tests {
     }
 
     fn set_up(volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
-        set_up_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source| {
+        set_up_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run, &|source, sections| {
             let object = std::fs::read(std::env::var_os("NLCLIENT_OBJECT").map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o")))?;
-            crate::nlclient::build(source, &object)
+            crate::nlclient::build(source, &object, sections)
         })
     }
 
@@ -1529,7 +1547,7 @@ mod tests {
         assert!(!volume.text(nestlocal::OPTIONS).contains("-themes"));
         assert!(volume.text(NESTLABS).contains(NLCLIENT_START.1) && !volume.text(NESTLABS).contains("libunfr0zen-theme"));
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
-        let error = set_up_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_| unreachable!())
+        let error = set_up_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_, _| unreachable!())
             .unwrap_err();
         assert!(error.to_string().contains("gen 3"), "{error}");
     }
@@ -1586,7 +1604,7 @@ mod tests {
             let before = volume.files.clone();
             let error = set_up_on_device(&mut volume, target,
                 &Options { external_temperature: true, ..options() }, b"ARMV7", &mut no_pki,
-                false, &|source| crate::nlclient::Patch::journal(source, source)).unwrap_err();
+                false, &|source, _| crate::nlclient::Patch::journal(source, source)).unwrap_err();
             assert!(error.to_string().contains("the external temperature requires"), "{error}");
             assert_eq!(volume.files, before);
             assert!(volume.commands.is_empty());
@@ -1614,7 +1632,7 @@ mod tests {
             volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source.clone()));
             let run = |volume: &mut FakeVolume, options: &Options, dry_run| set_up_on_device(
                 volume, Device::J49, options, b"ARMV7", &mut no_pki, dry_run,
-                &|source| crate::nlclient::build(source, &object));
+                &|source, sections| crate::nlclient::build(source, &object, sections));
             let off = Options { block_cloud, external_temperature_screen: rcs_object.clone(),
                 mqtt: Some(Mqtt { url: "broker".into(), ..Mqtt::default() }), ..options() };
             run(&mut volume, &off, false).unwrap();
@@ -1858,7 +1876,7 @@ mod tests {
         let mut made = 0;
         set_up_on_device(&mut fresh, Device::Diamond3, &Options { mqtt: Some(mqtt), ..options() }, b"ARMV7",
                         &mut || { made += 1; Ok(pki.clone()) }, false,
-                        &|source| crate::nlclient::build(source, b"")).unwrap();
+                        &|source, sections| crate::nlclient::build(source, b"", sections)).unwrap();
         assert_eq!(made, 1);
         // As Python's with_ca: the empty bundle's newline, then the CA.
         assert_eq!(fresh.files["etc/ssl/certs/ca-bundle.pem"].2, [b"\n", pki.ca.as_slice()].concat());
@@ -2192,7 +2210,7 @@ mod tests {
         }
         fn set_up(&self, volume: &mut FakeVolume, options: &Options, dry_run: bool) -> Result<Vec<Change>> {
             set_up_on_device(volume, Device::Diamond3, options, b"ARMV7", &mut no_pki, dry_run,
-                &|source| {
+                &|source, _| {
                     if source != self.stock() { return device("fake screen builder received different firmware"); }
                     Ok(self.0.borrow().clone())
                 })

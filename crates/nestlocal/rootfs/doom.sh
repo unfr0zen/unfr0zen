@@ -1,6 +1,6 @@
 #!/bin/sh
 # Plays Doom in place of the thermostat's UI, then gives the screen back:
-# nestlocal runs this when Doom is chosen on the UNFR0ZEN screen. Doom's
+# nestlocal runs this when Doom is chosen in the DOOM settings entry. Doom's
 # settings and saves are kept in /media/data/doom.
 #
 # An nlclient patched with the screen hand-over leaves its pid first in

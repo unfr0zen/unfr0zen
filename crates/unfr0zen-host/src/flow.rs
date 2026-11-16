@@ -60,9 +60,9 @@ pub struct SetupInputs {
     /// How the 3rd generation's boot ROM is entered for recovery.
     pub entry_point: EntryPoint,
     /// Customizable home screen themes (the gen 3): themes chosen on the
-    /// UNFR0ZEN screen draw the home screen's dial, in nlclient on its GPU.
+    /// THEMES settings entry draw the home screen's dial, in nlclient on its GPU.
     pub themes: bool,
-    /// Doom, launched from the UNFR0ZEN screen (through nestlocal).
+    /// Doom, launched from the DOOM settings entry (through nestlocal).
     pub doom: bool,
     /// Regulate from an external thermometer's readings: nestlocal plays a Nest
     /// Temperature Sensor.
@@ -304,11 +304,11 @@ pub(crate) fn stored_pki(directory: &Path) -> Result<Pki> {
 /// what was discovered in the run directory as nlclient.json. A build no
 /// reviewed variant names, or one the link fails on, is a sample a review
 /// needs, and the run has read it: its stock executable goes there too.
-pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8]) -> Result<Vec<u8>> + '_ {
-    move |source| {
-        log::info!("Discovering nlclient ABI and linking UNFR0ZEN settings in memory");
+pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8], &[nlclient::menu::Section]) -> Result<Vec<u8>> + '_ {
+    move |source, sections| {
+        log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens in memory");
         let path = run_dir.join("nlclient.stock");
-        match nlclient::builder::build(source, assets::CUSTOM_SCREEN) {
+        match nlclient::builder::build(source, assets::CUSTOM_SCREEN, sections) {
             Ok(built) => {
                 fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", built.manifest))?;
                 let status = built.manifest["status"].as_str().unwrap_or_default();
@@ -455,7 +455,7 @@ mod describe_tests {
     fn unknown_firmware_keeps_the_stock_nlclient_for_a_report() {
         let directory = tempfile::tempdir().unwrap();
         let stock = b"not an ARM executable";
-        let error = screen_builder(directory.path())(stock).unwrap_err().to_string();
+        let error = screen_builder(directory.path())(stock, &[]).unwrap_err().to_string();
         let saved = directory.path().join("nlclient.stock");
         assert!(error.contains(saved.to_str().unwrap()), "{error}");
         assert!(error.contains("bug report"), "{error}");

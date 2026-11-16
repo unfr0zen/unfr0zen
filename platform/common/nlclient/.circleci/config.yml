@@ -1,6 +1,6 @@
 version: 2.1
 
-# The UNFR0ZEN screen's object for the unit's nlclient, and the screen's host
+# unfr0zen's settings screens' object for the unit's nlclient, and the screens' host
 # test.
 
 jobs:

@@ -2,7 +2,7 @@
 //! which the setup installs in THEMES on the scratch volume) draw the home
 //! screen's dial inside nlclient, on its GPU, through the theme preload
 //! (platform/common/theme) and the theme library (theme_plugin.rs). This side
-//! offers them on the UNFR0ZEN screen's Themes page, keeps the choice, and
+//! offers them in the settings menu's THEMES entry, keeps the choice, and
 //! hands the library the chosen theme with the device and shared buckets.
 //! Themes are added by hand too: the catalog follows the folder as it
 //! changes, and a theme picked again, the one shown included, is loaded
@@ -37,7 +37,7 @@ use crate::{bridge, logf, settings_ui};
 /// one directory each. A scratch volume wiped since leaves only stock.
 const INSTALLED: &str = "/media/scratch/.unfr0zen/themes";
 
-/// The theme chosen on the UNFR0ZEN screen, kept across restarts.
+/// The theme chosen in the THEMES settings entry, kept across restarts.
 const CHOSEN: &str = "/media/data/nestlocal.theme";
 
 /// nlclient's own dial, offered first.
@@ -61,7 +61,7 @@ fn installed(root: &Path, name: &str) -> bool {
         && std::fs::metadata(root.join(name).join("theme.lua")).is_ok_and(|f| f.is_file() && f.len() <= SOURCE_LIMIT))
 }
 
-/// The theme `name` as the UNFR0ZEN screen shows it: the name its
+/// The theme `name` as the THEMES settings entry shows it: the name its
 /// theme.lua gives it (a `name = "..."` line), where that is one the
 /// library takes and a line of the catalog can hold, else its folder's.
 fn label(root: &Path, name: &str) -> String {
@@ -77,7 +77,7 @@ fn label(root: &Path, name: &str) -> String {
         .unwrap_or_else(|| name.to_string())
 }
 
-/// The themes the UNFR0ZEN screen offers: stock, then every theme under
+/// The themes the THEMES settings entry offers: stock, then every theme under
 /// `root` in the order its folder lists them.
 fn themes(root: &Path) -> Vec<String> {
     let mut out = vec![STOCK.to_string()];

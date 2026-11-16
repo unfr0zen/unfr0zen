@@ -221,10 +221,10 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     let post_setup = bundle.file(bundle::POST_SETUP)?.to_vec();
     drop(bundle);
     let manifest = RefCell::new(serde_json::Value::Null);
-    let build_screen = |source: &[u8]| -> Result<Vec<u8>> {
-        log::info!("Discovering nlclient ABI and linking UNFR0ZEN settings");
+    let build_screen = |source: &[u8], sections: &[nlclient::menu::Section]| -> Result<Vec<u8>> {
+        log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens");
         let stock = out.join("nlclient.stock");
-        match nlclient::builder::build(source, screen) {
+        match nlclient::builder::build(source, screen, sections) {
             Ok(built) => {
                 if built.manifest["reviewed"] == false {
                     fs::write(&stock, source)?;

@@ -8,6 +8,7 @@ mod elf;
 mod arm;
 pub mod discovery;
 pub mod builder;
+pub mod menu;
 pub mod linker;
 use std::io::Read;
 use sha2::Digest;
@@ -24,6 +25,17 @@ pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
 pub const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen.png"));
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";
 pub const GLYPH_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
+/// The other settings entries' menu glyphs, for every section.
+pub const SECTION_GLYPHS: [(&str, &[u8]); 4] = [
+    ("nestlabs/share/images/G_unfr0zen_zigbee_80px.png",
+     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/zigbee-glyph.png"))),
+    ("nestlabs/share/images/G_unfr0zen_matter_80px.png",
+     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/matter-glyph.png"))),
+    ("nestlabs/share/images/G_unfr0zen_themes_80px.png",
+     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/themes-glyph.png"))),
+    ("nestlabs/share/images/G_unfr0zen_doom_80px.png",
+     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/doom-glyph.png"))),
+];
 
 pub struct Edit { pub offset: usize, pub before: Vec<u8>, pub after: Vec<u8> }
 pub struct Patch {
@@ -126,9 +138,9 @@ impl Patch {
 
 /// Discover and link the embedded screen against the executable read from
 /// this unit. All work stays in memory; no external tools are launched.
-pub fn build(source: &[u8], object: &[u8]) -> Result<Vec<u8>> {
-    log::info!("Discovering nlclient ABI and linking UNFR0ZEN settings in memory");
-    Ok(builder::build(source, object)?.journal)
+pub fn build(source: &[u8], object: &[u8], sections: &[menu::Section]) -> Result<Vec<u8>> {
+    log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens in memory");
+    Ok(builder::build(source, object, sections)?.journal)
 }
 
 #[cfg(test)]

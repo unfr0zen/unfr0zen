@@ -14,7 +14,7 @@
 //!   (`utils/build-firmware.sh apply`) when its or unfr0zen-core's sources are newer;
 //! - Doom for --doom, built there too, and the shareware DOOM1.WAD v1.9 from
 //!   Debian's doom-wad-shareware 1.9.fixed-5 (by SHA-256, cached the same way),
-//!   with the title for the UNFR0ZEN screen's Doom page made from it.
+//!   with the title for the DOOM settings entry's page made from it.
 
 use std::env;
 use std::fs;
