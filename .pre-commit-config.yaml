@@ -1,0 +1,119 @@
+# Every formatter and linter, for CI (.circleci/lint.yml) and for a local run:
+#   pre-commit run --all-files
+# pre-commit installs each tool at the version pinned here; rustfmt comes from
+# the Rust toolchain. The submodules are not formatted, nor the patches, the
+# fonts' licenses and the goldens the nlclient tool writes. The website's HTML
+# is linted, not formatted.
+exclude: ^(.*\.patch|assets/fonts/.*|platform/common/nlclient/tests/golden/.*\.json)$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-toml
+      - id: check-yaml
+        # Home Assistant's blueprints tag their inputs (!input).
+        args: [--unsafe]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v23.1.5
+    hooks:
+      - id: clang-format
+        types_or: [c, c++]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.14.1-1
+    hooks:
+      - id: shfmt
+
+  - repo: https://github.com/JohnnyMorganz/StyLua
+    rev: v2.6.0
+    hooks:
+      - id: stylua-github
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict]
+
+  - repo: https://github.com/ComPWA/taplo-pre-commit
+    rev: v0.9.3
+    hooks:
+      - id: taplo-format
+
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.15.1
+    hooks:
+      - id: hadolint
+        # hadolint cannot parse a heredoc, which the build image's RUN steps use.
+        exclude: ^utils/ci/Dockerfile$
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.24.1
+    hooks:
+      - id: markdownlint-cli2
+
+  - repo: local
+    hooks:
+      - id: selene
+        name: selene
+        entry: selene
+        language: rust
+        types: [lua]
+        additional_dependencies: ["cli:selene:0.31.0"]
+      - id: gersemi
+        name: gersemi
+        entry: gersemi --in-place
+        language: python
+        types: [cmake]
+        additional_dependencies: [gersemi==0.29.2]
+      - id: prettier
+        name: prettier
+        entry: prettier --write --ignore-unknown
+        language: node
+        types_or: [css, javascript, json, markdown, yaml]
+        additional_dependencies: [prettier@3.10.1]
+      - id: html-validate
+        name: html-validate
+        entry: html-validate
+        language: node
+        types: [html]
+        additional_dependencies: [html-validate@11.21.1]
+      - id: biome
+        name: biome lint
+        entry: biome lint --error-on-warnings --no-errors-on-unmatched
+        language: node
+        types: [javascript]
+        additional_dependencies: ["@biomejs/biome@2.6.8"]

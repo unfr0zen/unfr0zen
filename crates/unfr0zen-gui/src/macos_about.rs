@@ -1,9 +1,9 @@
-use objc2::{define_class, sel, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::{define_class, sel, ClassType, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSImage, NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
-    NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionVersion,
+    NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion,
+    NSAboutPanelOptionCredits, NSAboutPanelOptionVersion, NSApplication, NSImage,
 };
 use objc2_foundation::{ns_string, NSAttributedString, NSDictionary, NSObject, NSString};
 
@@ -29,7 +29,10 @@ define_class!(
 pub fn install() {
     let mtm = MainThreadMarker::new().expect("eframe creates the app on the main thread");
     let app = NSApplication::sharedApplication(mtm);
-    let menu = app.mainMenu().and_then(|menu| menu.itemAtIndex(0)).and_then(|item| item.submenu())
+    let menu = app
+        .mainMenu()
+        .and_then(|menu| menu.itemAtIndex(0))
+        .and_then(|item| item.submenu())
         .expect("winit creates the application menu before the app");
     for item in menu.itemArray() {
         if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
@@ -53,9 +56,14 @@ fn options(icon: &NSImage) -> Retained<NSDictionary<NSString, AnyObject>> {
     // values respectively; all objects are retained by the dictionary.
     unsafe {
         NSDictionary::from_slices(
-            &[NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion,
-              NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionCredits, NSAboutPanelOptionVersion,
-              ns_string!("Copyright")],
+            &[
+                NSAboutPanelOptionApplicationName,
+                NSAboutPanelOptionApplicationVersion,
+                NSAboutPanelOptionApplicationIcon,
+                NSAboutPanelOptionCredits,
+                NSAboutPanelOptionVersion,
+                ns_string!("Copyright"),
+            ],
             &[&*name as &AnyObject, &*version, icon, &*credits, ns_string!(""), ns_string!("")],
         )
     }
@@ -69,7 +77,8 @@ mod tests {
 
     #[test]
     fn native_panel_has_version_icon_and_no_credits() {
-        let data = NSData::with_bytes(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen-macos.png")));
+        let data =
+            NSData::with_bytes(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/icon/unfr0zen-macos.png")));
         let icon = NSImage::initWithData(NSImage::alloc(), &data).expect("app icon decodes in AppKit");
         assert!(icon.size().width > 0.0 && icon.size().height > 0.0);
         let panel = options(&icon);

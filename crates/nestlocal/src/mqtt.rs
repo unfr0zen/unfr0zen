@@ -82,8 +82,15 @@ pub struct Options {
 }
 
 enum Request {
-    Publish { topic: String, payload: Vec<u8>, qos: u8, retain: bool },
-    Subscribe { filter: String },
+    Publish {
+        topic: String,
+        payload: Vec<u8>,
+        qos: u8,
+        retain: bool,
+    },
+    Subscribe {
+        filter: String,
+    },
     Ping,
     /// End the session and dial again at once.
     Redial(&'static str),
@@ -128,8 +135,16 @@ impl Client {
         let sent = Arc::new(AtomicU64::new(0));
         let heard = Arc::new(AtomicU64::new(0));
         let pinged = Arc::new(AtomicU64::new(0));
-        (Client { tx, connected: connected.clone(), sent: sent.clone(), heard: heard.clone(), pinged: pinged.clone() },
-         Connection { broker, options, rx, connected, sent, heard, pinged, redial: false })
+        (
+            Client {
+                tx,
+                connected: connected.clone(),
+                sent: sent.clone(),
+                heard: heard.clone(),
+                pinged: pinged.clone(),
+            },
+            Connection { broker, options, rx, connected, sent, heard, pinged, redial: false },
+        )
     }
 
     pub fn is_connected(&self) -> bool {
@@ -204,8 +219,10 @@ impl Connection {
         if self.broker.tls && self.options.tls.is_none() {
             return Err(std::io::Error::other("TLS broker, but no TLS configuration"));
         }
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((self.broker.host.as_str(), self.broker.port)))
-            .await.map_err(|_| std::io::Error::other("connect timed out"))??;
+        let tcp =
+            tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((self.broker.host.as_str(), self.broker.port)))
+                .await
+                .map_err(|_| std::io::Error::other("connect timed out"))??;
         tcp.set_nodelay(true)?;
         let Some(tls) = &self.options.tls else {
             return Ok(Box::new(tcp));
@@ -221,7 +238,8 @@ impl Connection {
         self.sent.store(unix_now(), Ordering::Relaxed);
         let mut buf = BytesMut::with_capacity(4096);
         let connack = tokio::time::timeout(CONNECT_TIMEOUT, next_packet(&mut rd, &mut buf))
-            .await.map_err(|_| std::io::Error::other("no CONNACK"))??;
+            .await
+            .map_err(|_| std::io::Error::other("no CONNACK"))??;
         match connack {
             (0x20, body) if body.len() >= 2 && body[1] == 0 => {}
             (0x20, body) if body.len() >= 2 => return Err(std::io::Error::other(refused(body[1]))),
@@ -444,13 +462,19 @@ pub mod tests {
 
     #[test]
     fn packets_round_trip() {
-        let o = Options { client_id: "nestlocal-S".into(), user: Some("u".into()), password: "p".into(),
-                          will: ("nestlocal/S/availability".into(), b"offline".to_vec()), tls: None };
+        let o = Options {
+            client_id: "nestlocal-S".into(),
+            user: Some("u".into()),
+            password: "p".into(),
+            will: ("nestlocal/S/availability".into(), b"offline".to_vec()),
+            tls: None,
+        };
         let connect = connect_packet(&o);
         assert_eq!(&connect[..2], &[0x10, connect.len() as u8 - 2]);
         assert_eq!(connect[9], 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80);
 
-        let publish = encode(Request::Publish { topic: "t/x".into(), payload: vec![b'x'; 300], qos: 1, retain: true }, 7);
+        let publish =
+            encode(Request::Publish { topic: "t/x".into(), payload: vec![b'x'; 300], qos: 1, retain: true }, 7);
         let mut buf = BytesMut::from(&publish[..]);
         let (header, body) = split_packet(&mut buf).unwrap().unwrap();
         assert_eq!(header, 0x33);
@@ -489,17 +513,32 @@ pub mod tests {
     fn publishes_as_they_arrive() {
         // QoS 0: no packet id, an empty payload allowed.
         assert_eq!(parse_publish(0x31, &[0, 1, b't']).unwrap(), ("t".into(), vec![], None));
-        assert_eq!(parse_publish(0x32, &[0, 1, b't', 0x12, 0x34, b'p']).unwrap(), ("t".into(), b"p".to_vec(), Some(0x1234)));
-        for (header, body) in [(0x30, &[][..]), (0x30, &[0][..]), (0x30, &[0, 5, b't'][..]), (0x32, &[0, 1, b't', 0x12][..])] {
+        assert_eq!(
+            parse_publish(0x32, &[0, 1, b't', 0x12, 0x34, b'p']).unwrap(),
+            ("t".into(), b"p".to_vec(), Some(0x1234))
+        );
+        for (header, body) in
+            [(0x30, &[][..]), (0x30, &[0][..]), (0x30, &[0, 5, b't'][..]), (0x32, &[0, 1, b't', 0x12][..])]
+        {
             assert!(parse_publish(header, body).is_err(), "{header:#x} {body:?}");
         }
         // Outgoing: QoS 0 carries no id, and a subscription asks for QoS 1.
-        assert_eq!(encode(Request::Publish { topic: "a".into(), payload: b"x".to_vec(), qos: 0, retain: false }, 9),
-                   vec![0x30, 4, 0, 1, b'a', b'x']);
-        assert_eq!(encode(Request::Subscribe { filter: "a/#".into() }, 0x0102), vec![0x82, 8, 1, 2, 0, 3, b'a', b'/', b'#', 1]);
+        assert_eq!(
+            encode(Request::Publish { topic: "a".into(), payload: b"x".to_vec(), qos: 0, retain: false }, 9),
+            vec![0x30, 4, 0, 1, b'a', b'x']
+        );
+        assert_eq!(
+            encode(Request::Subscribe { filter: "a/#".into() }, 0x0102),
+            vec![0x82, 8, 1, 2, 0, 3, b'a', b'/', b'#', 1]
+        );
         // Without a user, neither the user nor the password flag, nor either field.
-        let o = Options { client_id: "c".into(), user: None, password: "ignored".into(),
-                          will: ("w".into(), b"offline".to_vec()), tls: None };
+        let o = Options {
+            client_id: "c".into(),
+            user: None,
+            password: "ignored".into(),
+            will: ("w".into(), b"offline".to_vec()),
+            tls: None,
+        };
         let connect = connect_packet(&o);
         assert_eq!(connect[9], 0x02 | 0x04 | 0x08 | 0x20);
         assert!(connect.ends_with(b"\x00\x07offline"));
@@ -522,8 +561,16 @@ pub mod tests {
 
     fn connection(port: u16) -> (Client, Connection) {
         let broker = Broker::parse(&format!("tcp://127.0.0.1:{port}")).unwrap();
-        Client::new(broker, Options { client_id: "nestlocal-S".into(), user: Some("u".into()), password: "p".into(),
-                                      will: ("nestlocal/S/availability".into(), b"offline".to_vec()), tls: None })
+        Client::new(
+            broker,
+            Options {
+                client_id: "nestlocal-S".into(),
+                user: Some("u".into()),
+                password: "p".into(),
+                will: ("nestlocal/S/availability".into(), b"offline".to_vec()),
+                tls: None,
+            },
+        )
     }
 
     #[tokio::test]
@@ -542,7 +589,10 @@ pub mod tests {
         assert_eq!((header, &body[..6]), (0x10, &b"\x00\x04MQTT"[..]));
         // CONNACK, then a QoS 1 PUBLISH cut in two writes, then two QoS 0
         // ones in one.
-        let qos1 = encode(Request::Publish { topic: "nestlocal/S/set/mode".into(), payload: b"heat".to_vec(), qos: 1, retain: false }, 0x0A0B);
+        let qos1 = encode(
+            Request::Publish { topic: "nestlocal/S/set/mode".into(), payload: b"heat".to_vec(), qos: 1, retain: false },
+            0x0A0B,
+        );
         broker.write_all(&[0x20, 2, 0, 0]).await.unwrap();
         broker.write_all(&qos1[..3]).await.unwrap();
         broker.flush().await.unwrap();
@@ -558,11 +608,19 @@ pub mod tests {
         assert!(handler.connected.load(Ordering::Relaxed) && client.is_connected());
         client.publish("nestlocal/S/availability", b"online", 1, true);
         let (header, body) = next_packet(&mut broker, &mut buf).await.unwrap();
-        assert_eq!(parse_publish(header, &body).unwrap(), ("nestlocal/S/availability".into(), b"online".to_vec(), Some(1)));
+        assert_eq!(
+            parse_publish(header, &body).unwrap(),
+            ("nestlocal/S/availability".into(), b"online".to_vec(), Some(1))
+        );
         assert_eq!(header, 0x33);
-        assert_eq!(*handler.messages.lock().unwrap(), vec![
-            ("nestlocal/S/set/mode".to_string(), b"heat".to_vec()), ("a".to_string(), b"1".to_vec()), ("b".to_string(), vec![]),
-        ]);
+        assert_eq!(
+            *handler.messages.lock().unwrap(),
+            vec![
+                ("nestlocal/S/set/mode".to_string(), b"heat".to_vec()),
+                ("a".to_string(), b"1".to_vec()),
+                ("b".to_string(), vec![]),
+            ]
+        );
 
         drop(broker);
         let e = session.await.unwrap().unwrap_err();
@@ -696,8 +754,16 @@ pub mod tests {
     async fn a_tls_broker_without_a_tls_configuration_is_never_dialled() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let broker = Broker::parse(&format!("ssl://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
-        let (client, mut conn) = Client::new(broker, Options { client_id: "nestlocal-S".into(), user: Some("u".into()),
-            password: "p".into(), will: ("nestlocal/S/availability".into(), b"offline".to_vec()), tls: None });
+        let (client, mut conn) = Client::new(
+            broker,
+            Options {
+                client_id: "nestlocal-S".into(),
+                user: Some("u".into()),
+                password: "p".into(),
+                will: ("nestlocal/S/availability".into(), b"offline".to_vec()),
+                tls: None,
+            },
+        );
         let e = conn.session(&Recorder::default()).await.unwrap_err();
         assert_eq!(e.to_string(), "TLS broker, but no TLS configuration");
         assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err());
@@ -706,9 +772,11 @@ pub mod tests {
 
     #[tokio::test]
     async fn a_refused_connection_says_why() {
-        for (connack, want) in [(&[0x20, 2, 0, 4][..], "refused: bad user name or password"),
-                                (&[0x20, 2, 0, 9][..], "refused: code 9"),
-                                (&[0x90, 3, 0, 1, 0][..], "expected CONNACK")] {
+        for (connack, want) in [
+            (&[0x20, 2, 0, 4][..], "refused: bad user name or password"),
+            (&[0x20, 2, 0, 9][..], "refused: code 9"),
+            (&[0x90, 3, 0, 1, 0][..], "expected CONNACK"),
+        ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let (client, mut conn) = connection(listener.local_addr().unwrap().port());
             let handler = Recorder::default();

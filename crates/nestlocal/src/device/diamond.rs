@@ -3,10 +3,4 @@
 
 use super::Device;
 
-pub static DEVICE: Device = Device {
-    name: "diamond",
-    generation: 1,
-    radio: None,
-    ble: None,
-    display: 320,
-};
+pub static DEVICE: Device = Device { name: "diamond", generation: 1, radio: None, ble: None, display: 320 };

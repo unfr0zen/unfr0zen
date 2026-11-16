@@ -36,7 +36,9 @@ function sky.time(clock, weather)
   -- the sunset and, after midnight, the time count on from the day before.
   if set <= rise then
     set = set + DAY
-    if now < rise and now + DAY <= set then now = now + DAY end
+    if now < rise and now + DAY <= set then
+      now = now + DAY
+    end
   end
   local tw, glow = sun_times.twilight, sun_times.glow
   local daylight = math.min(smooth(now, rise, tw), 1 - smooth(now, set, tw))
@@ -92,7 +94,9 @@ end
 -- The sun, glowing, by day under a clear enough sky.
 function sky.draw_sun(gfx, time, kind)
   local shown = time.daylight * (1 - anim.clamp(kind.overcast * 1.6, 0, 1))
-  if not time.day or shown <= 0.01 then return end
+  if not time.day or shown <= 0.01 then
+    return
+  end
   local x, y = on_orbit(time.along)
   local r = sun_style.glow
   gfx:save()
@@ -106,7 +110,9 @@ end
 -- in the sky's colour at `top`..`bottom`.
 function sky.draw_moon(gfx, time, kind, size, top, bottom)
   local shown = (1 - time.daylight) * (1 - anim.clamp(kind.overcast * 1.6, 0, 1))
-  if time.day or shown <= 0.01 then return end
+  if time.day or shown <= 0.01 then
+    return
+  end
   local x, y = on_orbit(time.along)
   gfx:save()
   gfx:alpha(shown)
@@ -120,7 +126,9 @@ end
 -- Twinkling stars on clear nights, in groups that twinkle together.
 function sky.draw_stars(gfx, time, kind, now)
   local shown = (1 - time.daylight) * (1 - kind.overcast)
-  if shown <= 0.02 then return false end
+  if shown <= 0.02 then
+    return false
+  end
   for group = 1, star_style.groups do
     local twinkle = 0.65 + 0.35 * math.sin(now * star_style.twinkle * (0.7 + group * 0.3) + group * 2.1)
     gfx:save()

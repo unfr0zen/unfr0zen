@@ -8,11 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) enum Op {
     Reg(String),
     Imm(u32),
-    Mem {
-        base: String,
-        disp: i32,
-        indexed: bool,
-    },
+    Mem { base: String, disp: i32, indexed: bool },
     Other,
 }
 impl Op {
@@ -31,12 +27,7 @@ impl Op {
         }
     }
     pub fn mem(&self) -> Option<(&str, i32, bool)> {
-        if let Self::Mem {
-            base,
-            disp,
-            indexed,
-        } = self
-        {
+        if let Self::Mem { base, disp, indexed } = self {
             Some((base, *disp, *indexed))
         } else {
             None
@@ -99,36 +90,21 @@ impl<'a, 'b> Arm<'a, 'b> {
         Ok(Self { elf, cs, starts })
     }
     pub fn decode(&self, address: u32, data: &[u8]) -> Result<Vec<Ins>> {
-        let insns = self
-            .cs
-            .disasm_all(data, address as u64)
-            .map_err(|e| crate::Error::Device(e.to_string()))?;
+        let insns = self.cs.disasm_all(data, address as u64).map_err(|e| crate::Error::Device(e.to_string()))?;
         let mut result = Vec::new();
         for i in insns.iter() {
             if i.bytes().len() != 4 {
                 return device("non-ARM instruction");
             }
-            let detail = self
-                .cs
-                .insn_detail(i)
-                .map_err(|e| crate::Error::Device(e.to_string()))?;
+            let detail = self.cs.insn_detail(i).map_err(|e| crate::Error::Device(e.to_string()))?;
             let arch = detail.arch_detail();
-            let arm = arch
-                .arm()
-                .ok_or_else(|| crate::Error::Device("non-ARM detail".into()))?;
+            let arm = arch.arm().ok_or_else(|| crate::Error::Device("non-ARM detail".into()))?;
             let name = |reg| self.cs.reg_name(reg).unwrap_or_default();
-            let mut writes = detail
-                .regs_write()
-                .iter()
-                .map(|&reg| name(reg))
-                .collect::<Vec<_>>();
+            let mut writes = detail.regs_write().iter().map(|&reg| name(reg)).collect::<Vec<_>>();
             let ops = arm
                 .operands()
                 .map(|op| {
-                    if matches!(
-                        op.access,
-                        Some(AccessType::WriteOnly | AccessType::ReadWrite)
-                    ) {
+                    if matches!(op.access, Some(AccessType::WriteOnly | AccessType::ReadWrite)) {
                         if let ArmOperandType::Reg(r) = op.op_type {
                             writes.push(name(r));
                         }
@@ -140,11 +116,7 @@ impl<'a, 'b> Arm<'a, 'b> {
                             if arm.writeback() {
                                 writes.push(name(m.base()));
                             }
-                            Op::Mem {
-                                base: name(m.base()),
-                                disp: m.disp(),
-                                indexed: m.index().0 != 0,
-                            }
+                            Op::Mem { base: name(m.base()), disp: m.disp(), indexed: m.index().0 != 0 }
                         }
                         _ => Op::Other,
                     }
@@ -171,21 +143,14 @@ impl<'a, 'b> Arm<'a, 'b> {
                 .starts
                 .get(self.starts.partition_point(|&a| a <= address))
                 .and_then(|&end| end.checked_sub(address))
-                .ok_or_else(|| crate::Error::Device("missing ARM end boundary".into()))?
-                as usize,
+                .ok_or_else(|| crate::Error::Device("missing ARM end boundary".into()))? as usize,
         };
         if !(1..=0x10000).contains(&size) {
             return device("implausible ARM function length");
         }
-        let section = self
-            .elf
-            .at(address)
-            .ok_or_else(|| crate::Error::Device("ARM function outside sections".into()))?;
-        let code_bytes = bytes(
-            self.elf.contents(section),
-            (address - section.address) as usize,
-            size,
-        )?;
+        let section =
+            self.elf.at(address).ok_or_else(|| crate::Error::Device("ARM function outside sections".into()))?;
+        let code_bytes = bytes(self.elf.contents(section), (address - section.address) as usize, size)?;
         let mut code = self.decode(address, code_bytes)?;
         let mut end = address
             .checked_add(size as u32)
@@ -207,12 +172,7 @@ impl<'a, 'b> Arm<'a, 'b> {
         Ok(code)
     }
     pub fn calls(&self, address: u32) -> Result<Vec<u32>> {
-        Ok(self
-            .code(address, None)?
-            .iter()
-            .filter(|i| i.name == "bl")
-            .filter_map(|i| i.ops.first()?.imm())
-            .collect())
+        Ok(self.code(address, None)?.iter().filter(|i| i.name == "bl").filter_map(|i| i.ops.first()?.imm()).collect())
     }
     pub fn tails(&self, address: u32) -> Result<Vec<u32>> {
         let code = self.code(address, None)?;
@@ -237,11 +197,12 @@ impl<'a, 'b> Arm<'a, 'b> {
                 "movt" => {
                     if let Some(low) = pending.remove(i.ops[0].reg().unwrap()) {
                         let value = low.ops[1].imm().unwrap() | (i.ops[1].imm().unwrap() << 16);
-                        if self.elf.sections.iter().any(|s| {
-                            s.flags & 2 != 0
-                                && value >= s.address
-                                && value - s.address < s.size as u32
-                        }) {
+                        if self
+                            .elf
+                            .sections
+                            .iter()
+                            .any(|s| s.flags & 2 != 0 && value >= s.address && value - s.address < s.size as u32)
+                        {
                             halves.extend([low.address, i.address]);
                         }
                     }
@@ -257,20 +218,14 @@ impl<'a, 'b> Arm<'a, 'b> {
         for i in &code {
             let mut w = i.word;
             if w & 0x0e000000 == 0x0a000000
-                && i.ops
-                    .first()
-                    .and_then(Op::imm)
-                    .is_some_and(|t| !(address..end).contains(&t))
+                && i.ops.first().and_then(Op::imm).is_some_and(|t| !(address..end).contains(&t))
             {
                 w &= 0xff000000;
             }
             if halves.contains(&i.address) {
                 w &= !0x000f0fff;
             }
-            if i.ops
-                .iter()
-                .any(|op| op.mem().is_some_and(|(b, _, _)| b == "pc"))
-            {
+            if i.ops.iter().any(|op| op.mem().is_some_and(|(b, _, _)| b == "pc")) {
                 w &= !0x00800fff;
             }
             output.extend(w.to_le_bytes());
@@ -318,7 +273,9 @@ impl<'a, 'b> Arm<'a, 'b> {
             if !matches!(i.name.as_str(), "bl" | "b") {
                 continue;
             }
-            let Some(name) = i.ops.first().and_then(Op::imm).and_then(|t| imports.get(&t)) else { continue };
+            let Some(name) = i.ops.first().and_then(Op::imm).and_then(|t| imports.get(&t)) else {
+                continue;
+            };
             match name.as_str() {
                 "__stack_chk_fail" | "__cxa_end_cleanup" | "nlLogWithComponent" => {}
                 "_ZdlPvj" => {
@@ -404,11 +361,7 @@ impl<'a, 'b> Arm<'a, 'b> {
                     let v = o[1]
                         .mem()
                         .filter(|(b, _, _)| *b == "pc")
-                        .and_then(|(_, d, _)| {
-                            self.elf
-                                .read(i.address.wrapping_add(8).wrapping_add(d as u32))
-                                .ok()
-                        })
+                        .and_then(|(_, d, _)| self.elf.read(i.address.wrapping_add(8).wrapping_add(d as u32)).ok())
                         .map(Value::Number);
                     assign(&mut regs, &o[0], v);
                 }
@@ -427,15 +380,9 @@ impl<'a, 'b> Arm<'a, 'b> {
                     }
                 }
                 "stm" | "stmib" => {
-                    if let Some(Value::Object(base)) = o
-                        .first()
-                        .and_then(Op::reg)
-                        .and_then(|r| regs.get(r))
-                        .copied()
-                    {
+                    if let Some(Value::Object(base)) = o.first().and_then(Op::reg).and_then(|r| regs.get(r)).copied() {
                         for (n, op) in o[1..].iter().enumerate() {
-                            let offset =
-                                base + if i.name == "stmib" { 4 } else { 0 } + n as i32 * 4;
+                            let offset = base + if i.name == "stmib" { 4 } else { 0 } + n as i32 * 4;
                             if let Some(v) = value(op, &i, &regs) {
                                 stores.insert(offset, v);
                             } else {

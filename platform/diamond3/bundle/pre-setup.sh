@@ -14,7 +14,10 @@ if ! awk -v dir="$scratch" '$2 == dir { found = 1 } END { exit !found }' /proc/m
         echo "$scratch is not mounted" >&2
         exit 1
     fi
-    [ -d "$scratch" ] || { echo "the root volume has no $scratch to mount scratch on" >&2; exit 1; }
+    [ -d "$scratch" ] || {
+        echo "the root volume has no $scratch to mount scratch on" >&2
+        exit 1
+    }
     mode=rw
     [ "$UNFR0ZEN_DRY_RUN" = 1 ] && mode=ro
     mount -t ubifs -o "$mode" ubi0:scratch "$scratch"

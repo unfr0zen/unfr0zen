@@ -15,9 +15,9 @@ use regex::Regex;
 use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey};
 use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
+use rsa::sha2::Sha256;
 use rsa::signature::Verifier;
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use rsa::sha2::Sha256;
 use x509_cert::builder::{Builder, CertificateBuilder, Profile};
 use x509_cert::der::asn1::{GeneralizedTime, Ia5String, ObjectIdentifier, OctetString, UtcTime};
 use x509_cert::der::pem::LineEnding;
@@ -53,9 +53,14 @@ const MONITRC: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/ne
 /// nestlocal's options; present once nestlocal is installed.
 pub const OPTIONS: &str = "etc/nestlocal/options";
 pub const BLE_FIRMWARE: &str = "usr/share/dialog/data/firmware/nl_ble_peripheral_app_firmware.bin";
-pub const STOCK_FILES: [&str; 6] = ["etc/init.d/rcS", "etc/monitrc", "etc/init.d/networking-defines",
-                                    "etc/nestlabs/client.config", "etc/nestlabs/product.config",
-                                    "etc/ssl/certs/ca-bundle.pem"];
+pub const STOCK_FILES: [&str; 6] = [
+    "etc/init.d/rcS",
+    "etc/monitrc",
+    "etc/init.d/networking-defines",
+    "etc/nestlabs/client.config",
+    "etc/nestlabs/product.config",
+    "etc/ssl/certs/ca-bundle.pem",
+];
 /// The bundle nlclient trusts once unlocked; the gen 1 and gen 2 have none.
 pub const UNLOCK_BUNDLE: &str = "etc/ssl/certs/ca-unlock-bundle.pem";
 
@@ -86,8 +91,10 @@ pub fn check_entity_root(root: &str) -> Result<()> {
     static ROOT: LazyLock<Regex> = LazyLock::new(|| regex(r"^[a-z0-9]+(?:_[a-z0-9]+)*$"));
     let expanded = root.replace("<serial>", "0123456789abcdef");
     if !ROOT.is_match(&expanded) || expanded.len() > 64 {
-        return device(format!("entity ID root must be lowercase letters, digits and <serial>, words joined by _, \
-                               at most 64 characters: {root:?}"));
+        return device(format!(
+            "entity ID root must be lowercase letters, digits and <serial>, words joined by _, \
+                               at most 64 characters: {root:?}"
+        ));
     }
     Ok(())
 }
@@ -131,8 +138,7 @@ pub struct Matter {
 
 /// A passcode Matter accepts: 1 to 99999998, none of the trivial ones.
 pub fn check_matter_passcode(passcode: u32) -> Result<()> {
-    let trivial = [11111111, 22222222, 33333333, 44444444, 55555555, 66666666, 77777777, 88888888,
-                   12345678, 87654321];
+    let trivial = [11111111, 22222222, 33333333, 44444444, 55555555, 66666666, 77777777, 88888888, 12345678, 87654321];
     if !(1..=99_999_998).contains(&passcode) || trivial.contains(&passcode) {
         return device(format!("{passcode} is not a passcode Matter accepts (1-99999998, not a trivial one)"));
     }
@@ -171,8 +177,8 @@ impl Matter {
     /// Verhoeff check digit.
     pub fn pairing_code(&self) -> String {
         let short = u32::from(self.discriminator >> 8);
-        let digits = format!("{}{:05}{:04}", short >> 2, ((short & 3) << 14) | (self.passcode & 0x3fff),
-                             self.passcode >> 14);
+        let digits =
+            format!("{}{:05}{:04}", short >> 2, ((short & 3) << 14) | (self.passcode & 0x3fff), self.passcode >> 14);
         let code = format!("{digits}{}", verhoeff(&digits));
         format!("{}-{}-{}", &code[..4], &code[4..7], &code[7..])
     }
@@ -185,18 +191,32 @@ impl Matter {
 /// The Verhoeff check digit of a string of digits.
 fn verhoeff(digits: &str) -> u8 {
     const D: [[u8; 10]; 10] = [
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
-        [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-        [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+        [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+        [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+        [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+        [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+        [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+        [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+        [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
         [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
     ];
     const P: [[u8; 10]; 8] = [
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
-        [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-        [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+        [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+        [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+        [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+        [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+        [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+        [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
     ];
     const INV: [u8; 10] = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
-    let c = digits.bytes().rev().enumerate()
+    let c = digits
+        .bytes()
+        .rev()
+        .enumerate()
         .fold(0u8, |c, (i, b)| D[c as usize][P[(i + 1) % 8][(b - b'0') as usize] as usize]);
     INV[c as usize]
 }
@@ -204,8 +224,12 @@ fn verhoeff(digits: &str) -> u8 {
 /// nestlocal's options file: MQTT's options (or none: nestlocal's own
 /// default broker is not this unit's), Matter's and Zigbee's, the device
 /// name (None keeps the unit's), and the files they name.
-pub fn options(mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool, name: Option<&str>)
-               -> Result<(Vec<u8>, Vec<NamedFile>)> {
+pub fn options(
+    mqtt: Option<&Mqtt>,
+    matter: Option<&Matter>,
+    zigbee: bool,
+    name: Option<&str>,
+) -> Result<(Vec<u8>, Vec<NamedFile>)> {
     let (mut line, mut files) = match mqtt {
         Some(mqtt) => {
             let (options, files) = mqtt_options(mqtt)?;
@@ -232,7 +256,8 @@ pub fn mqtt_options(mqtt: &Mqtt) -> Result<(Vec<u8>, Vec<NamedFile>)> {
     static USER: LazyLock<Regex> = LazyLock::new(|| regex(r"^[A-Za-z0-9._@+-]+$"));
     let tls = mqtt.tls || mqtt.ca.is_some();
     let broker = mqtt_url(&mqtt.url)?;
-    let url = if broker.matches(':').count() == 2 { broker } else { format!("{broker}:{}", if tls { 8883 } else { 1883 }) };
+    let url =
+        if broker.matches(':').count() == 2 { broker } else { format!("{broker}:{}", if tls { 8883 } else { 1883 }) };
     // The init script word-splits the options: the user name must be one plain word.
     if let Some(user) = &mqtt.user {
         if !USER.is_match(user) {
@@ -335,15 +360,18 @@ const SENSOR_BLE_MARKER: &str = "\n<!-- unfr0zen turned BLE on for the stand-in 
 
 fn configure_matter_ble(mut text: String, enabled: bool, firmware: Option<&[u8]>) -> String {
     if text.contains(SENSOR_BLE_MARKER) {
-        text = text.replace("key=\"ble_disabled\" value=\"0\"", "key=\"ble_disabled\" value=\"1\"")
+        text = text
+            .replace("key=\"ble_disabled\" value=\"0\"", "key=\"ble_disabled\" value=\"1\"")
             .replace(SENSOR_BLE_MARKER, "");
     }
     if !enabled && text.contains(MATTER_BLE_MARKER) {
-        return text.replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
+        return text
+            .replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
             .replace(MATTER_BLE_MARKER, "");
     }
-    let supported = firmware.is_some_and(|data| crate::shell::sha256_hex(data)
-        == "f1a8be89252e1fab8d15f8e060ef5d74e7c60944b5ed4100d31f2eb4f4850315");
+    let supported = firmware.is_some_and(|data| {
+        crate::shell::sha256_hex(data) == "f1a8be89252e1fab8d15f8e060ef5d74e7c60944b5ed4100d31f2eb4f4850315"
+    });
     if enabled && supported && text.matches("key=\"ble_disabled\" value=\"0\"").count() == 1 {
         text = text.replace("key=\"ble_disabled\" value=\"0\"", "key=\"ble_disabled\" value=\"1\"");
         text.push_str(MATTER_BLE_MARKER);
@@ -356,7 +384,8 @@ fn configure_matter_ble(mut text: String, enabled: bool, firmware: Option<&[u8]>
 /// A unit that had it off gets it back when a run leaves the sensor out.
 pub fn stock_ble_on(text: &str) -> String {
     let was_off = text.contains("key=\"ble_disabled\" value=\"1\"") && !text.contains(MATTER_BLE_MARKER);
-    let mut text = text.replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
+    let mut text = text
+        .replace("key=\"ble_disabled\" value=\"1\"", "key=\"ble_disabled\" value=\"0\"")
         .replace(MATTER_BLE_MARKER, "");
     if was_off {
         text.push_str(SENSOR_BLE_MARKER);
@@ -372,15 +401,24 @@ static CERTIFICATE: LazyLock<regex::bytes::Regex> = LazyLock::new(|| {
 /// or the app's. Its subject, not its issuer, names it: the server
 /// certificate a CA signed carries the CA's name too.
 pub fn nestlocal_ca(pem: &[u8]) -> bool {
-    Certificate::from_pem(pem).ok().and_then(|cert| cert.tbs_certificate.subject.to_der().ok())
+    Certificate::from_pem(pem)
+        .ok()
+        .and_then(|cert| cert.tbs_certificate.subject.to_der().ok())
         .is_some_and(|der| der.windows(12).any(|w| w == b"nestlocal CA"))
 }
 
 /// The bundle with ca as its one nestlocal CA, after the stock certificates.
 pub fn with_ca(bundle: &[u8], ca: &[u8]) -> Vec<u8> {
-    let stock = CERTIFICATE.replace_all(bundle, |found: &regex::bytes::Captures| {
-        if nestlocal_ca(&found[0]) { Vec::new() } else { found[0].to_vec() }
-    });
+    let stock = CERTIFICATE.replace_all(
+        bundle,
+        |found: &regex::bytes::Captures| {
+            if nestlocal_ca(&found[0]) {
+                Vec::new()
+            } else {
+                found[0].to_vec()
+            }
+        },
+    );
     let mut result = stock.to_vec();
     while result.ends_with(b"\n") {
         result.pop();
@@ -410,12 +448,22 @@ fn public_key(spki: &SubjectPublicKeyInfoOwned) -> Option<RsaPublicKey> {
 /// Whether ca signed crt (SHA-256 with RSA) and key is crt's key.
 pub fn belongs_together(ca: &[u8], crt: &[u8], key: &[u8]) -> bool {
     const SHA256_WITH_RSA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.11");
-    let (Ok(authority), Ok(leaf)) = (Certificate::from_pem(ca), Certificate::from_pem(crt)) else { return false };
-    let (Some(signer), Some(served), Some(key)) = (public_key(&authority.tbs_certificate.subject_public_key_info),
-                                                   public_key(&leaf.tbs_certificate.subject_public_key_info),
-                                                   private_key(key)) else { return false };
-    let Ok(tbs) = leaf.tbs_certificate.to_der() else { return false };
-    let Some(signature) = leaf.signature.as_bytes().and_then(|bytes| Signature::try_from(bytes).ok()) else { return false };
+    let (Ok(authority), Ok(leaf)) = (Certificate::from_pem(ca), Certificate::from_pem(crt)) else {
+        return false;
+    };
+    let (Some(signer), Some(served), Some(key)) = (
+        public_key(&authority.tbs_certificate.subject_public_key_info),
+        public_key(&leaf.tbs_certificate.subject_public_key_info),
+        private_key(key),
+    ) else {
+        return false;
+    };
+    let Ok(tbs) = leaf.tbs_certificate.to_der() else {
+        return false;
+    };
+    let Some(signature) = leaf.signature.as_bytes().and_then(|bytes| Signature::try_from(bytes).ok()) else {
+        return false;
+    };
     leaf.signature_algorithm.oid == SHA256_WITH_RSA
         && leaf.tbs_certificate.issuer == authority.tbs_certificate.subject
         && VerifyingKey::<Sha256>::new(signer).verify(&tbs, &signature).is_ok()
@@ -425,11 +473,14 @@ pub fn belongs_together(ca: &[u8], crt: &[u8], key: &[u8]) -> bool {
 /// The unit's own CA, certificate and key, if they belong together.
 pub fn unit_pki(crt: Option<&[u8]>, key: Option<&[u8]>, bundle: Option<&[u8]>) -> Option<Pki> {
     let (crt, key, bundle) = (crt?, key?, bundle?);
-    CERTIFICATE.find_iter(bundle).map(|found| {
-        let mut ca = found.as_bytes().trim_ascii_end().to_vec();
-        ca.push(b'\n');
-        ca
-    }).find(|ca| nestlocal_ca(ca) && belongs_together(ca, crt, key))
+    CERTIFICATE
+        .find_iter(bundle)
+        .map(|found| {
+            let mut ca = found.as_bytes().trim_ascii_end().to_vec();
+            ca.push(b'\n');
+            ca
+        })
+        .find(|ca| nestlocal_ca(ca) && belongs_together(ca, crt, key))
         .map(|ca| Pki { ca, server_crt: crt.to_vec(), server_key: key.to_vec() })
 }
 
@@ -449,8 +500,12 @@ pub fn generate_pki() -> Result<Pki> {
     let ca_key = RsaPrivateKey::new(&mut rng, 2048).map_err(|e| failed("CA key", &e))?;
     let key = RsaPrivateKey::new(&mut rng, 2048).map_err(|e| failed("server key", &e))?;
     let validity = Validity {
-        not_before: Time::UtcTime(UtcTime::from_unix_duration(Duration::from_secs(946_684_800)).map_err(|e| failed("dates", &e))?),
-        not_after: Time::GeneralTime(GeneralizedTime::from_unix_duration(Duration::from_secs(4_102_358_400)).map_err(|e| failed("dates", &e))?),
+        not_before: Time::UtcTime(
+            UtcTime::from_unix_duration(Duration::from_secs(946_684_800)).map_err(|e| failed("dates", &e))?,
+        ),
+        not_after: Time::GeneralTime(
+            GeneralizedTime::from_unix_duration(Duration::from_secs(4_102_358_400)).map_err(|e| failed("dates", &e))?,
+        ),
     };
     let spki = |key: &RsaPrivateKey| -> Result<SubjectPublicKeyInfoOwned> {
         let der = RsaPublicKey::from(key).to_public_key_der().map_err(|e| failed("public key", &e))?;
@@ -459,13 +514,22 @@ pub fn generate_pki() -> Result<Pki> {
     let ca_name = Name::from_str("CN=nestlocal CA").map_err(|e| failed("CA name", &e))?;
     let signer = SigningKey::<Sha256>::new(ca_key.clone());
     let ca = CertificateBuilder::new(Profile::Root, serial()?, validity, ca_name.clone(), spki(&ca_key)?, &signer)
-        .map_err(|e| failed("CA", &e))?.build::<Signature>().map_err(|e| failed("CA", &e))?;
+        .map_err(|e| failed("CA", &e))?
+        .build::<Signature>()
+        .map_err(|e| failed("CA", &e))?;
     let mut leaf = CertificateBuilder::new(
         Profile::Leaf { issuer: ca_name, enable_key_agreement: false, enable_key_encipherment: true },
-        serial()?, validity, Name::from_str("CN=127.0.0.1").map_err(|e| failed("server name", &e))?, spki(&key)?, &signer,
-    ).map_err(|e| failed("server certificate", &e))?;
-    let names = vec![GeneralName::DnsName(Ia5String::new("localhost").map_err(|e| failed("server name", &e))?),
-                     GeneralName::IpAddress(OctetString::new(vec![127, 0, 0, 1]).map_err(|e| failed("server name", &e))?)];
+        serial()?,
+        validity,
+        Name::from_str("CN=127.0.0.1").map_err(|e| failed("server name", &e))?,
+        spki(&key)?,
+        &signer,
+    )
+    .map_err(|e| failed("server certificate", &e))?;
+    let names = vec![
+        GeneralName::DnsName(Ia5String::new("localhost").map_err(|e| failed("server name", &e))?),
+        GeneralName::IpAddress(OctetString::new(vec![127, 0, 0, 1]).map_err(|e| failed("server name", &e))?),
+    ];
     leaf.add_extension(&SubjectAltName(names)).map_err(|e| failed("server certificate", &e))?;
     leaf.add_extension(&ExtendedKeyUsage(vec![ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1")]))
         .map_err(|e| failed("server certificate", &e))?;
@@ -487,8 +551,15 @@ pub struct Overlay {
 
 /// The nestlocal overlay for a unit, from its own stock files (contents and
 /// mode); the files it edits keep the unit's mode.
-pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqtt>, matter: Option<&Matter>, zigbee: bool,
-               name: Option<&str>, binary: Vec<u8>, pki: &Pki) -> Result<Overlay> {
+pub fn overlay(
+    stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>,
+    mqtt: Option<&Mqtt>,
+    matter: Option<&Matter>,
+    zigbee: bool,
+    name: Option<&str>,
+    binary: Vec<u8>,
+    pki: &Pki,
+) -> Result<Overlay> {
     let text = |name: &str| -> Result<String> {
         let (data, _) = stock(name).map_or_else(|| device(format!("{name} is missing from the unit")), Ok)?;
         String::from_utf8(data).or_else(|_| device(format!("{name} is not text")))
@@ -504,8 +575,11 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
         }
     };
     let (options, secrets) = options(mqtt, matter, zigbee, name)?;
-    let product = configure_matter_ble(edit_product_config(&text("etc/nestlabs/product.config")?)?,
-        matter.is_some(), stock(BLE_FIRMWARE).map(|(data, _)| data).as_deref());
+    let product = configure_matter_ble(
+        edit_product_config(&text("etc/nestlabs/product.config")?)?,
+        matter.is_some(),
+        stock(BLE_FIRMWARE).map(|(data, _)| data).as_deref(),
+    );
     let mut files = vec![
         ("nestlabs/sbin/nestlocal".to_string(), 0o755, binary),
         ("etc/nestlocal/server.crt".to_string(), 0o644, pki.server_crt.clone()),
@@ -515,16 +589,29 @@ pub fn overlay(stock: impl Fn(&str) -> Option<(Vec<u8>, u32)>, mqtt: Option<&Mqt
         ("etc/init.d/nestlocal".to_string(), 0o755, INIT.to_vec()),
         ("etc/monit.d/nestlocal.monitrc".to_string(), 0o600, MONITRC.to_vec()),
         ("etc/init.d/rcS".to_string(), mode("etc/init.d/rcS", 0o750), edit_rcs(&text("etc/init.d/rcS")?)?.into_bytes()),
-        ("etc/monitrc".to_string(), mode("etc/monitrc", 0o600), edit_monitrc(&text("etc/monitrc")?, zigbee)?.into_bytes()),
-        ("etc/init.d/networking-defines".to_string(), mode("etc/init.d/networking-defines", 0o644),
-         edit_networking_defines(&text("etc/init.d/networking-defines")?, zigbee)?.into_bytes()),
-        ("etc/nestlabs/client.config".to_string(), mode("etc/nestlabs/client.config", 0o644),
-         edit_client_config(&text("etc/nestlabs/client.config")?)?.into_bytes()),
-        ("etc/nestlabs/product.config".to_string(), mode("etc/nestlabs/product.config", 0o644),
-         product.into_bytes()),
+        (
+            "etc/monitrc".to_string(),
+            mode("etc/monitrc", 0o600),
+            edit_monitrc(&text("etc/monitrc")?, zigbee)?.into_bytes(),
+        ),
+        (
+            "etc/init.d/networking-defines".to_string(),
+            mode("etc/init.d/networking-defines", 0o644),
+            edit_networking_defines(&text("etc/init.d/networking-defines")?, zigbee)?.into_bytes(),
+        ),
+        (
+            "etc/nestlabs/client.config".to_string(),
+            mode("etc/nestlabs/client.config", 0o644),
+            edit_client_config(&text("etc/nestlabs/client.config")?)?.into_bytes(),
+        ),
+        ("etc/nestlabs/product.config".to_string(), mode("etc/nestlabs/product.config", 0o644), product.into_bytes()),
     ];
-    let bundle = |path: &str| stock(path).map(|(bundle, _)| (path.to_string(), mode(path, 0o644), with_ca(&bundle, &pki.ca)));
-    files.push(bundle("etc/ssl/certs/ca-bundle.pem").map_or_else(|| device("etc/ssl/certs/ca-bundle.pem is missing from the unit"), Ok)?);
+    let bundle =
+        |path: &str| stock(path).map(|(bundle, _)| (path.to_string(), mode(path, 0o644), with_ca(&bundle, &pki.ca)));
+    files.push(
+        bundle("etc/ssl/certs/ca-bundle.pem")
+            .map_or_else(|| device("etc/ssl/certs/ca-bundle.pem is missing from the unit"), Ok)?,
+    );
     files.extend(bundle(UNLOCK_BUNDLE));
     files.extend(secrets);
     Ok(Overlay { files, directories: vec![("etc/nestlocal".to_string(), 0o755)] })
@@ -554,13 +641,16 @@ mod tests {
         let legacy = dir.join("legacy");
         std::fs::write(&installed, "-mqtt tcp://broker:1883 -zigbee\n").unwrap();
         std::fs::write(&legacy, "-mqtt tcp://10.0.2.100:1883\n").unwrap();
-        let script = std::str::from_utf8(INIT).unwrap().split("case ").next().unwrap()
+        let script = std::str::from_utf8(INIT)
+            .unwrap()
+            .split("case ")
+            .next()
+            .unwrap()
             .replace("/etc/nestlocal/options", installed.to_str().unwrap())
             .replace("/media/system-config/nestlocal.options", legacy.to_str().unwrap());
         let selected = || {
-            let output = std::process::Command::new("sh").arg("-c")
-                .arg(format!("{script}\ncat \"$OPTIONS\""))
-                .output().unwrap();
+            let output =
+                std::process::Command::new("sh").arg("-c").arg(format!("{script}\ncat \"$OPTIONS\"")).output().unwrap();
             assert!(output.status.success());
             String::from_utf8(output.stdout).unwrap()
         };
@@ -586,8 +676,12 @@ mod tests {
         }
         assert_eq!(Matter::from_pairing_code(" 1559 813 5763 ").unwrap().passcode, 58596013);
         // A mistyped digit, a short code, letters, and a code whose passcode Matter forbids.
-        for bad in ["1559-813-5764", "1559-813-576", "1559-81a-5763",
-                    &Matter { passcode: 12345678, discriminator: 0 }.pairing_code()] {
+        for bad in [
+            "1559-813-5764",
+            "1559-813-576",
+            "1559-81a-5763",
+            &Matter { passcode: 12345678, discriminator: 0 }.pairing_code(),
+        ] {
             assert!(Matter::from_pairing_code(bad).is_err(), "{bad} accepted");
         }
     }
@@ -598,12 +692,16 @@ mod tests {
         let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
         let line = |mqtt, matter| String::from_utf8(options(mqtt, matter, false, None).unwrap().0).unwrap();
         assert_eq!(line(Some(&mqtt), None), "-mqtt tcp://broker:1883\n");
-        assert_eq!(line(Some(&mqtt), Some(&matter)),
-                   "-mqtt tcp://broker:1883 -matter -matter-passcode 34970112 -matter-discriminator 1234\n");
+        assert_eq!(
+            line(Some(&mqtt), Some(&matter)),
+            "-mqtt tcp://broker:1883 -matter -matter-passcode 34970112 -matter-discriminator 1234\n"
+        );
         // Matter alone: no broker at all, not nestlocal's default one.
         assert_eq!(line(None, Some(&matter)), "-mqtt= -matter -matter-passcode 34970112 -matter-discriminator 1234\n");
-        assert_eq!(String::from_utf8(options(Some(&mqtt), None, true, None).unwrap().0).unwrap(),
-                   "-mqtt tcp://broker:1883 -zigbee\n");
+        assert_eq!(
+            String::from_utf8(options(Some(&mqtt), None, true, None).unwrap().0).unwrap(),
+            "-mqtt tcp://broker:1883 -zigbee\n"
+        );
     }
 
     #[test]
@@ -627,7 +725,10 @@ mod tests {
         assert!(edit_rcs(&format!("a\n{RCS_LINE}b\n{RCS_BEFORE}")).is_err());
         assert!(edit_rcs(&format!("{RCS_BEFORE}{RCS_BEFORE}")).is_err());
         assert!(edit_client_config(&format!("{STOCK_URL}\n{STOCK_URL}\n")).is_err());
-        assert!(edit_client_config("<a key=\"cloudregisterurl\" value=\"a\"/><a key=\"cloudregisterurl\" value=\"b\"/>").is_err());
+        assert!(edit_client_config(
+            "<a key=\"cloudregisterurl\" value=\"a\"/><a key=\"cloudregisterurl\" value=\"b\"/>"
+        )
+        .is_err());
         assert!(edit_product_config("").is_err());
         assert!(edit_monitrc(&format!("{MONIT_LINE}{MONIT_LINE}"), false).is_err());
     }
@@ -693,8 +794,9 @@ mod tests {
 
     #[test]
     fn broker_urls_get_their_default_port() {
-        let options = |url: &str, tls| String::from_utf8(mqtt_options(&Mqtt { url: url.into(), tls, ..Mqtt::default() })
-            .unwrap().0).unwrap();
+        let options = |url: &str, tls| {
+            String::from_utf8(mqtt_options(&Mqtt { url: url.into(), tls, ..Mqtt::default() }).unwrap().0).unwrap()
+        };
         assert_eq!(options("mqtt.lan", false), "-mqtt tcp://mqtt.lan:1883\n");
         assert_eq!(options("mqtt.lan", true), "-mqtt tcp://mqtt.lan:8883 -mqtt-tls\n");
         assert_eq!(options("tcp://10.0.0.2:1884", false), "-mqtt tcp://10.0.0.2:1884\n");
@@ -706,8 +808,18 @@ mod tests {
         for good in ["broker", "mqtt.lan", "10.0.0.2", "homeassistant.local.", &format!("{}.lan", "a".repeat(63))] {
             assert!(mqtt_url(good).is_ok(), "{good:?}");
         }
-        for bad in ["", "mqtt..lan", ".lan", "-mqtt.lan", "mqtt-.lan", &format!("{}.lan", "a".repeat(64)),
-                    &"a.".repeat(127), "mqtt lan", "mqtt_lan", "mqtt://lan"] {
+        for bad in [
+            "",
+            "mqtt..lan",
+            ".lan",
+            "-mqtt.lan",
+            "mqtt-.lan",
+            &format!("{}.lan", "a".repeat(64)),
+            &"a.".repeat(127),
+            "mqtt lan",
+            "mqtt_lan",
+            "mqtt://lan",
+        ] {
             assert!(mqtt_url(bad).is_err(), "{bad:?}");
         }
     }
@@ -723,11 +835,19 @@ mod tests {
 
     #[test]
     fn password_and_ca_go_in_their_own_files() {
-        let mqtt = Mqtt { url: "broker".into(), user: Some("u".into()), password: Some("p".into()),
-                          ca: Some(STOCK_CA.to_vec()), ..Mqtt::default() };
+        let mqtt = Mqtt {
+            url: "broker".into(),
+            user: Some("u".into()),
+            password: Some("p".into()),
+            ca: Some(STOCK_CA.to_vec()),
+            ..Mqtt::default()
+        };
         let (options, files) = mqtt_options(&mqtt).unwrap();
-        assert_eq!(String::from_utf8(options).unwrap(), "-mqtt tcp://broker:8883 -mqtt-user u -mqtt-password-file \
-            /etc/nestlocal/mqtt.password -mqtt-tls -mqtt-ca /etc/nestlocal/mqtt-ca.pem\n");
+        assert_eq!(
+            String::from_utf8(options).unwrap(),
+            "-mqtt tcp://broker:8883 -mqtt-user u -mqtt-password-file \
+            /etc/nestlocal/mqtt.password -mqtt-tls -mqtt-ca /etc/nestlocal/mqtt-ca.pem\n"
+        );
         assert_eq!(files[0], (PASSWORD_FILE.into(), 0o600, b"p\n".to_vec()));
         assert!(mqtt_options(&Mqtt { password: Some("p".into()), ..Mqtt::default() }).is_err());
         assert!(mqtt_options(&Mqtt { url: "b".into(), user: Some("two words".into()), ..Mqtt::default() }).is_err());
@@ -737,8 +857,10 @@ mod tests {
     fn home_assistant_names() {
         let mqtt = Mqtt { url: "broker".into(), entity_root: Some("nest_famrm".into()), ..Mqtt::default() };
         let (line, files) = options(Some(&mqtt), None, false, Some(" Nest FamRm ")).unwrap();
-        assert_eq!(String::from_utf8(line).unwrap(),
-                   "-mqtt tcp://broker:1883 -ha-entity-root nest_famrm -device-name-file /etc/nestlocal/device-name\n");
+        assert_eq!(
+            String::from_utf8(line).unwrap(),
+            "-mqtt tcp://broker:1883 -ha-entity-root nest_famrm -device-name-file /etc/nestlocal/device-name\n"
+        );
         assert_eq!(files, [(NAME_FILE.into(), 0o644, b"Nest FamRm\n".to_vec())]);
         // Matter takes the name alone too.
         let matter = Matter::from_pairing_code(DEFAULT_MATTER_CODE).unwrap();
@@ -751,12 +873,26 @@ mod tests {
             assert!(mqtt_options(&Mqtt { entity_root: Some(root.into()), ..mqtt.clone() }).is_ok(), "{root:?}");
         }
         assert!(mqtt_options(&Mqtt { entity_root: Some("a".repeat(64)), ..mqtt.clone() }).is_ok());
-        assert!(mqtt_options(&Mqtt { entity_root: Some(format!("{}_<serial>", "a".repeat(47))), ..mqtt.clone() }).is_ok());
-        for root in ["Nest", "nest famrm", "nest__famrm", "_nest", "nest_", "nest-famrm", "", "nest<serial", "nest_<SERIAL>",
-                     &"a".repeat(65), &format!("{}_<serial>", "a".repeat(48))] {
+        assert!(
+            mqtt_options(&Mqtt { entity_root: Some(format!("{}_<serial>", "a".repeat(47))), ..mqtt.clone() }).is_ok()
+        );
+        for root in [
+            "Nest",
+            "nest famrm",
+            "nest__famrm",
+            "_nest",
+            "nest_",
+            "nest-famrm",
+            "",
+            "nest<serial",
+            "nest_<SERIAL>",
+            &"a".repeat(65),
+            &format!("{}_<serial>", "a".repeat(48)),
+        ] {
             assert!(mqtt_options(&Mqtt { entity_root: Some(root.into()), ..mqtt.clone() }).is_err(), "{root:?}");
         }
-        for name in ["", "  ", "two\nlines", &"x".repeat(33), &format!("{}<serial>", "x".repeat(17)), &"é".repeat(17)] {
+        for name in ["", "  ", "two\nlines", &"x".repeat(33), &format!("{}<serial>", "x".repeat(17)), &"é".repeat(17)]
+        {
             assert!(options(Some(&mqtt), None, false, Some(name)).is_err(), "{name:?}");
         }
     }
@@ -766,7 +902,10 @@ mod tests {
             ("etc/init.d/rcS".into(), b"a\n${INITDIR}/nestlabs start\nb\n".to_vec()),
             ("etc/monitrc".into(), format!("set daemon 30\n{WPANTUND_LINE}").into_bytes()),
             ("etc/init.d/networking-defines".into(), WITH_WPAN.as_bytes().to_vec()),
-            ("etc/nestlabs/client.config".into(), format!("<a key=\"cloudregisterurl\" value=\"{STOCK_URL}\"/>\n").into_bytes()),
+            (
+                "etc/nestlabs/client.config".into(),
+                format!("<a key=\"cloudregisterurl\" value=\"{STOCK_URL}\"/>\n").into_bytes(),
+            ),
             ("etc/nestlabs/product.config".into(), b"<a key=\"usephoenix\" value=\"1\"/>\n".to_vec()),
             ("etc/ssl/certs/ca-bundle.pem".into(), STOCK_CA.to_vec()),
             ("etc/ssl/certs/ca-unlock-bundle.pem".into(), STOCK_CA.to_vec()),
@@ -778,7 +917,16 @@ mod tests {
         let (one, _) = pkis();
         let mqtt = Mqtt { url: "broker".into(), ..Mqtt::default() };
         let mut files = stock();
-        let first = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
+        let first = overlay(
+            |name| files.get(name).map(|data| (data.clone(), 0o640)),
+            Some(&mqtt),
+            None,
+            true,
+            None,
+            b"ARMV7".to_vec(),
+            one,
+        )
+        .unwrap();
         let by_name: BTreeMap<_, _> = first.files.iter().map(|(n, m, d)| (n.clone(), (*m, d.clone()))).collect();
         let rcs = String::from_utf8(by_name["etc/init.d/rcS"].1.clone()).unwrap();
         assert!(rcs.find(RCS_LINE).unwrap() < rcs.find(RCS_BEFORE).unwrap());
@@ -793,7 +941,16 @@ mod tests {
         }
         assert!(!String::from_utf8_lossy(&by_name["etc/monitrc"].1).contains(WPANTUND_LINE));
         assert_eq!(by_name["etc/init.d/networking-defines"].1, WITHOUT_WPAN.as_bytes());
-        let again = overlay(|name| files.get(name).map(|data| (data.clone(), 0o640)), Some(&mqtt), None, true, None, b"ARMV7".to_vec(), one).unwrap();
+        let again = overlay(
+            |name| files.get(name).map(|data| (data.clone(), 0o640)),
+            Some(&mqtt),
+            None,
+            true,
+            None,
+            b"ARMV7".to_vec(),
+            one,
+        )
+        .unwrap();
         assert_eq!(again.files, first.files);
     }
 
@@ -802,7 +959,15 @@ mod tests {
         let (pki, _) = pkis();
         let mut files = stock();
         let make = |files: &BTreeMap<String, Vec<u8>>| {
-            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), pki)
+            overlay(
+                |name| files.get(name).map(|data| (data.clone(), 0o644)),
+                None,
+                None,
+                false,
+                None,
+                b"ARMV7".to_vec(),
+                pki,
+            )
         };
         let seed = |overlay: Overlay| overlay.files.into_iter().find(|(name, _, _)| name == RANDOM_SEED).unwrap().2;
         assert_ne!(seed(make(&files).unwrap()), seed(make(&files).unwrap()));
@@ -817,12 +982,25 @@ mod tests {
         let (one, _) = pkis();
         let mut files = stock();
         files.remove(UNLOCK_BUNDLE);
-        files.insert("etc/nestlabs/client.config".into(),
-                     b"<a key=\"cloudregisterurl\" value=\"http://homeassistant.local:9543/entry\"/>\n".to_vec());
-        let made = overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, b"ARMV7".to_vec(), one).unwrap();
+        files.insert(
+            "etc/nestlabs/client.config".into(),
+            b"<a key=\"cloudregisterurl\" value=\"http://homeassistant.local:9543/entry\"/>\n".to_vec(),
+        );
+        let made = overlay(
+            |name| files.get(name).map(|data| (data.clone(), 0o644)),
+            None,
+            None,
+            false,
+            None,
+            b"ARMV7".to_vec(),
+            one,
+        )
+        .unwrap();
         let by_name: BTreeMap<_, _> = made.files.iter().map(|(n, _, d)| (n.clone(), d.clone())).collect();
         assert!(!by_name.contains_key(UNLOCK_BUNDLE));
-        assert_eq!(String::from_utf8_lossy(&by_name["etc/nestlabs/client.config"]),
-                   format!("<a key=\"cloudregisterurl\" value=\"{LOCAL_URL}\"/>\n"));
+        assert_eq!(
+            String::from_utf8_lossy(&by_name["etc/nestlabs/client.config"]),
+            format!("<a key=\"cloudregisterurl\" value=\"{LOCAL_URL}\"/>\n")
+        );
     }
 }

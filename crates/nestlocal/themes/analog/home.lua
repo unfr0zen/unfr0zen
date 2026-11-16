@@ -55,12 +55,21 @@ local function draw_cover(g, c, t)
   local minor, major = {}, {}
   each_tick(t, scale.steps, function(v, is_major)
     local a = scale_angle(t, v)
-    geom.push_spoke(is_major and major or minor, c, a,
-                    scale.outer - (is_major and scale.major_length or scale.minor_length), scale.outer)
+    geom.push_spoke(
+      is_major and major or minor,
+      c,
+      a,
+      scale.outer - (is_major and scale.major_length or scale.minor_length),
+      scale.outer
+    )
     if is_major then
       local x, y = polar(c, scale.label, a)
-      g:text(string.format("%d", math.floor(v + 0.5)), x, y,
-             { font = "medium", size = scale.label_size, color = colors.print, align = "center", baseline = "middle" })
+      g:text(
+        string.format("%d", math.floor(v + 0.5)),
+        x,
+        y,
+        { font = "medium", size = scale.label_size, color = colors.print, align = "center", baseline = "middle" }
+      )
     end
   end)
   g:lines(minor, scale.minor_width, colors.print)
@@ -78,13 +87,21 @@ local function draw_window(g, c, t)
   local minor, major = {}, {}
   each_tick(t, thermometer.steps, function(v, is_major)
     local a = needle_angle(t, v)
-    geom.push_spoke(is_major and major or minor, c, a,
-                    thermometer.outer - (is_major and thermometer.major_length or thermometer.minor_length),
-                    thermometer.outer)
+    geom.push_spoke(
+      is_major and major or minor,
+      c,
+      a,
+      thermometer.outer - (is_major and thermometer.major_length or thermometer.minor_length),
+      thermometer.outer
+    )
     if is_major then
       local x, y = polar(c, thermometer.label, a)
-      g:text(string.format("%d", math.floor(v + 0.5)), x, y, { font = "medium", size = thermometer.label_size,
-             color = colors.print, align = "center", baseline = "middle" })
+      g:text(
+        string.format("%d", math.floor(v + 0.5)),
+        x,
+        y,
+        { font = "medium", size = thermometer.label_size, color = colors.print, align = "center", baseline = "middle" }
+      )
     end
   end)
   g:lines(minor, 1.5, colors.print)
@@ -95,7 +112,9 @@ local function draw_window(g, c, t)
   for i = 0, coil.steps do
     local f = i / coil.steps
     local x, y = polar(c, anim.mix(coil.inner, coil.outer, f), f * coil.turns * 360)
-    if px then geom.push_line(segs, px, py, x, y) end
+    if px then
+      geom.push_line(segs, px, py, x, y)
+    end
     px, py = x, y
   end
   g:lines(segs, coil.width, colors.coil)
@@ -147,8 +166,10 @@ local function draw_needle(g, c, a)
   local px, py = -uy * needle.width / 2, ux * needle.width / 2
   local tip_x, tip_y = c + ux * needle.length, c + uy * needle.length
   local tail_x, tail_y = c - ux * needle.tail, c - uy * needle.tail
-  g:polygon({ tip_x, tip_y, c + px, c + py, tail_x + px, tail_y + py,
-              tail_x - px, tail_y - py, c - px, c - py }, colors.needle)
+  g:polygon(
+    { tip_x, tip_y, c + px, c + py, tail_x + px, tail_y + py, tail_x - px, tail_y - py, c - px, c - py },
+    colors.needle
+  )
   g:circle(c, c, needle.hub, colors.needle)
 end
 
@@ -177,10 +198,18 @@ function home.draw(gfx, ui)
   local t, now = ui.thermostat, ui.now
   gfx:clear(colors.bg)
   local key = table.concat({ t.unit, t.min, t.max }, "|")
-  gfx:layer("cover", key, function(g) draw_cover(g, c, t) end)
-  gfx:layer("window", key, function(g) draw_window(g, c, t) end)
-  gfx:layer("glass", "1", function(g) draw_glass(g, c) end)
-  gfx:layer("switch", t.mode, function(g) draw_switch(g, c, t) end)
+  gfx:layer("cover", key, function(g)
+    draw_cover(g, c, t)
+  end)
+  gfx:layer("window", key, function(g)
+    draw_window(g, c, t)
+  end)
+  gfx:layer("glass", "1", function(g)
+    draw_glass(g, c)
+  end)
+  gfx:layer("switch", t.mode, function(g)
+    draw_switch(g, c, t)
+  end)
 
   gfx:paint_layer("cover", WHITE)
   -- The indexes follow the ring: the target, or each of heat-cool's ends,
@@ -194,8 +223,11 @@ function home.draw(gfx, ui)
   if t.mode == "heat-cool" then
     for _, side in ipairs({ "low", "high" }) do
       local dimmed = t.range and t.range ~= side
-      place(side, side == "low" and t.low or t.high,
-            dimmed and color.with_alpha(colors.index, index.dim) or colors.index)
+      place(
+        side,
+        side == "low" and t.low or t.high,
+        dimmed and color.with_alpha(colors.index, index.dim) or colors.index
+      )
     end
   elseif t.mode ~= "off" then
     place("set", t.target + (t.nudge or 0), colors.index)

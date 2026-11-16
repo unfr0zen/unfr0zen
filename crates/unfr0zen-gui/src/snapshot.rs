@@ -17,18 +17,20 @@ pub fn render(size: [f32; 2], scale: f32, frames: usize, out: &Path, mut ui: imp
     for _ in 0..frames {
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))),
-            viewports: std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo {
-                native_pixels_per_point: Some(scale), ..Default::default()
-            })).collect(),
+            viewports: std::iter::once((
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo { native_pixels_per_point: Some(scale), ..Default::default() },
+            ))
+            .collect(),
             ..Default::default()
         };
         outputs.push(context.run_ui(input, &mut ui));
     }
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .expect("a GPU adapter");
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("a GPU device");
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("a GPU adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a GPU device");
     let mut renderer = Renderer::new(&device, FORMAT, RendererOptions::default());
     let (width, height) = ((size[0] * scale).round() as u32, (size[1] * scale).round() as u32);
     let screen = ScreenDescriptor { size_in_pixels: [width, height], pixels_per_point: scale };

@@ -77,8 +77,13 @@ pub struct Bundle {
 
 /// The bundle as gzipped tar: manifest.json, manifest.sig when signed, then
 /// the files in name order. The same inputs give the same bytes.
-pub fn pack(device: Device, version: &str, files: &Files, directories: &BTreeMap<String, u32>,
-            key: Option<&SigningKey>) -> Vec<u8> {
+pub fn pack(
+    device: Device,
+    version: &str,
+    files: &Files,
+    directories: &BTreeMap<String, u32>,
+    key: Option<&SigningKey>,
+) -> Vec<u8> {
     let (_, manifest_bytes) = manifest(device, version, files, directories);
     let mut tar = tar::Builder::new(Vec::new());
     let mut add = |name: &str, mode: u32, data: &[u8]| {
@@ -111,7 +116,10 @@ fn manifest(device: Device, version: &str, files: &Files, directories: &BTreeMap
         format: FORMAT,
         device: device.name().into(),
         version: version.into(),
-        files: files.iter().map(|(name, (mode, data))| (name.clone(), Member { sha256: sha256_hex(data), mode: *mode })).collect(),
+        files: files
+            .iter()
+            .map(|(name, (mode, data))| (name.clone(), Member { sha256: sha256_hex(data), mode: *mode }))
+            .collect(),
         directories: directories.clone(),
     };
     let mut bytes = serde_json::to_vec_pretty(&manifest).expect("a manifest serializes");
@@ -148,9 +156,14 @@ impl Bundle {
             }
         }
         let (_, manifest_bytes) = members.remove(MANIFEST).map_or_else(|| device("bundle: no manifest.json"), Ok)?;
-        let signature = members.remove(SIGNATURE).map(|(_, text)| {
-            STANDARD.decode(String::from_utf8_lossy(&text).trim()).map_err(|_| Error::Device("bundle: manifest.sig is not base64".into()))
-        }).transpose()?;
+        let signature = members
+            .remove(SIGNATURE)
+            .map(|(_, text)| {
+                STANDARD
+                    .decode(String::from_utf8_lossy(&text).trim())
+                    .map_err(|_| Error::Device("bundle: manifest.sig is not base64".into()))
+            })
+            .transpose()?;
         let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| Error::Device(format!("bundle: manifest.json: {e}")))?;
         if manifest.format != FORMAT {
@@ -171,7 +184,8 @@ impl Bundle {
     /// Checks the manifest's signature against a trusted key.
     pub fn verify(&self, key: &VerifyingKey) -> Result<()> {
         let signature = self.signature.as_deref().map_or_else(|| device("bundle: unsigned"), Ok)?;
-        let signature = Signature::from_slice(signature).map_err(|_| Error::Device("bundle: malformed signature".into()))?;
+        let signature =
+            Signature::from_slice(signature).map_err(|_| Error::Device("bundle: malformed signature".into()))?;
         key.verify(&self.manifest_bytes, &signature).map_err(|_| Error::Device("bundle: bad signature".into()))
     }
 
@@ -187,14 +201,22 @@ impl Bundle {
     /// The overlay the bundle holds under overlays/NAME/.
     pub fn overlay(&self, name: &str) -> Result<Overlay> {
         let prefix = format!("{OVERLAYS}{name}/");
-        let files: Vec<_> = self.files.iter().filter_map(|(path, (mode, data))| {
-            path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode, data.clone()))
-        }).collect();
+        let files: Vec<_> = self
+            .files
+            .iter()
+            .filter_map(|(path, (mode, data))| {
+                path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode, data.clone()))
+            })
+            .collect();
         if files.is_empty() {
             return device(format!("bundle: no {name} overlay"));
         }
-        let directories = self.manifest.directories.iter()
-            .filter_map(|(path, mode)| path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode))).collect();
+        let directories = self
+            .manifest
+            .directories
+            .iter()
+            .filter_map(|(path, mode)| path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode)))
+            .collect();
         Ok(Overlay { files, directories })
     }
 }
@@ -238,14 +260,20 @@ pub fn add_overlay(files: &mut Files, directories: &mut BTreeMap<String, u32>, n
 
 /// An Ed25519 key, as its 32-byte seed in base64.
 pub fn signing_key(text: &str) -> Result<SigningKey> {
-    let seed: [u8; 32] = STANDARD.decode(text.trim()).ok().and_then(|seed| seed.try_into().ok())
+    let seed: [u8; 32] = STANDARD
+        .decode(text.trim())
+        .ok()
+        .and_then(|seed| seed.try_into().ok())
         .map_or_else(|| device("not a base64 Ed25519 key seed"), Ok)?;
     Ok(SigningKey::from_bytes(&seed))
 }
 
 /// A public Ed25519 key, as its 32 bytes in base64.
 pub fn verifying_key(text: &str) -> Result<VerifyingKey> {
-    let bytes: [u8; 32] = STANDARD.decode(text.trim()).ok().and_then(|bytes| bytes.try_into().ok())
+    let bytes: [u8; 32] = STANDARD
+        .decode(text.trim())
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
         .map_or_else(|| device("not a base64 Ed25519 public key"), Ok)?;
     VerifyingKey::from_bytes(&bytes).map_err(|_| Error::Device("not an Ed25519 public key".into()))
 }
@@ -327,7 +355,10 @@ impl Settings {
             backplate_sim: options.backplate_sim,
             block_cloud: options.block_cloud,
             mqtt: options.mqtt.as_ref().map(|mqtt| MqttSettings {
-                url: mqtt.url.clone(), user: mqtt.user.clone(), password: mqtt.password.clone(), tls: mqtt.tls,
+                url: mqtt.url.clone(),
+                user: mqtt.user.clone(),
+                password: mqtt.password.clone(),
+                tls: mqtt.tls,
                 ca: mqtt.ca.as_deref().map(|ca| STANDARD.encode(ca)),
                 entity_root: mqtt.entity_root.clone(),
             }),
@@ -346,7 +377,8 @@ impl Settings {
             unsigned_updates: options.unsigned_updates,
             device_name: options.device_name.clone(),
             pki: pki.map(|pki| PkiSettings {
-                ca: STANDARD.encode(&pki.ca), server_crt: STANDARD.encode(&pki.server_crt),
+                ca: STANDARD.encode(&pki.ca),
+                server_crt: STANDARD.encode(&pki.server_crt),
                 server_key: STANDARD.encode(&pki.server_key),
             }),
         }
@@ -361,13 +393,20 @@ impl Settings {
             ntp_server: self.ntp_server.clone(),
             backplate_sim: self.backplate_sim,
             block_cloud: self.block_cloud,
-            mqtt: self.mqtt.as_ref().map(|mqtt| -> Result<Mqtt> {
-                Ok(Mqtt {
-                    url: mqtt.url.clone(), user: mqtt.user.clone(), password: mqtt.password.clone(), tls: mqtt.tls,
-                    ca: mqtt.ca.as_deref().map(|ca| decode("mqtt.ca", ca)).transpose()?,
-                    entity_root: mqtt.entity_root.clone(),
+            mqtt: self
+                .mqtt
+                .as_ref()
+                .map(|mqtt| -> Result<Mqtt> {
+                    Ok(Mqtt {
+                        url: mqtt.url.clone(),
+                        user: mqtt.user.clone(),
+                        password: mqtt.password.clone(),
+                        tls: mqtt.tls,
+                        ca: mqtt.ca.as_deref().map(|ca| decode("mqtt.ca", ca)).transpose()?,
+                        entity_root: mqtt.entity_root.clone(),
+                    })
                 })
-            }).transpose()?,
+                .transpose()?,
             matter,
             wake_filter: if matter.is_some() { bundle.file(WAKE_FILTER)?.to_vec() } else { Vec::new() },
             local_cloud: bundle.file(LOCAL_CLOUD)?.to_vec(),
@@ -400,17 +439,23 @@ impl Settings {
     /// These settings as the unit keeps them: without the key set, which the
     /// unit has its own copy of once set up.
     fn record(&self) -> Vec<u8> {
-        let mut record = serde_json::to_vec_pretty(&Settings { pki: None, ..self.clone() }).expect("settings serialize");
+        let mut record =
+            serde_json::to_vec_pretty(&Settings { pki: None, ..self.clone() }).expect("settings serialize");
         record.push(b'\n');
         record
     }
 
     pub fn pki(&self) -> Result<Option<Pki>> {
-        self.pki.as_ref().map(|pki| Ok(Pki {
-            ca: decode("pki.ca", &pki.ca)?,
-            server_crt: decode("pki.server_crt", &pki.server_crt)?,
-            server_key: decode("pki.server_key", &pki.server_key)?,
-        })).transpose()
+        self.pki
+            .as_ref()
+            .map(|pki| {
+                Ok(Pki {
+                    ca: decode("pki.ca", &pki.ca)?,
+                    server_crt: decode("pki.server_crt", &pki.server_crt)?,
+                    server_key: decode("pki.server_key", &pki.server_key)?,
+                })
+            })
+            .transpose()
     }
 }
 
@@ -427,14 +472,24 @@ mod tests {
             (PRE_SETUP.to_string(), (0o755, b"#!/bin/sh\n".to_vec())),
         ]);
         let mut directories = BTreeMap::new();
-        add_overlay(&mut files, &mut directories, DOOM, &Overlay {
-            files: vec![("usr/share/doom/doom1.wad".into(), 0o644, b"IWAD".to_vec())],
-            directories: vec![("usr/share/doom".into(), 0o755)],
-        });
-        add_overlay(&mut files, &mut directories, THEME, &Overlay {
-            files: vec![(crate::setup::THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec())],
-            directories: Vec::new(),
-        });
+        add_overlay(
+            &mut files,
+            &mut directories,
+            DOOM,
+            &Overlay {
+                files: vec![("usr/share/doom/doom1.wad".into(), 0o644, b"IWAD".to_vec())],
+                directories: vec![("usr/share/doom".into(), 0o755)],
+            },
+        );
+        add_overlay(
+            &mut files,
+            &mut directories,
+            THEME,
+            &Overlay {
+                files: vec![(crate::setup::THEME_PRELOAD.into(), 0o755, b"\x7fELF preload".to_vec())],
+                directories: Vec::new(),
+            },
+        );
         (files, directories)
     }
 
@@ -463,7 +518,16 @@ mod tests {
 
     #[test]
     fn versions_go_candidates_then_release_then_later_builds() {
-        let order = ["v0.4.2", "v0.4.3-rc1", "v0.4.3-rc2", "v0.4.3", "v0.4.3-1-gabc1234", "v0.4.3-12-gdef5678-dirty", "v0.5.0", "v1.0.0"];
+        let order = [
+            "v0.4.2",
+            "v0.4.3-rc1",
+            "v0.4.3-rc2",
+            "v0.4.3",
+            "v0.4.3-1-gabc1234",
+            "v0.4.3-12-gdef5678-dirty",
+            "v0.5.0",
+            "v1.0.0",
+        ];
         for pair in order.windows(2) {
             assert_eq!(is_downgrade(pair[1], pair[0]), Some(true), "{} after {}", pair[0], pair[1]);
             assert_eq!(is_downgrade(pair[0], pair[1]), Some(false), "{} after {}", pair[1], pair[0]);
@@ -498,11 +562,16 @@ mod tests {
 
     #[test]
     fn a_file_that_differs_from_the_manifest_or_is_not_listed_is_refused() {
-        let manifest = |sha: &str| serde_json::to_vec(&Manifest {
-            format: FORMAT, device: "diamond3".into(), version: "1".into(),
-            files: BTreeMap::from([("a".to_string(), Member { sha256: sha.into(), mode: 0o644 })]),
-            directories: BTreeMap::new(),
-        }).unwrap();
+        let manifest = |sha: &str| {
+            serde_json::to_vec(&Manifest {
+                format: FORMAT,
+                device: "diamond3".into(),
+                version: "1".into(),
+                files: BTreeMap::from([("a".to_string(), Member { sha256: sha.into(), mode: 0o644 })]),
+                directories: BTreeMap::new(),
+            })
+            .unwrap()
+        };
         let good = manifest(&sha256_hex(b"a"));
         Bundle::unpack(&raw(&[(MANIFEST, 0o644, &good), ("a", 0o644, b"a")])).unwrap();
         let error = |members: &[(&str, u32, &[u8])]| Bundle::unpack(&raw(members)).err().unwrap().to_string();
@@ -518,16 +587,26 @@ mod tests {
         let (files, directories) = contents();
         let bundle = Bundle::unpack(&pack(Device::Diamond3, "1", &files, &directories, None)).unwrap();
         let options = Options {
-            root_hash: "$6$x".into(), version: "1".into(), block_cloud: true,
-            mqtt: Some(Mqtt { url: "tcp://broker:1883".into(), user: Some("u".into()), password: Some("p".into()), tls: true,
-                              entity_root: Some("nest_hall".into()),
-                              ca: Some(b"-----BEGIN CERTIFICATE-----\n".to_vec()) }),
+            root_hash: "$6$x".into(),
+            version: "1".into(),
+            block_cloud: true,
+            mqtt: Some(Mqtt {
+                url: "tcp://broker:1883".into(),
+                user: Some("u".into()),
+                password: Some("p".into()),
+                tls: true,
+                entity_root: Some("nest_hall".into()),
+                ca: Some(b"-----BEGIN CERTIFICATE-----\n".to_vec()),
+            }),
             matter: Some(Matter { passcode: 20202021, discriminator: 3840 }),
             wake_filter: b"\x7fELF wake".to_vec(),
             local_cloud: b"\x7fELF local cloud".to_vec(),
             doom: Some(bundle.overlay(DOOM).unwrap()),
             theme: Some(bundle.overlay(THEME).unwrap()),
-            ssh: true, usb_shell: true, unsigned_updates: true, device_name: Some("Hall".into()),
+            ssh: true,
+            usb_shell: true,
+            unsigned_updates: true,
+            device_name: Some("Hall".into()),
             apply: b"\x7fELF apply".to_vec(),
             ..Options::default()
         };
@@ -549,11 +628,20 @@ mod tests {
     fn a_gen_2_bundle_brings_its_ssh_server_and_sensors_view_only_when_asked() {
         let (mut files, mut directories) = contents();
         files.insert(RCS_SCREEN.into(), (0o644, b"\x7fELF rcs".to_vec()));
-        add_overlay(&mut files, &mut directories, SSH, &Overlay {
-            files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())], directories: vec![],
-        });
+        add_overlay(
+            &mut files,
+            &mut directories,
+            SSH,
+            &Overlay {
+                files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())],
+                directories: vec![],
+            },
+        );
         let bundle = Bundle::from_files(Device::J49, "1", files.clone(), &directories);
-        assert_eq!(bundle.manifest, Bundle::unpack(&pack(Device::J49, "1", &files, &directories, None)).unwrap().manifest);
+        assert_eq!(
+            bundle.manifest,
+            Bundle::unpack(&pack(Device::J49, "1", &files, &directories, None)).unwrap().manifest
+        );
         let asked = Settings { ssh: true, external_temperature: true, ..Settings::default() }.options(&bundle).unwrap();
         assert_eq!(asked.external_temperature_screen, b"\x7fELF rcs");
         assert_eq!(asked.ssh_server.unwrap().files[0].0, "usr/sbin/dropbearmulti");

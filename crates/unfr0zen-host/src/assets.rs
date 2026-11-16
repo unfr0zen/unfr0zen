@@ -46,9 +46,21 @@ pub fn doom() -> Overlay {
         directories: vec![("usr/share/doom".into(), 0o755)],
         files: vec![
             ("nestlabs/sbin/doom".into(), 0o755, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom.gz")))),
-            ("nestlabs/sbin/unfr0zen-doom".into(), 0o755, include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/doom.sh")).to_vec()),
-            ("usr/share/doom/doom1.wad".into(), 0o644, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom1.wad.gz")))),
-            ("nestlabs/share/images/G_unfr0zen_doom.png".into(), 0o644, include_bytes!(concat!(env!("OUT_DIR"), "/doom-logo.png")).to_vec()),
+            (
+                "nestlabs/sbin/unfr0zen-doom".into(),
+                0o755,
+                include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/doom.sh")).to_vec(),
+            ),
+            (
+                "usr/share/doom/doom1.wad".into(),
+                0o644,
+                gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/doom1.wad.gz"))),
+            ),
+            (
+                "nestlabs/share/images/G_unfr0zen_doom.png".into(),
+                0o644,
+                include_bytes!(concat!(env!("OUT_DIR"), "/doom-logo.png")).to_vec(),
+            ),
         ],
     }
 }
@@ -61,14 +73,22 @@ const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs")
 /// themes, which go on the scratch volume with the library.
 pub fn theme() -> Overlay {
     let mut files = vec![
-        (unfr0zen_core::setup::THEME_PRELOAD.into(), 0o755,
-         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz")))),
-        (unfr0zen_core::setup::THEME_LIBRARY.into(), 0o755,
-         gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz")))),
+        (
+            unfr0zen_core::setup::THEME_PRELOAD.into(),
+            0o755,
+            gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libunfr0zen-theme.so.gz"))),
+        ),
+        (
+            unfr0zen_core::setup::THEME_LIBRARY.into(),
+            0o755,
+            gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/libnestlocal_theme.so.gz"))),
+        ),
     ];
-    files.extend(THEMES.iter().map(|(name, data)| {
-        (format!("{}/{name}", unfr0zen_core::diamond3::scratch::THEMES), 0o644, data.to_vec())
-    }));
+    files.extend(
+        THEMES
+            .iter()
+            .map(|(name, data)| (format!("{}/{name}", unfr0zen_core::diamond3::scratch::THEMES), 0o644, data.to_vec())),
+    );
     Overlay { directories: Vec::new(), files }
 }
 
@@ -78,10 +98,26 @@ pub fn thread() -> Overlay {
     Overlay {
         directories: vec![("usr/share/nestlocal".into(), 0o755)],
         files: vec![
-            ("etc/init.d/nestlocal-thread".into(), 0o755, include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/thread.init")).to_vec()),
-            ("nestlabs/sbin/thread-rcp".into(), 0o755, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-thread-rcp.gz")))),
-            ("nestlabs/sbin/ot-daemon".into(), 0o755, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-ot-daemon.gz")))),
-            ("nestlabs/sbin/ot-ctl".into(), 0o755, gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-ot-ctl.gz")))),
+            (
+                "etc/init.d/nestlocal-thread".into(),
+                0o755,
+                include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/crates/nestlocal/rootfs/thread.init")).to_vec(),
+            ),
+            (
+                "nestlabs/sbin/thread-rcp".into(),
+                0o755,
+                gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-thread-rcp.gz"))),
+            ),
+            (
+                "nestlabs/sbin/ot-daemon".into(),
+                0o755,
+                gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-ot-daemon.gz"))),
+            ),
+            (
+                "nestlabs/sbin/ot-ctl".into(),
+                0o755,
+                gunzip(include_bytes!(concat!(env!("OUT_DIR"), "/thread-ot-ctl.gz"))),
+            ),
         ],
     }
 }

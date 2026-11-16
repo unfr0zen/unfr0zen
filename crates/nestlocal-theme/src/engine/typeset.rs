@@ -60,7 +60,6 @@ impl Font {
     pub fn subpixel(&self) -> bool {
         self.ft.is_some()
     }
-
 }
 
 /// Bundled with the binary, so the fallback face can always draw.
@@ -97,9 +96,14 @@ impl Fonts {
                     font.clone()
                 }
                 None => {
-                    let font = std::rc::Rc::new(load(&bytes).map_err(|e| format!("font {name} ({}): {e}", file.display()))?);
-                    debug!("font: {name} ({}, {} bytes) loaded, set by {}", file.display(), bytes.len(),
-                           if font.subpixel() { "FreeType" } else { "fontdue" });
+                    let font =
+                        std::rc::Rc::new(load(&bytes).map_err(|e| format!("font {name} ({}): {e}", file.display()))?);
+                    debug!(
+                        "font: {name} ({}, {} bytes) loaded, set by {}",
+                        file.display(),
+                        bytes.len(),
+                        if font.subpixel() { "FreeType" } else { "fontdue" }
+                    );
                     by_bytes.push((bytes, font.clone()));
                     font
                 }
@@ -145,7 +149,14 @@ fn pick<'a>(font: &'a Font, extra: Option<&'a Font>, ch: char) -> &'a Font {
 
 /// Each glyph's pen position and font, spaced (and kerned by fontdue), and
 /// where the pen ends.
-fn pens<'a>(cache: &mut Glyphs, font: &'a Font, extra: Option<&'a Font>, text: &str, px: f32, spacing: f32) -> (Vec<(char, f32, &'a Font)>, f32) {
+fn pens<'a>(
+    cache: &mut Glyphs,
+    font: &'a Font,
+    extra: Option<&'a Font>,
+    text: &str,
+    px: f32,
+    spacing: f32,
+) -> (Vec<(char, f32, &'a Font)>, f32) {
     let mut pen = 0.0;
     let mut out = Vec::new();
     let mut prev: Option<(char, &Font)> = None;
@@ -199,7 +210,10 @@ impl Glyphs {
 
     fn ft(&mut self, font: &Font, ch: char, px: f32) -> Option<std::rc::Rc<super::ft::Glyph>> {
         let key = (font as *const Font as usize, ch, px.to_bits());
-        self.ft.entry(key).or_insert_with(|| font.ft.as_ref().and_then(|f| f.glyph(ch, px)).map(std::rc::Rc::new)).clone()
+        self.ft
+            .entry(key)
+            .or_insert_with(|| font.ft.as_ref().and_then(|f| f.glyph(ch, px)).map(std::rc::Rc::new))
+            .clone()
     }
 
     /// Forgets every glyph, as when the fonts change.
@@ -220,16 +234,28 @@ pub fn rasterize_with(cache: &mut Glyphs, font: &Font, extra: Option<&Font>, tex
 
 /// The run, its pen starting `frac` (each 0 to 1) of a pixel right of and
 /// below a whole pixel, where FreeType sets it.
-pub fn rasterize_at(cache: &mut Glyphs, font: &Font, extra: Option<&Font>, text: &str, px: f32, spacing: f32, frac: (f32, f32)) -> Run {
+pub fn rasterize_at(
+    cache: &mut Glyphs,
+    font: &Font,
+    extra: Option<&Font>,
+    text: &str,
+    px: f32,
+    spacing: f32,
+    frac: (f32, f32),
+) -> Run {
     let (pens, advance) = pens(cache, font, extra, text, px, spacing);
     if pens.iter().any(|(_, _, f)| f.ft.is_some()) {
         return set_like_stock(cache, &pens, px, advance, frac);
     }
-    let glyphs: Vec<_> = pens.iter().map(|&(ch, pen, f)| {
-        let glyph = cache.get(f, ch, px);
-        let m = glyph.0;
-        (pen.round() as i32 + m.xmin, m.ymin + m.height as i32, m, glyph)
-    }).filter(|(_, _, m, _)| m.width > 0 && m.height > 0).collect();
+    let glyphs: Vec<_> = pens
+        .iter()
+        .map(|&(ch, pen, f)| {
+            let glyph = cache.get(f, ch, px);
+            let m = glyph.0;
+            (pen.round() as i32 + m.xmin, m.ymin + m.height as i32, m, glyph)
+        })
+        .filter(|(_, _, m, _)| m.width > 0 && m.height > 0)
+        .collect();
     let Some(left) = glyphs.iter().map(|g| g.0).min() else {
         return Run { width: 0, height: 0, left: 0, top: 0, advance, alpha: Vec::new() };
     };
@@ -262,13 +288,15 @@ pub fn rasterize_at(cache: &mut Glyphs, font: &Font, extra: Option<&Font>, text:
 fn set_like_stock(cache: &mut Glyphs, pens: &[(char, f32, &Font)], px: f32, advance: f32, (fx, fy): (f32, f32)) -> Run {
     // Each glyph's coverage and its top-left in run pixels from the pen's
     // start (x right, y down from the baseline).
-    let glyphs: Vec<(std::rc::Rc<super::ft::Glyph>, f32, f32)> = pens.iter()
+    let glyphs: Vec<(std::rc::Rc<super::ft::Glyph>, f32, f32)> = pens
+        .iter()
         .filter_map(|&(ch, pen, f)| cache.ft(f, ch, px).map(|g| (g, pen, f)))
         .filter(|(g, _, _)| g.width > 0 && g.rows > 0)
         .map(|(g, pen, _)| {
             let (x, y) = (pen + fx + g.left as f32, fy - g.top as f32);
             (g, x, y)
-        }).collect();
+        })
+        .collect();
     if glyphs.is_empty() {
         return Run { width: 0, height: 0, left: 0, top: 0, advance, alpha: Vec::new() };
     }
@@ -317,13 +345,15 @@ pub fn dilate(run: &Run, radius: f32) -> Run {
     let r = radius.ceil().max(0.0) as i32;
     let (w, h) = (run.width + 2 * r as usize, run.height + 2 * r as usize);
     let mut alpha = vec![0u8; w * h];
-    let offsets: Vec<(i32, i32, f32)> = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+    let offsets: Vec<(i32, i32, f32)> = (-r..=r)
+        .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
         .filter_map(|(dx, dy)| {
             let d = ((dx * dx + dy * dy) as f32).sqrt();
             // Partial weight at the rim keeps the outline's edge soft.
             let weight = (radius + 0.5 - d).clamp(0.0, 1.0);
             (weight > 0.0).then_some((dx, dy, weight))
-        }).collect();
+        })
+        .collect();
     for y in 0..run.height as i32 {
         for x in 0..run.width as i32 {
             let a = run.alpha[y as usize * run.width + x as usize];

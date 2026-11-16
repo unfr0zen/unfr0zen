@@ -12,7 +12,10 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 cd "$root"
 out=${1:-build/doom-armv7}
 src=$dir/doomgeneric/doomgeneric
-[ -f "$src/doomgeneric.c" ] || { echo "$dir/doomgeneric is empty: git submodule update --init $dir/doomgeneric" >&2; exit 1; }
+[ -f "$src/doomgeneric.c" ] || {
+    echo "$dir/doomgeneric is empty: git submodule update --init $dir/doomgeneric" >&2
+    exit 1
+}
 
 # The game's sources, as doomgeneric's Makefile lists them, with this
 # platform in place of its X11 one.
@@ -21,7 +24,7 @@ sources=$(for o in $objs; do printf '%s ' "$src/${o%.o}.c"; done)
 mkdir -p "$(dirname "$out")"
 # Plain ARMv7-A, which both the gen 3's Cortex-A9 and the gen 2's A8 run.
 cc() {
-    if command -v zig > /dev/null 2>&1; then
+    if command -v zig >/dev/null 2>&1; then
         zig cc -target arm-linux-musleabihf -mcpu=generic+v7a "$@" -fno-sanitize=all
     else
         python3 -m ziglang cc -target arm-linux-musleabihf -mcpu=generic+v7a "$@" -fno-sanitize=all

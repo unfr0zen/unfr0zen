@@ -39,19 +39,14 @@ fn main() -> Result<(), String> {
     };
     let expected = std::fs::read_to_string(identity_path).map_err(|e| format!("{identity_path}: {e}"))?;
     verify_identity(&radio.ezsp(&[4]).map_err(|e| format!("RCP identity: {e}"))?, &expected)?;
-    if std::env::args().any(|arg| arg == "--probe") { return Ok(()); }
+    if std::env::args().any(|arg| arg == "--probe") {
+        return Ok(());
+    }
     let mut master = -1;
     let mut slave = -1;
     let mut name = [0 as libc::c_char; 128];
     unsafe {
-        if libc::openpty(
-            &mut master,
-            &mut slave,
-            name.as_mut_ptr(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        ) != 0
-        {
+        if libc::openpty(&mut master, &mut slave, name.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
         let mut termios = std::mem::zeroed();
@@ -62,10 +57,7 @@ fn main() -> Result<(), String> {
         if libc::tcsetattr(slave, libc::TCSANOW, &termios) != 0 {
             return Err("tcsetattr failed".into());
         }
-        println!(
-            "{}",
-            std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy()
-        );
+        println!("{}", std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy());
     }
     let mut master = unsafe { std::fs::File::from_raw_fd(master) };
     let _slave = unsafe { std::fs::File::from_raw_fd(slave) };
@@ -117,9 +109,7 @@ fn main() -> Result<(), String> {
             if trace {
                 eprintln!("RX {data:02x?}");
             }
-            master
-                .write_all(data)
-                .map_err(|e| e.to_string())?;
+            master.write_all(data).map_err(|e| e.to_string())?;
             if response.first() == Some(&0x54) {
                 if let Some(peer) = &alarm_peer {
                     alarm.send_to(&[], peer).map_err(|e| e.to_string())?;

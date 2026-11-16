@@ -6,9 +6,12 @@
 #
 #     platform/common/wakefilter/build.sh OUT
 set -eu
-[ $# -eq 1 ] || { echo "usage: $0 OUT" >&2; exit 2; }
+[ $# -eq 1 ] || {
+    echo "usage: $0 OUT" >&2
+    exit 2
+}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$1"
-if command -v zig > /dev/null 2>&1; then zig=zig; else zig="python3 -m ziglang"; fi
+if command -v zig >/dev/null 2>&1; then zig=zig; else zig="python3 -m ziglang"; fi
 $zig cc -target arm-linux-gnueabihf.2.28 -mcpu=cortex_a8 -Os -Wall -Wextra -Werror \
     -fno-stack-protector -shared -Wl,-z,lazy -Wl,-soname,libwakefilter.so -o "$1/libwakefilter.so" "$dir/wakefilter.c" -ldl

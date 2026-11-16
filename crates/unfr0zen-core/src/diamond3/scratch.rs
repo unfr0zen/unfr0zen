@@ -40,10 +40,8 @@ pub const MOVED: &[(&str, &str)] = &[
 ];
 
 /// Directories that held only moved files, by the name each has on scratch.
-const MOVED_DIRECTORIES: &[(&str, &str)] = &[
-    ("usr/share/doom", "media/scratch/.unfr0zen/doom"),
-    ("usr/share/nestlocal", "media/scratch/.unfr0zen/thread"),
-];
+const MOVED_DIRECTORIES: &[(&str, &str)] =
+    &[("usr/share/doom", "media/scratch/.unfr0zen/doom"), ("usr/share/nestlocal", "media/scratch/.unfr0zen/thread")];
 
 /// Where the gen 3 keeps the root volume's `name`: on scratch if it moved.
 pub fn name(name: &str) -> &str {
@@ -79,7 +77,8 @@ pub fn directories<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> 
 
 /// MANIFEST's contents for `files` (name, SHA-256), those on scratch.
 pub fn manifest<'a>(files: impl IntoIterator<Item = (&'a str, String)>) -> Vec<u8> {
-    let lines: std::collections::BTreeMap<&str, String> = files.into_iter()
+    let lines: std::collections::BTreeMap<&str, String> = files
+        .into_iter()
         .filter(|(name, _)| holds(name) && *name != MANIFEST)
         .map(|(name, sha)| (&name[DIR.len() + 1..], sha))
         .collect();
@@ -104,20 +103,40 @@ mod tests {
 
     #[test]
     fn directories_come_parents_first_and_only_on_scratch() {
-        let names = ["media/scratch/.unfr0zen/themes/nest-gen4/fonts/Figtree-Light.ttf",
-                     "media/scratch/.unfr0zen/doom/doom", "etc/unfr0zen/options.json"];
-        assert_eq!(directories(names), ["media/scratch/.unfr0zen", "media/scratch/.unfr0zen/doom",
-            "media/scratch/.unfr0zen/themes", "media/scratch/.unfr0zen/themes/nest-gen4",
-            "media/scratch/.unfr0zen/themes/nest-gen4/fonts"]);
+        let names = [
+            "media/scratch/.unfr0zen/themes/nest-gen4/fonts/Figtree-Light.ttf",
+            "media/scratch/.unfr0zen/doom/doom",
+            "etc/unfr0zen/options.json",
+        ];
+        assert_eq!(
+            directories(names),
+            [
+                "media/scratch/.unfr0zen",
+                "media/scratch/.unfr0zen/doom",
+                "media/scratch/.unfr0zen/themes",
+                "media/scratch/.unfr0zen/themes/nest-gen4",
+                "media/scratch/.unfr0zen/themes/nest-gen4/fonts"
+            ]
+        );
     }
 
     #[test]
     fn the_manifest_lists_scratch_files_by_their_names_there() {
         let sha = crate::shell::sha256_hex;
-        let files = [("media/scratch/.unfr0zen/doom/doom", sha(b"DOOM")), ("etc/hosts", sha(b"x")),
-                     ("media/scratch/.unfr0zen/backup/nlclient.original", sha(b"ELF")), (MANIFEST, sha(b"old"))];
+        let files = [
+            ("media/scratch/.unfr0zen/doom/doom", sha(b"DOOM")),
+            ("etc/hosts", sha(b"x")),
+            ("media/scratch/.unfr0zen/backup/nlclient.original", sha(b"ELF")),
+            (MANIFEST, sha(b"old")),
+        ];
         let text = String::from_utf8(manifest(files)).unwrap();
-        assert_eq!(text, format!("{}  backup/nlclient.original\n{}  doom/doom\n",
-                                 crate::shell::sha256_hex(b"ELF"), crate::shell::sha256_hex(b"DOOM")));
+        assert_eq!(
+            text,
+            format!(
+                "{}  backup/nlclient.original\n{}  doom/doom\n",
+                crate::shell::sha256_hex(b"ELF"),
+                crate::shell::sha256_hex(b"DOOM")
+            )
+        );
     }
 }

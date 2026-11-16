@@ -22,9 +22,22 @@ typedef unsigned int u32;
 
 struct nl_sock;
 struct nl_msg;
-struct nlmsghdr { u32 len; u16 type; u16 flags; u32 seq; u32 pid; };
-struct genlmsghdr { u8 cmd; u8 version; u16 reserved; };
-struct nlattr { u16 len; u16 type; };
+struct nlmsghdr {
+	u32 len;
+	u16 type;
+	u16 flags;
+	u32 seq;
+	u32 pid;
+};
+struct genlmsghdr {
+	u8 cmd;
+	u8 version;
+	u16 reserved;
+};
+struct nlattr {
+	u16 len;
+	u16 type;
+};
 
 #define WEAK __attribute__((weak))
 extern struct nlmsghdr *nlmsg_hdr(struct nl_msg *) WEAK;
@@ -40,21 +53,22 @@ extern int read(int, void *, unsigned int);
 extern int close(int);
 extern int unsetenv(const char *);
 
-#define RTLD_NEXT ((void *)-1)
-#define NL80211_CMD_SET_WOWLAN 74
-#define NL80211_ATTR_WOWLAN_TRIGGERS 117
+#define RTLD_NEXT                       ((void *)-1)
+#define NL80211_CMD_SET_WOWLAN          74
+#define NL80211_ATTR_WOWLAN_TRIGGERS    117
 #define NL80211_WOWLAN_TRIG_PKT_PATTERN 4
-#define NL80211_PKTPAT_MASK 1
-#define NL80211_PKTPAT_PATTERN 2
-#define NL80211_PKTPAT_OFFSET 3
-#define NLA_TYPE_MASK 0x3fff
-#define MAX_PATTERNS 8
-#define MAX_PATTERN_LEN 128
-#define PATTERNS "/var/run/unfr0zen/wake-patterns"
+#define NL80211_PKTPAT_MASK             1
+#define NL80211_PKTPAT_PATTERN          2
+#define NL80211_PKTPAT_OFFSET           3
+#define NLA_TYPE_MASK                   0x3fff
+#define MAX_PATTERNS                    8
+#define MAX_PATTERN_LEN                 128
+#define PATTERNS                        "/var/run/unfr0zen/wake-patterns"
 
 #define ALIGNED(n) (((n) + 3u) & ~3u)
-#define FOR_EACH_ATTR(a, start, end) \
-	for (a = (struct nlattr *)(start); (u8 *)a + 4 <= (u8 *)(end) && a->len >= 4 && (u8 *)a + a->len <= (u8 *)(end); \
+#define FOR_EACH_ATTR(a, start, end)                                                       \
+	for (a = (struct nlattr *)(start);                                                 \
+	     (u8 *)a + 4 <= (u8 *)(end) && a->len >= 4 && (u8 *)a + a->len <= (u8 *)(end); \
 	     a = (struct nlattr *)((u8 *)a + ALIGNED(a->len)))
 
 static int hex(const char **p, u8 *out, int max)
@@ -141,8 +155,8 @@ static struct nl_msg *with_listed(struct nlmsghdr *hdr)
 	if (hdr->len < sizeof(*hdr) + sizeof(*genl) || genl->cmd != NL80211_CMD_SET_WOWLAN)
 		return 0;
 	FOR_EACH_ATTR(attr, genl + 1, end)
-		if ((attr->type & NLA_TYPE_MASK) == NL80211_ATTR_WOWLAN_TRIGGERS)
-			triggers = attr;
+	if ((attr->type & NLA_TYPE_MASK) == NL80211_ATTR_WOWLAN_TRIGGERS)
+		triggers = attr;
 	if (!triggers)
 		return 0;
 	msg = nlmsg_alloc();
@@ -151,24 +165,25 @@ static struct nl_msg *with_listed(struct nlmsghdr *hdr)
 	if (!genlmsg_put(msg, 0, 0, hdr->type, 0, hdr->flags, genl->cmd, genl->version))
 		goto failed;
 	FOR_EACH_ATTR(attr, genl + 1, end)
-		if (attr != triggers && nla_put(msg, attr->type, attr->len - 4, attr + 1) < 0)
-			goto failed;
+	if (attr != triggers && nla_put(msg, attr->type, attr->len - 4, attr + 1) < 0)
+		goto failed;
 	nest = nla_nest_start(msg, NL80211_ATTR_WOWLAN_TRIGGERS);
 	if (!nest)
 		goto failed;
 	FOR_EACH_ATTR(sub, triggers + 1, (u8 *)triggers + triggers->len)
-		if ((sub->type & NLA_TYPE_MASK) != NL80211_WOWLAN_TRIG_PKT_PATTERN &&
-		    nla_put(msg, sub->type, sub->len - 4, sub + 1) < 0)
-			goto failed;
+	if ((sub->type & NLA_TYPE_MASK) != NL80211_WOWLAN_TRIG_PKT_PATTERN &&
+	    nla_put(msg, sub->type, sub->len - 4, sub + 1) < 0)
+		goto failed;
 	patterns = nla_nest_start(msg, NL80211_WOWLAN_TRIG_PKT_PATTERN);
 	if (!patterns)
 		goto failed;
-	FOR_EACH_ATTR(sub, triggers + 1, (u8 *)triggers + triggers->len) {
+	FOR_EACH_ATTR(sub, triggers + 1, (u8 *)triggers + triggers->len)
+	{
 		if ((sub->type & NLA_TYPE_MASK) != NL80211_WOWLAN_TRIG_PKT_PATTERN)
 			continue;
 		FOR_EACH_ATTR(entry, sub + 1, (u8 *)sub + sub->len)
-			if (nla_put(msg, ++count, entry->len - 4, entry + 1) < 0)
-				goto failed;
+		if (nla_put(msg, ++count, entry->len - 4, entry + 1) < 0)
+			goto failed;
 	}
 	add_listed(msg, count);
 	nla_nest_end(msg, patterns);

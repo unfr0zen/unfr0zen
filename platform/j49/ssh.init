@@ -8,18 +8,18 @@ PIDFILE=/var/run/dropbear.pid
 DROPBEAR=/usr/sbin/dropbearmulti
 
 case "$1" in
-start)
-    (
-        mkdir -p "$KEYS"
-        for type in ed25519 ecdsa rsa; do
-            [ -s "$KEYS/dropbear_${type}_host_key" ] ||
-                "$DROPBEAR" dropbearkey -t "$type" -f "$KEYS/dropbear_${type}_host_key" > /dev/null 2>&1
-        done
-        "$DROPBEAR" dropbear -r "$KEYS/dropbear_ed25519_host_key" -r "$KEYS/dropbear_ecdsa_host_key" \
-            -r "$KEYS/dropbear_rsa_host_key" -P "$PIDFILE"
-    ) &
-    ;;
-stop)
-    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")"
-    ;;
+    start)
+        (
+            mkdir -p "$KEYS"
+            for type in ed25519 ecdsa rsa; do
+                [ -s "$KEYS/dropbear_${type}_host_key" ] ||
+                    "$DROPBEAR" dropbearkey -t "$type" -f "$KEYS/dropbear_${type}_host_key" >/dev/null 2>&1
+            done
+            "$DROPBEAR" dropbear -r "$KEYS/dropbear_ed25519_host_key" -r "$KEYS/dropbear_ecdsa_host_key" \
+                -r "$KEYS/dropbear_rsa_host_key" -P "$PIDFILE"
+        ) &
+        ;;
+    stop)
+        [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")"
+        ;;
 esac

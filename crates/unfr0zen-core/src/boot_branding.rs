@@ -12,25 +12,12 @@ pub const GRADIENT: [[u8; 3]; 8] = [
     [18, 90, 126],
     [5, 81, 120],
 ];
-pub(crate) const COLORS: [(u32, u32); 4] = [
-    (0xffea4335, 0xff125a7e),
-    (0xfffbbc04, 0xffe1ebef),
-    (0xff34a853, 0xff5eacd1),
-    (0xff4285f4, 0xff98bfd3),
-];
+pub(crate) const COLORS: [(u32, u32); 4] =
+    [(0xffea4335, 0xff125a7e), (0xfffbbc04, 0xffe1ebef), (0xff34a853, 0xff5eacd1), (0xff4285f4, 0xff98bfd3)];
 pub(crate) const FILES: [(&str, &str); 3] = [
-    (
-        "nestlabs/share/images/G_splash_88px.png",
-        "etc/unfr0zen/boot/splash.original",
-    ),
-    (
-        "nestlabs/share/images/G_animation_168frames_94px.png",
-        "etc/unfr0zen/boot/animation.original",
-    ),
-    (
-        "boot/kernel_fdt.itb",
-        "etc/unfr0zen/boot/kernel_fdt.itb.original",
-    ),
+    ("nestlabs/share/images/G_splash_88px.png", "etc/unfr0zen/boot/splash.original"),
+    ("nestlabs/share/images/G_animation_168frames_94px.png", "etc/unfr0zen/boot/animation.original"),
+    ("boot/kernel_fdt.itb", "etc/unfr0zen/boot/kernel_fdt.itb.original"),
 ];
 
 fn color(rgb: &[u8]) -> [u8; 3] {
@@ -44,9 +31,7 @@ fn color(rgb: &[u8]) -> [u8; 3] {
             let distance = |v: u32| {
                 let c = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
                 let peak = *c.iter().max().unwrap() as f64;
-                (0..3)
-                    .map(|i| (rgb[i] as f64 / max - c[i] as f64 / peak).powi(2))
-                    .sum::<f64>()
+                (0..3).map(|i| (rgb[i] as f64 / max - c[i] as f64 / peak).powi(2)).sum::<f64>()
             };
             distance(*a).total_cmp(&distance(*b))
         })
@@ -68,9 +53,7 @@ pub fn recolor(name: &str, source: &[u8]) -> Result<Option<Vec<u8>>> {
         };
     }
     let expected = match name {
-        "nestlabs/share/images/G_splash_88px.png" => {
-            "80db15241d616de65c871e56b2ca1114c6b8016863619dede8e2ecb814059da0"
-        }
+        "nestlabs/share/images/G_splash_88px.png" => "80db15241d616de65c871e56b2ca1114c6b8016863619dede8e2ecb814059da0",
         "nestlabs/share/images/G_animation_168frames_94px.png" => {
             "136f4fdeb96076a7e41f496773a0c2d78c1a985f10e367f326cd7da32e79c414"
         }
@@ -83,9 +66,7 @@ pub fn recolor(name: &str, source: &[u8]) -> Result<Option<Vec<u8>>> {
     let mut at = 8;
     while at + 12 <= output.len() {
         let n = be(&output, at)? as usize;
-        let end = at
-            .checked_add(12 + n)
-            .ok_or_else(|| crate::Error::Device("PNG range overflow".into()))?;
+        let end = at.checked_add(12 + n).ok_or_else(|| crate::Error::Device("PNG range overflow".into()))?;
         if end > output.len() {
             return device("truncated PNG");
         }
@@ -103,12 +84,8 @@ pub fn recolor(name: &str, source: &[u8]) -> Result<Option<Vec<u8>>> {
 }
 
 fn range(data: &[u8], at: usize, n: usize) -> Result<&[u8]> {
-    data.get(
-        at..at
-            .checked_add(n)
-            .ok_or_else(|| crate::Error::Device("boot image range overflow".into()))?,
-    )
-    .ok_or_else(|| crate::Error::Device("truncated boot image".into()))
+    data.get(at..at.checked_add(n).ok_or_else(|| crate::Error::Device("boot image range overflow".into()))?)
+        .ok_or_else(|| crate::Error::Device("truncated boot image".into()))
 }
 fn be(data: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(range(data, at, 4)?.try_into().unwrap()))
@@ -117,13 +94,8 @@ fn le(data: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(range(data, at, 4)?.try_into().unwrap()))
 }
 fn cstr(data: &[u8], at: usize) -> Result<&str> {
-    let tail = data
-        .get(at..)
-        .ok_or_else(|| crate::Error::Device("invalid FIT string offset".into()))?;
-    let n = tail
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or_else(|| crate::Error::Device("unterminated FIT string".into()))?;
+    let tail = data.get(at..).ok_or_else(|| crate::Error::Device("invalid FIT string offset".into()))?;
+    let n = tail.iter().position(|&b| b == 0).ok_or_else(|| crate::Error::Device("unterminated FIT string".into()))?;
     std::str::from_utf8(&tail[..n]).or_else(|_| device("invalid FIT string"))
 }
 /// Property ranges retain the original FIT layout, including image lengths.
@@ -158,10 +130,7 @@ fn properties(data: &[u8]) -> Result<BTreeMap<(String, String), (usize, usize)>>
                 let name = cstr(strings, be(data, at + 4)? as usize)?;
                 at += 8;
                 range(&data[..end], at, size)?;
-                if props
-                    .insert((stack.join("/"), name.into()), (at, size))
-                    .is_some()
-                {
+                if props.insert((stack.join("/"), name.into()), (at, size)).is_some() {
                     return device("duplicate FIT property");
                 }
                 at = (at + size + 3) & !3;
@@ -225,20 +194,12 @@ fn lzop(data: &[u8], start: usize) -> Result<Lzop> {
         if adler2::adler32_slice(&raw) != checksum {
             return device("bad kernel block checksum");
         }
-        blocks.push(Block {
-            packed: block_start..at,
-            raw,
-        });
+        blocks.push(Block { packed: block_start..at, raw });
     }
     if blocks.is_empty() {
         return device("empty kernel LZOP stream");
     }
-    Ok(Lzop {
-        start,
-        header_end,
-        end: at,
-        blocks,
-    })
+    Ok(Lzop { start, header_end, end: at, blocks })
 }
 
 fn logo_palette(kernel: &[u8]) -> Result<Option<(usize, usize)>> {
@@ -251,31 +212,19 @@ fn logo_palette(kernel: &[u8]) -> Result<Option<(usize, usize)>> {
         if count != 166 {
             continue;
         }
-        let Some(palette) = le(kernel, at + 16)?
-            .checked_sub(0xc0008000)
-            .map(|v| v as usize)
-        else {
+        let Some(palette) = le(kernel, at + 16)?.checked_sub(0xc0008000).map(|v| v as usize) else {
             continue;
         };
-        let Some(pixels) = le(kernel, at + 20)?
-            .checked_sub(0xc0008000)
-            .map(|v| v as usize)
-        else {
+        let Some(pixels) = le(kernel, at + 20)?.checked_sub(0xc0008000).map(|v| v as usize) else {
             continue;
         };
-        let (Ok(colors), Ok(indexes)) = (
-            range(kernel, palette, count * 3),
-            range(kernel, pixels, 480 * 480),
-        ) else {
+        let (Ok(colors), Ok(indexes)) = (range(kernel, palette, count * 3), range(kernel, pixels, 480 * 480)) else {
             continue;
         };
-        if palette + count * 3 > pixels
-            || indexes.iter().any(|&v| v < 32 || v as usize >= 32 + count)
-        {
+        if palette + count * 3 > pixels || indexes.iter().any(|&v| v < 32 || v as usize >= 32 + count) {
             continue;
         }
-        if sha256_hex(&[colors, indexes].concat())
-            != "e0a36e8a9069b4a4d302ebf938e3ab293c875c347c03dc29d725e4a04d6a0777"
+        if sha256_hex(&[colors, indexes].concat()) != "e0a36e8a9069b4a4d302ebf938e3ab293c875c347c03dc29d725e4a04d6a0777"
         {
             continue;
         }
@@ -319,11 +268,7 @@ fn kernel_fit(source: &[u8]) -> Result<Option<Vec<u8>>> {
         return Ok(None);
     }
     let stream = streams.pop().unwrap();
-    let kernel: Vec<u8> = stream
-        .blocks
-        .iter()
-        .flat_map(|b| b.raw.iter().copied())
-        .collect();
+    let kernel: Vec<u8> = stream.blocks.iter().flat_map(|b| b.raw.iter().copied()).collect();
     let Some((palette, n)) = logo_palette(&kernel)? else {
         return Ok(None);
     };
@@ -339,14 +284,9 @@ fn kernel_fit(source: &[u8]) -> Result<Option<Vec<u8>>> {
         if raw == block.raw {
             packed.extend_from_slice(&zimage[block.packed.clone()]);
         } else {
-            let compressed = lzokay::compress::compress(raw).map_err(|error| {
-                crate::Error::Device(format!("kernel LZO compression: {error}"))
-            })?;
-            let data = if compressed.len() < raw.len() {
-                &compressed
-            } else {
-                raw
-            };
+            let compressed = lzokay::compress::compress(raw)
+                .map_err(|error| crate::Error::Device(format!("kernel LZO compression: {error}")))?;
+            let data = if compressed.len() < raw.len() { &compressed } else { raw };
             packed.extend_from_slice(&(raw.len() as u32).to_be_bytes());
             packed.extend_from_slice(&(data.len() as u32).to_be_bytes());
             packed.extend_from_slice(&adler2::adler32_slice(raw).to_be_bytes());
@@ -356,23 +296,13 @@ fn kernel_fit(source: &[u8]) -> Result<Option<Vec<u8>>> {
     packed.extend_from_slice(&[0; 4]);
     let capacity = stream.end - stream.start;
     if packed.len() > capacity {
-        return device(format!(
-            "recolored logo exceeds kernel compression space: {} > {capacity}",
-            packed.len()
-        ));
+        return device(format!("recolored logo exceeds kernel compression space: {} > {capacity}", packed.len()));
     }
     packed.resize(capacity, 0);
     let mut patched = zimage.to_vec();
     patched[stream.start..stream.end].copy_from_slice(&packed);
     let round_trip = lzop(&patched, stream.start)?;
-    if round_trip
-        .blocks
-        .iter()
-        .flat_map(|b| b.raw.iter())
-        .copied()
-        .collect::<Vec<_>>()
-        != modified
-    {
+    if round_trip.blocks.iter().flat_map(|b| b.raw.iter()).copied().collect::<Vec<_>>() != modified {
         return device("kernel compression round trip failed");
     }
     let mut output = source.to_vec();
@@ -397,9 +327,8 @@ mod tests {
         let raw = b"kernel LZO compatibility block\n".repeat(64);
         // LZO1X-999 encoding of the synthetic text above.
         let reference = vec![
-            48, 107, 101, 114, 110, 101, 108, 32, 76, 90, 79, 32, 99, 111, 109, 112, 97, 116, 105,
-            98, 105, 108, 105, 116, 121, 32, 98, 108, 111, 99, 107, 10, 32, 0, 0, 0, 0, 0, 0, 0,
-            135, 120, 0, 17, 0, 0,
+            48, 107, 101, 114, 110, 101, 108, 32, 76, 90, 79, 32, 99, 111, 109, 112, 97, 116, 105, 98, 105, 108, 105,
+            116, 121, 32, 98, 108, 111, 99, 107, 10, 32, 0, 0, 0, 0, 0, 0, 0, 135, 120, 0, 17, 0, 0,
         ];
         for compressed in [reference, lzokay::compress::compress(&raw).unwrap()] {
             for size in [raw.len(), raw.len() - 1, raw.len() + 1] {
@@ -427,15 +356,10 @@ mod tests {
     #[test]
     fn primary_colors_match_the_shared_gradient() {
         for ((old, new), stop) in COLORS.iter().zip([6, 0, 4, 2]) {
-            assert_eq!(
-                color(&[(old >> 16) as u8, (old >> 8) as u8, *old as u8]),
-                GRADIENT[stop]
-            );
+            assert_eq!(color(&[(old >> 16) as u8, (old >> 8) as u8, *old as u8]), GRADIENT[stop]);
             assert_eq!(
                 *new & 0xffffff,
-                (GRADIENT[stop][0] as u32) << 16
-                    | (GRADIENT[stop][1] as u32) << 8
-                    | GRADIENT[stop][2] as u32
+                (GRADIENT[stop][0] as u32) << 16 | (GRADIENT[stop][1] as u32) << 8 | GRADIENT[stop][2] as u32
             );
         }
         assert_eq!(color(&[0, 0, 0]), [0, 0, 0]);
@@ -456,10 +380,7 @@ mod tests {
         let mut chunks = Vec::new();
         while at < data.len() {
             let n = be(data, at).unwrap() as usize;
-            assert_eq!(
-                be(data, at + 8 + n).unwrap(),
-                crc32fast::hash(&data[at + 4..at + 8 + n])
-            );
+            assert_eq!(be(data, at + 8 + n).unwrap(), crc32fast::hash(&data[at + 4..at + 8 + n]));
             chunks.push((&data[at + 4..at + 8], &data[at + 8..at + 8 + n]));
             at += 12 + n;
         }
@@ -471,16 +392,11 @@ mod tests {
         let Some(dir) = fixtures() else {
             return;
         };
-        for ((name, _), fixture) in FILES[..2]
-            .iter()
-            .zip(["splash-stock.png", "animation-stock.png"])
-        {
+        for ((name, _), fixture) in FILES[..2].iter().zip(["splash-stock.png", "animation-stock.png"]) {
             let source = std::fs::read(dir.join(fixture)).unwrap();
             let output = recolor(name, &source).unwrap().expect("recognized PNG");
             assert_eq!(source.len(), output.len());
-            for ((kind, before), (after_kind, after)) in
-                png_chunks(&source).into_iter().zip(png_chunks(&output))
-            {
+            for ((kind, before), (after_kind, after)) in png_chunks(&source).into_iter().zip(png_chunks(&output)) {
                 assert_eq!(kind, after_kind);
                 if kind == b"PLTE" {
                     assert_ne!(before, after);
@@ -508,11 +424,7 @@ mod tests {
         let (at, size) = props[&("/images/kernel@1".into(), "data".into())];
         for ((path, key), &(start, len)) in &props {
             if path != "/images/kernel@1" && path != "/images/kernel@1/hash@1" {
-                assert_eq!(
-                    &source[start..start + len],
-                    &output[start..start + len],
-                    "{path}/{key}"
-                );
+                assert_eq!(&source[start..start + len], &output[start..start + len], "{path}/{key}");
             }
         }
         let zimage = &source[at..at + size];
@@ -522,33 +434,19 @@ mod tests {
             .filter(|(_, b)| *b == b"\x89LZO\0\r\n\x1a\n")
             .find_map(|(i, _)| lzop(zimage, i).ok())
             .unwrap();
-        let kernel: Vec<u8> = stream
-            .blocks
-            .iter()
-            .flat_map(|b| b.raw.iter().copied())
-            .collect();
+        let kernel: Vec<u8> = stream.blocks.iter().flat_map(|b| b.raw.iter().copied()).collect();
         let (palette, count) = logo_palette(&kernel).unwrap().unwrap();
         let new_zimage = &output[at..at + size];
-        let modified: Vec<u8> = lzop(new_zimage, stream.start)
-            .unwrap()
-            .blocks
-            .into_iter()
-            .flat_map(|b| b.raw)
-            .collect();
+        let modified: Vec<u8> =
+            lzop(new_zimage, stream.start).unwrap().blocks.into_iter().flat_map(|b| b.raw).collect();
         assert_eq!(&kernel[..palette], &modified[..palette]);
         assert_eq!(&kernel[palette + count..], &modified[palette + count..]);
         assert_eq!(&zimage[..stream.start], &new_zimage[..stream.start]);
         assert_eq!(&zimage[stream.end..], &new_zimage[stream.end..]);
-        assert_ne!(
-            &kernel[palette..palette + count],
-            &modified[palette..palette + count]
-        );
+        assert_ne!(&kernel[palette..palette + count], &modified[palette..palette + count]);
         use sha2::Digest;
         let (hash, _) = props[&("/images/kernel@1/hash@1".into(), "value".into())];
-        assert_eq!(
-            &output[hash..hash + 32],
-            sha2::Sha256::digest(new_zimage).as_slice()
-        );
+        assert_eq!(&output[hash..hash + 32], sha2::Sha256::digest(new_zimage).as_slice());
         let mut damaged = source.clone();
         damaged[at + size / 2] ^= 1;
         assert!(recolor(FILES[2].0, &damaged).unwrap().is_none());

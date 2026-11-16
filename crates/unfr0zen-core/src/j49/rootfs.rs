@@ -3,11 +3,12 @@
 //! starts, SSH a server the run brings, and its busybox 1.19 ash takes none of
 //! root's profile additions (no alias, no prompt substitution).
 
-use crate::setup::{check_mode, set_up_shell, put, text, Options, Rootfs, Tree, PROFILE};
+use crate::setup::{check_mode, put, set_up_shell, text, Options, Rootfs, Tree, PROFILE};
 use crate::{device, Result};
 
 /// The files the setup requires.
-pub const FILES: [&str; 5] = ["etc/shadow", "etc/inittab", "etc/init.d/rcS", "etc/init.d/rcH", "etc/nestlabs/client.config"];
+pub const FILES: [&str; 5] =
+    ["etc/shadow", "etc/inittab", "etc/init.d/rcS", "etc/init.d/rcH", "etc/nestlabs/client.config"];
 /// A root shell on the USB serial port (ttyGS0, which only a kernel built
 /// with CONFIG_USB_DYNAMIC_ACM has): a script started at sysinit, as busybox
 /// init starts respawn entries only once rcS is done and NoLongerEvil's never
@@ -20,7 +21,8 @@ pub(crate) const SHELL: &str = "#!/bin/sh\n# A root shell on the USB serial port
                                 while :; do\n    [ -e /dev/ttyGS0 ] && /sbin/getty -i -n -l /bin/sh -L ttyGS0 115200 vt100\n\
                                 \x20   sleep 5\ndone &\n";
 /// The login unfr0zen-gen2.py put there, which this shell replaces.
-pub(crate) const GEN2_GETTY: &str = "# A login on the USB serial port (unfr0zen-gen2.py)\n::sysinit:/bin/sh -c \"while :; do \
+pub(crate) const GEN2_GETTY: &str =
+    "# A login on the USB serial port (unfr0zen-gen2.py)\n::sysinit:/bin/sh -c \"while :; do \
                                      [ -e /dev/ttyGS0 ] && /sbin/getty -L ttyGS0 115200 vt100; sleep 5; done &\"\n";
 /// The SSH server's init script, and the end of its dropbear line, before
 /// which -s goes for keys-only logins.
@@ -71,11 +73,17 @@ pub(crate) fn set_up_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
 
 /// With a server given, its files and their start in rcS, after stock's sshd
 /// line (whose sshd is absent); without, no start.
-pub(crate) fn set_up_ssh(tree: &mut Tree, server: Option<&crate::nestlocal::Overlay>, password_login: bool) -> Result<()> {
+pub(crate) fn set_up_ssh(
+    tree: &mut Tree,
+    server: Option<&crate::nestlocal::Overlay>,
+    password_login: bool,
+) -> Result<()> {
     let (anchor, start) = SSH_START;
     let mut rcs = text(tree, "etc/init.d/rcS")?.replace(&format!("{anchor}{start}"), anchor);
     if rcs.contains(start) || rcs.matches(anchor).count() != 1 {
-        return device("etc/init.d/rcS: expected one '${INITDIR}/sshd start' line, and unfr0zen's SSH start only after it");
+        return device(
+            "etc/init.d/rcS: expected one '${INITDIR}/sshd start' line, and unfr0zen's SSH start only after it",
+        );
     }
     if let Some(server) = server {
         rcs = rcs.replace(anchor, &format!("{anchor}{start}"));
@@ -129,7 +137,8 @@ mod tests {
     fn a_j49_starts_the_ssh_server_it_is_given_after_stock_sshd() {
         let stock = "a\n${INITDIR}/sshd start\nb\n";
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (stock.as_bytes().to_vec(), 0o750))]);
-        let server = Overlay { directories: vec![], files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] };
+        let server =
+            Overlay { directories: vec![], files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] };
         set_up_ssh(&mut tree, Some(&server), true).unwrap();
         let started = "a\n${INITDIR}/sshd start\n${INITDIR}/unfr0zen-ssh start\nb\n";
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes());

@@ -5,7 +5,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::{Duration, Instant};
 
-
 pub struct Uart {
     io: async_io::Async<File>,
     _lock: File,
@@ -15,13 +14,19 @@ pub struct Uart {
 
 impl Uart {
     pub fn open() -> io::Result<Self> {
-        let ble = crate::device::current().ble.as_ref()
+        let ble = crate::device::current()
+            .ble
+            .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this unit has no BLE peripheral"))?;
         if !crate::sensor::port::owns_chip() && !crate::sensor::port::stock_ble_off()? {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "stock BLE owns the radio"));
         }
         let firmware = gtl::firmware(&std::fs::read(ble.firmware)?)?;
-        let lock = OpenOptions::new().create(true).truncate(false).write(true).mode(0o600)
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
             .open("/var/run/unfr0zen/ble.lock")?;
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(io::Error::last_os_error());
@@ -43,11 +48,17 @@ impl Uart {
             file.write_all(&firmware)?;
             let mut child = std::process::Command::new("/nestlabs/sbin/da-loader")
                 .args([ble.node, &temporary, "57600", "no-rtscts", &crate::sensor::port::reset_dir(ble)])
-                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()?;
             let started = Instant::now();
             loop {
                 if let Some(status) = child.try_wait()? {
-                    return if status.success() { Ok(()) } else { Err(io::Error::other("DA14580 firmware upload failed")) };
+                    return if status.success() {
+                        Ok(())
+                    } else {
+                        Err(io::Error::other("DA14580 firmware upload failed"))
+                    };
                 }
                 if started.elapsed() > Duration::from_secs(20) {
                     let _ = child.kill();
@@ -59,11 +70,13 @@ impl Uart {
         })();
         let _ = std::fs::remove_file(&temporary);
         loaded?;
-        let file = OpenOptions::new().read(true).write(true)
-            .custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&device)?;
+        let file =
+            OpenOptions::new().read(true).write(true).custom_flags(libc::O_NOCTTY | libc::O_NONBLOCK).open(&device)?;
         let fd = file.as_raw_fd();
         let mut saved = unsafe { std::mem::zeroed::<libc::termios>() };
-        if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 { return Err(io::Error::last_os_error()); }
+        if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
         let mut termios = saved;
         unsafe {
             libc::cfmakeraw(&mut termios);
@@ -74,7 +87,8 @@ impl Uart {
         termios.c_cc[libc::VMIN] = 1;
         termios.c_cc[libc::VTIME] = 0;
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0
-            || unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0 {
+            || unsafe { libc::ioctl(fd, libc::TIOCEXCL) } != 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(Self { io: async_io::Async::new(file)?, _lock: lock, saved, decoder: gtl::Decoder::default() })
@@ -85,7 +99,9 @@ impl Uart {
         let mut offset = 0;
         while offset < bytes.len() {
             let len = self.io.write_with(|mut file| file.write(&bytes[offset..])).await?;
-            if len == 0 { return Err(io::ErrorKind::WriteZero.into()); }
+            if len == 0 {
+                return Err(io::ErrorKind::WriteZero.into());
+            }
             offset += len;
         }
         Ok(())
@@ -93,10 +109,14 @@ impl Uart {
 
     pub async fn receive(&mut self) -> io::Result<(u16, Vec<u8>)> {
         loop {
-            if let Some(message) = self.decoder.next()? { return Ok(message); }
+            if let Some(message) = self.decoder.next()? {
+                return Ok(message);
+            }
             let mut bytes = [0; 512];
             let len = self.io.read_with(|mut file| file.read(&mut bytes)).await?;
-            if len == 0 { return Err(io::ErrorKind::UnexpectedEof.into()); }
+            if len == 0 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
             self.decoder.push(&bytes[..len])?;
         }
     }
@@ -108,7 +128,11 @@ impl Uart {
             loop {
                 let (op, body) = self.receive().await?;
                 if op == response {
-                    return if body == success { Ok(()) } else { Err(io::Error::other(format!("GTL response {op:#x}: {body:?}"))) };
+                    return if body == success {
+                        Ok(())
+                    } else {
+                        Err(io::Error::other(format!("GTL response {op:#x}: {body:?}")))
+                    };
                 }
             }
         };

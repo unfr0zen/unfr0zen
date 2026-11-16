@@ -45,10 +45,13 @@ pub(crate) fn file<T>(path: &Path, result: io::Result<T>) -> Result<T> {
 
 pub(crate) fn read_at(path: &Path, offset: u64, size: usize) -> Result<Vec<u8>> {
     let mut data = vec![0; size];
-    file(path, File::open(path).and_then(|mut f| {
-        f.seek(SeekFrom::Start(offset))?;
-        f.read_exact(&mut data)
-    }))?;
+    file(
+        path,
+        File::open(path).and_then(|mut f| {
+            f.seek(SeekFrom::Start(offset))?;
+            f.read_exact(&mut data)
+        }),
+    )?;
     Ok(data)
 }
 
@@ -78,10 +81,15 @@ pub fn read_bad_blocks(path: &Path) -> Result<Option<Vec<u32>>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         text => file(path, text)?,
     };
-    text.lines().map(|line| {
-        u32::from_str_radix(line, 16).ok().filter(|block| block % BLOCK == 0 && *block < NAND_SIZE)
-            .ok_or_else(|| failure(format!("{}: {line:?} is not a block offset", path.display())))
-    }).collect::<Result<Vec<u32>>>().map(Some)
+    text.lines()
+        .map(|line| {
+            u32::from_str_radix(line, 16)
+                .ok()
+                .filter(|block| block % BLOCK == 0 && *block < NAND_SIZE)
+                .ok_or_else(|| failure(format!("{}: {line:?} is not a block offset", path.display())))
+        })
+        .collect::<Result<Vec<u32>>>()
+        .map(Some)
 }
 
 /// The SHA-256 the .sha256 beside a restore's image records.
@@ -109,20 +117,32 @@ pub(crate) fn read_checked(progress: &mut dyn Progress, image: &Path, recorded: 
 /// Runs the job on the unit, whichever device it is, from whatever mode it is
 /// in, and boots it normally after. `confirm` is asked before a restore
 /// writes anything. Returns the final status line.
-pub fn run(job: &Job, wait_usb: Duration, omap: Option<Device>,
-           entry_point: diamond3::usb::EntryPoint, progress: &mut dyn Progress,
-           confirm: &mut dyn FnMut(&str) -> bool, cancel: &device::CancelFlag)
-           -> Result<String> {
+pub fn run(
+    job: &Job,
+    wait_usb: Duration,
+    omap: Option<Device>,
+    entry_point: diamond3::usb::EntryPoint,
+    progress: &mut dyn Progress,
+    confirm: &mut dyn FnMut(&str) -> bool,
+    cancel: &device::CancelFlag,
+) -> Result<String> {
     let expected = match job {
         Job::Backup(out) if out.exists() => return Err(failure(format!("{} exists", out.display()))),
         Job::Backup(_) => None,
         Job::Verify(image) | Job::Restore(image) => {
             let len = file(image, fs::metadata(image))?.len();
-            Some(image_device(len).ok_or_else(|| failure(format!("{} is not a whole-NAND image ({len} bytes)", image.display())))?)
+            Some(
+                image_device(len)
+                    .ok_or_else(|| failure(format!("{} is not a whole-NAND image ({len} bytes)", image.display())))?,
+            )
         }
     };
     let unit = device::detect(progress, wait_usb, omap, cancel)?;
-    if let Some(device) = expected.filter(|&device| unit.device != Device::Onyx && device != unit.device && !(device == Device::J49 && unit.device == Device::Diamond)) {
+    if let Some(device) = expected.filter(|&device| {
+        unit.device != Device::Onyx
+            && device != unit.device
+            && !(device == Device::J49 && unit.device == Device::Diamond)
+    }) {
         return Err(failure(format!("the image is a {}'s NAND; the unit is a {}", device.name(), unit.device.name())));
     }
     match unit.device {
@@ -203,7 +223,17 @@ mod tests {
             fn status(&mut self, _: &str) {}
             fn waiting(&mut self, _: &str) {}
         }
-        let error = run(&Job::Verify(image), Duration::ZERO, None, Default::default(), &mut Silent, &mut |_| false, &Default::default()).err().unwrap();
+        let error = run(
+            &Job::Verify(image),
+            Duration::ZERO,
+            None,
+            Default::default(),
+            &mut Silent,
+            &mut |_| false,
+            &Default::default(),
+        )
+        .err()
+        .unwrap();
         assert!(error.to_string().contains("is not a whole-NAND image"), "{error}");
         fs::remove_dir_all(dir).unwrap();
     }

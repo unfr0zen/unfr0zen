@@ -27,12 +27,20 @@ return {
   stars = { count = 70, top = 20, bottom = 300, groups = 3, twinkle = 1.3 },
   -- Clouds: `far` and `near` sprites, drifting `speed` units a second (by
   -- the wind's factor), lit white by day and slate by night.
-  clouds = { speed = 7, day = "#ffffff", night = "#4a5268", rain = "#9aa3ae", storm = "#5d6472",
-             top = 40, bottom = 230 },
+  clouds = {
+    speed = 7,
+    day = "#ffffff",
+    night = "#4a5268",
+    rain = "#9aa3ae",
+    storm = "#5d6472",
+    top = 40,
+    bottom = 230,
+  },
   -- Rain: streaks `slope` units across for each one down, in three depths
   -- of { count, length, width, speed, alpha }.
   rain = {
-    color = "#d8e8ff", slope = 0.14,
+    color = "#d8e8ff",
+    slope = 0.14,
     depths = { { 130, 20, 1.5, 620, 0.38 }, { 90, 28, 2, 820, 0.55 }, { 45, 40, 2.8, 1050, 0.75 } },
   },
   -- Snow: flakes in three depths of { count, radius, speed, sway, alpha }.

@@ -4,21 +4,25 @@ mod gtl;
 #[cfg(target_os = "linux")]
 mod uart;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use rs_matter::sc::pase::CommWindowState;
 use rs_matter::transport::network::btp::Btp;
 #[cfg(target_os = "linux")]
 use rs_matter::transport::network::{btp::AdvData, BtAddr};
 use rs_matter::{BasicCommData, Matter};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
-use rs_matter::sc::pase::CommWindowState;
+use std::time::{Duration, Instant};
 
 static CONNECTED: AtomicBool = AtomicBool::new(false);
 static READY: AtomicBool = AtomicBool::new(false);
 
-pub fn sleep_blocked() -> bool { CONNECTED.load(Ordering::SeqCst) }
-pub fn ready() -> bool { READY.load(Ordering::SeqCst) }
+pub fn sleep_blocked() -> bool {
+    CONNECTED.load(Ordering::SeqCst)
+}
+pub fn ready() -> bool {
+    READY.load(Ordering::SeqCst)
+}
 
 pub async fn run(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &str) {
     #[cfg(target_os = "linux")]
@@ -37,8 +41,8 @@ pub async fn run(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &
 
 #[cfg(target_os = "linux")]
 async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &str) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
     use embassy_futures::select::{select, Either};
+    use std::io::{Error, ErrorKind};
     let mut uart = uart::Uart::open()?;
     let info = rs_matter::dm::clusters::basic_info::BasicInfoConfig {
         vid: rs_matter::dm::devices::test::TEST_VID,
@@ -57,12 +61,12 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
     let mut packet = [0; gtl::MAX_VALUE];
     loop {
         let open = !matches!(matter.comm_window_state(), CommWindowState::Closed);
-        if open { closed_since = None; }
-        else if peer.is_some() {
+        if open {
+            closed_since = None;
+        } else if peer.is_some() {
             closed_since.get_or_insert_with(Instant::now);
         }
-        if peer.is_some() && (btp.timeout()
-            || closed_since.is_some_and(|at| at.elapsed() >= Duration::from_secs(30))) {
+        if peer.is_some() && (btp.timeout() || closed_since.is_some_and(|at| at.elapsed() >= Duration::from_secs(30))) {
             uart.command(10, &[], 12, &[1]).await?;
             advertising = false;
             peer = None;
@@ -78,7 +82,8 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
             return Err(Error::new(ErrorKind::TimedOut, "BLE indication confirmation timed out"));
         }
         if peer.is_some() && pending.is_none() {
-            let len = btp.process_outgoing(Some(mtu), &mut packet)
+            let len = btp
+                .process_outgoing(Some(mtu), &mut packet)
                 .map_err(|e| Error::new(ErrorKind::InvalidData, format!("BTP output: {e:?}")))?;
             if len != 0 {
                 let mut body = vec![2, 1];
@@ -93,7 +98,9 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
             Either::First(result) => Some(result?),
             Either::Second(_) => None,
         };
-        let Some((op, body)) = message else { continue; };
+        let Some((op, body)) = message else {
+            continue;
+        };
         match (op, body.as_slice()) {
             (0x15, [addr @ .., lo, hi, 1, _]) if addr.len() == 6 => {
                 btp.reset();
@@ -124,7 +131,9 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
             }
             // 0x21 reports request errors; 0x24 confirms delivery to the central.
             (0x21, [2, 1, _, _, status]) => {
-                if *status != 0 { return Err(Error::other(format!("BLE indication failed: {status}"))); }
+                if *status != 0 {
+                    return Err(Error::other(format!("BLE indication failed: {status}")));
+                }
             }
             (0x24, [2, 1, _, _, 1]) => pending = None,
             _ => {}

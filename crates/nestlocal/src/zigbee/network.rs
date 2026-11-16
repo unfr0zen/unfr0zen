@@ -53,9 +53,14 @@ fn eui_unhex(text: &str) -> Result<[u8; 8], String> {
 }
 
 fn unhex<const N: usize>(text: &str) -> Result<[u8; N], String> {
-    let bytes: Option<Vec<u8>> = (0..text.len()).step_by(2)
-        .map(|i| text.get(i..i + 2).filter(|b| b.bytes().all(|c| c.is_ascii_hexdigit()))
-            .and_then(|b| u8::from_str_radix(b, 16).ok())).collect();
+    let bytes: Option<Vec<u8>> = (0..text.len())
+        .step_by(2)
+        .map(|i| {
+            text.get(i..i + 2)
+                .filter(|b| b.bytes().all(|c| c.is_ascii_hexdigit()))
+                .and_then(|b| u8::from_str_radix(b, 16).ok())
+        })
+        .collect();
     bytes.and_then(|b| b.try_into().ok()).ok_or_else(|| format!("not {N} bytes of hex: {text:?}"))
 }
 
@@ -139,7 +144,11 @@ pub fn save(path: &Path, saved: &Saved) -> Result<(), String> {
     let partial = path.with_extension("partial");
     // A mode applies only to a file created, not to one left over.
     let _ = std::fs::remove_file(&partial);
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&partial)
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&partial)
         .map_err(|e| format!("{}: {e}", partial.display()))?;
     file.write_all(&text).and_then(|()| file.sync_all()).map_err(|e| format!("{}: {e}", partial.display()))?;
     std::fs::rename(&partial, path).map_err(|e| format!("{}: {e}", path.display()))
@@ -237,10 +246,19 @@ mod tests {
 
     fn saved() -> Saved {
         Saved {
-            eui64: "18b430000084b746".into(), pan_id: 0x1a62, extended_pan_id: "dddddddddddddddd".into(),
-            channel: 25, node_id: 0x545a, manager_id: 0, update_id: 0, network_key: "00".repeat(16),
-            network_key_sequence: 0, network_frame_counter: 1234, trust_center_link_key: "5a".repeat(16),
-            trust_center_eui64: "00".repeat(8), aps_frame_counter: 7,
+            eui64: "18b430000084b746".into(),
+            pan_id: 0x1a62,
+            extended_pan_id: "dddddddddddddddd".into(),
+            channel: 25,
+            node_id: 0x545a,
+            manager_id: 0,
+            update_id: 0,
+            network_key: "00".repeat(16),
+            network_key_sequence: 0,
+            network_frame_counter: 1234,
+            trust_center_link_key: "5a".repeat(16),
+            trust_center_eui64: "00".repeat(8),
+            aps_frame_counter: 7,
         }
     }
 

@@ -23,12 +23,13 @@ pub fn status(protocol: &str, text: &str) {
     }
 }
 
-pub fn take_request(protocol: &str) -> bool { take_request_age(protocol).is_some() }
+pub fn take_request(protocol: &str) -> bool {
+    take_request_age(protocol).is_some()
+}
 
 pub fn take_request_age(protocol: &str) -> Option<std::time::Duration> {
     let path = Path::new(DIR).join(format!("{protocol}.request"));
-    let age = std::fs::metadata(&path).ok()?.modified().ok()
-        .and_then(|time| time.elapsed().ok()).unwrap_or_default();
+    let age = std::fs::metadata(&path).ok()?.modified().ok().and_then(|time| time.elapsed().ok()).unwrap_or_default();
     std::fs::remove_file(path).ok()?;
     Some(age)
 }
@@ -41,7 +42,17 @@ pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Res
     let features = (matter as u8) | ((zigbee as u8) << 1) | ((doom as u8) << 2) | ((theme as u8) << 3);
     publish("features", format!("{features:x}").as_bytes())?;
     publish_activity_icons()?;
-    for name in ["display.request", "display.taken", "matter.request", "matter-reset.request", "zigbee.request", "doom.request", "theme.request", "matter.code", "matter.png"] {
+    for name in [
+        "display.request",
+        "display.taken",
+        "matter.request",
+        "matter-reset.request",
+        "zigbee.request",
+        "doom.request",
+        "theme.request",
+        "matter.code",
+        "matter.png",
+    ] {
         let _ = std::fs::remove_file(Path::new(DIR).join(name));
     }
     status("matter", if matter { "Starting Matter..." } else { "Matter not enabled" });
@@ -50,7 +61,10 @@ pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Res
     Ok(())
 }
 
-pub fn matter_codes(comm: &rs_matter::BasicCommData, capabilities: rs_matter::pairing::DiscoveryCapabilities) -> Result<(), String> {
+pub fn matter_codes(
+    comm: &rs_matter::BasicCommData,
+    capabilities: rs_matter::pairing::DiscoveryCapabilities,
+) -> Result<(), String> {
     let (png_bytes, code) = encode_matter_codes(comm, capabilities)?;
     publish("matter.png", &png_bytes).map_err(|e| e.to_string())?;
     publish("matter.code", code.as_bytes()).map_err(|e| e.to_string())
@@ -73,12 +87,13 @@ fn publish_activity_icons() -> std::io::Result<()> {
             let cx = centre + angle.sin() * orbit;
             let cy = centre - angle.cos() * orbit;
             let alpha = 64 + ((dot + 8 - frame) % 8) * 27;
-            for y in 0..size { for x in 0..size {
-                if (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2) <= dot_radius.powi(2) {
-                    rgba[(y * size + x) * 4..(y * size + x) * 4 + 4]
-                        .copy_from_slice(&[0, 174, 239, alpha as u8]);
+            for y in 0..size {
+                for x in 0..size {
+                    if (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2) <= dot_radius.powi(2) {
+                        rgba[(y * size + x) * 4..(y * size + x) * 4 + 4].copy_from_slice(&[0, 174, 239, alpha as u8]);
+                    }
                 }
-            } }
+            }
         }
         let mut data = Vec::new();
         {
@@ -93,10 +108,14 @@ fn publish_activity_icons() -> std::io::Result<()> {
     Ok(())
 }
 
-fn encode_matter_codes(comm: &rs_matter::BasicCommData, capabilities: rs_matter::pairing::DiscoveryCapabilities) -> Result<(Vec<u8>, String), String> {
-    use rs_matter::pairing::qr::{Qr, QrPayload, CommFlowType, no_optional_data};
-    use rs_matter::dm::devices::test::{TEST_VID, TEST_PID};
-    let payload = QrPayload::new(capabilities, CommFlowType::Standard, comm.clone(), TEST_VID, TEST_PID, "", no_optional_data);
+fn encode_matter_codes(
+    comm: &rs_matter::BasicCommData,
+    capabilities: rs_matter::pairing::DiscoveryCapabilities,
+) -> Result<(Vec<u8>, String), String> {
+    use rs_matter::dm::devices::test::{TEST_PID, TEST_VID};
+    use rs_matter::pairing::qr::{no_optional_data, CommFlowType, Qr, QrPayload};
+    let payload =
+        QrPayload::new(capabilities, CommFlowType::Standard, comm.clone(), TEST_VID, TEST_PID, "", no_optional_data);
     let mut text_buf = [0u8; 256];
     let (text, _) = payload.as_str(&mut text_buf).map_err(|e| e.to_string())?;
     let mut temporary = [0u8; 4096];
@@ -106,16 +125,24 @@ fn encode_matter_codes(comm: &rs_matter::BasicCommData, capabilities: rs_matter:
     // the slot the gen 3's 192 pixels are on this display.
     let modules = qr.size() + 8;
     let scale = scaled(192) as u32 / modules;
-    if scale == 0 { return Err("Matter QR exceeds display slot".into()); }
+    if scale == 0 {
+        return Err("Matter QR exceeds display slot".into());
+    }
     let size = modules * scale;
-    let pixels: Vec<u8> = (0..size).flat_map(|y| {
-        let qr = &qr;
-        (0..size).map(move |x| {
-            let mx = (x / scale) as i32 - 4;
-            let my = (y / scale) as i32 - 4;
-            if mx >= 0 && my >= 0 && mx < qr.size() as i32 && my < qr.size() as i32 && qr.get_module(mx, my) { 0 } else { 255 }
+    let pixels: Vec<u8> = (0..size)
+        .flat_map(|y| {
+            let qr = &qr;
+            (0..size).map(move |x| {
+                let mx = (x / scale) as i32 - 4;
+                let my = (y / scale) as i32 - 4;
+                if mx >= 0 && my >= 0 && mx < qr.size() as i32 && my < qr.size() as i32 && qr.get_module(mx, my) {
+                    0
+                } else {
+                    255
+                }
+            })
         })
-    }).collect();
+        .collect();
     let mut png_bytes = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png_bytes, size, size);
@@ -130,7 +157,10 @@ fn encode_matter_codes(comm: &rs_matter::BasicCommData, capabilities: rs_matter:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rs_matter::{BasicCommData, sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef}};
+    use rs_matter::{
+        sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef},
+        BasicCommData,
+    };
 
     #[test]
     fn qr_png_and_manual_code_follow_configured_credentials() {

@@ -16,9 +16,9 @@
 set -eu
 thread_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
 cd "$thread_root"
-export NESTLOCAL_ZBWAKE=${NESTLOCAL_ZBWAKE:-$thread_root/build/zbwake}
-export NESTLOCAL_RADIO=${NESTLOCAL_RADIO:-$thread_root/build/radio/radio.bin}
-export NESTLOCAL_RADIO_EM357=${NESTLOCAL_RADIO_EM357:-$thread_root/build/radio-em357-zigbee/radio.bin}
+export NESTLOCAL_ZBWAKE="${NESTLOCAL_ZBWAKE:-$thread_root/build/zbwake}"
+export NESTLOCAL_RADIO="${NESTLOCAL_RADIO:-$thread_root/build/radio/radio.bin}"
+export NESTLOCAL_RADIO_EM357="${NESTLOCAL_RADIO_EM357:-$thread_root/build/radio-em357-zigbee/radio.bin}"
 nestlocal_target_dir=${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}
 mkdir -p build/thread
 sh platform/common/wakefilter/build.sh build/wakefilter
@@ -32,7 +32,7 @@ sh platform/common/theme/build.sh build/theme
 target=armv7-unknown-linux-gnueabihf
 export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C link-arg=-Wl,-z,lazy -C relocation-model=static -C link-arg=-no-pie -C target-cpu=cortex-a8"
 cargo zigbuild --locked -p nestlocal --bin nestlocal --bin thread-rcp --profile thermostat \
-  --target $target.2.19 --target-dir "$nestlocal_target_dir"
+    --target $target.2.19 --target-dir "$nestlocal_target_dir"
 cp "$nestlocal_target_dir"/$target/thermostat/thread-rcp build/thread/
 cp "$nestlocal_target_dir"/$target/thermostat/nestlocal build/thread/
 cp build/thread/nestlocal build/nestlocal-armv7

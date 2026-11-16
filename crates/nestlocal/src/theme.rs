@@ -51,14 +51,18 @@ const SOURCE_LIMIT: u64 = 256 << 10;
 
 /// Whether `name` can name a theme: its folder's name.
 fn theme_id(name: &str) -> bool {
-    !name.is_empty() && name.len() <= NAME_LIMIT && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !name.is_empty()
+        && name.len() <= NAME_LIMIT
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Whether the theme `name` can be shown: stock always, another once its
 /// folder under `root` has a theme.lua the library would read.
 fn installed(root: &Path, name: &str) -> bool {
-    name == STOCK || (theme_id(name)
-        && std::fs::metadata(root.join(name).join("theme.lua")).is_ok_and(|f| f.is_file() && f.len() <= SOURCE_LIMIT))
+    name == STOCK
+        || (theme_id(name)
+            && std::fs::metadata(root.join(name).join("theme.lua"))
+                .is_ok_and(|f| f.is_file() && f.len() <= SOURCE_LIMIT))
 }
 
 /// The theme `name` as the THEMES settings entry shows it: the name its
@@ -68,11 +72,14 @@ fn label(root: &Path, name: &str) -> String {
     if name == STOCK {
         return "Stock".into();
     }
-    std::fs::read_to_string(root.join(name).join("theme.lua")).ok()
-        .and_then(|lua| lua.lines().find_map(|line| {
-            let rest = line.trim_start().strip_prefix("name = \"")?;
-            Some(rest[..rest.find('"')?].trim().to_string())
-        }))
+    std::fs::read_to_string(root.join(name).join("theme.lua"))
+        .ok()
+        .and_then(|lua| {
+            lua.lines().find_map(|line| {
+                let rest = line.trim_start().strip_prefix("name = \"")?;
+                Some(rest[..rest.find('"')?].trim().to_string())
+            })
+        })
         .filter(|l| !l.is_empty() && l.len() <= NAME_LIMIT && !l.chars().any(char::is_control))
         .unwrap_or_else(|| name.to_string())
 }
@@ -82,8 +89,11 @@ fn label(root: &Path, name: &str) -> String {
 fn themes(root: &Path) -> Vec<String> {
     let mut out = vec![STOCK.to_string()];
     if let Ok(entries) = std::fs::read_dir(root) {
-        out.extend(entries.filter_map(|e| e.ok()?.file_name().into_string().ok())
-            .filter(|name| name != STOCK && installed(root, name)));
+        out.extend(
+            entries
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter(|name| name != STOCK && installed(root, name)),
+        );
     }
     out
 }
@@ -91,10 +101,13 @@ fn themes(root: &Path) -> Vec<String> {
 /// What the catalog is made of: the themes offered, and when each one's
 /// theme.lua, which names it, last changed.
 fn listed(root: &Path) -> Vec<(String, Option<std::time::SystemTime>)> {
-    themes(root).into_iter().map(|name| {
-        let changed = std::fs::metadata(root.join(&name).join("theme.lua")).and_then(|f| f.modified()).ok();
-        (name, changed)
-    }).collect()
+    themes(root)
+        .into_iter()
+        .map(|name| {
+            let changed = std::fs::metadata(root.join(&name).join("theme.lua")).and_then(|f| f.modified()).ok();
+            (name, changed)
+        })
+        .collect()
 }
 
 /// theme.catalog: an `id<TAB>label` line for each theme offered.
@@ -123,7 +136,9 @@ fn state(theme: &str, picked: u64, dev: Value, shared: Value, weather: Fields) -
         (Value::Object(dev), Value::Object(shared)) => Value::Object(bridge::state(dev, shared)),
         _ => Value::Null,
     };
-    json!({"theme": theme, "picked": picked, "dev": dev, "shared": shared, "state": shown, "weather": weather}).to_string().into_bytes()
+    json!({"theme": theme, "picked": picked, "dev": dev, "shared": shared, "state": shown, "weather": weather})
+        .to_string()
+        .into_bytes()
 }
 
 /// Makes `name` the theme shown: its label for the Themes page, and the
@@ -147,7 +162,11 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
     let (tx, rx) = mpsc::channel::<()>();
     let (device, shared) = (format!("device.{serial}"), format!("shared.{serial}"));
     let watched = (device.clone(), shared.clone());
-    store.watch(move |o| if o.key == watched.0 || o.key == watched.1 { let _ = tx.send(()); });
+    store.watch(move |o| {
+        if o.key == watched.0 || o.key == watched.1 {
+            let _ = tx.send(());
+        }
+    });
     let spawned = std::thread::Builder::new().name("theme".into()).spawn(move || {
         let root = Path::new(INSTALLED);
         let mut offered = listed(root);
@@ -158,10 +177,15 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
             theme = "stock".into();
         }
         let buckets = |key: &str| store.get(key).map_or(Value::Null, |o| Value::Object(o.value));
-        let publish = |theme: &str, picked: u64, weather: &Fields| settings_ui::publish("theme.native.json",
-            &state(theme, picked, buckets(&device), buckets(&shared), weather.clone()));
+        let publish = |theme: &str, picked: u64, weather: &Fields| {
+            settings_ui::publish(
+                "theme.native.json",
+                &state(theme, picked, buckets(&device), buckets(&shared), weather.clone()),
+            )
+        };
         let mut weather = outdoor.known();
-        let ready = marker().map_err(std::io::Error::other)
+        let ready = marker()
+            .map_err(std::io::Error::other)
             .and_then(|png| settings_ui::publish("theme-marker.png", &png))
             .and_then(|()| settings_ui::publish("theme.catalog", catalog(root, &offered).as_bytes()))
             .and_then(|()| publish(&theme, picked, &weather))
@@ -233,9 +257,11 @@ mod tests {
     #[test]
     fn stock_comes_first_then_every_theme_folder_as_listed() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("themes");
-        let listed: Vec<String> = std::fs::read_dir(&source).unwrap()
+        let listed: Vec<String> = std::fs::read_dir(&source)
+            .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .filter(|name| source.join(name).join("theme.lua").is_file()).collect();
+            .filter(|name| source.join(name).join("theme.lua").is_file())
+            .collect();
         let offered = themes(&source);
         assert_eq!(offered[0], "stock");
         assert_eq!(offered[1..], listed[..]);
@@ -282,7 +308,10 @@ mod tests {
         // theme.lua, or removed.
         let before = listed(&root);
         assert_eq!(before, listed(&root));
-        assert!(catalog(&root, &before).contains("mine\tMy Theme\n") && catalog(&root, &before).starts_with("stock\tStock\n"));
+        assert!(
+            catalog(&root, &before).contains("mine\tMy Theme\n")
+                && catalog(&root, &before).starts_with("stock\tStock\n")
+        );
         theme("added", "name = \"Added\",");
         let added = listed(&root);
         assert!(added != before && catalog(&root, &added).contains("added\tAdded\n"));
@@ -307,15 +336,22 @@ mod tests {
     #[test]
     fn state_carries_the_theme_buckets_mqtt_state_and_weather() {
         let weather = json!({"temp_c": 4.5, "icon": "snow"}).as_object().unwrap().clone();
-        let first: Value = serde_json::from_slice(&state("hyperdrive", 2, json!({"temperature_scale": "F"}), Value::Null,
-                                                         weather)).unwrap();
+        let first: Value =
+            serde_json::from_slice(&state("hyperdrive", 2, json!({"temperature_scale": "F"}), Value::Null, weather))
+                .unwrap();
         assert_eq!(first["theme"], "hyperdrive");
         assert_eq!(first["picked"], 2);
         assert_eq!(first["dev"]["temperature_scale"], "F");
         assert!(first["shared"].is_null() && first["state"].is_null(), "no state before the unit reports");
         assert_eq!(first["weather"]["icon"], "snow");
-        let second: Value = serde_json::from_slice(&state("nest-gen4", 0, json!({"temperature_scale": "C", "current_humidity": 41}),
-            json!({"target_temperature_type": "heat", "target_temperature": 20.6, "hvac_heater_state": true}), Fields::new())).unwrap();
+        let second: Value = serde_json::from_slice(&state(
+            "nest-gen4",
+            0,
+            json!({"temperature_scale": "C", "current_humidity": 41}),
+            json!({"target_temperature_type": "heat", "target_temperature": 20.6, "hvac_heater_state": true}),
+            Fields::new(),
+        ))
+        .unwrap();
         assert_eq!(second["state"]["mode"], "heat");
         assert_eq!(second["state"]["target"], 20.5);
         assert_eq!(second["state"]["action"], "heating");

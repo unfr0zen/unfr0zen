@@ -20,8 +20,8 @@ pub mod usb;
 
 pub use device::{CancelFlag, Device, WAIT_USB_BOOT_STAGE};
 pub use flow::{mask_url, run, run_after_backup, Config, SetupInputs};
-pub use unfr0zen_core::nlclient;
 pub use progress::{end_log, init_logging, log_path, set_selection, Phase, Progress, Stage};
+pub use unfr0zen_core::nlclient;
 /// The icy house icon rendered as braille dots.
 pub const LOGO: &str = include_str!("logo.txt");
 /// RGB colours sampled from the app icon, one per braille cell, with rows

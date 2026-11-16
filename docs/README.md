@@ -7,4 +7,4 @@ custom domain in `CNAME`.
 The download page reads the latest release from the GitHub API; `REPO` in
 `download.js` names the repository it reads.
 
-Local preview: `python3 -m http.server -d docs` and open http://localhost:8000.
+Local preview: `python3 -m http.server -d docs` and open <http://localhost:8000>.

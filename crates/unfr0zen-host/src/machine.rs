@@ -4,16 +4,22 @@
 
 /// One line per fact found, such as "OS: macOS 26.1 (25B78)".
 pub(crate) fn describe() -> Vec<String> {
-    facts().into_iter()
-        .filter_map(|(label, value)| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
-            .map(|value| format!("{label}: {value}")))
+    facts()
+        .into_iter()
+        .filter_map(|(label, value)| {
+            value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).map(|value| format!("{label}: {value}"))
+        })
         .collect()
 }
 
 #[cfg(target_os = "macos")]
 fn facts() -> Vec<(&'static str, Option<String>)> {
     fn run(program: &str, args: &[&str]) -> Option<String> {
-        std::process::Command::new(program).args(args).output().ok().filter(|out| out.status.success())
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
     let sysctl = |name| run("/usr/sbin/sysctl", &["-n", name]);
@@ -23,7 +29,10 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
         ("CPU", sysctl("machdep.cpu.brand_string")),
         ("Model", sysctl("hw.model")),
         ("Country", run("/usr/bin/defaults", &["read", "-g", "AppleLocale"]).and_then(|locale| country(&locale))),
-        ("Rosetta", sysctl("sysctl.proc_translated").filter(|v| v == "1").map(|_| "this x86_64 build is translated".into())),
+        (
+            "Rosetta",
+            sysctl("sysctl.proc_translated").filter(|v| v == "1").map(|_| "this x86_64 build is translated".into()),
+        ),
     ]
 }
 
@@ -37,20 +46,29 @@ fn country(locale: &str) -> Option<String> {
 #[cfg(target_os = "linux")]
 fn facts() -> Vec<(&'static str, Option<String>)> {
     let read = |path: &str| std::fs::read_to_string(path).ok();
-    let field = |text: String, key: &str| text.lines()
-        .find_map(|line| line.split_once(':').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()));
-    let os = read("/etc/os-release").and_then(|text| text.lines()
-        .find_map(|line| line.strip_prefix("PRETTY_NAME=")).map(|v| v.trim_matches('"').to_string()));
+    let field = |text: String, key: &str| {
+        text.lines()
+            .find_map(|line| line.split_once(':').filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()))
+    };
+    let os = read("/etc/os-release").and_then(|text| {
+        text.lines().find_map(|line| line.strip_prefix("PRETTY_NAME=")).map(|v| v.trim_matches('"').to_string())
+    });
     let kernel = read("/proc/sys/kernel/osrelease").unwrap_or_default();
-    let model = read("/sys/class/dmi/id/sys_vendor").zip(read("/sys/class/dmi/id/product_name"))
+    let model = read("/sys/class/dmi/id/sys_vendor")
+        .zip(read("/sys/class/dmi/id/product_name"))
         .map(|(vendor, product)| format!("{} {}", vendor.trim(), product.trim()))
         .or_else(|| read("/proc/device-tree/model").map(|model| model.trim_end_matches('\0').to_string()));
     vec![
         ("OS", os.map(|os| format!("{os}, kernel {}", kernel.trim()))),
         ("CPU", read("/proc/cpuinfo").and_then(|text| field(text, "model name"))),
         ("Model", model),
-        ("Country", ["LC_ALL", "LANG"].iter().find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
-            .and_then(|locale| country(&locale))),
+        (
+            "Country",
+            ["LC_ALL", "LANG"]
+                .iter()
+                .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+                .and_then(|locale| country(&locale)),
+        ),
     ]
 }
 
@@ -70,8 +88,12 @@ fn facts() -> Vec<(&'static str, Option<String>)> {
         ("OS", os),
         // The system's processor, also when this build runs emulated on it.
         ("CPU", std::env::var("PROCESSOR_IDENTIFIER").ok()),
-        ("Model", machine(BIOS, "SystemManufacturer").zip(machine(BIOS, "SystemProductName"))
-            .map(|(maker, product)| format!("{maker} {product}"))),
+        (
+            "Model",
+            machine(BIOS, "SystemManufacturer")
+                .zip(machine(BIOS, "SystemProductName"))
+                .map(|(maker, product)| format!("{maker} {product}")),
+        ),
         ("Country", registry(HKEY_CURRENT_USER, r"Control Panel\International\Geo", "Name")),
     ]
 }
@@ -94,8 +116,15 @@ fn registry(hive: HKEY, key: &str, value: &str) -> Option<String> {
     let mut data = [0u16; 256];
     let (mut size, mut kind) = (std::mem::size_of_val(&data) as u32, 0);
     let status = unsafe {
-        RegGetValueW(hive, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ | RRF_RT_REG_DWORD,
-                     &mut kind, data.as_mut_ptr().cast(), &mut size)
+        RegGetValueW(
+            hive,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ | RRF_RT_REG_DWORD,
+            &mut kind,
+            data.as_mut_ptr().cast(),
+            &mut size,
+        )
     };
     if status != 0 {
         return None;
@@ -123,7 +152,9 @@ mod tests {
     fn names_the_operating_system_without_naming_the_computer() {
         let lines = super::describe();
         assert!(lines.iter().any(|line| line.starts_with("OS: ")), "{lines:?}");
-        let host = std::process::Command::new("hostname").output().ok()
+        let host = std::process::Command::new("hostname")
+            .output()
+            .ok()
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
         if let Some(host) = host.filter(|h| h.len() > 3) {
             assert!(!lines.iter().any(|line| line.contains(&host)), "{lines:?}");

@@ -5,7 +5,9 @@ local thermostat = {}
 
 -- Whole degrees as text, and in Celsius "5" for a half, else nil.
 function thermostat.digits(value, unit)
-  if unit == "F" then return string.format("%d", math.floor(value + 0.5)), nil end
+  if unit == "F" then
+    return string.format("%d", math.floor(value + 0.5)), nil
+  end
   local halves = math.floor(value * 2 + 0.5)
   return string.format("%d", math.floor(halves / 2)), halves % 2 == 1 and "5" or nil
 end
@@ -18,7 +20,9 @@ end
 
 -- A Celsius reading (as nestlocal gives the weather's) in the unit shown.
 function thermostat.shown(celsius, unit)
-  if unit == "F" then return celsius * 9 / 5 + 32 end
+  if unit == "F" then
+    return celsius * 9 / 5 + 32
+  end
   return celsius
 end
 
@@ -37,9 +41,15 @@ end
 -- "heat", "cool", "heat-cool", "eco" or "off", and in heat-cool the end
 -- picked ("low" or "high") and whether it is being changed.
 function thermostat.state(t)
-  if t.mode == "off" then return "off" end
-  if t.hvac == "heating" then return "heating" end
-  if t.hvac == "cooling" then return "cooling" end
+  if t.mode == "off" then
+    return "off"
+  end
+  if t.hvac == "heating" then
+    return "heating"
+  end
+  if t.hvac == "cooling" then
+    return "cooling"
+  end
   return t.mode
 end
 
@@ -50,14 +60,18 @@ end
 
 -- An hour as the clock shows hours: "15" or "3 PM".
 function thermostat.hour_text(clock, hour)
-  if not clock.twelve_hour then return string.format("%02d", hour) end
+  if not clock.twelve_hour then
+    return string.format("%02d", hour)
+  end
   return string.format("%d %s", (hour + 11) % 12 + 1, hour < 12 and "AM" or "PM")
 end
 
 -- The time as the clock shows it: "15:04" or "3:04".
 function thermostat.time_text(clock)
   local hour = clock.hour
-  if clock.twelve_hour then return string.format("%d:%02d", (hour + 11) % 12 + 1, clock.minute) end
+  if clock.twelve_hour then
+    return string.format("%d:%02d", (hour + 11) % 12 + 1, clock.minute)
+  end
   return string.format("%02d:%02d", hour, clock.minute)
 end
 

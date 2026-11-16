@@ -7,7 +7,7 @@ set -eu
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 thread_root=$(CDPATH= cd -- "$dir/../../../.." && pwd)
 cd "$thread_root"
-export NESTLOCAL_ZBWAKE=${NESTLOCAL_ZBWAKE:-$thread_root/build/zbwake}
+export NESTLOCAL_ZBWAKE="${NESTLOCAL_ZBWAKE:-$thread_root/build/zbwake}"
 sh "$thread_root/platform/diamond3/zbwake/build.sh" "$NESTLOCAL_ZBWAKE"
 sh "$dir/radio.sh"
 sh "$dir/host.sh"

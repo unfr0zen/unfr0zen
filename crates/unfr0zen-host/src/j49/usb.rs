@@ -46,22 +46,35 @@ pub fn mode_for(id: Id, app: Id) -> Option<Mode> {
 }
 
 /// Waits for the unit in one of the wanted modes, on the given port if any.
-pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>,
-                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+pub fn wait_device(
+    wanted: &[Mode],
+    timeout: Duration,
+    port: Option<&str>,
+    cancel: &crate::device::CancelFlag,
+) -> Result<(String, Id)> {
     wait_device_for(wanted, timeout, port, APP, cancel)
 }
 
-pub fn wait_device_for(wanted: &[Mode], timeout: Duration, port: Option<&str>, app: Id,
-                       cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+pub fn wait_device_for(
+    wanted: &[Mode],
+    timeout: Duration,
+    port: Option<&str>,
+    app: Id,
+    cancel: &crate::device::CancelFlag,
+) -> Result<(String, Id)> {
     let until = Instant::now() + timeout;
     let mut last = None;
     while Instant::now() < until && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        let seen: BTreeMap<String, Id> = usb::list()?.into_iter()
+        let seen: BTreeMap<String, Id> = usb::list()?
+            .into_iter()
             .filter(|(_, id)| mode_for(*id, app).is_some_and(|m| wanted.contains(&m)))
             .collect();
         if last.as_ref() != Some(&seen) {
-            log::info!("USB: {:?}{}", seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
-                       port.map(|p| format!(", waiting on {p}")).unwrap_or_default());
+            log::info!(
+                "USB: {:?}{}",
+                seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
+                port.map(|p| format!(", waiting on {p}")).unwrap_or_default()
+            );
             last = Some(seen.clone());
         }
         let found: Vec<(String, Id)> = seen.into_iter().filter(|(name, _)| port.is_none_or(|p| p == name)).collect();
@@ -84,8 +97,8 @@ pub fn wait_device_for(wanted: &[Mode], timeout: Duration, port: Option<&str>, a
 pub fn open_rom(timeout: Duration) -> Result<(String, Pipe)> {
     let until = Instant::now() + timeout;
     loop {
-        let info = nusb::list_devices().wait().map_err(usb_error)?
-            .find(|info| (info.vendor_id(), info.product_id()) == ROM);
+        let info =
+            nusb::list_devices().wait().map_err(usb_error)?.find(|info| (info.vendor_id(), info.product_id()) == ROM);
         if let Some(info) = info {
             match claim(&info) {
                 Ok(pipe) => return Ok((port_name(&info), pipe)),
@@ -101,13 +114,20 @@ pub fn open_rom(timeout: Duration) -> Result<(String, Pipe)> {
 }
 
 fn claim(info: &nusb::DeviceInfo) -> Result<Pipe> {
-    let hint = if cfg!(windows) { " (the OMAP boot ROM needs the WinUSB driver, which the app installs before the run: check Device Manager)" } else { "" };
+    let hint = if cfg!(windows) {
+        " (the OMAP boot ROM needs the WinUSB driver, which the app installs before the run: check Device Manager)"
+    } else {
+        ""
+    };
     let device = info.open().wait().map_err(|e| usb_error(format!("open the OMAP boot ROM: {e}{hint}")))?;
     let interface = match device.claim_interface(0).wait() {
         Ok(interface) => interface,
         Err(first) => {
             log::info!("claiming the OMAP boot ROM's interface: {first}; setting its configuration");
-            device.set_configuration(1).wait().map_err(|e| usb_error(format!("configure the OMAP boot ROM: {e}{hint}")))?;
+            device
+                .set_configuration(1)
+                .wait()
+                .map_err(|e| usb_error(format!("configure the OMAP boot ROM: {e}{hint}")))?;
             device.claim_interface(0).wait().map_err(|e| usb_error(format!("claim the OMAP boot ROM: {e}{hint}")))?
         }
     };

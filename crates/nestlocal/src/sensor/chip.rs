@@ -114,7 +114,10 @@ impl Chip {
         loop {
             match self.mode {
                 Mode::Rom { .. } => {
-                    let Some(&[first, low, high]) = self.input.get(..3).map(|b| <&[u8; 3]>::try_from(b).unwrap()) else { break };
+                    let Some(&[first, low, high]) = self.input.get(..3).map(|b| <&[u8; 3]>::try_from(b).unwrap())
+                    else {
+                        break;
+                    };
                     if first != SOH {
                         self.input.remove(0);
                         continue;
@@ -149,7 +152,9 @@ impl Chip {
     fn next_frame(&mut self) -> Option<(u16, Vec<u8>)> {
         loop {
             match self.input.iter().position(|&b| b == TO_CHIP[0]) {
-                Some(start) => { self.input.drain(..start); }
+                Some(start) => {
+                    self.input.drain(..start);
+                }
                 None => {
                     self.input.clear();
                     return None;
@@ -196,13 +201,22 @@ impl Chip {
             }
             // A count and the sensors' ids, answered by nothing.
             op::SENSOR_FILTER => {
-                self.filter = body.get(1..).unwrap_or_default().as_chunks::<2>().0.iter()
-                    .map(|id| u16::from_le_bytes(*id)).collect();
+                self.filter = body
+                    .get(1..)
+                    .unwrap_or_default()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|id| u16::from_le_bytes(*id))
+                    .collect();
                 Vec::new()
             }
             op::SCAN_PARAMETERS => Vec::new(),
             other => {
-                logf!("BLE stand-in: nlclient sent BLE command {other:#04x} ({} bytes), which it does not need here", body.len());
+                logf!(
+                    "BLE stand-in: nlclient sent BLE command {other:#04x} ({} bytes), which it does not need here",
+                    body.len()
+                );
                 frame(op::UNRECOGNIZED, &[other as u8])
             }
         }

@@ -20,26 +20,21 @@ extern int threadMain(void);
 #if defined(RADIO_PERSONALITY_thread)
 // The RCP alone (the EM357 holds one personality): Zigbee is another image,
 // so a request for it changes nothing.
-int main(void)
-{
-  personalityRequest = 0;
-  return threadMain();
+int main(void) {
+    personalityRequest = 0;
+    return threadMain();
 }
 
-void radioSelectZigbee(void)
-{
-}
+void radioSelectZigbee(void) {}
 #else
-int main(void)
-{
-  radioZigbee = personalityRequest == ZIGBEE_REQUESTED;
-  personalityRequest = 0;
-  return radioZigbee ? zigbeeMain() : threadMain();
+int main(void) {
+    radioZigbee = personalityRequest == ZIGBEE_REQUESTED;
+    personalityRequest = 0;
+    return radioZigbee ? zigbeeMain() : threadMain();
 }
 
-void radioSelectZigbee(void)
-{
-  personalityRequest = ZIGBEE_REQUESTED;
-  halReboot();
+void radioSelectZigbee(void) {
+    personalityRequest = ZIGBEE_REQUESTED;
+    halReboot();
 }
 #endif

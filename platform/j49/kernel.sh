@@ -26,7 +26,10 @@
 #     platform/j49/kernel.sh OUT diamond
 set -eu
 
-[ $# -eq 1 ] || [ $# -eq 2 ] && [ "${2:-diamond}" = diamond ] || { echo "usage: $0 OUT [diamond]" >&2; exit 2; }
+[ $# -eq 1 ] || [ $# -eq 2 ] && [ "${2:-diamond}" = diamond ] || {
+    echo "usage: $0 OUT [diamond]" >&2
+    exit 2
+}
 board=${2:-j49}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$(dirname "$dir")")
@@ -37,24 +40,27 @@ if [ "$board" = diamond ] && [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ];
     echo "$out/uImage is up to date"
     exit 0
 fi
-if [ "$board" = j49 ] && [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ] && [ -f "$out/zbwake.ko" ] && [ "$out/zbwake.ko" -nt "$0" ] \
-    && [ "$out/zbwake.ko" -nt "$module" ]; then
+if [ "$board" = j49 ] && [ -f "$out/uImage" ] && [ "$out/uImage" -nt "$0" ] && [ -f "$out/zbwake.ko" ] && [ "$out/zbwake.ko" -nt "$0" ] &&
+    [ "$out/zbwake.ko" -nt "$module" ]; then
     echo "$out/uImage and $out/zbwake.ko are up to date"
     exit 0
 fi
-command -v docker > /dev/null || { echo "The j49 kernel builds in Docker, which is missing." >&2; exit 1; }
+command -v docker >/dev/null || {
+    echo "The j49 kernel builds in Docker, which is missing." >&2
+    exit 1
+}
 
 commit=34a29f48414fe242f3fd2f77017f65b240e278be
 image=ubuntu@sha256:64483f3496c1373bfd55348e88694d1c4d0c9b660dee6bfef5e12f43b9933b30
 source=$root/.work/j49/linux-5.9.4
-if [ "$(git -C "$source" rev-parse -q --verify HEAD 2> /dev/null)" != "$commit" ]; then
+if [ "$(git -C "$source" rev-parse -q --verify HEAD 2>/dev/null)" != "$commit" ]; then
     rm -rf "$source"
-    git clone -q https://nest-open-source.googlesource.com/nest-learning-thermostat/5.9.4/linux "$source" 2> /dev/null
+    git clone -q https://nest-open-source.googlesource.com/nest-learning-thermostat/5.9.4/linux "$source" 2>/dev/null
     git -C "$source" checkout -q --detach "$commit"
 fi
 
 volume=unfr0zen-$board-kernel
-docker volume create "$volume" > /dev/null
+docker volume create "$volume" >/dev/null
 git -C "$source" archive --format=tar "$commit" |
     docker run --rm -i -v "$volume:/vol" "$image" sh -ec 'rm -rf /vol/src /vol/out; mkdir -p /vol/src /vol/out; tar -x -C /vol/src'
 docker run --rm -e board="$board" -v "$volume:/vol" -v "$out:/out" -v "$module:/zbwake/zbwake.c:ro" "$image" sh -ec '
@@ -82,4 +88,4 @@ docker run --rm -e board="$board" -v "$volume:/vol" -v "$out:/out" -v "$module:/
     chown '"$(id -u):$(id -g)"' /out/uImage.partial'
 mv "$out/uImage.partial" "$out/uImage"
 [ "$board" = diamond ] || mv "$out/zbwake.ko.partial" "$out/zbwake.ko"
-echo "Built $out/uImage ($(wc -c < "$out/uImage") bytes)"
+echo "Built $out/uImage ($(wc -c <"$out/uImage") bytes)"

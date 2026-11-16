@@ -43,11 +43,26 @@ local KINDS = {
 
 -- Home Assistant's conditions as words.
 local NAMES = {
-  sunny = "Sunny", ["clear-night"] = "Clear", clear = "Clear", partlycloudy = "Partly cloudy",
-  cloudy = "Cloudy", windy = "Windy", ["windy-variant"] = "Windy", fog = "Fog", rainy = "Rain",
-  rain = "Rain", pouring = "Heavy rain", lightning = "Thunderstorm", ["lightning-rainy"] = "Thunderstorm",
-  tstorms = "Thunderstorm", snowy = "Snow", snow = "Snow", ["snowy-rainy"] = "Sleet", sleet = "Sleet",
-  hail = "Hail", exceptional = "Severe weather",
+  sunny = "Sunny",
+  ["clear-night"] = "Clear",
+  clear = "Clear",
+  partlycloudy = "Partly cloudy",
+  cloudy = "Cloudy",
+  windy = "Windy",
+  ["windy-variant"] = "Windy",
+  fog = "Fog",
+  rainy = "Rain",
+  rain = "Rain",
+  pouring = "Heavy rain",
+  lightning = "Thunderstorm",
+  ["lightning-rainy"] = "Thunderstorm",
+  tstorms = "Thunderstorm",
+  snowy = "Snow",
+  snow = "Snow",
+  ["snowy-rainy"] = "Sleet",
+  sleet = "Sleet",
+  hail = "Hail",
+  exceptional = "Severe weather",
 }
 
 -- The weather `w` (ui.nest.weather) as a kind, with every field set.
@@ -55,8 +70,14 @@ function weather.kind(w)
   local name = w.condition or w.icon
   local k = KINDS[name] or {}
   return {
-    name = NAMES[name], overcast = k.overcast or 0, clouds = k.clouds or 0, rain = k.rain or 0,
-    snow = k.snow or 0, wind = k.wind or 1, fog = k.fog or false, lightning = k.lightning or false,
+    name = NAMES[name],
+    overcast = k.overcast or 0,
+    clouds = k.clouds or 0,
+    rain = k.rain or 0,
+    snow = k.snow or 0,
+    wind = k.wind or 1,
+    fog = k.fog or false,
+    lightning = k.lightning or false,
     glass = k.glass or false,
   }
 end
@@ -69,7 +90,9 @@ end
 -- The clouds, drifting right and coming round again, in front-to-back
 -- order of size; tinted for the time of day and the weather.
 function weather.draw_clouds(gfx, kind, daylight, now)
-  if kind.clouds == 0 then return end
+  if kind.clouds == 0 then
+    return
+  end
   local tint = color.mix(clouds_style.night, clouds_style.day, daylight)
   if kind.lightning then
     tint = color.mix(tint, clouds_style.storm, 0.7)
@@ -90,7 +113,9 @@ end
 
 -- Fog banks drifting slowly across.
 function weather.draw_fog(gfx, kind, now)
-  if not kind.fog then return end
+  if not kind.fog then
+    return
+  end
   for i = 1, fog_style.count do
     local r = fog_style.radius * (0.7 + 0.6 * random(i, 7))
     local span = SIZE + 2 * r
@@ -106,7 +131,9 @@ local function rain_depth(gfx, kind, depth, now)
   local d = rain_style.depths[depth]
   local count, length, width, speed, alpha = d[1], d[2], d[3], d[4], d[5]
   count = math.floor(count * kind.rain + 0.5)
-  if count == 0 then return end
+  if count == 0 then
+    return
+  end
   length = length * (0.6 + 0.4 * kind.rain)
   local slope = rain_style.slope * kind.wind
   local fall = SIZE + length
@@ -129,7 +156,9 @@ local function snow_depth(gfx, kind, depth, now)
   local d = snow_style.depths[depth]
   local count, radius, speed, sway, alpha = d[1], d[2], d[3], d[4], d[5]
   count = math.floor(count * kind.snow + 0.5)
-  if count == 0 then return end
+  if count == 0 then
+    return
+  end
   local fall = SIZE + 2 * radius
   gfx:save()
   gfx:alpha(alpha)
@@ -146,10 +175,16 @@ end
 -- it (the near one).
 function weather.draw_precipitation(gfx, kind, now, front)
   local from, to = 1, 2
-  if front then from, to = 3, 3 end
+  if front then
+    from, to = 3, 3
+  end
   for depth = from, to do
-    if kind.snow > 0 then snow_depth(gfx, kind, depth, now) end
-    if kind.rain > 0 then rain_depth(gfx, kind, depth, now) end
+    if kind.snow > 0 then
+      snow_depth(gfx, kind, depth, now)
+    end
+    if kind.rain > 0 then
+      rain_depth(gfx, kind, depth, now)
+    end
   end
 end
 
@@ -157,7 +192,9 @@ end
 -- dries; the next lands elsewhere. Their timing comes from the time alone,
 -- so each frame finds them where they are.
 function weather.draw_glass(gfx, kind, now)
-  if not kind.glass then return end
+  if not kind.glass then
+    return
+  end
   local count = math.floor(glass_style.count * math.max(kind.rain, 0.4) + 0.5)
   local life_min, life_max = glass_style.life[1], glass_style.life[2]
   for i = 1, count do
@@ -188,7 +225,9 @@ local function flash(now)
   local n = math.floor(now / (every + lightning_style.spread))
   local at = n * (every + lightning_style.spread) + random(n, 21) * lightning_style.spread
   local since = now - at
-  if since < 0 or since > lightning_style.length then return 0, n end
+  if since < 0 or since > lightning_style.length then
+    return 0, n
+  end
   local p = since / lightning_style.length
   local flicker = p < 0.15 and 1 or (p < 0.3 and 0.25 or (p < 0.45 and 0.8 or 1 - p))
   return flicker, n
@@ -209,9 +248,13 @@ end
 
 -- The sky lighting up behind the readout: the bolt and the flash.
 function weather.draw_lightning(gfx, kind, now)
-  if not kind.lightning then return end
+  if not kind.lightning then
+    return
+  end
   local strength, n = flash(now)
-  if strength <= 0 then return end
+  if strength <= 0 then
+    return
+  end
   bolt(gfx, n, strength)
   gfx:rect(0, 0, SIZE, SIZE, color.with_alpha("#ffffff", lightning_style.alpha * strength))
 end

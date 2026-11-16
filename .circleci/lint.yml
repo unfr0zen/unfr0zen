@@ -1,0 +1,66 @@
+version: 2.1
+
+# The formatters and linters, on every push: each hook of .pre-commit-config.yaml
+# over every file, failing on any change a formatter makes or any finding, then
+# PSScriptAnalyzer over the PowerShell, which no hook covers. pre-commit keeps
+# the tools it installs in ~/.cache/pre-commit, cached under the config's hash.
+
+parameters:
+  lint:
+    type: boolean
+    default: false
+
+jobs:
+  lint:
+    docker:
+      - image: cimg/python:3.13-node
+    resource_class: medium
+    environment:
+      PRE_COMMIT_VERSION: 4.7.0
+      PSSCRIPTANALYZER_VERSION: 1.25.0
+      POWERSHELL_VERSION: 7.7.0
+      POWERSHELL_SHA256: c89d9c682d2c403dfe726f3df948e359675235a5bd6fab535776de69729ca0cb
+    steps:
+      - checkout
+      - run:
+          name: Rust and pre-commit
+          command: |
+            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt
+            echo 'source "$HOME/.cargo/env"' >> "$BASH_ENV"
+            pip install --quiet "pre-commit==$PRE_COMMIT_VERSION"
+      - restore_cache:
+          keys:
+            - pre-commit-v1-{{ checksum ".pre-commit-config.yaml" }}
+      - run:
+          name: pre-commit
+          command: pre-commit run --all-files --show-diff-on-failure
+      - save_cache:
+          when: always
+          key: pre-commit-v1-{{ checksum ".pre-commit-config.yaml" }}
+          paths:
+            - ~/.cache/pre-commit
+      - run:
+          name: PowerShell
+          command: |
+            curl -fsSL -o /tmp/pwsh.tar.gz \
+              "https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-x64.tar.gz"
+            echo "$POWERSHELL_SHA256  /tmp/pwsh.tar.gz" | sha256sum -c
+            mkdir /tmp/pwsh && tar xzf /tmp/pwsh.tar.gz -C /tmp/pwsh
+            /tmp/pwsh/pwsh -NoProfile -Command '
+              $ErrorActionPreference = "Stop"
+              Set-PSRepository PSGallery -InstallationPolicy Trusted
+              Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser
+              $failed = $false
+              foreach ($file in git ls-files "*.ps1") {
+                $findings = Invoke-ScriptAnalyzer -Path $file
+                if ($findings) { $findings | Format-Table -AutoSize | Out-String -Width 200; $failed = $true }
+                $text = Get-Content -Raw $file
+                if ((Invoke-Formatter -ScriptDefinition $text) -cne $text) { "${file}: not formatted (Invoke-Formatter)"; $failed = $true }
+              }
+              if ($failed) { exit 1 }'
+
+workflows:
+  lint:
+    when: << pipeline.parameters.lint >>
+    jobs:
+      - lint

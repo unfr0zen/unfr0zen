@@ -6,8 +6,8 @@
    its metadata, and frames to the host go out as they are made. */
 #include "../em3581/openthread-rcp-config.h"
 
-#define OPENTHREAD_CONFIG_NCP_TX_BUFFER_SIZE 768
-#define OPENTHREAD_CONFIG_NCP_HDLC_TX_CHUNK_SIZE 256
+#define OPENTHREAD_CONFIG_NCP_TX_BUFFER_SIZE      768
+#define OPENTHREAD_CONFIG_NCP_HDLC_TX_CHUNK_SIZE  256
 #define OPENTHREAD_CONFIG_NCP_HDLC_RX_BUFFER_SIZE 320
 
 #endif

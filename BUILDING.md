@@ -4,11 +4,11 @@ The first firmware build needs internet access: it downloads busybox, Nest's
 kernel and x-loader sources, the Silicon Labs SDK and OpenThread at pinned
 versions.
 
-| Device | How it is set up |
-|-|-|
-| `diamond3` (gen 3) | Recovery U-Boot over the ROM's serial download, then the slot's own kernel with an initramfs sets up its UBIFS root. |
-| `j49` (gen 2) | Nest's own x-loader over the ROM's USB boot loads a NAND flasher; the host appends the changes to the slot's JFFS2 root in its erased blocks. |
-| `diamond` (gen 1) | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path. |
+| Device             | How it is set up                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `diamond3` (gen 3) | Recovery U-Boot over the ROM's serial download, then the slot's own kernel with an initramfs sets up its UBIFS root.                                          |
+| `j49` (gen 2)      | Nest's own x-loader over the ROM's USB boot loads a NAND flasher; the host appends the changes to the slot's JFFS2 root in its erased blocks.                 |
+| `diamond` (gen 1)  | The j49's x-loader (Nest's USB loaders for the two differ only in the muxing of pins the loader does not use), the same OMAP USB/NAND flasher and JFFS2 path. |
 
 ## Dependencies
 
@@ -20,6 +20,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
 Plus Docker, any of:
+
 - [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/)
 - Colima: `brew install colima docker && colima start --memory 8`
 - Podman: `brew install podman && podman machine init --memory 8192 && podman machine start`, then put a `docker` → `podman` symlink on your `PATH`

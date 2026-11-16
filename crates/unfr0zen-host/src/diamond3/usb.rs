@@ -7,9 +7,7 @@ use std::time::{Duration, Instant};
 
 use nusb::MaybeFuture;
 use unfr0zen_core::diamond3::fastboot::Protocol;
-use unfr0zen_core::diamond3::recovery::{
-    revision, rom_revision, silicon, RomRevision, DIGPROG, RAM_BASE,
-};
+use unfr0zen_core::diamond3::recovery::{revision, rom_revision, silicon, RomRevision, DIGPROG, RAM_BASE};
 use unfr0zen_core::diamond3::sdp::{self, Hid, UBOOT_BASE};
 use unfr0zen_core::{Error, Result};
 
@@ -58,8 +56,12 @@ pub fn devices() -> Result<BTreeMap<String, Id>> {
 }
 
 /// Waits for the unit in one of the wanted modes, on the given port if any.
-pub fn wait_device(wanted: &[Mode], timeout: Duration, port: Option<&str>,
-                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+pub fn wait_device(
+    wanted: &[Mode],
+    timeout: Duration,
+    port: Option<&str>,
+    cancel: &crate::device::CancelFlag,
+) -> Result<(String, Id)> {
     wait_device_ids(wanted, &[], timeout, port, cancel)
 }
 
@@ -72,17 +74,24 @@ fn wanted_identity(id: Id, wanted: &[Mode], extra: &[Id]) -> bool {
     mode(id).is_some_and(|m| wanted.contains(&m)) || extra.contains(&id)
 }
 
-fn wait_device_ids(wanted: &[Mode], extra: &[Id], timeout: Duration, port: Option<&str>,
-                   cancel: &crate::device::CancelFlag) -> Result<(String, Id)> {
+fn wait_device_ids(
+    wanted: &[Mode],
+    extra: &[Id],
+    timeout: Duration,
+    port: Option<&str>,
+    cancel: &crate::device::CancelFlag,
+) -> Result<(String, Id)> {
     let until = Instant::now() + timeout;
     let mut last = None;
     while Instant::now() < until && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        let seen: BTreeMap<String, Id> = usb::list()?.into_iter()
-            .filter(|(_, id)| wanted_identity(*id, wanted, extra))
-            .collect();
+        let seen: BTreeMap<String, Id> =
+            usb::list()?.into_iter().filter(|(_, id)| wanted_identity(*id, wanted, extra)).collect();
         if last.as_ref() != Some(&seen) {
-            log::info!("USB: {:?}{}", seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
-                       port.map(|p| format!(", waiting on {p}")).unwrap_or_default());
+            log::info!(
+                "USB: {:?}{}",
+                seen.iter().map(|(p, (v, d))| format!("{p} {v:04x}:{d:04x}")).collect::<Vec<_>>(),
+                port.map(|p| format!(", waiting on {p}")).unwrap_or_default()
+            );
             last = Some(seen.clone());
         }
         let found: Vec<(String, Id)> = seen.into_iter().filter(|(name, _)| port.is_none_or(|p| p == name)).collect();
@@ -99,18 +108,24 @@ fn wait_device_ids(wanted: &[Mode], extra: &[Id], timeout: Duration, port: Optio
 }
 
 pub fn open_fastboot(port: &str) -> Result<Protocol<usb::Pipe>> {
-    let info = nusb::list_devices().wait().map_err(usb_error)?
+    let info = nusb::list_devices()
+        .wait()
+        .map_err(usb_error)?
         .find(|info| (info.vendor_id(), info.product_id()) == RECOVERY && port_name(info) == port)
         .ok_or_else(|| Error::Device("recovery USB device is gone".into()))?;
-    let number = info.interfaces().find(|i| (i.class(), i.subclass(), i.protocol()) == (0xff, 0x42, 0x03))
-        .map(|i| i.interface_number()).ok_or_else(|| Error::Device("recovery has no fastboot interface".into()))?;
+    let number = info
+        .interfaces()
+        .find(|i| (i.class(), i.subclass(), i.protocol()) == (0xff, 0x42, 0x03))
+        .map(|i| i.interface_number())
+        .ok_or_else(|| Error::Device("recovery has no fastboot interface".into()))?;
     let hint = if cfg!(windows) {
         " (recovery's fastboot interface should have WinUSB from its OS descriptors: check Device Manager)"
     } else {
         ""
     };
     let device = info.open().wait().map_err(|e| usb_error(format!("open recovery: {e}{hint}")))?;
-    let interface = device.claim_interface(number).wait().map_err(|e| usb_error(format!("claim fastboot: {e}{hint}")))?;
+    let interface =
+        device.claim_interface(number).wait().map_err(|e| usb_error(format!("claim fastboot: {e}{hint}")))?;
     Ok(Protocol::new(usb::Pipe::new(&interface, "fastboot")?))
 }
 
@@ -284,17 +299,14 @@ pub(crate) fn rom_silicon(rom: &mut impl Hid) -> Result<RomId> {
 /// One word for the run log: a unit that does not answer an address is
 /// worth a warning, never a failed load.
 fn diag_word(rom: &mut impl sdp::Hid, address: u32, name: &str) -> Option<u32> {
-    sdp::read_word(rom, address)
-        .inspect_err(|error| log::warn!("{name} at {address:#010x} not read: {error}"))
-        .ok()
+    sdp::read_word(rom, address).inspect_err(|error| log::warn!("{name} at {address:#010x} not read: {error}")).ok()
 }
 
 fn diag_words(rom: &mut impl sdp::Hid, address: u32, len: usize, name: &str) {
     match sdp::read_memory(rom, address, len) {
         Ok(data) => {
-            let words: Vec<String> = data.chunks(4)
-                .map(|w| format!("{:#010x}", u32::from_le_bytes(w.try_into().unwrap())))
-                .collect();
+            let words: Vec<String> =
+                data.chunks(4).map(|w| format!("{:#010x}", u32::from_le_bytes(w.try_into().unwrap()))).collect();
             log::info!("{name}: {}", words.join(" "));
         }
         Err(error) => log::warn!("{name} at {address:#010x} not read: {error}"),
@@ -314,8 +326,7 @@ fn log_unit_diagnostics(rom: &mut impl sdp::Hid) {
     // OCOTP shadow strip: banks 0 through 3, deduplicated.
     if let Ok(strip) = sdp::read_memory(rom, 0x021B_C400, 0x200) {
         let words: Vec<String> = (0..0x20)
-            .map(|i| format!("{:#010x}",
-                             u32::from_le_bytes(strip[i * 0x10..i * 0x10 + 4].try_into().unwrap())))
+            .map(|i| format!("{:#010x}", u32::from_le_bytes(strip[i * 0x10..i * 0x10 + 4].try_into().unwrap())))
             .collect();
         log::info!("OTP: {}", words.join(" "));
     }
@@ -392,22 +403,28 @@ impl std::str::FromStr for EntryPoint {
 pub fn load_recovery(watchdog_seconds: u32, entry_point: EntryPoint) -> Result<Option<String>> {
     let mut api = hidapi::HidApi::new().map_err(|e| Error::Io(e.to_string()))?;
     let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(130))?;
-    let rom_id = rom_silicon(&mut rom).inspect_err(|error| {
-        log::warn!("Silicon revision not read over SDP: {error}");
-        sdp::drain(&mut rom, 50);
-    }).ok();
+    let rom_id = rom_silicon(&mut rom)
+        .inspect_err(|error| {
+            log::warn!("Silicon revision not read over SDP: {error}");
+            sdp::drain(&mut rom, 50);
+        })
+        .ok();
     log_unit_diagnostics(&mut rom);
     if entry_point == EntryPoint::OfficialLoader {
         official_loader(&mut rom)?;
-        log::info!("Recovery U-Boot started through the official loader; \
-                    fastboot buffer at {RAM_BASE:#x}");
+        log::info!(
+            "Recovery U-Boot started through the official loader; \
+                    fastboot buffer at {RAM_BASE:#x}"
+        );
         return Ok(rom_id.map(|id| id.silicon));
     }
     if entry_point == EntryPoint::Auto {
         match official_loader(&mut rom) {
             Ok(()) => {
-                log::info!("Recovery U-Boot started through the official loader; \
-                            fastboot buffer at {RAM_BASE:#x}");
+                log::info!(
+                    "Recovery U-Boot started through the official loader; \
+                            fastboot buffer at {RAM_BASE:#x}"
+                );
                 return Ok(rom_id.map(|id| id.silicon));
             }
             Err(error) => {
@@ -424,19 +441,24 @@ pub fn load_recovery(watchdog_seconds: u32, entry_point: EntryPoint) -> Result<O
         log::info!("Recovery U-Boot started; fastboot buffer at {RAM_BASE:#x}");
     } else if entry_point == EntryPoint::Cve20177932 {
         return Err(Error::Device(
-            "the ROM refused the authenticated jump; set the entry point to auto or cve-2017-7936".into()));
+            "the ROM refused the authenticated jump; set the entry point to auto or cve-2017-7936".into(),
+        ));
     } else if entry_point == EntryPoint::Auto {
         log::warn!("JUMP refused; trying the WRITE FILE overflow");
         drop(rom);
         let mut rom = wait_hid(&mut api, SDP, Duration::from_secs(30))?;
         load_bootstrap(&mut rom, watchdog_seconds)?;
         cve_2017_7936(&mut rom)?;
-        log::info!("Recovery U-Boot started through the overflow fallback; \
-                    fastboot buffer at {RAM_BASE:#x}");
+        log::info!(
+            "Recovery U-Boot started through the overflow fallback; \
+                    fastboot buffer at {RAM_BASE:#x}"
+        );
     } else {
         cve_2017_7936(&mut rom)?;
-        log::info!("Recovery U-Boot started through the overflow fallback; \
-                    fastboot buffer at {RAM_BASE:#x}");
+        log::info!(
+            "Recovery U-Boot started through the overflow fallback; \
+                    fastboot buffer at {RAM_BASE:#x}"
+        );
     }
     Ok(rom_id.map(|id| id.silicon))
 }
@@ -469,8 +491,12 @@ fn load_bootstrap(rom: &mut impl sdp::Hid, watchdog_seconds: u32) -> Result<()> 
     getrandom::fill(&mut nonce).map_err(|e| Error::Io(e.to_string()))?;
     let wcr = ((watchdog_seconds * 2 - 1) << 8) | 0x34;
     let parameters = [nonce.to_vec(), wcr.to_le_bytes().to_vec()].concat();
-    for (address, data) in [(UBOOT_BASE, assets::RECOVERY), (0x90BF00, parameters.as_slice()),
-                            (0x90B000, assets::BOOT_WRAPPER), (ROM_STAGE_BASE, assets::ROM_STAGE)] {
+    for (address, data) in [
+        (UBOOT_BASE, assets::RECOVERY),
+        (0x90BF00, parameters.as_slice()),
+        (0x90B000, assets::BOOT_WRAPPER),
+        (ROM_STAGE_BASE, assets::ROM_STAGE),
+    ] {
         sdp::write_checked(rom, address, data)?;
         log::info!("Uploaded {} bytes at {address:#x}; read back intact", data.len());
     }
@@ -498,8 +524,8 @@ fn cve_2017_7932(rom: &mut impl sdp::Hid, rom_id: Option<&RomId>) -> Result<bool
     if let Ok(word) = <[u8; 4]>::try_from(&refusal[1..5]) {
         log::info!("HAB refusal: {}", sdp::hab_word_description(word));
     }
-    if let Some(digprog) = rom_id.map(|id| id.digprog)
-        .filter(|&digprog| rom_revision(digprog) == RomRevision::Updated) {
+    if let Some(digprog) = rom_id.map(|id| id.digprog).filter(|&digprog| rom_revision(digprog) == RomRevision::Updated)
+    {
         return Err(Error::Device(updated_rom(digprog)));
     }
     Ok(false)
@@ -516,8 +542,10 @@ fn cve_2017_7932(rom: &mut impl sdp::Hid, rom_id: Option<&RomId>) -> Result<bool
 /// completion word never overwrote anything, and fails the load.
 fn cve_2017_7936(rom: &mut impl sdp::Hid) -> Result<()> {
     let spray = vec![ROM_STAGE_ENTRY.to_le_bytes(); ((OCRAM_TOP - SPRAY_START) / 4) as usize].concat();
-    log::info!("Spraying {:#x} bytes at {SPRAY_START:#x} past the write window into the stack",
-               OCRAM_TOP - SPRAY_START);
+    log::info!(
+        "Spraying {:#x} bytes at {SPRAY_START:#x} past the write window into the stack",
+        OCRAM_TOP - SPRAY_START
+    );
     match sdp::write_file(rom, SPRAY_START, &spray) {
         Ok(sdp::WriteOutcome::Completed) => {
             log::info!("Spray complete, ROM acked");
@@ -528,11 +556,10 @@ fn cve_2017_7936(rom: &mut impl sdp::Hid) -> Result<()> {
             log::info!("Spray took the session with it");
             Ok(())
         }
-        Ok(sdp::WriteOutcome::Rejected) => Err(Error::Device(
-            "the ROM rejected the overflow write; this build cannot start recovery on it".into(),
-        )),
-        Err(error) => Err(Error::Device(format!(
-            "the overflow write never reached the ROM: {error}"))),
+        Ok(sdp::WriteOutcome::Rejected) => {
+            Err(Error::Device("the ROM rejected the overflow write; this build cannot start recovery on it".into()))
+        }
+        Err(error) => Err(Error::Device(format!("the overflow write never reached the ROM: {error}"))),
     }
 }
 
@@ -562,7 +589,7 @@ fn legacy_image(payload: &[u8], load: u32, entry: u32) -> Vec<u8> {
     header[28] = 5; // OS: Linux
     header[29] = 2; // arch: ARM
     header[30] = 2; // type: kernel
-    // [31] compression: none (0)
+                    // [31] compression: none (0)
     header[32..44].copy_from_slice(b"unfr0zen\0\0\0\0");
     let header_crc = crc32fast::hash(&header);
     header[4..8].copy_from_slice(&header_crc.to_be_bytes());
@@ -585,8 +612,7 @@ fn official_loader(rom: &mut impl sdp::Hid) -> Result<()> {
     let mut padded = payload.clone();
     padded.resize(padded_len, 0);
     sdp::write_checked(rom, LEGACY_IMAGE_STAGING, &padded)?;
-    log::info!("Recovery legacy image: {} bytes at {LEGACY_IMAGE_STAGING:#x}; read back intact",
-               padded.len());
+    log::info!("Recovery legacy image: {} bytes at {LEGACY_IMAGE_STAGING:#x}; read back intact", padded.len());
     // Zero the IVT DCD pointer so the official loader does not re-apply DCD.
     let mut first_block = loader[..sdp::HID_DATA_SIZE].to_vec();
     first_block[12..16].copy_from_slice(&[0; 4]);

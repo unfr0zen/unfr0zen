@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build LuaJIT's 32-bit host tools on an AArch64 build machine."""
+
 import os
 import shlex
 import subprocess

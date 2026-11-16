@@ -26,7 +26,9 @@ pub(crate) fn port_name(info: &nusb::DeviceInfo) -> String {
 
 /// Every device on the bus: physical port, identity.
 pub fn list() -> Result<BTreeMap<String, Id>> {
-    Ok(nusb::list_devices().wait().map_err(usb_error)?
+    Ok(nusb::list_devices()
+        .wait()
+        .map_err(usb_error)?
         .map(|info| (port_name(&info), (info.vendor_id(), info.product_id())))
         .collect())
 }
@@ -34,7 +36,9 @@ pub fn list() -> Result<BTreeMap<String, Id>> {
 /// The serial number each device on the bus reports, by physical port;
 /// read by the system as it enumerated the device, without opening it.
 pub fn serial_numbers() -> Result<BTreeMap<String, String>> {
-    Ok(nusb::list_devices().wait().map_err(usb_error)?
+    Ok(nusb::list_devices()
+        .wait()
+        .map_err(usb_error)?
         .filter_map(|info| Some((port_name(&info), info.serial_number()?.to_string())))
         .collect())
 }
@@ -54,7 +58,8 @@ pub struct Pipe {
 impl Pipe {
     /// The interface's first bulk endpoint each way; `name` labels its errors.
     pub fn new(interface: &nusb::Interface, name: &'static str) -> Result<Pipe> {
-        let descriptor = interface.descriptor().ok_or_else(|| Error::Device(format!("{name} interface has no descriptor")))?;
+        let descriptor =
+            interface.descriptor().ok_or_else(|| Error::Device(format!("{name} interface has no descriptor")))?;
         let (mut out, mut input, mut packet) = (None, None, 512);
         for endpoint in descriptor.endpoints() {
             if endpoint.transfer_type() == nusb::descriptors::TransferType::Bulk {
@@ -80,8 +85,11 @@ impl Pipe {
 
 impl bulk::Bulk for Pipe {
     fn send(&mut self, data: &[u8], timeout: Duration) -> Result<()> {
-        self.out.transfer_blocking(Buffer::from(data.to_vec()), timeout).into_result()
-            .map(drop).map_err(|e| usb_error(format!("{} send: {e}", self.name)))
+        self.out
+            .transfer_blocking(Buffer::from(data.to_vec()), timeout)
+            .into_result()
+            .map(drop)
+            .map_err(|e| usb_error(format!("{} send: {e}", self.name)))
     }
 
     /// At most [`MAX_RECEIVE`] at a time: the caller takes a longer reply in
@@ -90,7 +98,9 @@ impl bulk::Bulk for Pipe {
         let requested = max.clamp(1, MAX_RECEIVE).next_multiple_of(self.packet);
         match self.input.transfer_blocking(Buffer::new(requested), timeout).into_result() {
             Ok(buffer) => Ok(buffer.into_vec()),
-            Err(nusb::transfer::TransferError::Cancelled) => Err(Error::Timeout(format!("{}: no answer from the unit", self.name))),
+            Err(nusb::transfer::TransferError::Cancelled) => {
+                Err(Error::Timeout(format!("{}: no answer from the unit", self.name)))
+            }
             Err(e) => Err(usb_error(format!("{} receive: {e}", self.name))),
         }
     }
@@ -98,20 +108,26 @@ impl bulk::Bulk for Pipe {
 
 /// Every USB serial port, with the identity it belongs to.
 pub fn acm_ports() -> Vec<(String, Id)> {
-    serialport::available_ports().unwrap_or_default().into_iter().filter_map(|port| match port.port_type {
-        // macOS lists every ACM twice; the callout device does not wait for carrier.
-        serialport::SerialPortType::UsbPort(usb) if !port.port_name.starts_with("/dev/tty.") => {
-            Some((port.port_name, (usb.vid, usb.pid)))
-        }
-        _ => None,
-    }).collect()
+    serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|port| match port.port_type {
+            // macOS lists every ACM twice; the callout device does not wait for carrier.
+            serialport::SerialPortType::UsbPort(usb) if !port.port_name.starts_with("/dev/tty.") => {
+                Some((port.port_name, (usb.vid, usb.pid)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The ACM serial port of the unit in the given identity.
 pub fn acm_port(id: Id) -> Option<String> {
     serialport::available_ports().ok()?.into_iter().find_map(|port| match port.port_type {
         // macOS lists every ACM twice; the callout device does not wait for carrier.
-        serialport::SerialPortType::UsbPort(usb) if (usb.vid, usb.pid) == id && !port.port_name.starts_with("/dev/tty.") => {
+        serialport::SerialPortType::UsbPort(usb)
+            if (usb.vid, usb.pid) == id && !port.port_name.starts_with("/dev/tty.") =>
+        {
             Some(port.port_name)
         }
         _ => None,
@@ -167,7 +183,9 @@ impl Port {
     }
 
     pub fn open(name: &str) -> Result<Self> {
-        let mut port = serialport::new(name, 115_200).timeout(Duration::from_millis(250)).open_native()
+        let mut port = serialport::new(name, 115_200)
+            .timeout(Duration::from_millis(250))
+            .open_native()
             .map_err(|e| Error::Io(format!("{name}: {e}")))?;
         port.write_data_terminal_ready(true).map_err(|e| Error::Io(format!("{name}: {e}")))?;
         #[cfg(windows)]
@@ -199,7 +217,9 @@ mod windows {
         let mut errors = 0;
         let mut status = COMSTAT { _bitfield: 0, cbInQue: 0, cbOutQue: 0 };
         if unsafe { ClearCommError(port.as_raw_handle() as isize, &mut errors, &mut status) } != 0 && errors != 0 {
-            log::warn!("Serial driver dropped received data: error flags {errors:#x} (0x1 queue overflow, 0x2 overrun)");
+            log::warn!(
+                "Serial driver dropped received data: error flags {errors:#x} (0x1 queue overflow, 0x2 overrun)"
+            );
         }
     }
 }
@@ -295,6 +315,9 @@ pub fn verify_shell(port: &str, id: Id, timeout: Duration) -> Result<String> {
     if answers.is_empty() {
         return Err(Error::Timeout("the application's USB serial port did not appear".into()));
     }
-    log::info!("No uid-0 answer; the shell said: {:?}", String::from_utf8_lossy(&reply[reply.len().saturating_sub(300)..]));
+    log::info!(
+        "No uid-0 answer; the shell said: {:?}",
+        String::from_utf8_lossy(&reply[reply.len().saturating_sub(300)..])
+    );
     Err(Error::Timeout("application USB ACM appeared without a confirmed uid-0 shell".into()))
 }

@@ -7,7 +7,10 @@
 #     platform/j49/build.sh OUT
 set -eu
 
-[ $# -eq 1 ] || { echo "usage: $0 OUT" >&2; exit 2; }
+[ $# -eq 1 ] || {
+    echo "usage: $0 OUT" >&2
+    exit 2
+}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$1"
 out=$(CDPATH= cd -- "$1" && pwd)
@@ -23,4 +26,4 @@ if arm-none-eabi-objdump -h "$work/nand-flasher.elf" | grep -E '\.(data|bss)' | 
 fi
 test "$(arm-none-eabi-nm "$work/nand-flasher.elf" | sed -n 's/ T _start$//p')" = 80100000
 arm-none-eabi-objcopy -O binary -j .text -j .rodata "$work/nand-flasher.elf" "$out/nand-flasher.bin"
-echo "Built $out/nand-flasher.bin ($(wc -c < "$out/nand-flasher.bin") bytes)"
+echo "Built $out/nand-flasher.bin ($(wc -c <"$out/nand-flasher.bin") bytes)"

@@ -109,13 +109,18 @@ static GF: LazyLock<Field> = LazyLock::new(|| {
 
 impl Field {
     fn mul(&self, a: u16, b: u16) -> u16 {
-        if a == 0 || b == 0 { 0 } else { self.exp[self.log[a as usize] as usize + self.log[b as usize] as usize] }
+        if a == 0 || b == 0 {
+            0
+        } else {
+            self.exp[self.log[a as usize] as usize + self.log[b as usize] as usize]
+        }
     }
 
     fn syndromes(&self, remainder: u64) -> [u16; 9] {
         let mut s = [0u16; 9];
         for j in [1usize, 3, 5, 7] {
-            s[j] = (0..PARITY_BITS as usize).filter(|k| remainder >> k & 1 != 0)
+            s[j] = (0..PARITY_BITS as usize)
+                .filter(|k| remainder >> k & 1 != 0)
                 .fold(0, |v, k| v ^ self.exp[j * k % FIELD]);
         }
         s[2] = self.mul(s[1], s[1]);
@@ -183,7 +188,10 @@ pub fn correct_sector(data: &[u8], stored: &[u8]) -> Option<(Vec<u8>, u32)> {
     for e in 0..CODE_BITS {
         // x^e is an error position when locator(alpha^-e) == 0.
         let power = (FIELD - e % FIELD) % FIELD;
-        let v = locator.iter().enumerate().filter(|(_, &c)| c != 0)
+        let v = locator
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c != 0)
             .fold(0, |v, (i, &c)| v ^ gf.exp[(gf.log[c as usize] as usize + power * i) % FIELD]);
         if v != 0 {
             continue;
@@ -258,12 +266,16 @@ pub struct Environment {
 impl Environment {
     /// One copy's ENV_SIZE bytes; None when its CRC32 does not match.
     pub fn parse(data: &[u8]) -> Option<Environment> {
-        if data.len() < ENV_SIZE || crc32fast::hash(&data[5..ENV_SIZE]) != u32::from_le_bytes(data[..4].try_into().unwrap()) {
+        if data.len() < ENV_SIZE
+            || crc32fast::hash(&data[5..ENV_SIZE]) != u32::from_le_bytes(data[..4].try_into().unwrap())
+        {
             return None;
         }
         let body = &data[5..ENV_SIZE];
         let end = body.windows(2).position(|w| w == [0, 0]).unwrap_or(body.len());
-        let values = body[..end].split(|&b| b == 0).filter(|e| !e.is_empty())
+        let values = body[..end]
+            .split(|&b| b == 0)
+            .filter(|e| !e.is_empty())
             .filter_map(|e| String::from_utf8_lossy(e).split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
             .collect();
         Some(Environment { generation: data[4], values })
@@ -295,11 +307,14 @@ impl Environment {
     /// The slots bootcmd boots, in its order.
     pub fn boot_order(&self) -> Result<[Slot; 2]> {
         let bootcmd = self.get("bootcmd").unwrap_or("");
-        let numbers: Vec<u8> = bootcmd.match_indices("run nandboot").filter_map(|(at, _)| {
-            let rest = &bootcmd.as_bytes()[at + 12..];
-            let boundary = rest.get(1).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
-            matches!(rest.first(), Some(b'0' | b'1')).then_some(rest[0] - b'0').filter(|_| boundary)
-        }).collect();
+        let numbers: Vec<u8> = bootcmd
+            .match_indices("run nandboot")
+            .filter_map(|(at, _)| {
+                let rest = &bootcmd.as_bytes()[at + 12..];
+                let boundary = rest.get(1).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+                matches!(rest.first(), Some(b'0' | b'1')).then_some(rest[0] - b'0').filter(|_| boundary)
+            })
+            .collect();
         if numbers.len() < 2 || numbers[0] == numbers[1] {
             return device("bootcmd does not boot both root slots");
         }
@@ -340,12 +355,14 @@ mod tests {
 
     fn sample(seed: u32) -> Vec<u8> {
         let mut x = seed.wrapping_mul(2_654_435_761) | 1;
-        (0..PAGE).map(|_| {
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            x as u8
-        }).collect()
+        (0..PAGE)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x as u8
+            })
+            .collect()
     }
 
     #[test]
@@ -390,8 +407,10 @@ mod tests {
 
     #[test]
     fn the_environment_round_trips_in_order() {
-        let env = Environment { generation: 7, values: vec![
-            ("bootcmd".into(), "run nandboot1 || run nandboot0".into()), ("a".into(), "b=c".into())] };
+        let env = Environment {
+            generation: 7,
+            values: vec![("bootcmd".into(), "run nandboot1 || run nandboot0".into()), ("a".into(), "b=c".into())],
+        };
         let data = env.to_bytes().unwrap();
         assert_eq!(data.len(), ENV_SIZE);
         assert_eq!(Environment::parse(&data).unwrap(), env);
@@ -429,6 +448,9 @@ mod tests {
         let env = |cmd: &str| Environment { generation: 0, values: vec![("bootcmd".into(), cmd.into())] };
         assert_eq!(env("run nandboot0 || run nandboot1").boot_order().unwrap(), [Slot::Root0, Slot::Root1]);
         assert!(env("run nandboot0acm || run nandboot0").boot_order().is_err());
-        assert_eq!(env("run nandboot1acm || run nandboot1 || run nandboot0").boot_order().unwrap(), [Slot::Root1, Slot::Root0]);
+        assert_eq!(
+            env("run nandboot1acm || run nandboot1 || run nandboot0").boot_order().unwrap(),
+            [Slot::Root1, Slot::Root0]
+        );
     }
 }

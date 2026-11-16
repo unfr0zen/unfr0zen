@@ -21,21 +21,21 @@ again.
 
 ## The themes here
 
-| Folder | Look |
-|-|-|
-| `hyperdrive` | A heads-up display in a dark editor palette, set in JetBrains Mono. |
-| `nest-gen4` | Black, with a glow in the colour of what the system is doing. |
-| `analog` | An old-school round thermostat: a printed cover that turns under an index, a bimetal needle for the room. |
-| `lcd` | A round backlit LCD: seven-segment figures and a bar graph round the rim. |
-| `weather` | The weather outside, animated: sky, sun and moon, clouds, rain, snow, fog, lightning. |
-| `common` | Not a theme: helper modules every theme can use. |
+| Folder       | Look                                                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------------------- |
+| `hyperdrive` | A heads-up display in a dark editor palette, set in JetBrains Mono.                                       |
+| `nest-gen4`  | Black, with a glow in the colour of what the system is doing.                                             |
+| `analog`     | An old-school round thermostat: a printed cover that turns under an index, a bimetal needle for the room. |
+| `lcd`        | A round backlit LCD: seven-segment figures and a bar graph round the rim.                                 |
+| `weather`    | The weather outside, animated: sky, sun and moon, clouds, rain, snow, fog, lightning.                     |
+| `common`     | Not a theme: helper modules every theme can use.                                                          |
 
 Read `hyperdrive` first (one file of drawing, ~300 lines), then `lcd` for
 static layout and `weather` for animation.
 
 ## A theme's files
 
-```
+```text
 mytheme/
   theme.lua      the manifest (required)
   home.lua       the drawing, by convention
@@ -117,25 +117,25 @@ A theme runs inside nlclient, so the engine checks everything of it and
 fails the theme, never the thermostat, on the first thing out of bounds.
 The dial shows the error, as does nlclient's log (`THEME Lua theme=...`).
 
-| What | Limit |
-|-|-|
-| Folder, font and layer names | 1 to 64 bytes; folders and fonts in letters, digits, `-` and `_`. |
-| Every file | A regular file inside the themes' folder; a link leading out of it is refused. |
-| A Lua file | 256 KiB of UTF-8 source. |
-| A font file | 8 MiB. |
-| An image | A PNG of 4 MiB and 1024 pixels a side; another is not drawn (`gfx:image` returns false), the reason logged once. |
-| `theme.lua` | Returns a table: `api` the number 1, `name` one line of 1 to 64 bytes, `design` a number from 120 to 1920, `draw` a function, `fonts` 16 names at most, each a file or a list of 4 at most; the font found must exist. |
-| `require` | A module that requires itself, through others or not, fails. |
-| Lua's memory | 16 MiB. |
-| Patterns | `find`, `match`, `gmatch` and `gsub` take 64 KiB of text, and refuse a pattern whose worst case is long: the text's length to the power of one more than the pattern's `*`, `+`, `-` and `?` must stay under ten million. Match short texts, or `find` plainly (`s:find(text, 1, true)`). |
-| Numbers given to `gfx` | Finite and within a million. |
-| `gfx:lines`, `gfx:polygon`, clips | 16384 numbers. |
-| A text | 1024 bytes; its `size` and `spacing` within `design`, its `outline_width` within an eighth of it. |
-| `gfx:radial_glow` | 255 steps. |
-| `gfx:save` | 64 deep in a frame. |
-| Layers | 64 names, each side twice `design` at most, 12 dials of area in all; keys of 1024 bytes. |
-| `gfx:sprite` | A column at least, frames a unit wide and high at least. |
-| `gfx:wake` | 0 seconds or more. |
+| What                              | Limit                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Folder, font and layer names      | 1 to 64 bytes; folders and fonts in letters, digits, `-` and `_`.                                                                                                                                                                                                                         |
+| Every file                        | A regular file inside the themes' folder; a link leading out of it is refused.                                                                                                                                                                                                            |
+| A Lua file                        | 256 KiB of UTF-8 source.                                                                                                                                                                                                                                                                  |
+| A font file                       | 8 MiB.                                                                                                                                                                                                                                                                                    |
+| An image                          | A PNG of 4 MiB and 1024 pixels a side; another is not drawn (`gfx:image` returns false), the reason logged once.                                                                                                                                                                          |
+| `theme.lua`                       | Returns a table: `api` the number 1, `name` one line of 1 to 64 bytes, `design` a number from 120 to 1920, `draw` a function, `fonts` 16 names at most, each a file or a list of 4 at most; the font found must exist.                                                                    |
+| `require`                         | A module that requires itself, through others or not, fails.                                                                                                                                                                                                                              |
+| Lua's memory                      | 16 MiB.                                                                                                                                                                                                                                                                                   |
+| Patterns                          | `find`, `match`, `gmatch` and `gsub` take 64 KiB of text, and refuse a pattern whose worst case is long: the text's length to the power of one more than the pattern's `*`, `+`, `-` and `?` must stay under ten million. Match short texts, or `find` plainly (`s:find(text, 1, true)`). |
+| Numbers given to `gfx`            | Finite and within a million.                                                                                                                                                                                                                                                              |
+| `gfx:lines`, `gfx:polygon`, clips | 16384 numbers.                                                                                                                                                                                                                                                                            |
+| A text                            | 1024 bytes; its `size` and `spacing` within `design`, its `outline_width` within an eighth of it.                                                                                                                                                                                         |
+| `gfx:radial_glow`                 | 255 steps.                                                                                                                                                                                                                                                                                |
+| `gfx:save`                        | 64 deep in a frame.                                                                                                                                                                                                                                                                       |
+| Layers                            | 64 names, each side twice `design` at most, 12 dials of area in all; keys of 1024 bytes.                                                                                                                                                                                                  |
+| `gfx:sprite`                      | A column at least, frames a unit wide and high at least.                                                                                                                                                                                                                                  |
+| `gfx:wake`                        | 0 seconds or more.                                                                                                                                                                                                                                                                        |
 
 ## ui: what a theme reads
 
@@ -143,43 +143,43 @@ The dial shows the error, as does nlclient's log (`THEME Lua theme=...`).
 (`thermostat.unit`), never converted by the theme, except the weather's,
 which are Celsius.
 
-| Field | |
-|-|-|
-| `ui.now` | Seconds since the theme was first drawn, for animation. |
-| `ui.screen` | Always `"home"`. |
-| `ui.dial.size`, `ui.dial.px`, `ui.dial.scale` | The dial in design units, in pixels, and pixels per unit. |
-| `ui.fan_on` | The fan runs. |
-| `ui.changed.screen` | `ui.now` when the home screen last came into view (as the menus fold away). |
-| `ui.changed.target` | When the target last changed. |
-| `ui.changed.turned` | When the ring last turned; -100 before it has. |
+| Field                                         |                                                                             |
+| --------------------------------------------- | --------------------------------------------------------------------------- |
+| `ui.now`                                      | Seconds since the theme was first drawn, for animation.                     |
+| `ui.screen`                                   | Always `"home"`.                                                            |
+| `ui.dial.size`, `ui.dial.px`, `ui.dial.scale` | The dial in design units, in pixels, and pixels per unit.                   |
+| `ui.fan_on`                                   | The fan runs.                                                               |
+| `ui.changed.screen`                           | `ui.now` when the home screen last came into view (as the menus fold away). |
+| `ui.changed.target`                           | When the target last changed.                                               |
+| `ui.changed.turned`                           | When the ring last turned; -100 before it has.                              |
 
 ### ui.thermostat
 
-| Field | |
-|-|-|
-| `target` | The target, rounded to the unit's step (0.5 °C, 1 °F). |
-| `nudge` | How far the ring has turned towards the next step, in the unit: draw `target + nudge` to follow the ring smoothly. |
-| `current` | The room's temperature. |
-| `min`, `max` | The lowest and highest targets (9 to 32 °C, 48.2 to 89.6 °F): the ends of a scale. |
-| `unit` | `"C"` or `"F"`. |
-| `mode` | `"heat"`, `"cool"`, `"heat-cool"`, `"eco"` or `"off"`. |
-| `hvac` | `"heating"`, `"cooling"` or `"idle"`. |
-| `low`, `high` | Heat-cool's ends. |
-| `range` | In heat-cool, the end picked on the home screen: `"low"`, `"high"` or nil. |
-| `range_editing` | The picked end is being changed (press to set). |
-| `humidity` | Relative humidity in percent, or nil. |
-| `leaf_on` | The setpoint saves energy. |
-| `eco` | Eco is on: `target` is the Eco temperature. |
-| `can_heat`, `can_cool` | What the wiring can run. |
-| `stage` | The stage running, 1 to 3. |
-| `aux`, `emergency`, `alt` | Auxiliary heat runs; emergency heat; alternate heat's stage (0 when off). |
-| `preconditioning` | Early-On running: `"heat"`, `"cool"` or nil. |
-| `sunblock` | Sunlight correction is active. |
-| `safety` | The safety shutoff is active. |
-| `time_to_target` | Minutes until the room reaches the target, or nil. |
-| `outdoor` | Outside temperature in the unit, or nil. |
-| `weather_image` | The unit's own picture for the weather (`"unit:Weather_*.png"`), or nil. |
-| `online` | Always true. |
+| Field                     |                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `target`                  | The target, rounded to the unit's step (0.5 °C, 1 °F).                                                             |
+| `nudge`                   | How far the ring has turned towards the next step, in the unit: draw `target + nudge` to follow the ring smoothly. |
+| `current`                 | The room's temperature.                                                                                            |
+| `min`, `max`              | The lowest and highest targets (9 to 32 °C, 48.2 to 89.6 °F): the ends of a scale.                                 |
+| `unit`                    | `"C"` or `"F"`.                                                                                                    |
+| `mode`                    | `"heat"`, `"cool"`, `"heat-cool"`, `"eco"` or `"off"`.                                                             |
+| `hvac`                    | `"heating"`, `"cooling"` or `"idle"`.                                                                              |
+| `low`, `high`             | Heat-cool's ends.                                                                                                  |
+| `range`                   | In heat-cool, the end picked on the home screen: `"low"`, `"high"` or nil.                                         |
+| `range_editing`           | The picked end is being changed (press to set).                                                                    |
+| `humidity`                | Relative humidity in percent, or nil.                                                                              |
+| `leaf_on`                 | The setpoint saves energy.                                                                                         |
+| `eco`                     | Eco is on: `target` is the Eco temperature.                                                                        |
+| `can_heat`, `can_cool`    | What the wiring can run.                                                                                           |
+| `stage`                   | The stage running, 1 to 3.                                                                                         |
+| `aux`, `emergency`, `alt` | Auxiliary heat runs; emergency heat; alternate heat's stage (0 when off).                                          |
+| `preconditioning`         | Early-On running: `"heat"`, `"cool"` or nil.                                                                       |
+| `sunblock`                | Sunlight correction is active.                                                                                     |
+| `safety`                  | The safety shutoff is active.                                                                                      |
+| `time_to_target`          | Minutes until the room reaches the target, or nil.                                                                 |
+| `outdoor`                 | Outside temperature in the unit, or nil.                                                                           |
+| `weather_image`           | The unit's own picture for the weather (`"unit:Weather_*.png"`), or nil.                                           |
+| `online`                  | Always true.                                                                                                       |
 
 `drying`, `airwave`, `system_issue`, `press_to`, `forecast`, `starts_in`,
 `delayed_for`, `lockout` and `farsight` exist for compatibility and keep
@@ -187,23 +187,23 @@ their defaults.
 
 ### ui.clock
 
-| Field | |
-|-|-|
-| `hour`, `minute`, `second`, `weekday` | Local time; weekday 0 is Sunday. |
-| `twelve_hour` | The unit shows 12-hour time. |
-| `epoch` | Seconds since 1970, UTC. |
-| `utc_offset` | Local time's offset from UTC, in seconds: the local hour of an epoch time is `((time + utc_offset) % 86400) // 3600`. |
+| Field                                 |                                                                                                                       |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `hour`, `minute`, `second`, `weekday` | Local time; weekday 0 is Sunday.                                                                                      |
+| `twelve_hour`                         | The unit shows 12-hour time.                                                                                          |
+| `epoch`                               | Seconds since 1970, UTC.                                                                                              |
+| `utc_offset`                          | Local time's offset from UTC, in seconds: the local hour of an epoch time is `((time + utc_offset) % 86400) // 3600`. |
 
 A second changing alone draws no frame: a theme that shows seconds, or the
 minute, asks for its frame with `gfx:wake`.
 
 ### ui.nest: everything nestlocal knows
 
-| Field | |
-|-|-|
-| `ui.nest.device`, `ui.nest.shared` | The unit's device and shared buckets, as nlclient reports them (`current_humidity`, `fan_timer_timeout`, `hvac_heater_state`, …). |
-| `ui.nest.state` | What MQTT's state topic shows, and Home Assistant with it: `mode`, `action`, `target`, `current_temperature`, `fan_mode`, `eco_mode`, `filter_runtime_h`, …, in Celsius. |
-| `ui.nest.weather` | Home Assistant's weather, when it publishes it: `temp_c`, `humidity`, `condition` (Home Assistant's: `sunny`, `clear-night`, `partlycloudy`, `cloudy`, `fog`, `rainy`, `pouring`, `lightning`, `lightning-rainy`, `snowy`, `snowy-rainy`, `hail`, `windy`, `windy-variant`, `exceptional`), `icon` (the unit's coarser name), `sunrise` and `sunset` (epoch seconds, today's), `forecast.hourly[]` (`time`, `temp_c`, `humidity`) and `forecast.daily[]` (`date`, `temp_high_c`, `temp_low_c`, `humidity`). |
+| Field                              |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ui.nest.device`, `ui.nest.shared` | The unit's device and shared buckets, as nlclient reports them (`current_humidity`, `fan_timer_timeout`, `hvac_heater_state`, …).                                                                                                                                                                                                                                                                                                                                                                           |
+| `ui.nest.state`                    | What MQTT's state topic shows, and Home Assistant with it: `mode`, `action`, `target`, `current_temperature`, `fan_mode`, `eco_mode`, `filter_runtime_h`, …, in Celsius.                                                                                                                                                                                                                                                                                                                                    |
+| `ui.nest.weather`                  | Home Assistant's weather, when it publishes it: `temp_c`, `humidity`, `condition` (Home Assistant's: `sunny`, `clear-night`, `partlycloudy`, `cloudy`, `fog`, `rainy`, `pouring`, `lightning`, `lightning-rainy`, `snowy`, `snowy-rainy`, `hail`, `windy`, `windy-variant`, `exceptional`), `icon` (the unit's coarser name), `sunrise` and `sunset` (epoch seconds, today's), `forecast.hourly[]` (`time`, `temp_c`, `humidity`) and `forecast.daily[]` (`date`, `temp_high_c`, `temp_low_c`, `humidity`). |
 
 Any of them may be missing or empty: a theme draws something sensible
 without them (the Weather theme falls back to a clear sky by the clock).
@@ -215,18 +215,18 @@ arguments are design units; widths are line widths.
 
 ### Shapes
 
-| Call | Draws |
-|-|-|
-| `gfx:clear(color)` | The whole screen in one colour, whatever the transform. |
-| `gfx:circle(x, y, r, color)` | A filled disc. |
-| `gfx:ring(x, y, r, width, color)` | A circle's outline. |
-| `gfx:arc(x, y, r, from, to, width, color)` | An arc from angle `from` to `to`. |
-| `gfx:gradient_arc(x, y, r, from, to, width, start, stop)` | An arc fading from colour `start` to `stop`. |
-| `gfx:radial_glow(x, y, radius, steps)` | A white glow built of `steps` faint discs; tint it by drawing it into a layer. |
-| `gfx:line(x1, y1, x2, y2, width, color[, round])` | One segment, round-capped if `round`. |
-| `gfx:lines({x1, y1, x2, y2, ...}, width, color)` | Many segments in one stroke: far cheaper than as many `line` calls. |
-| `gfx:rect(x, y, w, h, color[, radius])` | A rectangle, its corners rounded by `radius`. |
-| `gfx:polygon({x1, y1, x2, y2, ...}, color)` | A filled polygon. Keep it convex (see below). |
+| Call                                                      | Draws                                                                          |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `gfx:clear(color)`                                        | The whole screen in one colour, whatever the transform.                        |
+| `gfx:circle(x, y, r, color)`                              | A filled disc.                                                                 |
+| `gfx:ring(x, y, r, width, color)`                         | A circle's outline.                                                            |
+| `gfx:arc(x, y, r, from, to, width, color)`                | An arc from angle `from` to `to`.                                              |
+| `gfx:gradient_arc(x, y, r, from, to, width, start, stop)` | An arc fading from colour `start` to `stop`.                                   |
+| `gfx:radial_glow(x, y, radius, steps)`                    | A white glow built of `steps` faint discs; tint it by drawing it into a layer. |
+| `gfx:line(x1, y1, x2, y2, width, color[, round])`         | One segment, round-capped if `round`.                                          |
+| `gfx:lines({x1, y1, x2, y2, ...}, width, color)`          | Many segments in one stroke: far cheaper than as many `line` calls.            |
+| `gfx:rect(x, y, w, h, color[, radius])`                   | A rectangle, its corners rounded by `radius`.                                  |
+| `gfx:polygon({x1, y1, x2, y2, ...}, color)`               | A filled polygon. Keep it convex (see below).                                  |
 
 ### Text
 
@@ -235,16 +235,16 @@ arguments are design units; widths are line widths.
 `gfx:has_glyphs(text, style)` says whether the font has every character.
 The style is a table:
 
-| Field | Default | |
-|-|-|-|
-| `font` | `"regular"` | A name from the manifest's `fonts`. |
-| `size` | 24 | In design units. |
-| `color` | white | |
-| `align` | `"left"` | `"left"`, `"center"` or `"right"` of x. |
-| `baseline` | `"alphabetic"` | `"alphabetic"`, `"top"`, `"middle"` or `"bottom"` at y. |
-| `spacing` | 0 | Extra space between letters. |
-| `outline`, `outline_width` | none, 2 | A stroke round the letters, under them. |
-| `snap` | true | Start on a whole pixel; false for text that moves smoothly. |
+| Field                      | Default        |                                                             |
+| -------------------------- | -------------- | ----------------------------------------------------------- |
+| `font`                     | `"regular"`    | A name from the manifest's `fonts`.                         |
+| `size`                     | 24             | In design units.                                            |
+| `color`                    | white          |                                                             |
+| `align`                    | `"left"`       | `"left"`, `"center"` or `"right"` of x.                     |
+| `baseline`                 | `"alphabetic"` | `"alphabetic"`, `"top"`, `"middle"` or `"bottom"` at y.     |
+| `spacing`                  | 0              | Extra space between letters.                                |
+| `outline`, `outline_width` | none, 2        | A stroke round the letters, under them.                     |
+| `snap`                     | true           | Start on a whole pixel; false for text that moves smoothly. |
 
 ### Images
 
@@ -265,11 +265,11 @@ opacity of what follows, until the next restore.
 A layer is an offscreen picture the theme draws once and paints as often
 as it likes: the main tool for a fast theme.
 
-| Call | |
-|-|-|
-| `gfx:layer(name, key, function(g) ... end[, w, h])` | Draws the function into layer `name` (`w` by `h` units, the dial by default), unless the layer already holds what `key` (a string, number or boolean) names. Change the key whenever what the layer shows changes. |
-| `gfx:paint_layer(name, tint[, clip])` | Paints the layer at the origin (move it with `translate`), its colours multiplied by `tint`; only inside the polygon `clip` (layer coordinates) when given. Draw a layer in white to paint it in any colour. |
-| `gfx:warp_layer(name, {x0, y0, x1, y1, x2, y2, x3, y3})` | Paints all of the layer onto the quadrilateral with those top-left, top-right, bottom-right and bottom-left corners, in perspective; opacity from `gfx:alpha`. |
+| Call                                                     |                                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `gfx:layer(name, key, function(g) ... end[, w, h])`      | Draws the function into layer `name` (`w` by `h` units, the dial by default), unless the layer already holds what `key` (a string, number or boolean) names. Change the key whenever what the layer shows changes. |
+| `gfx:paint_layer(name, tint[, clip])`                    | Paints the layer at the origin (move it with `translate`), its colours multiplied by `tint`; only inside the polygon `clip` (layer coordinates) when given. Draw a layer in white to paint it in any colour.       |
+| `gfx:warp_layer(name, {x0, y0, x1, y1, x2, y2, x3, y3})` | Paints all of the layer onto the quadrilateral with those top-left, top-right, bottom-right and bottom-left corners, in perspective; opacity from `gfx:alpha`.                                                     |
 
 On the unit a layer keeps its texture for as long as the theme is shown:
 use a fixed set of names (one per digit or sprite is fine), never a name
@@ -319,12 +319,12 @@ budget:
 
 The common modules help:
 
-| Module | |
-|-|-|
-| `common:anim` | `clamp`, easing (`ease_out`, `ease_in_out`), `mix`, and `follower(rate, near)`: a value that glides to its target. |
-| `common:color` | `alpha`, `with_alpha`, `mix` and `scale` for `"#rrggbb"` colours. |
-| `common:geom` | `polar` (a point at an angle and radius), `push_line`, `push_spoke`, `ring_quad`, `ring_clips` (clips round a ring, for painting parts of a layer). |
-| `common:thermostat` | Temperatures as text, the scale's fraction for a value, what the system is doing, the time as text, seconds to the next minute. |
+| Module              |                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common:anim`       | `clamp`, easing (`ease_out`, `ease_in_out`), `mix`, and `follower(rate, near)`: a value that glides to its target.                                  |
+| `common:color`      | `alpha`, `with_alpha`, `mix` and `scale` for `"#rrggbb"` colours.                                                                                   |
+| `common:geom`       | `polar` (a point at an angle and radius), `push_line`, `push_spoke`, `ring_quad`, `ring_clips` (clips round a ring, for painting parts of a layer). |
+| `common:thermostat` | Temperatures as text, the scale's fraction for a value, what the system is doing, the time as text, seconds to the next minute.                     |
 
 ## Trying a theme
 

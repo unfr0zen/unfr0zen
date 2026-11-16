@@ -3,7 +3,10 @@
 
 use std::time::Duration;
 
-use rs_matter::{error::{Error, ErrorCode}, Matter};
+use rs_matter::{
+    error::{Error, ErrorCode},
+    Matter,
+};
 
 use crate::logf;
 
@@ -16,19 +19,29 @@ struct Service {
 
 fn services(matter: &Matter<'_>) -> Result<Vec<Service>, Error> {
     let mut descriptors = Vec::new();
-    matter.mdns_services(|service| { descriptors.push(service); Ok(()) })?;
+    matter.mdns_services(|service| {
+        descriptors.push(service);
+        Ok(())
+    })?;
     let mut result = Vec::new();
     for service in descriptors {
         let mut buffer = [0; 1024];
         let (service, _) = service.service(matter, &mut buffer)?;
         let mut kind = service.service_protocol.to_string();
-        for subtype in service.service_subtypes { kind.push(','); kind.push_str(subtype); }
+        for subtype in service.service_subtypes {
+            kind.push(',');
+            kind.push_str(subtype);
+        }
         let mut txt = String::new();
         for (key, value) in service.txt_kvs {
             let entry = format!("{key}={value}");
-            if entry.len() > 255 { return Err(ErrorCode::NoSpace.into()); }
+            if entry.len() > 255 {
+                return Err(ErrorCode::NoSpace.into());
+            }
             txt.push_str(&format!("{:02x}", entry.len()));
-            for byte in entry.bytes() { txt.push_str(&format!("{byte:02x}")); }
+            for byte in entry.bytes() {
+                txt.push_str(&format!("{byte:02x}"));
+            }
         }
         result.push(Service {
             name: service.name.to_string(),
@@ -45,8 +58,8 @@ pub(super) async fn command(line: &str) -> std::io::Result<String> {
 
 #[cfg(unix)]
 pub(super) async fn command_to(path: &std::path::Path, line: &str) -> std::io::Result<String> {
-    use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
     use embassy_futures::select::{select, Either};
+    use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
     use std::os::unix::net::UnixStream;
     static CLI: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = CLI.lock().await;
@@ -57,10 +70,14 @@ pub(super) async fn command_to(path: &std::path::Path, line: &str) -> std::io::R
         loop {
             let mut buffer = [0; 512];
             let n = socket.read(&mut buffer).await?;
-            if n == 0 { return Err(std::io::ErrorKind::UnexpectedEof.into()); }
+            if n == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
             output.extend_from_slice(&buffer[..n]);
             let text = String::from_utf8_lossy(&output);
-            if text.contains("Done\r\n") { return Ok(text.into_owned()); }
+            if text.contains("Done\r\n") {
+                return Ok(text.into_owned());
+            }
             let limit = if line == "nest-diag" { 32768 } else { 8192 };
             if text.contains("Error ") || output.len() > limit {
                 return Err(std::io::Error::other(text.into_owned()));
@@ -80,19 +97,25 @@ pub(super) async fn command_to(_: &std::path::Path, _: &str) -> std::io::Result<
 }
 
 fn obsolete_services<'a>(listing: &'a str, wanted: &[Service]) -> Vec<(&'a str, &'a str)> {
-    listing.lines().filter_map(|line| {
-        let line = line.trim_start_matches("> ").strip_prefix("instance:\"")?;
-        let (name, line) = line.split_once("\", name:\"")?;
-        let (kind, _) = line.split_once('"')?;
-        let kind = kind.split(',').next()?;
-        (matches!(kind, "_matter._tcp" | "_matterc._udp") &&
-         !wanted.iter().any(|s| s.name == name && s.kind == kind)).then_some((name, kind))
-    }).collect()
+    listing
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start_matches("> ").strip_prefix("instance:\"")?;
+            let (name, line) = line.split_once("\", name:\"")?;
+            let (kind, _) = line.split_once('"')?;
+            let kind = kind.split(',').next()?;
+            (matches!(kind, "_matter._tcp" | "_matterc._udp")
+                && !wanted.iter().any(|s| s.name == name && s.kind == kind))
+            .then_some((name, kind))
+        })
+        .collect()
 }
 
 /// IPv6 addresses the Thread stack owns and can advertise through SRP.
 fn thread_addresses(listing: &str) -> Vec<std::net::Ipv6Addr> {
-    listing.lines().filter_map(|line| line.trim().trim_start_matches("> ").parse::<std::net::Ipv6Addr>().ok())
+    listing
+        .lines()
+        .filter_map(|line| line.trim().trim_start_matches("> ").parse::<std::net::Ipv6Addr>().ok())
         .filter(|address| !address.is_unspecified() && !address.is_multicast() && !address.is_unicast_link_local())
         .collect()
 }
@@ -101,11 +124,15 @@ async fn sync_addresses() -> std::io::Result<()> {
     let listing = command("ipaddr").await?;
     let local = if_addrs::get_if_addrs()?;
     for address in thread_addresses(&listing) {
-        if local.iter().any(|iface| iface.name == "thread0" && iface.ip() == std::net::IpAddr::V6(address)) { continue; }
+        if local.iter().any(|iface| iface.name == "thread0" && iface.ip() == std::net::IpAddr::V6(address)) {
+            continue;
+        }
         let status = std::process::Command::new("ip")
             .args(["-6", "addr", "add", &format!("{address}/128"), "dev", "thread0"])
             .status()?;
-        if !status.success() { return Err(std::io::Error::other("cannot assign Thread address to Linux")); }
+        if !status.success() {
+            return Err(std::io::Error::other("cannot assign Thread address to Linux"));
+        }
     }
     Ok(())
 }
@@ -143,7 +170,8 @@ pub async fn run(matter: &Matter<'_>, serial: &str) -> Result<(), Error> {
                 }
             }
             Ok::<(), std::io::Error>(())
-        }.await;
+        }
+        .await;
         match update {
             Ok(()) => registered = wanted,
             Err(error) => logf!("matter: Thread SRP: {error}; retrying"),
@@ -156,8 +184,8 @@ pub async fn run(matter: &Matter<'_>, serial: &str) -> Result<(), Error> {
 mod tests {
     use super::*;
     use rs_matter::crypto::default_crypto;
-    use rs_matter::dm::{AttrChangeNotifier, clusters::basic_info::BasicInfoConfig};
     use rs_matter::dm::devices::test::{DAC_PRIVKEY, TEST_DEV_ATT};
+    use rs_matter::dm::{clusters::basic_info::BasicInfoConfig, AttrChangeNotifier};
     use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
     use rs_matter::BasicCommData;
 
@@ -171,8 +199,10 @@ mod tests {
 
     #[test]
     fn srp_addresses_exclude_cli_text_link_local_and_multicast() {
-        assert_eq!(thread_addresses("> fd00::1234\r\nfe80::1\r\nff03::1\r\n::\r\nDone\r\n"),
-                   vec!["fd00::1234".parse::<std::net::Ipv6Addr>().unwrap()]);
+        assert_eq!(
+            thread_addresses("> fd00::1234\r\nfe80::1\r\nff03::1\r\n::\r\nDone\r\n"),
+            vec!["fd00::1234".parse::<std::net::Ipv6Addr>().unwrap()]
+        );
     }
 
     #[test]
@@ -189,7 +219,9 @@ mod tests {
     fn commissioning_service_tracks_window_and_encodes_txt_for_cli() {
         let info = BasicInfoConfig { device_name: "Nest Thermostat", ..BasicInfoConfig::new() };
         let comm = BasicCommData {
-            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(&20202021u32.to_le_bytes())),
+            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(
+                &20202021u32.to_le_bytes(),
+            )),
             discriminator: 3840,
         };
         let matter = Matter::new(&info, comm, &TEST_DEV_ATT, 5540);
@@ -201,7 +233,7 @@ mod tests {
         let command = &announced[0].add;
         assert!(command.len() < 512);
         let hex = command.split_whitespace().last().unwrap();
-        let txt: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect();
+        let txt: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
         assert!(txt.windows(19).any(|bytes| bytes == b"\x12DN=Nest Thermostat"));
         matter.close_comm_window(&Notify).unwrap();
         assert!(services(&matter).unwrap().is_empty());

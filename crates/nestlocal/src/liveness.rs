@@ -50,8 +50,18 @@ impl Liveness {
 
     fn with_clock(stale: Duration, now: Clock) -> Arc<Liveness> {
         let started = now();
-        Arc::new(Liveness { stale, now, state: Mutex::new(State { in_flight: 0, last: None, alive: false, on_change: None,
-                                                                 started, warned: false }) })
+        Arc::new(Liveness {
+            stale,
+            now,
+            state: Mutex::new(State {
+                in_flight: 0,
+                last: None,
+                alive: false,
+                on_change: None,
+                started,
+                warned: false,
+            }),
+        })
     }
 
     /// What to call when the unit comes or goes.
@@ -101,7 +111,10 @@ impl Liveness {
             if alive {
                 logf!("nestlocal: nlclient is calling in");
             } else {
-                logf!("nestlocal: nothing from nlclient for {}, availability offline", crate::logger::duration(self.stale));
+                logf!(
+                    "nestlocal: nothing from nlclient for {}, availability offline",
+                    crate::logger::duration(self.stale)
+                );
             }
             if let Some(f) = f {
                 f(alive);
@@ -109,7 +122,6 @@ impl Liveness {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -195,5 +207,4 @@ mod tests {
         l.update(0);
         assert_eq!(*seen.lock().unwrap(), vec![true, false], "told of something that did not change");
     }
-
 }

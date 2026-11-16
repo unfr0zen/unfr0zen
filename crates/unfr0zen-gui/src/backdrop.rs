@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use eframe::egui_wgpu::{self, wgpu, CallbackResources, CallbackTrait, ScreenDescriptor};
 use egui::layers::PaintList;
-use egui::{Color32, ColorImage, Context, Id, LayerId, Modal, Order, PaintCallbackInfo, Rect, UserData, ViewportCommand};
+use egui::{
+    Color32, ColorImage, Context, Id, LayerId, Modal, Order, PaintCallbackInfo, Rect, UserData, ViewportCommand,
+};
 
 /// Seconds of the fade in and out.
 const FADE: f32 = 0.12;
@@ -134,33 +136,37 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |entry: &str, format, blend| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("backdrop"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let uniform = || device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("backdrop"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let pipeline = |entry: &str, format, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("backdrop"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let uniform = || {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("backdrop"),
+                size: 32,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
         Self {
             blur: pipeline("blur", TARGET_FORMAT, None),
             show: pipeline("show", target, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
@@ -179,31 +185,35 @@ impl Gpu {
     }
 
     fn targets(&self, device: &wgpu::Device, size: [usize; 2], texel: f32) -> Targets {
-        let texture = |width: u32, height: u32, usage| device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("backdrop"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TARGET_FORMAT,
-            usage,
-            view_formats: &[],
-        });
+        let texture = |width: u32, height: u32, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("backdrop"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: TARGET_FORMAT,
+                usage,
+                view_formats: &[],
+            })
+        };
         let (width, height) = (size[0] as u32, size[1] as u32);
         let target = |side: u32| (side as f32 / texel).ceil().max(1.0) as u32;
         let source = texture(width, height, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
         let across = texture(target(width), target(height), usage).create_view(&Default::default());
         let down = texture(target(width), target(height), usage).create_view(&Default::default());
-        let group = |uniform: &wgpu::Buffer, view: &wgpu::TextureView| device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("backdrop"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
+        let group = |uniform: &wgpu::Buffer, view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("backdrop"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                ],
+            })
+        };
         let groups = [
             group(&self.uniforms[0], &source.create_view(&Default::default())),
             group(&self.uniforms[1], &across),
@@ -238,7 +248,9 @@ impl CallbackTrait for Paint {
         encoder: &mut wgpu::CommandEncoder,
         resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let Some(gpu) = resources.get_mut::<Gpu>() else { return Vec::new() };
+        let Some(gpu) = resources.get_mut::<Gpu>() else {
+            return Vec::new();
+        };
         let new = gpu.generation != self.generation;
         if new {
             let [width, height] = self.image.size;
@@ -274,7 +286,10 @@ impl CallbackTrait for Paint {
                         view,
                         depth_slice: None,
                         resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -307,8 +322,12 @@ fn layers_id() -> Id {
 /// A modal that leaves its backdrop to `Backdrop`.
 pub fn modal(ctx: &Context, name: &str) -> Modal {
     // A card as the set-up flow's, lifted off the page.
-    let frame = egui::Frame::new().fill(crate::CARD).stroke(egui::Stroke::new(1.0, crate::LINE)).corner_radius(18)
-        .inner_margin(egui::Margin::same(24)).shadow(ctx.global_style().visuals.popup_shadow);
+    let frame = egui::Frame::new()
+        .fill(crate::CARD)
+        .stroke(egui::Stroke::new(1.0, crate::LINE))
+        .corner_radius(18)
+        .inner_margin(egui::Margin::same(24))
+        .shadow(ctx.global_style().visuals.popup_shadow);
     let modal = Modal::new(Id::new(name)).backdrop_color(Color32::TRANSPARENT).frame(frame);
     let layer = modal.area.layer();
     ctx.data_mut(|data| data.get_temp_mut_or_default::<Vec<LayerId>>(layers_id()).push(layer));
@@ -330,7 +349,9 @@ impl Backdrop {
     /// A backdrop for the app's renderer, which it readies for its paint
     /// callbacks unless that renderer runs on the CPU.
     pub fn new(render_state: Option<&egui_wgpu::RenderState>) -> Self {
-        let Some(render_state) = render_state else { return Self::default() };
+        let Some(render_state) = render_state else {
+            return Self::default();
+        };
         if render_state.adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             return Self::default();
         }
@@ -345,10 +366,12 @@ impl Backdrop {
         let layers = ctx.data_mut(|data| data.remove_temp::<Vec<LayerId>>(layers_id())).unwrap_or_default();
         let open = !layers.is_empty();
 
-        let captured = ctx.input(|input| input.events.iter().rev().find_map(|event| match event {
-            egui::Event::Screenshot { image, .. } => Some(image.clone()),
-            _ => None,
-        }));
+        let captured = ctx.input(|input| {
+            input.events.iter().rev().find_map(|event| match event {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
         if let Some(image) = captured {
             self.snapshot = Some(image);
             self.generation += 1;
@@ -382,15 +405,21 @@ impl Backdrop {
         let painter = ctx.layer_painter(LayerId::new(Order::Middle, Id::new("backdrop")));
         let window = ctx.content_rect();
         if let Some(image) = self.snapshot.as_ref().filter(|_| blur > 0.0) {
-            painter.add(egui_wgpu::Callback::new_paint_callback(blurred, Paint {
-                image: image.clone(),
-                generation: self.generation,
-                texel: ctx.pixels_per_point().round().max(1.0),
-                sigma: SIGMA * blur,
-                opacity: blur,
-                uv_min: [(blurred.min.x - window.min.x) / window.width(), (blurred.min.y - window.min.y) / window.height()],
-                uv_size: [blurred.width() / window.width(), blurred.height() / window.height()],
-            }));
+            painter.add(egui_wgpu::Callback::new_paint_callback(
+                blurred,
+                Paint {
+                    image: image.clone(),
+                    generation: self.generation,
+                    texel: ctx.pixels_per_point().round().max(1.0),
+                    sigma: SIGMA * blur,
+                    opacity: blur,
+                    uv_min: [
+                        (blurred.min.x - window.min.x) / window.width(),
+                        (blurred.min.y - window.min.y) / window.height(),
+                    ],
+                    uv_size: [blurred.width() / window.width(), blurred.height() / window.height()],
+                },
+            ));
         }
         painter.rect_filled(window, 0.0, Color32::from_black_alpha(DIM).gamma_multiply(dim));
     }
@@ -411,32 +440,38 @@ mod tests {
     fn frames(blur: bool, blurred: Rect) -> Vec<Frame> {
         let context = Context::default();
         let mut backdrop = Backdrop { blur, ..Backdrop::default() };
-        (0..6).map(|frame| {
-            let events = if blur && frame == 3 {
-                vec![egui::Event::Screenshot {
-                    viewport_id: ViewportId::ROOT,
-                    user_data: UserData::default(),
-                    image: Arc::new(ColorImage::new([1, 1], vec![Color32::BLACK])),
-                }]
-            } else {
-                Vec::new()
-            };
-            let output = context.run_ui(egui::RawInput { time: Some(frame as f64 / 60.0), events, ..Default::default() }, |ui| {
-                if frame >= 1 {
-                    modal(ui.ctx(), "test").show(ui.ctx(), |ui| ui.label("modal"));
+        (0..6)
+            .map(|frame| {
+                let events = if blur && frame == 3 {
+                    vec![egui::Event::Screenshot {
+                        viewport_id: ViewportId::ROOT,
+                        user_data: UserData::default(),
+                        image: Arc::new(ColorImage::new([1, 1], vec![Color32::BLACK])),
+                    }]
+                } else {
+                    Vec::new()
+                };
+                let output = context.run_ui(
+                    egui::RawInput { time: Some(frame as f64 / 60.0), events, ..Default::default() },
+                    |ui| {
+                        if frame >= 1 {
+                            modal(ui.ctx(), "test").show(ui.ctx(), |ui| ui.label("modal"));
+                        }
+                        backdrop.show(ui.ctx(), blurred);
+                    },
+                );
+                Frame {
+                    modal_painted: output.shapes.iter().any(|shape| matches!(shape.shape, egui::Shape::Text(_))),
+                    capture_asked: output.viewport_output.values().any(|viewport| {
+                        viewport.commands.iter().any(|command| matches!(command, ViewportCommand::Screenshot(_)))
+                    }),
+                    blur: output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Callback(callback) => Some(callback.rect),
+                        _ => None,
+                    }),
                 }
-                backdrop.show(ui.ctx(), blurred);
-            });
-            Frame {
-                modal_painted: output.shapes.iter().any(|shape| matches!(shape.shape, egui::Shape::Text(_))),
-                capture_asked: output.viewport_output.values()
-                    .any(|viewport| viewport.commands.iter().any(|command| matches!(command, ViewportCommand::Screenshot(_)))),
-                blur: output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::Shape::Callback(callback) => Some(callback.rect),
-                    _ => None,
-                }),
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     #[test]

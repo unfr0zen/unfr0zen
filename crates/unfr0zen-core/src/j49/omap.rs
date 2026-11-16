@@ -87,8 +87,10 @@ pub fn probe(bulk: &mut impl Bulk) -> Result<Vec<u8>> {
         }
         thread::sleep(Duration::from_millis(500));
     }
-    device("no ASIC ID: the 0451:d00e device is not a live boot ROM (a hung x-loader enumerates the same way); \
-            power-cycle the unit and retry")
+    device(
+        "no ASIC ID: the 0451:d00e device is not a live boot ROM (a hung x-loader enumerates the same way); \
+            power-cycle the unit and retry",
+    )
 }
 
 /// The peripheral boot command, then the first stage into SRAM.
@@ -114,8 +116,13 @@ pub fn check_files(files: &[File]) -> Result<()> {
     for file in files {
         let end = file.address as u64 + file.data.len() as u64;
         if file.data.is_empty() || file.address < SDRAM_BASE || end > SDRAM_BASE as u64 + SDRAM_MIN as u64 {
-            return device(format!("{} at {:#x}+{:#x} leaves SDRAM {SDRAM_BASE:#x}-{:#x}", file.name, file.address,
-                                  file.data.len(), SDRAM_BASE as u64 + SDRAM_MIN as u64));
+            return device(format!(
+                "{} at {:#x}+{:#x} leaves SDRAM {SDRAM_BASE:#x}-{:#x}",
+                file.name,
+                file.address,
+                file.data.len(),
+                SDRAM_BASE as u64 + SDRAM_MIN as u64
+            ));
         }
         spans.push((file.address as u64, end, file.name));
     }
@@ -133,13 +140,21 @@ pub fn check_files(files: &[File]) -> Result<()> {
 pub fn upload_files(bulk: &mut impl Bulk, files: &[File]) -> Result<Vec<String>> {
     check_files(files)?;
     #[derive(PartialEq)]
-    enum Phase { Request, Echo, Report }
+    enum Phase {
+        Request,
+        Echo,
+        Report,
+    }
     let (mut messages, mut index, mut phase, mut failures) = (Vec::new(), 0, Phase::Request, 0);
     let mut started = Instant::now();
     while index < files.len() {
         if started.elapsed() > Duration::from_secs(30) {
-            return Err(Error::Timeout(format!("x-loader went quiet loading {} (file {} of {}); power-cycle the unit",
-                                              files[index].name, index + 1, files.len())));
+            return Err(Error::Timeout(format!(
+                "x-loader went quiet loading {} (file {} of {}); power-cycle the unit",
+                files[index].name,
+                index + 1,
+                files.len()
+            )));
         }
         let raw = match bulk.receive(PACKET, TRANSFER_TIMEOUT) {
             Ok(raw) if !raw.is_empty() => raw,
@@ -164,14 +179,21 @@ pub fn upload_files(bulk: &mut impl Bulk, files: &[File]) -> Result<Vec<String>>
                 continue;
             }
             (op, Phase::Request) if op == CMD_FILE_REQ => {
-                let request = [&CMD_FILE[..], &(file.data.len() as u32).to_le_bytes(), &file.address.to_le_bytes()].concat();
+                let request =
+                    [&CMD_FILE[..], &(file.data.len() as u32).to_le_bytes(), &file.address.to_le_bytes()].concat();
                 write(bulk, &request, Duration::from_secs(2))?;
                 phase = Phase::Echo;
             }
             (op, Phase::Echo) if op == CMD_ECHO_SIZE => {
                 match word(4) {
                     Some(size) if size as usize == file.data.len() => {}
-                    other => return device(format!("x-loader echoed {other:?} bytes for {}, not {}", file.name, file.data.len())),
+                    other => {
+                        return device(format!(
+                            "x-loader echoed {other:?} bytes for {}, not {}",
+                            file.name,
+                            file.data.len()
+                        ))
+                    }
                 }
                 write(bulk, file.data, Duration::from_secs(60))?;
                 phase = Phase::Report;
@@ -179,7 +201,13 @@ pub fn upload_files(bulk: &mut impl Bulk, files: &[File]) -> Result<Vec<String>>
             (op, Phase::Report) if op == CMD_REPORT_SIZE => {
                 match word(4) {
                     Some(size) if size as usize == file.data.len() => {}
-                    other => return device(format!("x-loader received {other:?} of {} bytes of {}", file.data.len(), file.name)),
+                    other => {
+                        return device(format!(
+                            "x-loader received {other:?} of {} bytes of {}",
+                            file.data.len(),
+                            file.name
+                        ))
+                    }
                 }
                 index += 1;
                 phase = Phase::Request;
@@ -251,9 +279,15 @@ pub(crate) mod tests {
     #[test]
     fn a_file_is_requested_echoed_and_confirmed() {
         let data = vec![1u8; 600];
-        let mut bulk = Scripted { replies: VecDeque::from([
-            b"USBmhello\0".to_vec(), word(CMD_FILE_REQ, 0), word(CMD_ECHO_SIZE, 600), word(CMD_REPORT_SIZE, 600),
-        ]), ..Default::default() };
+        let mut bulk = Scripted {
+            replies: VecDeque::from([
+                b"USBmhello\0".to_vec(),
+                word(CMD_FILE_REQ, 0),
+                word(CMD_ECHO_SIZE, 600),
+                word(CMD_REPORT_SIZE, 600),
+            ]),
+            ..Default::default()
+        };
         let messages = upload_files(&mut bulk, &[File { name: "flasher", data: &data, address: 0x8010_0000 }]).unwrap();
         assert_eq!(messages, ["hello"]);
         assert_eq!(bulk.sent[0], [&b"USBs"[..], &600u32.to_le_bytes(), &0x8010_0000u32.to_le_bytes()].concat());
@@ -264,7 +298,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_wrong_echo_stops_the_upload() {
-        let mut bulk = Scripted { replies: VecDeque::from([word(CMD_FILE_REQ, 0), word(CMD_ECHO_SIZE, 5)]), ..Default::default() };
+        let mut bulk =
+            Scripted { replies: VecDeque::from([word(CMD_FILE_REQ, 0), word(CMD_ECHO_SIZE, 5)]), ..Default::default() };
         let error = upload_files(&mut bulk, &[File { name: "f", data: &[0; 6], address: 0x8010_0000 }]).unwrap_err();
         assert!(error.to_string().contains("echoed"), "{error}");
     }

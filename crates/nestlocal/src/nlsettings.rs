@@ -38,8 +38,7 @@ pub fn set(b: &[u8], key: &str, value: &str) -> io::Result<Vec<u8>> {
     let line = format!(r#"<s key="{key}" value="{value}"/>"#).into_bytes();
     let found = entries(b, key);
     if found.is_empty() {
-        let end = b.windows(11).rposition(|w| w == b"</settings>")
-            .ok_or_else(|| io::Error::other("no </settings>"))?;
+        let end = b.windows(11).rposition(|w| w == b"</settings>").ok_or_else(|| io::Error::other("no </settings>"))?;
         let mut out = b[..end].to_vec();
         out.extend_from_slice(b"  ");
         out.extend_from_slice(&line);
@@ -104,8 +103,10 @@ mod tests {
         let out = set(FILE.as_bytes(), "a", "0").unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), FILE.replace(r#""a" value="1""#, r#""a" value="0""#));
         let out = set(FILE.as_bytes(), "c", "1").unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(),
-                   FILE.replace("</settings>", "  <s key=\"c\" value=\"1\"/>\n</settings>"));
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            FILE.replace("</settings>", "  <s key=\"c\" value=\"1\"/>\n</settings>")
+        );
         assert!(set(b"<settings>\n", "c", "1").is_err());
     }
 }

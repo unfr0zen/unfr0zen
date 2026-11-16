@@ -23,7 +23,8 @@ pub const THREAD_RADIO_IDENTITY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"),
 pub fn busybox() -> Vec<u8> {
     let mut busybox = Vec::new();
     flate2::read::GzDecoder::new(&include_bytes!(concat!(env!("OUT_DIR"), "/j49-busybox.gz"))[..])
-        .read_to_end(&mut busybox).expect("embedded at build time");
+        .read_to_end(&mut busybox)
+        .expect("embedded at build time");
     busybox
 }
 
@@ -31,12 +32,17 @@ pub fn busybox() -> Vec<u8> {
 pub fn ssh_server() -> Overlay {
     let mut dropbear = Vec::new();
     flate2::read::GzDecoder::new(&include_bytes!(concat!(env!("OUT_DIR"), "/dropbearmulti.gz"))[..])
-        .read_to_end(&mut dropbear).expect("embedded at build time");
+        .read_to_end(&mut dropbear)
+        .expect("embedded at build time");
     Overlay {
         directories: Vec::new(),
         files: vec![
             ("usr/sbin/dropbearmulti".into(), 0o755, dropbear),
-            ("etc/init.d/unfr0zen-ssh".into(), 0o755, include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/ssh.init")).to_vec()),
+            (
+                "etc/init.d/unfr0zen-ssh".into(),
+                0o755,
+                include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/ssh.init")).to_vec(),
+            ),
         ],
     }
 }

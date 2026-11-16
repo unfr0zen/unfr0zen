@@ -1,0 +1,10 @@
+base: lua51
+globals:
+  log:
+    args:
+      - type: "..."
+  saved:
+    any: true
+  tr:
+    args:
+      - type: string

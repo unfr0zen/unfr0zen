@@ -8,13 +8,13 @@ use std::path::Path;
 use std::time::Instant;
 
 use tiny_skia::{
-    FillRule, FilterQuality, LineCap, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect, SpreadMode, Stroke, Transform,
+    FillRule, FilterQuality, LineCap, Paint, PathBuilder, Pattern, Pixmap, PixmapPaint, Rect, SpreadMode, Stroke,
+    Transform,
 };
 
 use super::paint::{square_to_quad, Align, Baseline, Color, Painter, TextStyle};
 use super::typeset;
 use log::{debug, trace};
-
 
 /// At most this many runs of text are kept.
 const RUNS: usize = 96;
@@ -78,8 +78,19 @@ impl Renderer {
         Ok(Renderer {
             pixmap: Pixmap::new(width, height).ok_or_else(|| format!("a {width}x{height} pixmap"))?,
             fonts: typeset::Fonts::new()?,
-            images: HashMap::new(), scaled: HashMap::new(), layers: HashMap::new(), used: HashMap::new(), frame: 0, runs: HashMap::new(), tick: 0, glyphs: typeset::Glyphs::default(),
-            advances: HashMap::new(), shapes: 0, painting: std::time::Duration::ZERO, design: 480.0, scale: 1.0,
+            images: HashMap::new(),
+            scaled: HashMap::new(),
+            layers: HashMap::new(),
+            used: HashMap::new(),
+            frame: 0,
+            runs: HashMap::new(),
+            tick: 0,
+            glyphs: typeset::Glyphs::default(),
+            advances: HashMap::new(),
+            shapes: 0,
+            painting: std::time::Duration::ZERO,
+            design: 480.0,
+            scale: 1.0,
             base: Transform::identity(),
         })
     }
@@ -111,8 +122,12 @@ impl Renderer {
             let images = &self.images;
             self.scaled.retain(|k, _| images.contains_key(k));
             self.layers.retain(|k, _| used.contains_key(&(true, k.clone())));
-            trace!("paint: {} images, {} scaled and {} layers kept after frame {frame}", self.images.len(), self.scaled.len(),
-                   self.layers.len());
+            trace!(
+                "paint: {} images, {} scaled and {} layers kept after frame {frame}",
+                self.images.len(),
+                self.scaled.len(),
+                self.layers.len()
+            );
         }
         self.design = design;
         self.scale = theme / design;
@@ -247,8 +262,12 @@ impl SoftPainter<'_> {
                 run = typeset::dilate(&run, outline);
             }
             // White coverage, tinted when drawn.
-            trace!("paint: text {text:?} set, {}x{} pixels at {px:.1} px{}", run.width, run.height,
-                   if outline > 0.0 { ", outlined" } else { "" });
+            trace!(
+                "paint: text {text:?} set, {}x{} pixels at {px:.1} px{}",
+                run.width,
+                run.height,
+                if outline > 0.0 { ", outlined" } else { "" }
+            );
             let pixmap = Pixmap::new(run.width as u32, run.height as u32).map(|mut p| {
                 for (px, &a) in p.pixels_mut().iter_mut().zip(&run.alpha) {
                     *px = tiny_skia::PremultipliedColorU8::from_rgba(a, a, a, a).unwrap_or(*px);
@@ -277,7 +296,14 @@ impl SoftPainter<'_> {
         if self.r.advances.len() > 512 {
             self.r.advances.clear();
         }
-        let a = typeset::advance(&mut self.r.glyphs, self.r.fonts.get(&style.font), self.r.fonts.cjk(text), text, px, spacing);
+        let a = typeset::advance(
+            &mut self.r.glyphs,
+            self.r.fonts.get(&style.font),
+            self.r.fonts.cjk(text),
+            text,
+            px,
+            spacing,
+        );
         self.r.advances.insert(key, a);
         a
     }
@@ -290,7 +316,8 @@ impl SoftPainter<'_> {
         let t = s.transform;
         // An unsnapped text FreeType sets upright starts where it falls: its
         // run is set at the start's fraction of a pixel, from the whole one.
-        let upright = t.kx.abs() < 1e-6 && t.ky.abs() < 1e-6 && (t.sx - scale).abs() < 1e-4 && (t.sy - scale).abs() < 1e-4;
+        let upright =
+            t.kx.abs() < 1e-6 && t.ky.abs() < 1e-6 && (t.sx - scale).abs() < 1e-4 && (t.sy - scale).abs() < 1e-4;
         let (frac, x, baseline) = if !style.snap && upright && self.font(&style.font).subpixel() {
             let (dx, dy) = (t.sx * x + t.tx, t.sy * baseline + t.ty);
             let (fx, fy) = (((dx - dx.floor()) * 16.0).round(), ((dy - dy.floor()) * 16.0).round());
@@ -299,17 +326,23 @@ impl SoftPainter<'_> {
         } else {
             ((0, 0), x, baseline)
         };
-        let Some(run) = self.run(text, style, outline, frac) else { return };
+        let Some(run) = self.run(text, style, outline, frac) else {
+            return;
+        };
         let (left, top) = (run.left, run.top);
         let key = run_key(text, style, outline, scale, frac);
         let Some(coverage) = run.pixmap.as_ref() else { return };
         let snap = |v: f32| (v * scale).round() / scale;
-        let at = t.pre_translate(snap(x) + left as f32 / scale, snap(baseline) - top as f32 / scale).pre_scale(1.0 / scale, 1.0 / scale);
+        let at = t
+            .pre_translate(snap(x) + left as f32 / scale, snap(baseline) - top as f32 / scale)
+            .pre_scale(1.0 / scale, 1.0 / scale);
         if let Some((x, y)) = whole_pixels(&at) {
             let started = Instant::now();
             self.r.shapes += 1;
             let r = &mut *self.r;
-            let Some(coverage) = r.runs.get(&key).and_then(|c| c.pixmap.as_ref()) else { return };
+            let Some(coverage) = r.runs.get(&key).and_then(|c| c.pixmap.as_ref()) else {
+                return;
+            };
             let target = match self.layer.as_mut() {
                 Some(l) => l,
                 None => &mut r.pixmap,
@@ -323,7 +356,8 @@ impl SoftPainter<'_> {
         let k = |c: u8, t: f32| (f32::from(c) * t).round() as u8;
         for px in colored.pixels_mut() {
             let a = px.alpha();
-            *px = tiny_skia::PremultipliedColorU8::from_rgba(k(a, color.r), k(a, color.g), k(a, color.b), a).unwrap_or(*px);
+            *px = tiny_skia::PremultipliedColorU8::from_rgba(k(a, color.r), k(a, color.g), k(a, color.b), a)
+                .unwrap_or(*px);
         }
         let started = Instant::now();
         self.r.shapes += 1;
@@ -371,7 +405,14 @@ impl SoftPainter<'_> {
 
     /// Fills `path` with an image or a layer, whose pixels `pattern`
     /// places in design units.
-    fn fill_with(&mut self, path: Option<tiny_skia::Path>, image: &str, pattern: Transform, opacity: f32, quality: FilterQuality) {
+    fn fill_with(
+        &mut self,
+        path: Option<tiny_skia::Path>,
+        image: &str,
+        pattern: Transform,
+        opacity: f32,
+        quality: FilterQuality,
+    ) {
         let Some(path) = path else { return };
         let started = Instant::now();
         let s = self.state();
@@ -379,7 +420,11 @@ impl SoftPainter<'_> {
         let r = &mut *self.r;
         let pixmap = r.images.get(image).and_then(Option::as_ref);
         let Some(pixmap) = pixmap else { return };
-        let p = Paint { shader: Pattern::new(pixmap.as_ref(), SpreadMode::Pad, quality, opacity * s.alpha, pattern), anti_alias: true, ..Paint::default() };
+        let p = Paint {
+            shader: Pattern::new(pixmap.as_ref(), SpreadMode::Pad, quality, opacity * s.alpha, pattern),
+            anti_alias: true,
+            ..Paint::default()
+        };
         let target = match self.layer.as_mut() {
             Some(l) => l,
             None => &mut r.pixmap,
@@ -403,7 +448,8 @@ fn blit(target: &mut Pixmap, source: &Pixmap, x: i32, y: i32, opacity: f32) {
 /// on whole pixels.
 fn whole_pixels(at: &Transform) -> Option<(i32, i32)> {
     let one = |v: f32| (v - 1.0).abs() < 1e-3;
-    (one(at.sx) && one(at.sy) && at.kx.abs() < 1e-6 && at.ky.abs() < 1e-6).then(|| (at.tx.round() as i32, at.ty.round() as i32))
+    (one(at.sx) && one(at.sy) && at.kx.abs() < 1e-6 && at.ky.abs() < 1e-6)
+        .then(|| (at.tx.round() as i32, at.ty.round() as i32))
 }
 
 /// `source` over `target` placed by `at` (its pixels to the target's),
@@ -432,7 +478,8 @@ fn blit_transformed(target: &mut Pixmap, source: &Pixmap, at: Transform, opacity
         let cy = row as f32 + 0.5;
         // The row's source coordinates at x0's centre, then the span of x
         // whose samples land inside the source.
-        let (u0, v0) = (inv.sx * (x0 as f32 + 0.5) + inv.kx * cy + inv.tx, inv.ky * (x0 as f32 + 0.5) + inv.sy * cy + inv.ty);
+        let (u0, v0) =
+            (inv.sx * (x0 as f32 + 0.5) + inv.kx * cy + inv.tx, inv.ky * (x0 as f32 + 0.5) + inv.sy * cy + inv.ty);
         let (mut lo, mut hi) = (0.0f32, (x1 - x0) as f32);
         for (start, step, limit) in [(u0, inv.sx, sw), (v0, inv.ky, sh)] {
             if step.abs() < 1e-9 {
@@ -536,9 +583,17 @@ fn blit_smooth(target: &mut Pixmap, source: &Pixmap, at: Transform, opacity: f32
 fn blit_warped(target: &mut Pixmap, source: &Pixmap, corners: &[(f32, f32); 4], opacity: f32) {
     let [a, b, c, d, e, f, g, h, i] = square_to_quad(corners);
     // Its inverse (the adjugate: the scale cancels in the division).
-    let m = [e * i - f * h, c * h - b * i, b * f - c * e,
-             f * g - d * i, a * i - c * g, c * d - a * f,
-             d * h - e * g, b * g - a * h, a * e - b * d];
+    let m = [
+        e * i - f * h,
+        c * h - b * i,
+        b * f - c * e,
+        f * g - d * i,
+        a * i - c * g,
+        c * d - a * f,
+        d * h - e * g,
+        b * g - a * h,
+        a * e - b * d,
+    ];
     let (tw, th) = (target.width() as i32, target.height() as i32);
     let (left, right) = corners.iter().fold((f32::MAX, f32::MIN), |(l, r), p| (l.min(p.0), r.max(p.0)));
     let (top, bottom) = corners.iter().fold((f32::MAX, f32::MIN), |(t, b), p| (t.min(p.1), b.max(p.1)));
@@ -554,7 +609,8 @@ fn blit_warped(target: &mut Pixmap, source: &Pixmap, corners: &[(f32, f32); 4], 
     for row in y0..y1 {
         let cy = row as f32 + 0.5;
         let cx = x0 as f32 + 0.5;
-        let (mut nu, mut nv, mut nw) = (m[0] * cx + m[1] * cy + m[2], m[3] * cx + m[4] * cy + m[5], m[6] * cx + m[7] * cy + m[8]);
+        let (mut nu, mut nv, mut nw) =
+            (m[0] * cx + m[1] * cy + m[2], m[3] * cx + m[4] * cy + m[5], m[6] * cx + m[7] * cy + m[8]);
         let d_row = &mut dst[((row * tw + x0) * 4) as usize..][..((x1 - x0) * 4) as usize];
         for px in d_row.as_chunks_mut::<4>().0 {
             let (u, v) = (nu / nw, nv / nw);
@@ -670,7 +726,11 @@ fn rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<tiny_skia::Path> {
 fn polygon_path(points: &[(f32, f32)]) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
     for (i, &(x, y)) in points.iter().enumerate() {
-        if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+        if i == 0 {
+            pb.move_to(x, y)
+        } else {
+            pb.line_to(x, y)
+        }
     }
     pb.close();
     pb.finish()
@@ -684,7 +744,11 @@ fn arc_path(x: f32, y: f32, r: f32, from: f32, to: f32) -> Option<tiny_skia::Pat
     for i in 0..=steps {
         let a = a0 + (a1 - a0) * i as f32 / steps as f32;
         let (px, py) = (x + r * a.cos(), y + r * a.sin());
-        if i == 0 { pb.move_to(px, py) } else { pb.line_to(px, py) }
+        if i == 0 {
+            pb.move_to(px, py)
+        } else {
+            pb.line_to(px, py)
+        }
     }
     pb.finish()
 }
@@ -775,11 +839,20 @@ impl Painter for SoftPainter<'_> {
             let r = &mut *self.r;
             let fresh = r.scaled.get(path).is_some_and(|p| (p.width(), p.height()) == (dw, dh));
             if !fresh {
-                let Some(scaled) = Pixmap::new(dw.max(1), dh.max(1)) else { return Ok(()) };
+                let Some(scaled) = Pixmap::new(dw.max(1), dh.max(1)) else {
+                    return Ok(());
+                };
                 let mut scaled = scaled;
                 let source = r.images[path].as_ref().expect("loaded above");
                 let paint = PixmapPaint { quality: FilterQuality::Bilinear, ..PixmapPaint::default() };
-                scaled.draw_pixmap(0, 0, source.as_ref(), &paint, Transform::from_scale(dw as f32 / iw as f32, dh as f32 / ih as f32), None);
+                scaled.draw_pixmap(
+                    0,
+                    0,
+                    source.as_ref(),
+                    &paint,
+                    Transform::from_scale(dw as f32 / iw as f32, dh as f32 / ih as f32),
+                    None,
+                );
                 r.scaled.insert(path.to_string(), scaled);
             }
             r.shapes += 1;
@@ -787,7 +860,13 @@ impl Painter for SoftPainter<'_> {
                 Some(l) => l,
                 None => &mut r.pixmap,
             };
-            blit(target, &r.scaled[path], (x * t.sx + t.tx).round() as i32, (y * t.sy + t.ty).round() as i32, alpha * faded);
+            blit(
+                target,
+                &r.scaled[path],
+                (x * t.sx + t.tx).round() as i32,
+                (y * t.sy + t.ty).round() as i32,
+                alpha * faded,
+            );
             r.painting += started.elapsed();
             return Ok(());
         }
@@ -820,19 +899,27 @@ impl Painter for SoftPainter<'_> {
     }
 
     fn translate(&mut self, x: f32, y: f32) {
-        if let Some(s) = self.stack.last_mut() { s.transform = s.transform.pre_translate(x, y); }
+        if let Some(s) = self.stack.last_mut() {
+            s.transform = s.transform.pre_translate(x, y);
+        }
     }
 
     fn rotate(&mut self, angle: f32) {
-        if let Some(s) = self.stack.last_mut() { s.transform = s.transform.pre_concat(Transform::from_rotate(angle.to_degrees())); }
+        if let Some(s) = self.stack.last_mut() {
+            s.transform = s.transform.pre_concat(Transform::from_rotate(angle.to_degrees()));
+        }
     }
 
     fn scale(&mut self, x: f32, y: f32) {
-        if let Some(s) = self.stack.last_mut() { s.transform = s.transform.pre_scale(x, y); }
+        if let Some(s) = self.stack.last_mut() {
+            s.transform = s.transform.pre_scale(x, y);
+        }
     }
 
     fn alpha(&mut self, alpha: f32) {
-        if let Some(s) = self.stack.last_mut() { s.alpha *= alpha.clamp(0.0, 1.0); }
+        if let Some(s) = self.stack.last_mut() {
+            s.alpha *= alpha.clamp(0.0, 1.0);
+        }
     }
 
     fn clear(&mut self, color: Color) {
@@ -840,7 +927,13 @@ impl Painter for SoftPainter<'_> {
         self.target().fill(c);
     }
 
-    fn layer(&mut self, name: &str, key: &str, size: Option<(f32, f32)>, draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>) -> Result<(), String> {
+    fn layer(
+        &mut self,
+        name: &str,
+        key: &str,
+        size: Option<(f32, f32)>,
+        draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>,
+    ) -> Result<(), String> {
         let size = size.unwrap_or((self.r.design, self.r.design));
         self.r.used.insert((true, name.to_string()), self.r.frame);
         let px = |v: f32| (v * self.r.scale).ceil().max(1.0) as u32;
@@ -857,7 +950,10 @@ impl Painter for SoftPainter<'_> {
         // Drawn in its own pixels, from its top-left corner, at full opacity.
         let outer_layer = self.layer.replace(pixmap);
         let scale = self.r.scale;
-        let outer_stack = std::mem::replace(&mut self.stack, vec![State { transform: Transform::from_scale(scale, scale), alpha: 1.0 }]);
+        let outer_stack = std::mem::replace(
+            &mut self.stack,
+            vec![State { transform: Transform::from_scale(scale, scale), alpha: 1.0 }],
+        );
         let drawn = draw(self);
         let pixmap = std::mem::replace(&mut self.layer, outer_layer).expect("the layer was set above");
         self.stack = outer_stack;
@@ -867,7 +963,9 @@ impl Painter for SoftPainter<'_> {
 
     fn paint_layer(&mut self, name: &str, tint: Color, clip: Option<&[(f32, f32)]>) -> Result<(), String> {
         self.r.used.insert((true, name.to_string()), self.r.frame);
-        let Some(layer) = self.r.layers.get_mut(name) else { return Err(format!("no layer {name}")) };
+        let Some(layer) = self.r.layers.get_mut(name) else {
+            return Err(format!("no layer {name}"));
+        };
         let (w, h) = layer.size;
         // Untinted (white), the layer as drawn; else a tinted copy, kept for
         // the few tints in use.
@@ -897,11 +995,14 @@ impl Painter for SoftPainter<'_> {
             None => &mut r.pixmap,
         };
         if let (Some(points), Some((x, y))) = (clip, whole_pixels(&at)) {
-            let device: Vec<(f32, f32)> = points.iter().map(|&(px, py)| {
-                let mut p = [tiny_skia::Point::from_xy(px, py)];
-                s.transform.map_points(&mut p);
-                (p[0].x, p[0].y)
-            }).collect();
+            let device: Vec<(f32, f32)> = points
+                .iter()
+                .map(|&(px, py)| {
+                    let mut p = [tiny_skia::Point::from_xy(px, py)];
+                    s.transform.map_points(&mut p);
+                    (p[0].x, p[0].y)
+                })
+                .collect();
             blit_polygon(target, source, x, y, &device, s.alpha);
             r.painting += started.elapsed();
             return Ok(());
@@ -911,8 +1012,13 @@ impl Painter for SoftPainter<'_> {
             // and clips fall between its marks.
             Some(path) => {
                 let paint = Paint {
-                    shader: Pattern::new(source.as_ref(), SpreadMode::Pad, FilterQuality::Nearest, s.alpha,
-                                         at.post_concat(s.transform.invert().unwrap_or_default())),
+                    shader: Pattern::new(
+                        source.as_ref(),
+                        SpreadMode::Pad,
+                        FilterQuality::Nearest,
+                        s.alpha,
+                        at.post_concat(s.transform.invert().unwrap_or_default()),
+                    ),
                     anti_alias: false,
                     ..Paint::default()
                 };
@@ -962,7 +1068,8 @@ mod tests {
         for (i, px) in source.pixels_mut().iter_mut().enumerate() {
             let (x, y) = (i % 200, i / 200);
             let a = if (x / 10 + y / 10) % 3 == 0 { 0 } else { 255 };
-            *px = tiny_skia::PremultipliedColorU8::from_rgba((x % 256) as u8 & a, (y * 2) as u8 & a, 90 & a, a).unwrap();
+            *px =
+                tiny_skia::PremultipliedColorU8::from_rgba((x % 256) as u8 & a, (y * 2) as u8 & a, 90 & a, a).unwrap();
         }
         let at = Transform::from_translate(160.0, 160.0).pre_rotate(37.0).pre_translate(-100.0, -60.0);
         let mut ours = Pixmap::new(320, 320).unwrap();
@@ -978,8 +1085,17 @@ mod tests {
         let mut ours = Pixmap::new(320, 320).unwrap();
         blit_polygon(&mut ours, &source, 20, 10, &clip, 1.0);
         let mut theirs = Pixmap::new(320, 320).unwrap();
-        let paint = Paint { shader: Pattern::new(source.as_ref(), SpreadMode::Pad, FilterQuality::Nearest, 1.0, Transform::from_translate(20.0, 10.0)),
-                            anti_alias: false, ..Paint::default() };
+        let paint = Paint {
+            shader: Pattern::new(
+                source.as_ref(),
+                SpreadMode::Pad,
+                FilterQuality::Nearest,
+                1.0,
+                Transform::from_translate(20.0, 10.0),
+            ),
+            anti_alias: false,
+            ..Paint::default()
+        };
         theirs.fill_path(&polygon_path(&clip).unwrap(), &paint, FillRule::Winding, Transform::identity(), None);
         let differ = ours.pixels().iter().zip(theirs.pixels()).filter(|(a, b)| a != b).count();
         assert!(differ < 40, "{differ} pixels differ");
@@ -992,15 +1108,24 @@ mod tests {
         {
             let mut p = r.painter(Path::new("."));
             p.rect(0.0, 0.0, 240.0, 240.0, 0.0, Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 });
-            let style = TextStyle { font: "fallback".into(), size: 40.0, color: Color { r: 0.0, g: 1.0, b: 0.0, a: 1.0 }, align: Align::Center,
-                                    baseline: Baseline::Alphabetic, spacing: 0.0, outline: None, snap: true };
+            let style = TextStyle {
+                font: "fallback".into(),
+                size: 40.0,
+                color: Color { r: 0.0, g: 1.0, b: 0.0, a: 1.0 },
+                align: Align::Center,
+                baseline: Baseline::Alphabetic,
+                spacing: 0.0,
+                outline: None,
+                snap: true,
+            };
             p.text("HELLO", 360.0, 400.0, &style);
         }
         let at = |x: u32, y: u32| r.pixmap.pixel(x, y).unwrap();
         // Design 480 maps onto 320: the red square fills the top-left 160.
         assert_eq!((at(10, 10).red(), at(150, 150).red(), at(170, 170).red()), (255, 255, 0));
         // The text is drawn around (240, 267) in pixels.
-        let green = (200..280).flat_map(|x| (240..275).map(move |y| (x, y))).filter(|&(x, y)| at(x, y).green() > 128).count();
+        let green =
+            (200..280).flat_map(|x| (240..275).map(move |y| (x, y))).filter(|&(x, y)| at(x, y).green() > 128).count();
         assert!(green > 50, "text drawn: {green} pixels");
     }
 
@@ -1012,7 +1137,12 @@ mod tests {
         let white = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
         let mut drawn = 0;
         for _ in 0..2 {
-            p.layer("ring", "k", None, &mut |q| { drawn += 1; q.fill_circle(240.0, 240.0, 100.0, white); Ok(()) }).unwrap();
+            p.layer("ring", "k", None, &mut |q| {
+                drawn += 1;
+                q.fill_circle(240.0, 240.0, 100.0, white);
+                Ok(())
+            })
+            .unwrap();
         }
         p.paint_layer("ring", Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }, None).unwrap();
         drop(p);
@@ -1022,10 +1152,18 @@ mod tests {
         // Clipped to the left half, in red: only there.
         r.begin(320.0, 480.0);
         let mut p = r.painter(Path::new("."));
-        p.paint_layer("ring", Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }, Some(&[(0.0, 0.0), (240.0, 0.0), (240.0, 480.0), (0.0, 480.0)])).unwrap();
+        p.paint_layer(
+            "ring",
+            Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+            Some(&[(0.0, 0.0), (240.0, 0.0), (240.0, 480.0), (0.0, 480.0)]),
+        )
+        .unwrap();
         drop(p);
         let (left, right) = (r.pixmap.pixel(120, 160).unwrap(), r.pixmap.pixel(200, 160).unwrap());
-        assert_eq!((left.red(), right.red(), right.alpha()), (255, 0, 255), "right of the clip stays the cleared black");
+        assert_eq!(
+            (left.red(), right.red(), right.alpha()),
+            (255, 0, 255),
+            "right of the clip stays the cleared black"
+        );
     }
 }
-

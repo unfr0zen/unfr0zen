@@ -208,7 +208,8 @@ workflows:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
       - test:
-          requires: &modules [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]
+          requires:
+            &modules [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
       - clippy:
           requires: *modules

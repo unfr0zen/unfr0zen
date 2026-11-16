@@ -81,8 +81,8 @@ pub fn atags(nlmodel: &str, slot: Slot, length: usize) -> Result<Vec<u8>> {
     if nlmodel.is_empty() || !nlmodel.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
         return device(format!("the U-Boot environment's nlmodel {nlmodel:?} is not a model name"));
     }
-    let mut cmdline = format!("console=ttyO0,115200 nlmodel={nlmodel} unfr0zen.slot={slot} rdinit=/init panic=5")
-        .into_bytes();
+    let mut cmdline =
+        format!("console=ttyO0,115200 nlmodel={nlmodel} unfr0zen.slot={slot} rdinit=/init panic=5").into_bytes();
     cmdline.push(0);
     cmdline.resize(cmdline.len().next_multiple_of(4), 0);
     let mut tags = Vec::new();

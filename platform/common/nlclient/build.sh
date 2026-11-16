@@ -5,7 +5,10 @@
 #
 #     sh platform/common/nlclient/build.sh OUT
 set -eu
-[ $# -eq 1 ] || { echo "usage: $0 OUT" >&2; exit 2; }
+[ $# -eq 1 ] || {
+    echo "usage: $0 OUT" >&2
+    exit 2
+}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$1"
 for name in custom_screen rcs_screen; do

@@ -13,23 +13,14 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
     if half(object, 16)? != 1 || address & 3 != 0 {
         return device("payload must be an ARM relocatable object at an aligned address");
     }
-    if elf
-        .sections
-        .iter()
-        .any(|s| s.flags & 2 != 0 && (s.size > 1 << 20 || s.align > 0x10000))
-    {
+    if elf.sections.iter().any(|s| s.flags & 2 != 0 && (s.size > 1 << 20 || s.align > 0x10000)) {
         return device("payload section exceeds supported size or alignment");
     }
     let mut offsets = BTreeMap::new();
     let mut output = Vec::new();
     // ld.lld -O0 keeps SHF_MERGE strings in input order, including duplicates.
     for prefix in [".text", ".rodata"] {
-        let sections: Vec<_> = elf
-            .sections
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.name.starts_with(prefix))
-            .collect();
+        let sections: Vec<_> = elf.sections.iter().enumerate().filter(|(_, s)| s.name.starts_with(prefix)).collect();
         let group_align = sections.iter().map(|(_, s)| s.align).max().unwrap_or(1);
         output.resize(align(output.len(), group_align)?, 0);
         for (index, s) in sections {
@@ -53,19 +44,14 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
     }
     if output.is_empty()
         || address
-            .checked_add(
-                u32::try_from(output.len())
-                    .map_err(|_| crate::Error::Device("payload too large".into()))?,
-            )
+            .checked_add(u32::try_from(output.len()).map_err(|_| crate::Error::Device("payload too large".into()))?)
             .is_none()
     {
         return device("invalid payload address range");
     }
     let table = elf.section(".symtab")?;
-    let strings = elf
-        .sections
-        .get(table.link)
-        .ok_or_else(|| crate::Error::Device("invalid payload symbol strings".into()))?;
+    let strings =
+        elf.sections.get(table.link).ok_or_else(|| crate::Error::Device("invalid payload symbol strings".into()))?;
     if table.size % 16 != 0 {
         return device("invalid payload symbol table");
     }
@@ -90,9 +76,7 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
                     address
                         .checked_add(*offset as u32)
                         .and_then(|v| v.checked_add(value))
-                        .ok_or_else(|| {
-                            crate::Error::Device("payload symbol address overflow".into())
-                        })?
+                        .ok_or_else(|| crate::Error::Device("payload symbol address overflow".into()))?
                 }
                 None => {
                     values.push(None);
@@ -113,15 +97,7 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
         let Some(&base) = offsets.get(&s.info) else {
             continue;
         };
-        if s.kind != 9
-            || s.link
-                != elf
-                    .sections
-                    .iter()
-                    .position(|s| s.name == ".symtab")
-                    .unwrap()
-            || s.size % 8 != 0
-        {
+        if s.kind != 9 || s.link != elf.sections.iter().position(|s| s.name == ".symtab").unwrap() || s.size % 8 != 0 {
             return device("unsupported payload relocation table");
         }
         for o in (s.offset..s.offset + s.size).step_by(8) {
@@ -130,9 +106,7 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
             let symbol = values
                 .get((info >> 8) as usize)
                 .and_then(|s| *s)
-                .ok_or_else(|| {
-                    crate::Error::Device("relocation to a discarded or invalid symbol".into())
-                })?;
+                .ok_or_else(|| crate::Error::Device("relocation to a discarded or invalid symbol".into()))?;
             let target = elf
                 .sections
                 .get(s.info)
@@ -161,15 +135,10 @@ pub fn link(object: &[u8], address: u32, externals: &BTreeMap<String, u32>) -> R
             output[at..at + 4].copy_from_slice(&value.to_le_bytes());
         }
     }
-    let entry = *symbols
-        .get("custom_factory")
-        .ok_or_else(|| crate::Error::Device("payload has no custom_factory".into()))?;
+    let entry =
+        *symbols.get("custom_factory").ok_or_else(|| crate::Error::Device("payload has no custom_factory".into()))?;
     if !(address..address + output.len() as u32).contains(&entry) {
         return device("payload factory outside executable bytes");
     }
-    Ok(Linked {
-        bytes: output,
-        entry,
-        symbols,
-    })
+    Ok(Linked { bytes: output, entry, symbols })
 }

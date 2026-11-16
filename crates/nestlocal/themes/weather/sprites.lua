@@ -41,8 +41,12 @@ end
 
 -- Draws the sprites' layers (once: their keys never change).
 function sprites.define(gfx)
-  gfx:layer("dot", "1", function(g) soft_disc(g, SIZE.dot / 2, SIZE.dot / 2, 1.2) end, SIZE.dot, SIZE.dot)
-  gfx:layer("glow", "1", function(g) soft_disc(g, SIZE.glow / 2, SIZE.glow / 2, 0.6) end, SIZE.glow, SIZE.glow)
+  gfx:layer("dot", "1", function(g)
+    soft_disc(g, SIZE.dot / 2, SIZE.dot / 2, 1.2)
+  end, SIZE.dot, SIZE.dot)
+  gfx:layer("glow", "1", function(g)
+    soft_disc(g, SIZE.glow / 2, SIZE.glow / 2, 0.6)
+  end, SIZE.glow, SIZE.glow)
   -- A raindrop's streak, faint at its top.
   gfx:layer("drop", "1", function(g)
     local x, steps = SIZE.drop / 2, 8
@@ -60,7 +64,9 @@ function sprites.define(gfx)
     g:circle(c - r * 0.35, c - r * 0.4, r * 0.22, "#ffffffc0")
   end, SIZE.bead, SIZE.bead)
   for seed = 1, 2 do
-    gfx:layer("cloud" .. seed, "1", function(g) cloud(g, seed) end, SIZE.cloud, CLOUD_HEIGHT)
+    gfx:layer("cloud" .. seed, "1", function(g)
+      cloud(g, seed)
+    end, SIZE.cloud, CLOUD_HEIGHT)
   end
 end
 

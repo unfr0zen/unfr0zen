@@ -9,9 +9,9 @@
 
 pub mod beacon;
 pub mod chip;
-pub mod socket;
 #[cfg(target_os = "linux")]
 pub mod port;
+pub mod socket;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -48,7 +48,11 @@ const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
 /// The sensor's description. The gen 1's and gen 2's Sensors view names it
 /// after its room, where a description would be a second label.
 fn description() -> &'static str {
-    if crate::device::current().omap() { "" } else { "External" }
+    if crate::device::current().omap() {
+        ""
+    } else {
+        "External"
+    }
 }
 
 /// Who the sensor is, kept between runs: the key only nlclient and nestlocal
@@ -85,7 +89,9 @@ fn base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let value = u32::from(chunk[0]) << 16 | u32::from(*chunk.get(1).unwrap_or(&0)) << 8 | u32::from(*chunk.get(2).unwrap_or(&0));
+        let value = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(TABLE[(value >> (18 - 6 * i) & 63) as usize] as char);
@@ -109,8 +115,8 @@ fn write_identity(path: &Path, identity: &Identity) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".partial");
     {
-        use std::os::unix::fs::OpenOptionsExt;
         use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&tmp)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
@@ -215,7 +221,9 @@ impl Sensor {
         if let Some(select) = self.select_after_delivery.get() {
             self.state.lock().unwrap().pending = true;
             select();
-            if let Some(notify) = self.notify.get() { notify(); }
+            if let Some(notify) = self.notify.get() {
+                notify();
+            }
         } else {
             select(store, serial, &self.bucket);
         }
@@ -371,7 +379,8 @@ pub fn prepare_settings(path: &Path, settings: &Path, serial: &str, where_id: Op
     let original = std::fs::read(settings)?;
     let mut b = original.clone();
     let where_id = where_id.unwrap_or(DEFAULT_WHERE);
-    for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", description().to_string())] {
+    for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", description().to_string())]
+    {
         b = nlsettings::set(&b, &format!("{bucket}.{name}"), &value)?;
     }
     if b != original {
@@ -385,7 +394,9 @@ pub fn prepare_settings(path: &Path, settings: &Path, serial: &str, where_id: Op
 /// its settings, and its files beside the sensor's identity. Other sensors
 /// stay. The settings go last: a run they survive is done again.
 pub fn forget_settings(path: &Path, settings: &Path) -> io::Result<()> {
-    let Some(identity) = read_identity(path) else { return Ok(()) };
+    let Some(identity) = read_identity(path) else {
+        return Ok(());
+    };
     let bucket = format!("kryptonite.{}", identity.id);
     let original = std::fs::read(settings)?;
     if nlsettings::value(&original, &format!("{bucket}.key")).is_none() {
@@ -399,9 +410,11 @@ pub fn forget_settings(path: &Path, settings: &Path) -> io::Result<()> {
         b = nlsettings::remove(&b, &format!("{bucket}.{name}"));
     }
     let associated = nlsettings::value(&b, "associated_rcs_sensors").unwrap_or_default();
-    let others: String = String::from_utf8_lossy(associated).split(',')
+    let others: String = String::from_utf8_lossy(associated)
+        .split(',')
         .filter(|sensor| !sensor.is_empty() && *sensor != bucket)
-        .map(|sensor| format!("{sensor},")).collect();
+        .map(|sensor| format!("{sensor},"))
+        .collect();
     if others.is_empty() {
         b = nlsettings::remove(&b, "associated_rcs_sensors");
         b = nlsettings::remove(&b, "is_onboarded_to_rcs");
@@ -466,16 +479,22 @@ pub fn ensure_buckets(store: &Arc<Store>, serial: &str, bucket: &str, where_id: 
     let mut swarm = listed(store.get(&structure).as_ref().and_then(|o| o.value.get("swarm")));
     if !swarm.iter().any(|v| v == bucket) {
         swarm.push(bucket.into());
-        store.merge(&structure, &fields!{"swarm" => swarm}, 0, 0, false);
+        store.merge(&structure, &fields! {"swarm" => swarm}, 0, 0, false);
     }
-    store.merge(bucket, &fields!{
-        "model" => "KR1",
-        "serial_number" => id,
-        "where_id" => where_id.unwrap_or(DEFAULT_WHERE),
-        "description" => description(),
-        "structure_id" => structure.split_once('.').map_or("", |(_, id)| id),
-        "report_period_in_seconds" => 60,
-    }, 0, 0, false);
+    store.merge(
+        bucket,
+        &fields! {
+            "model" => "KR1",
+            "serial_number" => id,
+            "where_id" => where_id.unwrap_or(DEFAULT_WHERE),
+            "description" => description(),
+            "structure_id" => structure.split_once('.').map_or("", |(_, id)| id),
+            "report_period_in_seconds" => 60,
+        },
+        0,
+        0,
+        false,
+    );
     choose(store, serial, bucket, false);
 }
 
@@ -490,13 +509,19 @@ fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
     if !associated.iter().any(|v| v == bucket) {
         associated.push(bucket.into());
     }
-    store.merge(&key, &fields!{
-        "active_rcs_sensors" => if active { vec![Value::from(bucket)] } else { Vec::new() },
-        "associated_rcs_sensors" => associated,
-        "rcs_control_setting" => "OVERRIDE",
-        "multiroom_active" => false,
-        "thermostat_alert" => "OFF",
-    }, 0, 0, false);
+    store.merge(
+        &key,
+        &fields! {
+            "active_rcs_sensors" => if active { vec![Value::from(bucket)] } else { Vec::new() },
+            "associated_rcs_sensors" => associated,
+            "rcs_control_setting" => "OVERRIDE",
+            "multiroom_active" => false,
+            "thermostat_alert" => "OFF",
+        },
+        0,
+        0,
+        false,
+    );
 }
 
 /// nlclient turns sensors OFF while it starts, before it has heard of them:
@@ -512,8 +537,10 @@ pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
     let (again, serial, sensor) = (store.clone(), serial.to_string(), sensor.clone());
     let waiting = Arc::new(AtomicBool::new(false));
     store.watch(move |o| {
-        if o.key != key || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF")
-            || waiting.swap(true, Ordering::SeqCst) {
+        if o.key != key
+            || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF")
+            || waiting.swap(true, Ordering::SeqCst)
+        {
             return;
         }
         let (store, serial, sensor, waiting) = (again.clone(), serial.clone(), sensor.clone(), waiting.clone());
@@ -537,7 +564,7 @@ pub fn withdraw(path: &Path, store: &Store, serial: &str) {
     if let Some(structure) = structure_key(store, serial).and_then(|key| store.get(&key)) {
         let swarm = listed(structure.value.get("swarm"));
         if swarm.iter().any(|v| v == bucket.as_str()) {
-            store.merge(&structure.key, &fields!{"swarm" => without(swarm)}, 0, 0, false);
+            store.merge(&structure.key, &fields! {"swarm" => without(swarm)}, 0, 0, false);
         }
     }
     if let Some(settings) = store.get(&format!("rcs_settings.{serial}")) {
@@ -546,41 +573,55 @@ pub fn withdraw(path: &Path, store: &Store, serial: &str) {
         if active.iter().chain(&associated).any(|v| v == bucket.as_str()) {
             let associated = without(associated);
             let control = if associated.is_empty() { "OFF" } else { "OVERRIDE" };
-            store.merge(&settings.key, &fields!{
-                "active_rcs_sensors" => without(active), "associated_rcs_sensors" => associated,
-                "rcs_control_setting" => control,
-            }, 0, 0, false);
+            store.merge(
+                &settings.key,
+                &fields! {
+                    "active_rcs_sensors" => without(active), "associated_rcs_sensors" => associated,
+                    "rcs_control_setting" => control,
+                },
+                0,
+                0,
+                false,
+            );
         }
     }
 }
 
 /// Whether nlclient has this sensor selected, as opposed to the backplate.
 pub fn selected(store: &Store, serial: &str, bucket: &str) -> bool {
-    store.get(&format!("rcs_settings.{serial}"))
+    store
+        .get(&format!("rcs_settings.{serial}"))
         .is_some_and(|o| listed(o.value.get("active_rcs_sensors")).iter().any(|v| v == bucket))
 }
 
 /// The unit's room, as its device bucket names it. With nlclient's settings
 /// (gen 1 and gen 2), their `device_where_id` comes first.
 pub fn where_id(store: &Store, serial: &str, settings: Option<&Path>) -> Option<String> {
-    settings.and_then(|settings| std::fs::read(settings).ok()).and_then(|bytes| {
-        let value = nlsettings::value(&bytes, "device_where_id")?;
-        std::str::from_utf8(value).ok().filter(|id| !id.is_empty()).map(str::to_string)
-    }).or_else(|| {
-        store.get(&format!("device.{serial}")).and_then(|device| {
-            device.value.get("where_id")?.as_str().filter(|id| !id.is_empty()).map(str::to_string)
+    settings
+        .and_then(|settings| std::fs::read(settings).ok())
+        .and_then(|bytes| {
+            let value = nlsettings::value(&bytes, "device_where_id")?;
+            std::str::from_utf8(value).ok().filter(|id| !id.is_empty()).map(str::to_string)
         })
-    })
+        .or_else(|| {
+            store.get(&format!("device.{serial}")).and_then(|device| {
+                device.value.get("where_id")?.as_str().filter(|id| !id.is_empty()).map(str::to_string)
+            })
+        })
 }
 
 /// Follow the thermostat's room, including a location change after startup.
 pub fn keep_location(store: &Arc<Store>, serial: &str, bucket: &str) {
     let (device, bucket, weak) = (format!("device.{serial}"), bucket.to_string(), Arc::downgrade(store));
     store.watch(move |object| {
-        if object.key != device { return; }
-        let Some(where_id) = object.value.get("where_id").and_then(Value::as_str).filter(|id| !id.is_empty()) else { return; };
+        if object.key != device {
+            return;
+        }
+        let Some(where_id) = object.value.get("where_id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
+            return;
+        };
         if let Some(store) = weak.upgrade() {
-            store.merge(&bucket, &fields!{"where_id" => where_id}, 0, 0, false);
+            store.merge(&bucket, &fields! {"where_id" => where_id}, 0, 0, false);
         }
     });
 }
@@ -611,7 +652,7 @@ mod tests {
         let directory = dir("location");
         let settings = directory.join("settings.config");
         std::fs::write(&settings, b"<settings><s key=\"device_where_id\" value=\"living-room\"/></settings>").unwrap();
-        store.merge("device.S", &fields!{"where_id" => "old-room"}, 0, 0, true);
+        store.merge("device.S", &fields! {"where_id" => "old-room"}, 0, 0, true);
         assert_eq!(where_id(&store, "S", Some(&settings)).as_deref(), Some("living-room"));
         assert_eq!(where_id(&store, "S", None).as_deref(), Some("old-room"), "gen 3 keeps to the bucket");
         std::fs::remove_file(&settings).unwrap();
@@ -619,7 +660,7 @@ mod tests {
         crate::structure::ensure_structure(&store, "S");
         ensure_buckets(&store, "S", "kryptonite.AB", Some("living-room"));
         keep_location(&store, "S", "kryptonite.AB");
-        store.merge("device.S", &fields!{"where_id" => "new-room"}, 0, 0, true);
+        store.merge("device.S", &fields! {"where_id" => "new-room"}, 0, 0, true);
         let sensor = store.get("kryptonite.AB").unwrap();
         assert_eq!(sensor.value["where_id"], json!("new-room"));
         assert_eq!(sensor.value["description"], json!(description()));
@@ -716,7 +757,8 @@ mod tests {
         let (path, settings) = (dir.join("sensor.json"), dir.join("settings"));
         load_identity(&path, "S").unwrap();
         let bucket = format!("kryptonite.{}", sensor_id("S"));
-        std::fs::write(&settings, format!("<settings>\n  <s key=\"{bucket}.seqno\" value=\"5000\"/>\n</settings>\n")).unwrap();
+        std::fs::write(&settings, format!("<settings>\n  <s key=\"{bucket}.seqno\" value=\"5000\"/>\n</settings>\n"))
+            .unwrap();
         let sensor = Sensor::open(&path, "S", &settings, Duration::from_secs(1800)).unwrap();
         assert_eq!(sensor.state.lock().unwrap().sequence, 5001);
     }
@@ -730,7 +772,10 @@ mod tests {
         let identity = read_identity(&path).unwrap();
         let b = std::fs::read(&settings).unwrap();
         let bucket = format!("kryptonite.{}", identity.id);
-        assert_eq!(nlsettings::value(&b, &format!("{bucket}.key")).unwrap(), base64(&parse_key(&identity.key).unwrap()).as_bytes());
+        assert_eq!(
+            nlsettings::value(&b, &format!("{bucket}.key")).unwrap(),
+            base64(&parse_key(&identity.key).unwrap()).as_bytes()
+        );
         assert_eq!(nlsettings::value(&b, &format!("{bucket}.whereid")).unwrap(), b"room");
         assert_eq!(nlsettings::value(&b, "a").unwrap(), b"1", "the rest stays");
     }
@@ -743,8 +788,8 @@ mod tests {
     #[test]
     fn the_buckets_register_the_sensor_and_a_reading_selects_it() {
         let store = temp_store();
-        store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
-        store.merge("structure.home", &fields!{"swarm" => vec![Value::from("kryptonite.REAL")]}, 0, 0, false);
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        store.merge("structure.home", &fields! {"swarm" => vec![Value::from("kryptonite.REAL")]}, 0, 0, false);
         ensure_buckets(&store, "S", "kryptonite.AB", Some("room"));
         let value = |key: &str, field: &str| store.get(key).unwrap().value.get(field).cloned().unwrap();
         assert_eq!(value("structure.home", "swarm"), json!(["kryptonite.REAL", "kryptonite.AB"]));
@@ -761,11 +806,19 @@ mod tests {
         let dir = dir("keep");
         let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
         let store = temp_store();
-        store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
         ensure_buckets(&store, "S", &sensor.bucket, None);
         keep_selected(&store, "S", &sensor);
         let setting = || store.get("rcs_settings.S").unwrap().value;
-        let off = || store.merge("rcs_settings.S", &fields!{"rcs_control_setting" => "OFF", "active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        let off = || {
+            store.merge(
+                "rcs_settings.S",
+                &fields! {"rcs_control_setting" => "OFF", "active_rcs_sensors" => Vec::<Value>::new()},
+                0,
+                0,
+                true,
+            )
+        };
         off();
         assert_eq!(setting().get("rcs_control_setting").unwrap(), "OFF", "not within nlclient's update");
         std::thread::sleep(SELECT_AFTER * 20);
@@ -775,8 +828,12 @@ mod tests {
         off();
         std::thread::sleep(SELECT_AFTER * 20);
         assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([sensor.bucket]));
-        store.merge("rcs_settings.S", &fields!{"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
-        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "the backplate chosen on the screen stays");
+        store.merge("rcs_settings.S", &fields! {"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        assert_eq!(
+            setting().get("active_rcs_sensors").unwrap(),
+            &json!([]),
+            "the backplate chosen on the screen stays"
+        );
     }
 
     #[test]
@@ -811,12 +868,12 @@ mod tests {
     fn the_sensor_counts_as_selected_only_while_nlclient_has_it_active() {
         let store = temp_store();
         assert!(!selected(&store, "S", "kryptonite.AB"));
-        store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
         ensure_buckets(&store, "S", "kryptonite.AB", None);
         assert!(!selected(&store, "S", "kryptonite.AB"));
         select(&store, "S", "kryptonite.AB");
         assert!(selected(&store, "S", "kryptonite.AB"));
-        store.merge("rcs_settings.S", &fields!{"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        store.merge("rcs_settings.S", &fields! {"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
         assert!(!selected(&store, "S", "kryptonite.AB"));
     }
 
@@ -827,8 +884,8 @@ mod tests {
         let identity = load_identity(&path, "S").unwrap();
         let bucket = format!("kryptonite.{}", identity.id);
         let store = temp_store();
-        store.merge("link.S", &fields!{"structure" => "structure.home"}, 0, 0, false);
-        store.merge("structure.home", &fields!{"swarm" => vec![Value::from("kryptonite.REAL")]}, 0, 0, false);
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        store.merge("structure.home", &fields! {"swarm" => vec![Value::from("kryptonite.REAL")]}, 0, 0, false);
         ensure_buckets(&store, "S", &bucket, None);
         withdraw(&path, &store, "S");
         let value = |key: &str, field: &str| store.get(key).unwrap().value.get(field).cloned().unwrap();
@@ -849,8 +906,11 @@ mod tests {
         let real = if others.is_empty() { String::new() } else { r#",{"ID":"kryptonite.REAL"}"#.to_string() };
         std::fs::write(dir.join("rcsmanager.json"), format!(
             r#"{{"active_sensors":"{bucket}","selected_sensor_type":"SINGLE_KRYPTONITE","associated_sensor_info":[{{"ID":"{bucket}"}}{real}]}}"#)).unwrap();
-        std::fs::write(dir.join("predictionmanager.json"), format!(
-            r#"{{"RemoteModels":{{"{bucket}":{{}},"kryptonite.REAL":{{}}}}}}"#)).unwrap();
+        std::fs::write(
+            dir.join("predictionmanager.json"),
+            format!(r#"{{"RemoteModels":{{"{bucket}":{{}},"kryptonite.REAL":{{}}}}}}"#),
+        )
+        .unwrap();
         (path, settings, bucket)
     }
 
@@ -859,7 +919,10 @@ mod tests {
         let (path, settings, bucket) = nlclient_after_the_sensor("forget", "");
         let dir = path.parent().unwrap().to_path_buf();
         forget_settings(&path, &settings).unwrap();
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "<settings>\n  <s key=\"a\" value=\"1\"/>\n</settings>\n");
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            "<settings>\n  <s key=\"a\" value=\"1\"/>\n</settings>\n"
+        );
         assert!(!dir.join(format!("rcs.{bucket}.recovery")).exists());
         assert!(!dir.join("rcsmanager.json").exists());
         let prediction = std::fs::read_to_string(dir.join("predictionmanager.json")).unwrap();
@@ -891,6 +954,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), config);
         load_identity(&dir.join("sensor.json"), "S").unwrap();
         forget_settings(&dir.join("sensor.json"), &settings).unwrap();
-        assert_eq!(std::fs::read_to_string(&settings).unwrap(), config, "a real sensor's onboarding stays once the sensor is gone");
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            config,
+            "a real sensor's onboarding stays once the sensor is gone"
+        );
     }
 }

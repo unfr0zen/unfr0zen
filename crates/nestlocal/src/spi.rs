@@ -71,7 +71,8 @@ fn gpio(line: &str, write: bool) -> std::io::Result<File> {
 /// nHOST_INT is low, read without opening the radio.
 pub fn host_int_low() -> bool {
     let mut level = *b"1";
-    crate::device::radio().is_ok_and(|radio| gpio(radio.host_int, false).and_then(|mut f| f.read(&mut level)).is_ok()) && level[0] == b'0'
+    crate::device::radio().is_ok_and(|radio| gpio(radio.host_int, false).and_then(|mut f| f.read(&mut level)).is_ok())
+        && level[0] == b'0'
 }
 
 /// nSSEL as a GPIO, its pad taken from the SPI controller while this lives.
@@ -344,7 +345,11 @@ impl Spi {
         };
         // SAFETY: the transfer's buffers outlive the call and are len long.
         if unsafe { libc::ioctl(self.dev.as_raw_fd(), SPI_IOC_MESSAGE_1 as _, &t) } < 0 {
-            return Err(format!("{}: {}", crate::device::radio().map_or("radio", |radio| radio.spi), std::io::Error::last_os_error()));
+            return Err(format!(
+                "{}: {}",
+                crate::device::radio().map_or("radio", |radio| radio.spi),
+                std::io::Error::last_os_error()
+            ));
         }
         Ok(rx)
     }
@@ -366,7 +371,14 @@ mod tests {
     /// An Spi over plain files, nHOST_INT's value in `level`.
     fn fake(level: &std::path::Path) -> Spi {
         let file = || OpenOptions::new().read(true).write(true).open(level).unwrap();
-        Spi { dev: file(), host_int: file(), reset: file(), wake: Some(file()), chip_select: None, script: Default::default() }
+        Spi {
+            dev: file(),
+            host_int: file(),
+            reset: file(),
+            wake: Some(file()),
+            chip_select: None,
+            script: Default::default(),
+        }
     }
 
     /// A radio coming out of a boot: nHOST_INT high, then low once it is ready.
@@ -397,8 +409,16 @@ mod tests {
     fn startup_retries_answers_lost_while_the_radio_boots() {
         // No answer, then the protocol's report of that aborted attempt, then
         // a radio whose reset report went with the first attempt.
-        let (mut spi, path) = booting("lost", vec![Err("no answer from the radio".into()), Ok(vec![0x02, 0x00]),
-                                                   Ok(vec![ALIVE_OK]), Ok(vec![ALIVE_OK]), Ok(vec![VERSION_2])]);
+        let (mut spi, path) = booting(
+            "lost",
+            vec![
+                Err("no answer from the radio".into()),
+                Ok(vec![0x02, 0x00]),
+                Ok(vec![ALIVE_OK]),
+                Ok(vec![ALIVE_OK]),
+                Ok(vec![VERSION_2]),
+            ],
+        );
         assert_eq!(spi.startup(), Ok(()));
         assert!(spi.script.is_empty());
         let _ = std::fs::remove_file(path);
@@ -420,15 +440,20 @@ mod tests {
         }
         let start = Instant::now();
         assert!(spi.startup().unwrap_err().contains("SPI protocol [81]"));
-        assert!(start.elapsed() >= STARTUP - Duration::from_millis(100) && start.elapsed() < STARTUP + Duration::from_secs(1));
+        assert!(
+            start.elapsed() >= STARTUP - Duration::from_millis(100)
+                && start.elapsed() < STARTUP + Duration::from_secs(1)
+        );
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn zigbee_is_selected_from_the_rcp_and_its_reboot_awaited() {
         // The RCP answers command 6 as an EZSP frame, then the NCP boots.
-        let (mut spi, path) = booting("select", vec![Ok(vec![EZSP_FRAME, 3, 0x52, 2, 0]), Ok(REPORT.to_vec()),
-                                                     Ok(vec![ALIVE_OK]), Ok(vec![VERSION_2])]);
+        let (mut spi, path) = booting(
+            "select",
+            vec![Ok(vec![EZSP_FRAME, 3, 0x52, 2, 0]), Ok(REPORT.to_vec()), Ok(vec![ALIVE_OK]), Ok(vec![VERSION_2])],
+        );
         assert_eq!(spi.select_zigbee(), Ok(()));
         assert!(spi.script.is_empty());
         let _ = std::fs::remove_file(path);

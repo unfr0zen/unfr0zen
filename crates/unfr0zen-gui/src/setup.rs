@@ -10,8 +10,8 @@ use unfr0zen_host::Device;
 
 use crate::bus::Bus;
 use crate::PhaseRow;
-use unfr0zen_host::Phase;
 use crate::{medium, tr, App, Page, Task, ACCENT, BAD, CARD, DIM, INSET, LINE, MUTED, OK, ON_ACCENT, TEXT, WARN};
+use unfr0zen_host::Phase;
 
 /// The flow's steps, in order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -169,7 +169,9 @@ impl App {
 
     fn step_page(&mut self, ui: &mut egui::Ui, step: Step) {
         // The bar first, so the steps' content takes the room above it.
-        egui::Panel::bottom("setup_actions").show_separator_line(false).frame(egui::Frame::new())
+        egui::Panel::bottom("setup_actions")
+            .show_separator_line(false)
+            .frame(egui::Frame::new())
             .show(ui, |ui| self.action_bar(ui, step));
         stepper(ui, step);
         ui.add_space(18.0);
@@ -209,7 +211,9 @@ impl App {
             }
             let hint = match step {
                 Step::Connect if !can_continue => Some(tr!("setup.connect_hint")),
-                Step::Integrations if !can_continue && self.form.mqtt.on && self.form.mqtt.value.trim().is_empty() => Some(tr!("setup.mqtt_needs_broker")),
+                Step::Integrations if !can_continue && self.form.mqtt.on && self.form.mqtt.value.trim().is_empty() => {
+                    Some(tr!("setup.mqtt_needs_broker"))
+                }
                 Step::Integrations if !can_continue => Some(tr!("setup.fix_fields")),
                 Step::Features if !can_continue => Some(tr!("setup.ssh_needs_secret")),
                 Step::Integrations if !self.form.any_integration() => Some(tr!("setup.integrations_skip_hint")),
@@ -220,13 +224,13 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if step == Step::Review {
-                    let label = if self.form.backup_first {
-                        tr!("setup.start_backup_setup")
-                    } else {
-                        tr!("setup.start_setup")
-                    };
-                    if pill_button(ui, label, true, self.idle()).on_hover_text(tr!("form.start_hint"))
-                        .on_disabled_hover_text(tr!("form.start_disabled")).clicked() {
+                    let label =
+                        if self.form.backup_first { tr!("setup.start_backup_setup") } else { tr!("setup.start_setup") };
+                    if pill_button(ui, label, true, self.idle())
+                        .on_hover_text(tr!("form.start_hint"))
+                        .on_disabled_hover_text(tr!("form.start_disabled"))
+                        .clicked()
+                    {
                         self.start_flow();
                     }
                     ui.label(egui::RichText::new(tr!("setup.keep_plugged_in")).color(MUTED).size(13.0));
@@ -257,10 +261,15 @@ impl App {
                     (tr!("setup.connect_1"), tr!("setup.connect_1_about")),
                     (tr!("setup.connect_2"), tr!("setup.connect_2_about")),
                     (tr!("setup.connect_3"), tr!("setup.connect_3_about")),
-                ].into_iter().enumerate() {
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     card(ui, |ui| {
                         ui.horizontal_top(|ui| {
-                            ui.label(egui::RichText::new((number + 1).to_string()).font(crate::display(22.0)).color(ACCENT));
+                            ui.label(
+                                egui::RichText::new((number + 1).to_string()).font(crate::display(22.0)).color(ACCENT),
+                            );
                             ui.add_space(6.0);
                             ui.vertical(|ui| {
                                 ui.label(egui::RichText::new(title).font(medium(14.5)));
@@ -279,11 +288,17 @@ impl App {
                 bus_pill(ui, &bus);
                 ui.add_space(8.0);
                 if let Bus::One(seen) = &bus {
-                    let mode = if seen.mode == "app" { tr!("setup.mode_app").to_string() } else { seen.mode.to_string() };
-                    ui.label(egui::RichText::new(format!("{}\n{mode}", seen.device.description())).color(MUTED).size(12.5));
+                    let mode =
+                        if seen.mode == "app" { tr!("setup.mode_app").to_string() } else { seen.mode.to_string() };
+                    ui.label(
+                        egui::RichText::new(format!("{}\n{mode}", seen.device.description())).color(MUTED).size(12.5),
+                    );
                     if seen.device == Device::Onyx {
                         ui.add_space(10.0);
-                        ui.add(egui::Label::new(egui::RichText::new(tr!("setup.unsupported_unit")).color(WARN).size(13.0)).wrap());
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(tr!("setup.unsupported_unit")).color(WARN).size(13.0))
+                                .wrap(),
+                        );
                     }
                 }
             });
@@ -330,11 +345,15 @@ impl App {
                 });
                 ui.add_space(10.0);
                 card(ui, |ui| {
-                    let header = ui.horizontal(|ui| {
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                        chevron(ui.painter(), rect.center(), self.developer_open, MUTED);
-                        ui.label(egui::RichText::new(tr!("setup.developer")).font(medium(15.0)).color(TEXT));
-                    }).response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand)
+                    let header = ui
+                        .horizontal(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                            chevron(ui.painter(), rect.center(), self.developer_open, MUTED);
+                            ui.label(egui::RichText::new(tr!("setup.developer")).font(medium(15.0)).color(TEXT));
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(tr!("setup.developer_hint"));
                     if header.clicked() {
                         self.developer_open = !self.developer_open;
@@ -351,10 +370,21 @@ impl App {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(tr!("setup.backup_question")).font(medium(15.0)));
                 ui.add_space(8.0);
-                let latest = self.library.entries.first()
+                let latest = self
+                    .library
+                    .entries
+                    .first()
                     .map(|e| tr!("setup.backup_latest", taken = e.taken_label(), device = e.device_label()))
                     .unwrap_or_else(|| tr!("setup.backup_none").to_string());
-                if choice_card(ui, self.form.backup_first, tr!("setup.backup_yes"), tr!("setup.backup_yes_about"), Some(tr!("setup.recommended"))).clicked() {
+                if choice_card(
+                    ui,
+                    self.form.backup_first,
+                    tr!("setup.backup_yes"),
+                    tr!("setup.backup_yes_about"),
+                    Some(tr!("setup.recommended")),
+                )
+                .clicked()
+                {
                     self.form.backup_first = true;
                 }
                 ui.add_space(10.0);
@@ -379,7 +409,8 @@ impl App {
                 (None, tr!("setup.ring_stopped"), "!".to_string(), String::new())
             } else if let Some(t) = self.logs.transfer.as_ref().filter(|t| t.shown() < t.total) {
                 let fraction = t.shown() as f32 / t.total.max(1) as f32;
-                let left = t.speed().map(|rate| ((t.total.saturating_sub(t.shown())) as f64 / rate / 60.0).ceil() as u64);
+                let left =
+                    t.speed().map(|rate| ((t.total.saturating_sub(t.shown())) as f64 / rate / 60.0).ceil() as u64);
                 let under = left.map_or_else(String::new, |m| tr!("setup.minutes_left", minutes = m.max(1)));
                 let label = if backing_up { tr!("setup.ring_backing_up") } else { tr!("setup.ring_setting_up") };
                 (Some(fraction), label, format!("{}", (fraction * 100.0).floor() as u32), under)
@@ -481,10 +512,19 @@ impl App {
                     ui.horizontal(|ui| {
                         let name = backup.file_name().unwrap_or_default().to_string_lossy().into_owned();
                         let room = ui.available_width() - 120.0;
-                        ui.allocate_ui_with_layout(egui::vec2(room, 20.0), egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), |ui| {
-                            ui.set_width(room);
-                            ui.add(egui::Label::new(egui::RichText::new(tr!("setup.backup_note", name = name)).size(13.5)).wrap());
-                        });
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(room, 20.0),
+                            egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+                            |ui| {
+                                ui.set_width(room);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(tr!("setup.backup_note", name = name)).size(13.5),
+                                    )
+                                    .wrap(),
+                                );
+                            },
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if link(ui, tr!("setup.open_backups")).clicked() {
                                 self.library.selected = Some(backup.clone());
@@ -526,11 +566,14 @@ fn stepper(ui: &mut egui::Ui, current: Step) {
     let height = 26.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
     let painter = ui.painter();
-    let labels: Vec<_> = Step::ALL.iter().map(|step| {
-        let strong = *step == current;
-        let font = if strong { medium(13.0) } else { egui::FontId::proportional(13.0) };
-        painter.layout_no_wrap(step.title().to_string(), font, if strong { egui::Color32::WHITE } else { MUTED })
-    }).collect();
+    let labels: Vec<_> = Step::ALL
+        .iter()
+        .map(|step| {
+            let strong = *step == current;
+            let font = if strong { medium(13.0) } else { egui::FontId::proportional(13.0) };
+            painter.layout_no_wrap(step.title().to_string(), font, if strong { egui::Color32::WHITE } else { MUTED })
+        })
+        .collect();
     let items: f32 = labels.iter().map(|g| 24.0 + 8.0 + g.size().x).sum();
     let gap = ((rect.width() - items) / (Step::ALL.len() - 1) as f32).max(24.0);
     let mut x = rect.left();
@@ -553,7 +596,8 @@ fn stepper(ui: &mut egui::Ui, current: Step) {
         x = label_x + width;
         if i + 1 < Step::ALL.len() {
             let line = if step.index() < current.index() { ACCENT } else { LINE };
-            painter.line_segment([egui::pos2(x + 12.0, y), egui::pos2(x + gap - 12.0, y)], egui::Stroke::new(1.0, line));
+            painter
+                .line_segment([egui::pos2(x + 12.0, y), egui::pos2(x + gap - 12.0, y)], egui::Stroke::new(1.0, line));
             x += gap;
         }
     }
@@ -595,11 +639,16 @@ pub(crate) fn card<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) 
     // The width there is now, fixed: content that asks for more must not
     // widen the column, and every later card with it.
     let width = ui.available_width() - 36.0;
-    egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
-        ui.set_width(width);
-        ui.set_max_width(width);
-        body(ui)
-    }).inner
+    egui::Frame::new()
+        .fill(CARD)
+        .corner_radius(14)
+        .inner_margin(egui::Margin::symmetric(18, 14))
+        .show(ui, |ui| {
+            ui.set_width(width);
+            ui.set_max_width(width);
+            body(ui)
+        })
+        .inner
 }
 
 /// A note on the page or in a card: the backup Done names, the SSH key's
@@ -623,13 +672,19 @@ pub(crate) fn field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit<'_>, wi
 
 /// A field as [`field`] draws it, its edge red while what it holds is
 /// refused.
-pub(crate) fn checked_field(ui: &mut egui::Ui, label: &str, edit: egui::TextEdit<'_>, width: f32, invalid: bool)
-                            -> egui::Response {
+pub(crate) fn checked_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    edit: egui::TextEdit<'_>,
+    width: f32,
+    invalid: bool,
+) -> egui::Response {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         ui.label(egui::RichText::new(label).size(12.5).color(LABEL));
         checked_box(ui, edit, width, invalid)
-    }).inner
+    })
+    .inner
 }
 
 /// A text field as a rounded box `width` wide: its edge red while what it
@@ -645,8 +700,12 @@ pub(crate) fn small_boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f3
 }
 
 fn sized_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool, small: bool) -> egui::Response {
-    let (margin, font) = if small { (egui::Margin::symmetric(9, 4), 12.5) } else { (egui::Margin::symmetric(11, 7), 14.0) };
-    let frame = egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, FIELD_EDGE)).corner_radius(if small { 7 } else { 9 })
+    let (margin, font) =
+        if small { (egui::Margin::symmetric(9, 4), 12.5) } else { (egui::Margin::symmetric(11, 7), 14.0) };
+    let frame = egui::Frame::new()
+        .fill(INSET)
+        .stroke(egui::Stroke::new(1.0, FIELD_EDGE))
+        .corner_radius(if small { 7 } else { 9 })
         .inner_margin(margin);
     let mut prepared = frame.begin(ui);
     let room = (width - 2.0 * margin.left as f32 - 2.0).max(40.0);
@@ -662,23 +721,40 @@ fn sized_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: b
 
 /// A drop-down with its label over it, drawn as the fields are: a rounded
 /// box `width` wide. Greyed, keeping its choice, when not enabled.
-pub(crate) fn select(ui: &mut egui::Ui, label: &str, id: &str, width: f32, selected: &str, enabled: bool,
-                     rows: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+pub(crate) fn select(
+    ui: &mut egui::Ui,
+    label: &str,
+    id: &str,
+    width: f32,
+    selected: &str,
+    enabled: bool,
+    rows: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 5.0;
         ui.label(egui::RichText::new(label).size(12.5).color(if enabled { LABEL } else { DIM }));
         ui.add_enabled_ui(enabled, |ui| boxed_select(ui, id, width, selected, rows)).inner
-    }).inner
+    })
+    .inner
 }
 
 /// A drop-down drawn as the text fields are: a rounded box `width` wide.
-pub(crate) fn boxed_select(ui: &mut egui::Ui, id: &str, width: f32, selected: &str,
-                           rows: impl FnOnce(&mut egui::Ui)) -> egui::Response {
+pub(crate) fn boxed_select(
+    ui: &mut egui::Ui,
+    id: &str,
+    width: f32,
+    selected: &str,
+    rows: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
     ui.scope(|ui| {
         ui.style_mut().visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, FIELD_EDGE);
         ui.spacing_mut().button_padding = egui::vec2(11.0, 9.0);
-        crate::dropdown(id, width - 22.0).selected_text(egui::RichText::new(selected).font(medium(14.0))).show_ui(ui, rows).response
-    }).inner
+        crate::dropdown(id, width - 22.0)
+            .selected_text(egui::RichText::new(selected).font(medium(14.0)))
+            .show_ui(ui, rows)
+            .response
+    })
+    .inner
 }
 
 /// A switch with its name and a line on what it does beside it: an option
@@ -693,12 +769,17 @@ pub(crate) fn switch_row(ui: &mut egui::Ui, on: &mut bool, title: &str, about: &
             ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED).size(13.0)).wrap());
         });
         response
-    }).inner
+    })
+    .inner
 }
 
 /// A command to copy, in the monospace face on an inset.
 pub(crate) fn code_line(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::new().fill(INSET).stroke(egui::Stroke::new(1.0, LINE)).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 7))
+    egui::Frame::new()
+        .fill(INSET)
+        .stroke(egui::Stroke::new(1.0, LINE))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(10, 7))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add(egui::Label::new(egui::RichText::new(text).monospace().color(TEXT)).selectable(true).wrap());
@@ -735,13 +816,23 @@ pub(crate) fn switch(ui: &mut egui::Ui, on: &mut bool, enabled: bool) -> egui::R
     painter.rect_filled(rect, 13.0, track);
     let knob = egui::pos2(egui::lerp(rect.left() + 13.0..=rect.right() - 13.0, t), rect.center().y);
     painter.circle_filled(knob, 10.0, MUTED.lerp_to_gamma(egui::Color32::WHITE, t).gamma_multiply(shade));
-    if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
+    if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 /// An option as a card: its name and what it does, a switch at the right,
 /// and when on, `body` under them. Returns whether it is on (and enabled).
-pub(crate) fn option_card(ui: &mut egui::Ui, on: &mut bool, enabled: bool, title: &str, about: &str,
-                          body: impl FnOnce(&mut egui::Ui)) -> bool {
+pub(crate) fn option_card(
+    ui: &mut egui::Ui,
+    on: &mut bool,
+    enabled: bool,
+    title: &str,
+    about: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
     card_with(ui, on, enabled, title, about, Some(Box::new(body)))
 }
 
@@ -752,7 +843,14 @@ pub(crate) fn toggle_card(ui: &mut egui::Ui, on: &mut bool, enabled: bool, title
 
 type Body<'a> = Box<dyn FnOnce(&mut egui::Ui) + 'a>;
 
-fn card_with(ui: &mut egui::Ui, on: &mut bool, enabled: bool, title: &str, about: &str, body: Option<Body<'_>>) -> bool {
+fn card_with(
+    ui: &mut egui::Ui,
+    on: &mut bool,
+    enabled: bool,
+    title: &str,
+    about: &str,
+    body: Option<Body<'_>>,
+) -> bool {
     let shown = card(ui, |ui| {
         ui.horizontal_top(|ui| {
             let room = ui.available_width() - 44.0 - 16.0 - 2.0 * ui.spacing().item_spacing.x;
@@ -781,7 +879,11 @@ fn card_with(ui: &mut egui::Ui, on: &mut bool, enabled: bool, title: &str, about
 fn choice_card(ui: &mut egui::Ui, chosen: bool, title: &str, about: &str, badge: Option<&str>) -> egui::Response {
     let fill = if chosen { ACCENT_TINT } else { CARD };
     let stroke = egui::Stroke::new(2.0, if chosen { ACCENT } else { egui::Color32::TRANSPARENT });
-    let inner = egui::Frame::new().fill(fill).stroke(stroke).corner_radius(14).inner_margin(egui::Margin::symmetric(16, 14))
+    let inner = egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(14)
+        .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
@@ -797,9 +899,13 @@ fn choice_card(ui: &mut egui::Ui, chosen: bool, title: &str, about: &str, badge:
                     ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED).size(13.0)).wrap());
                     if let Some(badge) = badge {
                         ui.add_space(4.0);
-                        egui::Frame::new().fill(ACCENT).corner_radius(10).inner_margin(egui::Margin::symmetric(9, 2)).show(ui, |ui| {
-                            ui.label(egui::RichText::new(badge).font(medium(11.5)).color(ON_ACCENT));
-                        });
+                        egui::Frame::new()
+                            .fill(ACCENT)
+                            .corner_radius(10)
+                            .inner_margin(egui::Margin::symmetric(9, 2))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(badge).font(medium(11.5)).color(ON_ACCENT));
+                            });
                     }
                 });
             });
@@ -820,7 +926,13 @@ pub(crate) enum Look {
 }
 
 /// A rounded button at least `size`, its ends fully round.
-pub(crate) fn rounded_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: egui::Vec2) -> egui::Response {
+pub(crate) fn rounded_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    look: Look,
+    enabled: bool,
+    size: egui::Vec2,
+) -> egui::Response {
     sized_button(ui, text, look, enabled, size, 14.0, 20.0)
 }
 
@@ -832,12 +944,24 @@ pub(crate) fn small_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: b
 /// The compact controls' height.
 pub(crate) const SMALL_HEIGHT: f32 = 26.0;
 
-fn sized_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: egui::Vec2, font: f32, padding: f32) -> egui::Response {
+fn sized_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    look: Look,
+    enabled: bool,
+    size: egui::Vec2,
+    font: f32,
+    padding: f32,
+) -> egui::Response {
     let (fill, color, stroke) = match look {
         Look::Primary if enabled => (ACCENT, ON_ACCENT, egui::Stroke::NONE),
         Look::Primary => (DISABLED_FILL, DISABLED_TEXT, egui::Stroke::NONE),
         Look::Secondary => (egui::Color32::TRANSPARENT, if enabled { TEXT } else { DIM }, egui::Stroke::new(1.0, OFF)),
-        Look::Danger => (if enabled { BAD } else { BAD.gamma_multiply(0.35) }, if enabled { egui::Color32::WHITE } else { DIM }, egui::Stroke::NONE),
+        Look::Danger => (
+            if enabled { BAD } else { BAD.gamma_multiply(0.35) },
+            if enabled { egui::Color32::WHITE } else { DIM },
+            egui::Stroke::NONE,
+        ),
     };
     let label = egui::RichText::new(text).font(medium(font)).color(color);
     let radius = (size.y * 0.5).round() as u8;
@@ -845,7 +969,8 @@ fn sized_button(ui: &mut egui::Ui, text: &str, look: Look, enabled: bool, size: 
     ui.scope(|ui| {
         ui.spacing_mut().button_padding.x = padding;
         ui.add_enabled(enabled, egui::Button::new(label).fill(fill).stroke(stroke).corner_radius(radius).min_size(size))
-    }).inner
+    })
+    .inner
 }
 
 /// A primary button that cannot act yet: grey, its label still readable.
@@ -865,7 +990,8 @@ pub(crate) fn pill_button(ui: &mut egui::Ui, text: &str, primary: bool, enabled:
 
 /// Accent text that acts.
 pub(crate) fn link(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let response = ui.add(egui::Label::new(egui::RichText::new(text).color(ACCENT).size(13.0)).sense(egui::Sense::click()));
+    let response =
+        ui.add(egui::Label::new(egui::RichText::new(text).color(ACCENT).size(13.0)).sense(egui::Sense::click()));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -894,14 +1020,27 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
         for i in 0..steps {
             let (a0, a1) = (head - (i + 1) as f32 * 0.06, head - i as f32 * 0.06);
             let fade = 1.0 - i as f32 / steps as f32;
-            painter.line_segment([c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r],
-                                 egui::Stroke::new(6.0, ACCENT.gamma_multiply(0.85 * fade * fade)));
+            painter.line_segment(
+                [c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r],
+                egui::Stroke::new(6.0, ACCENT.gamma_multiply(0.85 * fade * fade)),
+            );
         }
         ui.ctx().request_repaint();
         plug_icon(painter, c - egui::vec2(0.0, 36.0), MUTED);
-        painter.text(c + egui::vec2(0.0, 10.0), egui::Align2::CENTER_CENTER, tr!("setup.plug_in"), crate::display(30.0), TEXT);
-        painter.text(c + egui::vec2(0.0, 40.0), egui::Align2::CENTER_CENTER, tr!("setup.data_cable"),
-                     egui::FontId::proportional(12.0), MUTED);
+        painter.text(
+            c + egui::vec2(0.0, 10.0),
+            egui::Align2::CENTER_CENTER,
+            tr!("setup.plug_in"),
+            crate::display(30.0),
+            TEXT,
+        );
+        painter.text(
+            c + egui::vec2(0.0, 40.0),
+            egui::Align2::CENTER_CENTER,
+            tr!("setup.data_cable"),
+            egui::FontId::proportional(12.0),
+            MUTED,
+        );
         return;
     };
     let ring = if device == Device::Onyx { WARN } else { ACCENT };
@@ -941,11 +1080,19 @@ pub(crate) fn waiting_ring(ui: &mut egui::Ui, size: f32, big: &str, small: &str)
     for i in 0..steps {
         let (a0, a1) = (head - (i + 1) as f32 * 0.07, head - i as f32 * 0.07);
         let fade = 1.0 - i as f32 / steps as f32;
-        painter.line_segment([c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r],
-                             egui::Stroke::new(4.0, ACCENT.gamma_multiply(0.85 * fade * fade)));
+        painter.line_segment(
+            [c + egui::vec2(a0.cos(), a0.sin()) * r, c + egui::vec2(a1.cos(), a1.sin()) * r],
+            egui::Stroke::new(4.0, ACCENT.gamma_multiply(0.85 * fade * fade)),
+        );
     }
     painter.text(c - egui::vec2(0.0, 6.0), egui::Align2::CENTER_CENTER, big, crate::display(28.0), TEXT);
-    painter.text(c + egui::vec2(0.0, 20.0), egui::Align2::CENTER_CENTER, small, egui::FontId::proportional(11.5), MUTED);
+    painter.text(
+        c + egui::vec2(0.0, 20.0),
+        egui::Align2::CENTER_CENTER,
+        small,
+        egui::FontId::proportional(11.5),
+        MUTED,
+    );
     ui.ctx().request_repaint();
 }
 
@@ -953,7 +1100,10 @@ pub(crate) fn waiting_ring(ui: &mut egui::Ui, size: f32, big: &str, small: &str)
 /// beside it.
 pub(crate) fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
     ui.horizontal_top(|ui| {
-        ui.add_sized([16.0, 20.0], egui::Label::new(egui::RichText::new(number.to_string()).font(crate::display(20.0)).color(ACCENT)));
+        ui.add_sized(
+            [16.0, 20.0],
+            egui::Label::new(egui::RichText::new(number.to_string()).font(crate::display(20.0)).color(ACCENT)),
+        );
         ui.add_space(4.0);
         ui.add(egui::Label::new(text).wrap());
     });
@@ -963,7 +1113,9 @@ pub(crate) fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
 fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
     let (text, fg, bg, dot) = match bus {
         Bus::Nothing => (tr!("setup.waiting_for_unit"), TEXT, CARD, DIM),
-        Bus::One(seen) if seen.device == Device::Onyx => (tr!("setup.unsupported_short"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
+        Bus::One(seen) if seen.device == Device::Onyx => {
+            (tr!("setup.unsupported_short"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN)
+        }
         Bus::One(_) => (tr!("setup.found_unit"), OK_LIGHT, OK_FILL, OK),
         Bus::Several(_) => (tr!("setup.several_units"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
     };
@@ -990,7 +1142,15 @@ fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
 /// The run's ring: a whole track, lit from the top round to `fraction`
 /// (shown as a percentage), or a lit arc that goes round while the share
 /// done is unknown; what it does above a big number in the middle.
-fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &str, big: &str, under: &str, failed: bool) {
+fn progress_ring(
+    ui: &mut egui::Ui,
+    size: f32,
+    fraction: Option<f32>,
+    label: &str,
+    big: &str,
+    under: &str,
+    failed: bool,
+) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
     let c = rect.center();
@@ -1002,10 +1162,12 @@ fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &st
     const WIDTH: f32 = 14.0;
     let arc = |from: f32, to: f32, color: egui::Color32| {
         let steps = ((to - from).abs() / 0.03).ceil().max(2.0) as usize;
-        let points: Vec<egui::Pos2> = (0..=steps).map(|i| {
-            let a = from + (to - from) * i as f32 / steps as f32;
-            c + egui::vec2(a.cos(), a.sin()) * r
-        }).collect();
+        let points: Vec<egui::Pos2> = (0..=steps)
+            .map(|i| {
+                let a = from + (to - from) * i as f32 / steps as f32;
+                c + egui::vec2(a.cos(), a.sin()) * r
+            })
+            .collect();
         painter.add(egui::Shape::line(points, egui::Stroke::new(WIDTH, color)));
     };
     // A lit arc's ends round, as the thermostat's own ring has them.
@@ -1042,7 +1204,13 @@ fn progress_ring(ui: &mut egui::Ui, size: f32, fraction: Option<f32>, label: &st
         painter.galley(egui::pos2(right + 2.0, y), sign, TEXT);
     }
     if !under.is_empty() {
-        painter.text(c + egui::vec2(0.0, 52.0), egui::Align2::CENTER_CENTER, under, egui::FontId::proportional(12.5), MUTED);
+        painter.text(
+            c + egui::vec2(0.0, 52.0),
+            egui::Align2::CENTER_CENTER,
+            under,
+            egui::FontId::proportional(12.5),
+            MUTED,
+        );
     }
 }
 
@@ -1055,8 +1223,8 @@ enum StepMark {
 }
 
 /// A setup run's phases, in order.
-const PHASES: [Phase; 7] = [Phase::DownloadMode, Phase::Recovery, Phase::Backup, Phase::Check, Phase::Prepare,
-                            Phase::SetUp, Phase::Restart];
+const PHASES: [Phase; 7] =
+    [Phase::DownloadMode, Phase::Recovery, Phase::Backup, Phase::Check, Phase::Prepare, Phase::SetUp, Phase::Restart];
 
 /// What a phase is called beside the ring.
 fn phase_title(phase: Phase) -> &'static str {
@@ -1092,10 +1260,12 @@ fn step_row(ui: &mut egui::Ui, mark: StepMark, text: &str, time: Option<std::tim
             }
             StepMark::Running => {
                 let a = ui.input(|i| i.time) as f32 * 5.0;
-                let points: Vec<egui::Pos2> = (0..=20).map(|i| {
-                    let t = a + i as f32 / 20.0 * TAU * 0.7;
-                    c + egui::vec2(t.cos(), t.sin()) * 8.0
-                }).collect();
+                let points: Vec<egui::Pos2> = (0..=20)
+                    .map(|i| {
+                        let t = a + i as f32 / 20.0 * TAU * 0.7;
+                        c + egui::vec2(t.cos(), t.sin()) * 8.0
+                    })
+                    .collect();
                 painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, ACCENT)));
                 ui.ctx().request_repaint();
                 egui::Color32::WHITE
@@ -1121,7 +1291,11 @@ const STEPS_WIDTH: f32 = 380.0;
 /// A phase's time: seconds, then minutes and seconds.
 fn duration_text(time: std::time::Duration) -> String {
     let seconds = time.as_secs();
-    if seconds < 60 { format!("{seconds}s") } else { format!("{}m {:02}s", seconds / 60, seconds % 60) }
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    }
 }
 
 /// The ticked circle at the head of Done.

@@ -10,9 +10,23 @@ local segments = {}
 -- Which segments each character lights: a top, b top right, c bottom
 -- right, d bottom, e bottom left, f top left, g middle.
 local LIT = {
-  ["0"] = "abcdef", ["1"] = "bc", ["2"] = "abdeg", ["3"] = "abcdg", ["4"] = "bcfg",
-  ["5"] = "acdfg", ["6"] = "acdefg", ["7"] = "abc", ["8"] = "abcdefg", ["9"] = "abcdfg",
-  ["-"] = "g", [" "] = "", O = "abcdef", F = "aefg", L = "def", H = "bcefg", o = "cdeg",
+  ["0"] = "abcdef",
+  ["1"] = "bc",
+  ["2"] = "abdeg",
+  ["3"] = "abcdg",
+  ["4"] = "bcfg",
+  ["5"] = "acdfg",
+  ["6"] = "acdefg",
+  ["7"] = "abc",
+  ["8"] = "abcdefg",
+  ["9"] = "abcdfg",
+  ["-"] = "g",
+  [" "] = "",
+  O = "abcdef",
+  F = "aefg",
+  L = "def",
+  H = "bcefg",
+  o = "cdeg",
 }
 
 -- A digit's width for height h, and the step to the next.
@@ -29,7 +43,9 @@ end
 function segments.measure(text, h)
   local w = 0
   for ch in text:gmatch(".") do
-    if ch ~= "." and ch ~= ":" then w = w + step(h) end
+    if ch ~= "." and ch ~= ":" then
+      w = w + step(h)
+    end
   end
   return w - h * style.spacing
 end
@@ -42,9 +58,23 @@ local function bar(g, x1, y1, x2, y2, t, base, fill)
   local px, py = -uy * t / 2, ux * t / 2
   local ax, ay = ux * t / 2, uy * t / 2
   local slant = math.tan(math.rad(style.slant))
-  local pts = { x1, y1, x1 + ax + px, y1 + ay + py, x2 - ax + px, y2 - ay + py,
-                x2, y2, x2 - ax - px, y2 - ay - py, x1 + ax - px, y1 + ay - py }
-  for i = 1, #pts, 2 do pts[i] = pts[i] + (base - pts[i + 1]) * slant end
+  local pts = {
+    x1,
+    y1,
+    x1 + ax + px,
+    y1 + ay + py,
+    x2 - ax + px,
+    y2 - ay + py,
+    x2,
+    y2,
+    x2 - ax - px,
+    y2 - ay - py,
+    x1 + ax - px,
+    y1 + ay - py,
+  }
+  for i = 1, #pts, 2 do
+    pts[i] = pts[i] + (base - pts[i + 1]) * slant
+  end
   g:polygon(pts, fill)
 end
 

@@ -21,7 +21,7 @@ fetch() {
     name=$1 url=$2 commit=$3
     shift 3
     repo=$dir/$name
-    if [ "$(git -C "$repo" rev-parse HEAD 2> /dev/null)" = "$commit" ]; then
+    if [ "$(git -C "$repo" rev-parse HEAD 2>/dev/null)" = "$commit" ]; then
         # The paths kept may have grown since.
         git -C "$repo" sparse-checkout set --no-cone "$@"
         return

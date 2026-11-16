@@ -41,25 +41,45 @@ const REVIEWED: &[Reviewed] = &[
     // 6.4-8
     Reviewed {
         stock_sha256: "d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52",
-        background_slot: 0x6e1a08, background_draw: 0x21dbec,
-        brightness_manager: 0xab388, read_als: 0x2282a4,
-        settings_view: 0x6d6bc8, thermostat_view: 0x6d9bb8, view_offset: 0x1b8,
-        current_temperature: 0xae050, current_humidity: 0xae068, leaf_slot: 0x34c,
+        background_slot: 0x6e1a08,
+        background_draw: 0x21dbec,
+        brightness_manager: 0xab388,
+        read_als: 0x2282a4,
+        settings_view: 0x6d6bc8,
+        thermostat_view: 0x6d9bb8,
+        view_offset: 0x1b8,
+        current_temperature: 0xae050,
+        current_humidity: 0xae068,
+        leaf_slot: 0x34c,
     },
     // 6.5-14
     Reviewed {
         stock_sha256: "3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2",
-        background_slot: 0x6bac30, background_draw: 0x236744,
-        brightness_manager: 0xaac68, read_als: 0x240f4c,
-        settings_view: 0x6b0564, thermostat_view: 0x6b3554, view_offset: 0x2f0,
-        current_temperature: 0xad880, current_humidity: 0xad898, leaf_slot: 0x364,
+        background_slot: 0x6bac30,
+        background_draw: 0x236744,
+        brightness_manager: 0xaac68,
+        read_als: 0x240f4c,
+        settings_view: 0x6b0564,
+        thermostat_view: 0x6b3554,
+        view_offset: 0x2f0,
+        current_temperature: 0xad880,
+        current_humidity: 0xad898,
+        leaf_slot: 0x364,
     },
 ];
 
 /// The natives the preload calls, by discovery's names.
 const NATIVES: &[&str] = &[
-    "native_activity_client", "native_activity_ctor", "native_activity_init", "native_delete", "native_enqueue",
-    "native_event_type", "native_image_load", "native_layer_lookup", "native_menu_hidden", "native_menu_scale",
+    "native_activity_client",
+    "native_activity_ctor",
+    "native_activity_init",
+    "native_delete",
+    "native_enqueue",
+    "native_event_type",
+    "native_image_load",
+    "native_layer_lookup",
+    "native_menu_hidden",
+    "native_menu_scale",
     "native_new",
 ];
 
@@ -80,13 +100,22 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
         return device("customizable themes: nlclient's dial was not found");
     };
     let mut lines = vec![
-        ("dial_slot", dial.slot), ("dial_draw", dial.draw), ("dial_event_slot", dial.event_slot),
-        ("dial_event", dial.event), ("figures_slot", dial.figures_slot), ("figures_draw", dial.figures),
-        ("background_slot", reviewed.background_slot), ("background_draw", reviewed.background_draw),
-        ("brightness_manager", reviewed.brightness_manager), ("read_als", reviewed.read_als),
-        ("settings_view", reviewed.settings_view), ("thermostat_view", reviewed.thermostat_view),
-        ("view_offset", reviewed.view_offset), ("current_temperature", reviewed.current_temperature),
-        ("current_humidity", reviewed.current_humidity), ("leaf_slot", reviewed.leaf_slot),
+        ("dial_slot", dial.slot),
+        ("dial_draw", dial.draw),
+        ("dial_event_slot", dial.event_slot),
+        ("dial_event", dial.event),
+        ("figures_slot", dial.figures_slot),
+        ("figures_draw", dial.figures),
+        ("background_slot", reviewed.background_slot),
+        ("background_draw", reviewed.background_draw),
+        ("brightness_manager", reviewed.brightness_manager),
+        ("read_als", reviewed.read_als),
+        ("settings_view", reviewed.settings_view),
+        ("thermostat_view", reviewed.thermostat_view),
+        ("view_offset", reviewed.view_offset),
+        ("current_temperature", reviewed.current_temperature),
+        ("current_humidity", reviewed.current_humidity),
+        ("leaf_slot", reviewed.leaf_slot),
     ];
     for name in NATIVES {
         let Some(&address) = found.native_api.get(*name) else {
@@ -111,10 +140,28 @@ mod tests {
     #[test]
     fn names_match_the_preload() {
         let preload = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/theme/theme.c"));
-        for name in ["dial_slot", "dial_draw", "dial_event_slot", "dial_event", "figures_slot", "figures_draw",
-                     "background_slot", "background_draw", "brightness_manager", "read_als", "settings_view",
-                     "thermostat_view", "view_offset", "current_temperature", "current_humidity", "leaf_slot"]
-            .iter().copied().chain(NATIVES.iter().map(|n| n.strip_prefix("native_").unwrap())) {
+        for name in [
+            "dial_slot",
+            "dial_draw",
+            "dial_event_slot",
+            "dial_event",
+            "figures_slot",
+            "figures_draw",
+            "background_slot",
+            "background_draw",
+            "brightness_manager",
+            "read_als",
+            "settings_view",
+            "thermostat_view",
+            "view_offset",
+            "current_temperature",
+            "current_humidity",
+            "leaf_slot",
+        ]
+        .iter()
+        .copied()
+        .chain(NATIVES.iter().map(|n| n.strip_prefix("native_").unwrap()))
+        {
             assert!(preload.contains(&format!("\"{name}\"")), "theme.c does not read {name}");
         }
     }

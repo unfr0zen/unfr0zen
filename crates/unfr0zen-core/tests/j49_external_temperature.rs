@@ -27,16 +27,24 @@ fn target(instruction: u32, address: u32) -> u32 {
 #[test]
 fn rcs_object_matches_the_independent_reference_without_firmware() {
     let root = Path::new(env!("UNFR0ZEN_ROOT"));
-    let path = std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
+    let path = std::env::var_os("NLCLIENT_RCS_OBJECT")
+        .map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"));
     let Ok(object) = std::fs::read(path) else {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the j49 RCS object");
         return;
     };
-    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
-    let linked = nlclient::linker::link(&object, golden["ui_address"].as_u64().unwrap() as u32,
-        &serde_json::from_value(golden["ui_bindings"].clone()).unwrap()).unwrap();
+    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("UNFR0ZEN_ROOT"),
+        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"
+    )))
+    .unwrap();
+    let linked = nlclient::linker::link(
+        &object,
+        golden["ui_address"].as_u64().unwrap() as u32,
+        &serde_json::from_value(golden["ui_bindings"].clone()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(linked.bytes.len(), golden["ui_size"].as_u64().unwrap() as usize);
     assert_eq!(unfr0zen_core::shell::sha256_hex(&linked.bytes), golden["ui_sha256"]);
     for (name, address) in golden["ui_symbols"].as_object().unwrap() {
@@ -47,19 +55,29 @@ fn rcs_object_matches_the_independent_reference_without_firmware() {
 #[test]
 fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
     let root = Path::new(env!("UNFR0ZEN_ROOT"));
-    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from)
-        .unwrap_or_else(|| root.join(".work/firmware"));
-    let object = std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from)
-        .unwrap_or_else(|| root.join("build/custom-screen.o"));
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root.join(".work/firmware"));
+    let object =
+        std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from).unwrap_or_else(|| root.join("build/custom-screen.o"));
     let (Ok(stock), Ok(object)) = (std::fs::read(firmware.join("nlclient-gen2-2019")), std::fs::read(object)) else {
-        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the j49 sample and screen object");
+        assert!(
+            std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(),
+            "strict checks need the j49 sample and screen object"
+        );
         eprintln!("No private j49 sample or screen object; skipping RCS input check");
         return;
     };
-    let rcs_object = std::fs::read(std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
-        .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"))).expect("build the j49 RCS screen object");
-    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
+    let rcs_object = std::fs::read(
+        std::env::var_os("NLCLIENT_RCS_OBJECT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("build/j49-rcs-screen.o")),
+    )
+    .expect("build the j49 RCS screen object");
+    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("UNFR0ZEN_ROOT"),
+        "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"
+    )))
+    .unwrap();
     let screen = nlclient::builder::build(&stock, &object, &[]).unwrap().output;
     assert_eq!(unfr0zen_core::shell::sha256_hex(&stock), golden["stock_sha256"]);
     assert_eq!(unfr0zen_core::shell::sha256_hex(&screen), golden["screen_sha256"]);
@@ -90,10 +108,17 @@ fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
     assert_eq!(word(&output, offset(&stock, 0x141c74)), 0xe1a00000);
     assert_eq!(target(word(&output, offset(&stock, 0x141d40)), 0x141d40), entry + 29 * 4);
     for (site, symbol) in [(0x14282c, "custom_factory"), (0x141858, "rcs_post_reading")] {
-        assert_eq!(target(word(&output, offset(&stock, site)), site), golden["ui_symbols"][symbol].as_u64().unwrap() as u32);
+        assert_eq!(
+            target(word(&output, offset(&stock, site)), site),
+            golden["ui_symbols"][symbol].as_u64().unwrap() as u32
+        );
     }
-    for (site, field) in [(0x19a668, "guard_entry"), (0x14185c, "reply_entry"),
-                          (0x237af4, "temperature_entry"), (0x237afc, "result_entry")] {
+    for (site, field) in [
+        (0x19a668, "guard_entry"),
+        (0x14185c, "reply_entry"),
+        (0x237af4, "temperature_entry"),
+        (0x237afc, "result_entry"),
+    ] {
         assert_eq!(target(word(&output, offset(&stock, site)), site), golden[field].as_u64().unwrap() as u32);
     }
     assert_eq!(word(&output, offset(&stock, 0x47e94)), 0xe3a00000);
@@ -126,8 +151,10 @@ fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
     let downgrade = Patch::upgrade(&patch, off).unwrap();
     assert_eq!(downgrade.apply(&output, false).unwrap(), screen);
     assert!(external_temperature::patch(&stock, &mut output, &rcs_object).is_err());
-    for address in [0x47e88, 0x47e94, 0x141bc4, 0x141c74, 0x141d40, 0x141c7c, 0x4ef920,
-                    0x14282c, 0x11474c, 0x19a668, 0x141858, 0x14185c, 0x237af4, 0x237afc] {
+    for address in [
+        0x47e88, 0x47e94, 0x141bc4, 0x141c74, 0x141d40, 0x141c7c, 0x4ef920, 0x14282c, 0x11474c, 0x19a668, 0x141858,
+        0x14185c, 0x237af4, 0x237afc,
+    ] {
         let mut changed = screen.clone();
         changed[offset(&stock, address)] ^= 1;
         let before = changed.clone();

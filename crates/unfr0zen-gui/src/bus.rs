@@ -38,11 +38,21 @@ pub enum Bus {
 impl Bus {
     fn read() -> Bus {
         let serials = usb::serial_numbers().unwrap_or_default();
-        let mut seen: Vec<Seen> = usb::list().unwrap_or_default().into_iter().filter_map(|(port, id)| {
-            let device = device::identify(id)?;
-            let serial = serials.get(&port).and_then(|reported| unit_serial(reported));
-            Some(Seen { device, mode: device::mode_name(device, id).unwrap_or(crate::tr!("bus.unknown_mode")), port, id, serial })
-        }).collect();
+        let mut seen: Vec<Seen> = usb::list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(port, id)| {
+                let device = device::identify(id)?;
+                let serial = serials.get(&port).and_then(|reported| unit_serial(reported));
+                Some(Seen {
+                    device,
+                    mode: device::mode_name(device, id).unwrap_or(crate::tr!("bus.unknown_mode")),
+                    port,
+                    id,
+                    serial,
+                })
+            })
+            .collect();
         match seen.len() {
             0 => Bus::Nothing,
             1 => Bus::One(seen.remove(0)),
@@ -109,7 +119,13 @@ mod tests {
 
     #[test]
     fn the_summary_names_the_unit_and_its_mode() {
-        let seen = Seen { device: Device::Diamond3, mode: "USB download (SDP)", port: "20-1".into(), id: (0x15a2, 0x0071), serial: None };
+        let seen = Seen {
+            device: Device::Diamond3,
+            mode: "USB download (SDP)",
+            port: "20-1".into(),
+            id: (0x15a2, 0x0071),
+            serial: None,
+        };
         assert_eq!(Bus::One(seen.clone()).summary(), "Nest gen 3 (diamond3) · USB download (SDP)");
         let app = Seen { mode: "app", id: (0x2464, 0x0030), ..seen.clone() };
         assert_eq!(Bus::One(app).summary(), "Nest gen 3 (diamond3)", "the usual mode goes unsaid");

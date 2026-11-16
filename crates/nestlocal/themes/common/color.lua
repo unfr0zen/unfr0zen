@@ -23,11 +23,12 @@ end
 
 -- Between colours a and b, by p from 0 to 1.
 function color.mix(a, b, p)
-  if a == b then return a end
+  if a == b then
+    return a
+  end
   local r1, g1, b1 = rgb(a)
   local r2, g2, b2 = rgb(b)
-  return string.format("#%02x%02x%02x",
-    byte(anim.mix(r1, r2, p)), byte(anim.mix(g1, g2, p)), byte(anim.mix(b1, b2, p)))
+  return string.format("#%02x%02x%02x", byte(anim.mix(r1, r2, p)), byte(anim.mix(g1, g2, p)), byte(anim.mix(b1, b2, p)))
 end
 
 -- `hex` with each channel scaled by `amount`, clamped to 255.

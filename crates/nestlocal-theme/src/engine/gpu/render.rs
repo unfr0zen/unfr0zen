@@ -7,15 +7,15 @@ use std::time::Instant;
 
 use log::{debug, trace, warn};
 
+use femtovg::imgref::Img;
 use femtovg::renderer::OpenGl;
 use femtovg::renderer::RenderTarget;
-use femtovg::imgref::Img;
 use femtovg::rgb::RGBA8;
 use femtovg::{Canvas, ImageFlags, ImageId, LineCap, Paint, Path as Shape, PixelFormat, Solidity};
 
+use super::quads::Quads;
 use crate::engine::display::{Geometry, Step};
 use crate::engine::paint::{perspective_weights, Align, Baseline, Color, Painter, TextStyle};
-use super::quads::Quads;
 use crate::engine::typeset;
 
 /// A canvas and what it has loaded for the current theme.
@@ -91,7 +91,10 @@ struct Decoded {
 }
 
 /// Decodes images as they are asked for, in order, until the renderer goes.
-fn decode_images(asked: std::sync::mpsc::Receiver<(String, std::path::PathBuf)>, done: std::sync::mpsc::Sender<(String, Option<Decoded>)>) {
+fn decode_images(
+    asked: std::sync::mpsc::Receiver<(String, std::path::PathBuf)>,
+    done: std::sync::mpsc::Sender<(String, Option<Decoded>)>,
+) {
     while let Ok((name, file)) = asked.recv() {
         let started = Instant::now();
         let decoded = std::fs::read(&file).ok().and_then(|data| image::load_from_memory(&data).ok()).map(|image| {
@@ -101,7 +104,9 @@ fn decode_images(asked: std::sync::mpsc::Receiver<(String, std::path::PathBuf)>,
             Decoded { width, height, rgba }
         });
         match &decoded {
-            Some(d) => debug!("paint: image {name} decoded, {}x{} in {} ms", d.width, d.height, started.elapsed().as_millis()),
+            Some(d) => {
+                debug!("paint: image {name} decoded, {}x{} in {} ms", d.width, d.height, started.elapsed().as_millis())
+            }
             None => debug!("paint: image {name} could not be loaded"),
         }
         if done.send((name, decoded)).is_err() {
@@ -148,20 +153,43 @@ struct Layer {
     opaque: bool,
 }
 
-
 impl Renderer {
     pub fn new(canvas: Canvas<OpenGl>, quads: Option<Quads>, window: (f32, f32, u32, u32)) -> Result<Renderer, String> {
         let (decode, asked) = std::sync::mpsc::channel();
         let (done, decoded) = std::sync::mpsc::channel();
-        std::thread::Builder::new().name("images".into()).spawn(move || decode_images(asked, done))
+        std::thread::Builder::new()
+            .name("images".into())
+            .spawn(move || decode_images(asked, done))
             .map_err(|e| format!("image decoder thread: {e}"))?;
         Ok(Renderer {
-            canvas, fonts: typeset::Fonts::new()?, images: HashMap::new(), decoding: std::collections::HashSet::new(), decode, decoded,
-            layers: HashMap::new(), runs: HashMap::new(), tick: 0, glyphs: typeset::Glyphs::default(), advances: HashMap::new(),
-            shapes: 0, painting: std::time::Duration::ZERO, layers_drawn: 0, layer_time: std::time::Duration::ZERO, flushes: 0,
-            quads, queued: false, design: 480.0, scale: 1.0,
-            cached: HashMap::new(), white: None, clear: None, stencil_cleared: false, window,
-            frame: None, screen: RenderTarget::Screen, external: false,
+            canvas,
+            fonts: typeset::Fonts::new()?,
+            images: HashMap::new(),
+            decoding: std::collections::HashSet::new(),
+            decode,
+            decoded,
+            layers: HashMap::new(),
+            runs: HashMap::new(),
+            tick: 0,
+            glyphs: typeset::Glyphs::default(),
+            advances: HashMap::new(),
+            shapes: 0,
+            painting: std::time::Duration::ZERO,
+            layers_drawn: 0,
+            layer_time: std::time::Duration::ZERO,
+            flushes: 0,
+            quads,
+            queued: false,
+            design: 480.0,
+            scale: 1.0,
+            cached: HashMap::new(),
+            white: None,
+            clear: None,
+            stencil_cleared: false,
+            window,
+            frame: None,
+            screen: RenderTarget::Screen,
+            external: false,
         })
     }
 
@@ -178,7 +206,9 @@ impl Renderer {
 
     /// Draws onto the canvas's external screen target without a full-frame copy.
     #[allow(dead_code)] // Used by the native nlclient theme library.
-    pub fn use_external_target(&mut self, external: bool) { self.external = external; }
+    pub fn use_external_target(&mut self, external: bool) {
+        self.external = external;
+    }
 
     /// Clears the panel, when it is still to be cleared.
     fn cleared(&mut self) {
@@ -220,7 +250,8 @@ impl Renderer {
             self.flushes += 1;
             self.queued = false;
         }
-        self.frame.filter(|&f| self.screen == RenderTarget::Image(f))
+        self.frame
+            .filter(|&f| self.screen == RenderTarget::Image(f))
             .and_then(|frame| self.canvas.get_native_texture(frame).ok())
     }
 
@@ -245,7 +276,9 @@ impl Renderer {
     pub fn present_retained(&mut self) -> bool {
         self.canvas.set_render_target(RenderTarget::Screen);
         let texture = self.frame.and_then(|frame| self.canvas.get_native_texture(frame).ok());
-        let Some((texture, quads)) = texture.zip(self.quads.as_mut()) else { return false };
+        let Some((texture, quads)) = texture.zip(self.quads.as_mut()) else {
+            return false;
+        };
         // SAFETY: the context owns the frame texture and is current.
         unsafe { quads.present(texture, self.window.2 as f32, self.window.3 as f32) };
         true
@@ -254,7 +287,9 @@ impl Renderer {
     /// Loads a theme's fonts, replacing the previous theme's names.
     pub fn use_fonts(&mut self, fonts: &[(String, std::path::PathBuf)]) -> Result<(), String> {
         self.fonts.use_theme(fonts)?;
-        if let Some(quads) = self.quads.as_mut() { quads.invalidate_composite(); }
+        if let Some(quads) = self.quads.as_mut() {
+            quads.invalidate_composite();
+        }
         for image in self.images.drain().filter_map(|(_, id)| id) {
             self.canvas.delete_image(image);
         }
@@ -285,7 +320,9 @@ impl Renderer {
     pub fn begin(&mut self, geometry: &Geometry, design: f32) {
         // Discs are dropped between frames, when nothing queued uses them.
         while self.cached.len() > SHAPES {
-            let Some((&key, &(image, _))) = self.cached.iter().min_by_key(|(_, (_, used))| *used) else { break };
+            let Some((&key, &(image, _))) = self.cached.iter().min_by_key(|(_, (_, used))| *used) else {
+                break;
+            };
             self.canvas.delete_image(image);
             self.cached.remove(&key);
             trace!("paint: a cached shape dropped, {} kept", self.cached.len());
@@ -300,18 +337,31 @@ impl Renderer {
             self.canvas.set_size(w, h, 1.0);
         }
         if self.quads.is_some() && !self.external {
-            let fits = self.frame.and_then(|f| self.canvas.image_size(f).ok()).is_some_and(|s| s == (w as usize, h as usize));
+            let fits =
+                self.frame.and_then(|f| self.canvas.image_size(f).ok()).is_some_and(|s| s == (w as usize, h as usize));
             if !fits {
                 if let Some(old) = self.frame.take() {
                     self.canvas.delete_image(old);
                 }
-                self.frame = self.canvas.create_image_empty(w as usize, h as usize, PixelFormat::Rgba8, ImageFlags::FLIP_Y | ImageFlags::PREMULTIPLIED)
-                    .map_err(|e| warn!("paint: a frame texture: {e:?}; frames drawn onto the panel")).ok();
+                self.frame = self
+                    .canvas
+                    .create_image_empty(
+                        w as usize,
+                        h as usize,
+                        PixelFormat::Rgba8,
+                        ImageFlags::FLIP_Y | ImageFlags::PREMULTIPLIED,
+                    )
+                    .map_err(|e| warn!("paint: a frame texture: {e:?}; frames drawn onto the panel"))
+                    .ok();
                 self.stencil_cleared = false;
             }
         }
         let previous_target = self.screen;
-        self.screen = if self.external { RenderTarget::Screen } else { self.frame.map_or(RenderTarget::Screen, RenderTarget::Image) };
+        self.screen = if self.external {
+            RenderTarget::Screen
+        } else {
+            self.frame.map_or(RenderTarget::Screen, RenderTarget::Image)
+        };
         self.canvas.set_render_target(self.screen);
         self.canvas.reset_transform();
         self.canvas.translate(-x, -y);
@@ -338,7 +388,9 @@ impl Renderer {
             if !self.decoding.remove(&name) {
                 continue;
             }
-            let image = decoded.and_then(|d| self.canvas.create_image(Img::new(d.rgba.as_slice(), d.width, d.height), ImageFlags::empty()).ok());
+            let image = decoded.and_then(|d| {
+                self.canvas.create_image(Img::new(d.rgba.as_slice(), d.width, d.height), ImageFlags::empty()).ok()
+            });
             self.images.insert(name, image);
             arrived = true;
         }
@@ -412,7 +464,9 @@ impl GpuPainter<'_> {
         if self.r.quads.is_none() || self.target == RenderTarget::Image(image) {
             return false;
         }
-        let Ok(texture) = self.r.canvas.get_native_texture(image) else { return false };
+        let Ok(texture) = self.r.canvas.get_native_texture(image) else {
+            return false;
+        };
         let started = Instant::now();
         self.r.cleared();
         if self.r.queued {
@@ -450,8 +504,14 @@ impl GpuPainter<'_> {
                     *used = tick;
                     return Some((*image, (n as usize, 1)));
                 }
-                let pixels: Vec<RGBA8> = (0..n).map(|i| if i == 0 || i == n - 1 { RGBA8::new(0, 0, 0, 0) } else { RGBA8::new(255, 255, 255, 255) }).collect();
-                let image = self.r.canvas.create_image(Img::new(pixels.as_slice(), n as usize, 1), ImageFlags::PREMULTIPLIED).ok()?;
+                let pixels: Vec<RGBA8> = (0..n)
+                    .map(|i| if i == 0 || i == n - 1 { RGBA8::new(0, 0, 0, 0) } else { RGBA8::new(255, 255, 255, 255) })
+                    .collect();
+                let image = self
+                    .r
+                    .canvas
+                    .create_image(Img::new(pixels.as_slice(), n as usize, 1), ImageFlags::PREMULTIPLIED)
+                    .ok()?;
                 self.r.cached.insert(key, (image, tick));
                 return Some((image, (n as usize, 1)));
             }
@@ -463,7 +523,8 @@ impl GpuPainter<'_> {
             *used = tick;
             return Some((*image, size));
         }
-        let image = self.r.canvas.create_image_empty(size.0, size.1, PixelFormat::Rgba8, ImageFlags::PREMULTIPLIED).ok()?;
+        let image =
+            self.r.canvas.create_image_empty(size.0, size.1, PixelFormat::Rgba8, ImageFlags::PREMULTIPLIED).ok()?;
         self.femtovg();
         self.r.canvas.set_render_target(RenderTarget::Image(image));
         self.r.canvas.save();
@@ -488,7 +549,11 @@ impl GpuPainter<'_> {
     /// (a shape growing with an animation then keeps one image, scaled).
     fn shape_scale(&self, t: &femtovg::Transform2D) -> f32 {
         let full = (t[0] * t[3] - t[1] * t[2]).abs().sqrt();
-        if (full / self.r.scale - 1.0).abs() < 0.02 { full } else { self.r.scale }
+        if (full / self.r.scale - 1.0).abs() < 0.02 {
+            full
+        } else {
+            self.r.scale
+        }
     }
 
     /// One white pixel, made the first time it is asked for.
@@ -516,12 +581,21 @@ impl GpuPainter<'_> {
             if outline > 0.0 {
                 run = typeset::dilate(&run, outline);
             }
-            let image = (run.width > 0 && run.height > 0).then(|| {
-                let pixels: Vec<RGBA8> = run.alpha.iter().map(|&a| RGBA8::new(a, a, a, a)).collect();
-                self.r.canvas.create_image(Img::new(pixels.as_slice(), run.width, run.height), ImageFlags::PREMULTIPLIED).ok()
-            }).flatten();
-            trace!("paint: text {text:?} set, {}x{} pixels at {px:.1} px{}", run.width, run.height,
-                   if outline > 0.0 { ", outlined" } else { "" });
+            let image = (run.width > 0 && run.height > 0)
+                .then(|| {
+                    let pixels: Vec<RGBA8> = run.alpha.iter().map(|&a| RGBA8::new(a, a, a, a)).collect();
+                    self.r
+                        .canvas
+                        .create_image(Img::new(pixels.as_slice(), run.width, run.height), ImageFlags::PREMULTIPLIED)
+                        .ok()
+                })
+                .flatten();
+            trace!(
+                "paint: text {text:?} set, {}x{} pixels at {px:.1} px{}",
+                run.width,
+                run.height,
+                if outline > 0.0 { ", outlined" } else { "" }
+            );
             if self.r.runs.len() >= RUNS {
                 if let Some(oldest) = self.r.runs.iter().min_by_key(|(_, r)| r.used).map(|(k, _)| k.clone()) {
                     if let Some(image) = self.r.runs.remove(&oldest).and_then(|r| r.image) {
@@ -529,9 +603,10 @@ impl GpuPainter<'_> {
                     }
                 }
             }
-            self.r.runs.insert(key.clone(), CachedRun {
-                image, left: run.left, top: run.top, width: run.width, height: run.height, used: 0,
-            });
+            self.r.runs.insert(
+                key.clone(),
+                CachedRun { image, left: run.left, top: run.top, width: run.width, height: run.height, used: 0 },
+            );
         }
         let tick = self.r.tick;
         let run = self.r.runs.get_mut(&key)?;
@@ -549,7 +624,14 @@ impl GpuPainter<'_> {
         if self.r.advances.len() > 512 {
             self.r.advances.clear();
         }
-        let a = typeset::advance(&mut self.r.glyphs, self.r.fonts.get(&style.font), self.r.fonts.cjk(text), text, px, spacing);
+        let a = typeset::advance(
+            &mut self.r.glyphs,
+            self.r.fonts.get(&style.font),
+            self.r.fonts.cjk(text),
+            text,
+            px,
+            spacing,
+        );
         self.r.advances.insert(key, a);
         a
     }
@@ -558,7 +640,9 @@ impl GpuPainter<'_> {
     /// on whole pixels.
     fn draw_run(&mut self, text: &str, style: &TextStyle, outline: f32, x: f32, baseline: f32, color: Color) {
         let scale = self.r.scale;
-        let Some(run) = self.run(text, style, outline) else { return };
+        let Some(run) = self.run(text, style, outline) else {
+            return;
+        };
         let Some(image) = run.image else { return };
         // An unsnapped text starts where it falls, the GPU sampling its run
         // there.
@@ -617,7 +701,9 @@ impl GpuPainter<'_> {
 
     /// Draws the image, or nothing yet while it is being decoded.
     fn draw_image(&mut self, path: &str, x: f32, y: f32, w: f32, h: f32, alpha: f32) -> Result<(), String> {
-        let Some(id) = self.load_image(path)? else { return Ok(()) };
+        let Some(id) = self.load_image(path)? else {
+            return Ok(());
+        };
         let mut shape = Shape::new();
         shape.rect(x, y, w, h);
         self.fill(&shape, &Paint::image(id, x, y, w, h, 0.0, alpha));
@@ -633,8 +719,12 @@ impl Painter for GpuPainter<'_> {
         if quarters >= 64 && self.r.quads.is_some() {
             if let Some((image, (size, _))) = self.shape(ShapeKey::Disc(quarters)) {
                 let half = size as f32 / 2.0 / scale;
-                let corners = [(x - half, y - half, 0.0, 0.0), (x + half, y - half, 1.0, 0.0),
-                               (x + half, y + half, 1.0, 1.0), (x - half, y + half, 0.0, 1.0)];
+                let corners = [
+                    (x - half, y - half, 0.0, 0.0),
+                    (x + half, y - half, 1.0, 0.0),
+                    (x + half, y + half, 1.0, 1.0),
+                    (x - half, y + half, 0.0, 1.0),
+                ];
                 if self.quad(image, &corners, color, false) {
                     return;
                 }
@@ -694,13 +784,23 @@ impl Painter for GpuPainter<'_> {
         path.arc(x, y, r, a0, a1, if a1 >= a0 { Solidity::Hole } else { Solidity::Solid });
         let mut paint = Paint::color(rgba(color)).with_line_width(width).with_line_cap(LineCap::Butt);
         // Less than a turn, no wider than its radius: never over a pixel twice.
-        if (to - from).abs() < std::f32::consts::TAU && width <= r { paint.set_stencil_strokes(false); }
+        if (to - from).abs() < std::f32::consts::TAU && width <= r {
+            paint.set_stencil_strokes(false);
+        }
         self.stroke(&path, paint, color);
     }
 
     fn gradient_arc(&mut self, x: f32, y: f32, r: f32, from: f32, to: f32, start: Color, end: Color, width: f32) {
         if (to - from).abs() < 0.01 {
-            return self.arc(x, y, r, from.min(to) - 0.3_f32.to_radians(), from.max(to) + 0.3_f32.to_radians(), start, width);
+            return self.arc(
+                x,
+                y,
+                r,
+                from.min(to) - 0.3_f32.to_radians(),
+                from.max(to) + 0.3_f32.to_radians(),
+                start,
+                width,
+            );
         }
         let n = ((to - from).abs() / std::f32::consts::FRAC_PI_3).ceil().max(1.0) as usize;
         let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
@@ -712,16 +812,23 @@ impl Painter for GpuPainter<'_> {
             let point = |a: f32| (x + r * a.sin(), y - r * a.cos());
             let (x0, y0) = point(a0);
             let (x1, y1) = point(a1);
-            let color = |t: f32| Color { r: mix(start.r, end.r, t), g: mix(start.g, end.g, t),
-                                         b: mix(start.b, end.b, t), a: mix(start.a, end.a, t) };
+            let color = |t: f32| Color {
+                r: mix(start.r, end.r, t),
+                g: mix(start.g, end.g, t),
+                b: mix(start.b, end.b, t),
+                a: mix(start.a, end.a, t),
+            };
             let mut path = Shape::new();
             let lo = a0.min(a1) - 0.3_f32.to_radians();
             let hi = a0.max(a1) + 0.3_f32.to_radians();
             path.arc(x, y, r, lo - FRAC_PI_2, hi - FRAC_PI_2, Solidity::Hole);
             let mut paint = Paint::linear_gradient(x0, y0, x1, y1, rgba(color(t0)), rgba(color(t1)))
-                .with_line_width(width).with_line_cap(LineCap::Butt);
+                .with_line_width(width)
+                .with_line_cap(LineCap::Butt);
             // A sixth of a turn at most: one pass, as for arc.
-            if width <= r { paint.set_stencil_strokes(false); }
+            if width <= r {
+                paint.set_stencil_strokes(false);
+            }
             self.stroke(&path, paint, Color { a: start.a.min(end.a), ..Color::WHITE });
         }
     }
@@ -781,7 +888,8 @@ impl Painter for GpuPainter<'_> {
                 let whole = |v: f32| (v - v.round()).abs() < 0.01;
                 let square = (t[1].abs() < 1e-6 && t[2].abs() < 1e-6) || (t[0].abs() < 1e-6 && t[3].abs() < 1e-6);
                 if square && whole(ax) && whole(ay) && whole(bx) && whole(by) {
-                    let corners = [(x, y, 0.5, 0.5), (x + w, y, 0.5, 0.5), (x + w, y + h, 0.5, 0.5), (x, y + h, 0.5, 0.5)];
+                    let corners =
+                        [(x, y, 0.5, 0.5), (x + w, y, 0.5, 0.5), (x + w, y + h, 0.5, 0.5), (x, y + h, 0.5, 0.5)];
                     if self.quad(image, &corners, color, color.a >= 1.0) {
                         return;
                     }
@@ -789,14 +897,22 @@ impl Painter for GpuPainter<'_> {
             }
         }
         let mut path = Shape::new();
-        if radius > 0.0 { path.rounded_rect(x, y, w, h, radius) } else { path.rect(x, y, w, h) }
+        if radius > 0.0 {
+            path.rounded_rect(x, y, w, h, radius)
+        } else {
+            path.rect(x, y, w, h)
+        }
         self.fill(&path, &Paint::color(rgba(color)));
     }
 
     fn polygon(&mut self, points: &[(f32, f32)], color: Color) {
         let mut path = Shape::new();
         for (i, &(x, y)) in points.iter().enumerate() {
-            if i == 0 { path.move_to(x, y) } else { path.line_to(x, y) }
+            if i == 0 {
+                path.move_to(x, y)
+            } else {
+                path.line_to(x, y)
+            }
         }
         path.close();
         // femtovg fills a contour without its stencil only when it turns
@@ -858,9 +974,15 @@ impl Painter for GpuPainter<'_> {
         }
     }
 
-    fn translate(&mut self, x: f32, y: f32) { self.r.canvas.translate(x, y); }
-    fn rotate(&mut self, angle: f32) { self.r.canvas.rotate(angle); }
-    fn scale(&mut self, x: f32, y: f32) { self.r.canvas.scale(x, y); }
+    fn translate(&mut self, x: f32, y: f32) {
+        self.r.canvas.translate(x, y);
+    }
+    fn rotate(&mut self, angle: f32) {
+        self.r.canvas.rotate(angle);
+    }
+    fn scale(&mut self, x: f32, y: f32) {
+        self.r.canvas.scale(x, y);
+    }
 
     fn alpha(&mut self, alpha: f32) {
         if let Some(current) = self.alpha.last_mut() {
@@ -882,7 +1004,13 @@ impl Painter for GpuPainter<'_> {
         self.r.canvas.clear_rect(0, 0, w, h, rgba(color));
     }
 
-    fn layer(&mut self, name: &str, key: &str, size: Option<(f32, f32)>, draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>) -> Result<(), String> {
+    fn layer(
+        &mut self,
+        name: &str,
+        key: &str,
+        size: Option<(f32, f32)>,
+        draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>,
+    ) -> Result<(), String> {
         let size = size.unwrap_or((self.r.design, self.r.design));
         let px = |v: f32| (v * self.r.scale).ceil().max(1.0) as usize;
         let pixels = (px(size.0), px(size.1));
@@ -897,7 +1025,15 @@ impl Painter for GpuPainter<'_> {
         }
         let image = match self.r.layers.get(name) {
             Some(l) => l.image,
-            None => self.r.canvas.create_image_empty(pixels.0, pixels.1, PixelFormat::Rgba8, ImageFlags::FLIP_Y | ImageFlags::PREMULTIPLIED)
+            None => self
+                .r
+                .canvas
+                .create_image_empty(
+                    pixels.0,
+                    pixels.1,
+                    PixelFormat::Rgba8,
+                    ImageFlags::FLIP_Y | ImageFlags::PREMULTIPLIED,
+                )
                 .map_err(|e| format!("layer {name}: {e:?}"))?,
         };
         let (pw, ph) = (pixels.0 as u32, pixels.1 as u32);
@@ -930,14 +1066,18 @@ impl Painter for GpuPainter<'_> {
         self.r.canvas.set_global_alpha(*self.alpha.last().unwrap_or(&1.0));
         let opaque = std::mem::replace(&mut self.opaque, outer_opaque);
         self.r.layers.insert(name.to_string(), Layer { key: key.to_string(), image, pixels, size, opaque });
-        if let Some(quads) = self.r.quads.as_mut() { quads.invalidate_composite(); }
+        if let Some(quads) = self.r.quads.as_mut() {
+            quads.invalidate_composite();
+        }
         self.r.layers_drawn += 1;
         self.r.layer_time += started.elapsed();
         drawn
     }
 
     fn paint_layer(&mut self, name: &str, tint: Color, clip: Option<&[(f32, f32)]>) -> Result<(), String> {
-        let Some(layer) = self.r.layers.get(name) else { return Err(format!("no layer {name}")) };
+        let Some(layer) = self.r.layers.get(name) else {
+            return Err(format!("no layer {name}"));
+        };
         let ((w, h), image, opaque) = (layer.size, layer.image, layer.opaque);
         // Layers are drawn upside down in their textures (FLIP_Y).
         let corner = |x: f32, y: f32| (x, y, x / w, 1.0 - y / h);
@@ -955,7 +1095,11 @@ impl Painter for GpuPainter<'_> {
         match clip {
             Some(points) => {
                 for (i, &(x, y)) in points.iter().enumerate() {
-                    if i == 0 { shape.move_to(x, y) } else { shape.line_to(x, y) }
+                    if i == 0 {
+                        shape.move_to(x, y)
+                    } else {
+                        shape.line_to(x, y)
+                    }
                 }
                 shape.close();
             }
@@ -966,7 +1110,9 @@ impl Painter for GpuPainter<'_> {
     }
 
     fn warp_layer(&mut self, name: &str, corners: &[(f32, f32); 4]) -> Result<(), String> {
-        let Some(layer) = self.r.layers.get(name) else { return Err(format!("no layer {name}")) };
+        let Some(layer) = self.r.layers.get(name) else {
+            return Err(format!("no layer {name}"));
+        };
         let ((w, h), image, opaque) = (layer.size, layer.image, layer.opaque);
         let texture = match self.r.quads {
             Some(_) if self.target != RenderTarget::Image(image) => self.r.canvas.get_native_texture(image).ok(),
@@ -977,7 +1123,14 @@ impl Painter for GpuPainter<'_> {
             // and left side placed exactly.
             let [(x0, y0), (x1, y1), _, (x3, y3)] = *corners;
             self.save();
-            self.r.canvas.set_transform(&femtovg::Transform2D::new((x1 - x0) / w, (y1 - y0) / w, (x3 - x0) / h, (y3 - y0) / h, x0, y0));
+            self.r.canvas.set_transform(&femtovg::Transform2D::new(
+                (x1 - x0) / w,
+                (y1 - y0) / w,
+                (x3 - x0) / h,
+                (y3 - y0) / h,
+                x0,
+                y0,
+            ));
             let painted = self.paint_layer(name, Color::WHITE, None);
             self.restore();
             return painted;
@@ -994,7 +1147,8 @@ impl Painter for GpuPainter<'_> {
         let q = perspective_weights(&device);
         // Layers are drawn upside down in their textures (FLIP_Y).
         let uv = [(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)];
-        let points: [[f32; 5]; 4] = std::array::from_fn(|i| [device[i].0, device[i].1, uv[i].0 * q[i], uv[i].1 * q[i], q[i]]);
+        let points: [[f32; 5]; 4] =
+            std::array::from_fn(|i| [device[i].0, device[i].1, uv[i].0 * q[i], uv[i].1 * q[i], q[i]]);
         let a = self.alpha.last().copied().unwrap_or(1.0);
         if let Some(quads) = self.r.quads.as_mut() {
             quads.push_projective(texture, &points, [a, a, a, a], !(opaque && a >= 1.0));

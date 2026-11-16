@@ -12,7 +12,6 @@ mod commands;
 use nestlocal::device;
 mod doom;
 mod entropy;
-mod theme;
 mod fetch;
 mod flags;
 mod heatlink;
@@ -25,12 +24,13 @@ mod mqtttls;
 mod naming;
 mod nlsettings;
 mod occupancy;
-mod sensor;
 mod scratch;
 mod screen;
-mod store;
+mod sensor;
 mod settings_ui;
+mod store;
 mod structure;
+mod theme;
 mod thread_sleep;
 mod update;
 mod wake;
@@ -74,18 +74,24 @@ pub fn pids(name: &str) -> Vec<i32> {
     let Ok(dir) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
-    dir.flatten().filter_map(|entry| {
-        let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
-        let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
-        (comm.trim_end() == name).then_some(pid)
-    }).collect()
+    dir.flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
+            let comm = std::fs::read_to_string(entry.path().join("comm")).ok()?;
+            (comm.trim_end() == name).then_some(pid)
+        })
+        .collect()
 }
 
 fn server_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>, String> {
-    let certs = CertificateDer::pem_file_iter(cert).map_err(|e| format!("{cert}: {e}"))?
-        .collect::<Result<Vec<_>, _>>().map_err(|e| format!("{cert}: {e}"))?;
+    let certs = CertificateDer::pem_file_iter(cert)
+        .map_err(|e| format!("{cert}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{cert}: {e}"))?;
     let key = PrivateKeyDer::from_pem_file(key).map_err(|e| format!("{key}: {e}"))?;
-    let config = rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(certs, key)
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
         .map_err(|e| format!("{cert}: {e}"))?;
     Ok(Arc::new(config))
 }
@@ -137,15 +143,16 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let (true, Some(ble)) = (config.external_temperature || matter_takes_ble(&config), device::current().ble.as_ref()) {
+    if let (true, Some(ble)) =
+        (config.external_temperature || matter_takes_ble(&config), device::current().ble.as_ref())
+    {
         if let Err(e) = sensor::port::start_holder(ble) {
             logf!("BLE stand-in: {e}");
         }
     }
     entropy::seed();
     install_crypto();
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
-        .unwrap_or_else(|e| fatal!("{e}"));
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap_or_else(|e| fatal!("{e}"));
     runtime.block_on(run(config));
 }
 
@@ -166,7 +173,9 @@ fn prepare_settings(config: &flags::Config) {
         let store = store::Store::new(&config.state);
         let settings = device::current().omap().then_some(std::path::Path::new(path));
         let where_id = sensor::where_id(&store, &config.serial, settings);
-        if let Err(e) = sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref()) {
+        if let Err(e) =
+            sensor::prepare_settings(identity, std::path::Path::new(path), &config.serial, where_id.as_deref())
+        {
             logf!("external temperature: {e}");
         }
     }
@@ -185,7 +194,12 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         logf!("external temperature: this unit has no supported sensor transport");
         return None;
     }
-    let sensor = sensor::Sensor::open(identity, &config.serial, std::path::Path::new(&config.settings), config.external_temperature_timeout);
+    let sensor = sensor::Sensor::open(
+        identity,
+        &config.serial,
+        std::path::Path::new(&config.settings),
+        config.external_temperature_timeout,
+    );
     let sensor = match sensor {
         Ok(sensor) => sensor,
         Err(e) => {
@@ -225,7 +239,9 @@ async fn run(config: flags::Config) {
     tokio::spawn(store.clone().save_changes());
     let sensor = start_sensor(&config, &store);
     #[cfg(target_os = "linux")]
-    if let (true, false, Some(ble)) = (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref()) {
+    if let (true, false, Some(ble)) =
+        (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref())
+    {
         if let Err(e) = sensor::port::start(None, ble, true) {
             logf!("matter BLE: stand-in: {e}");
         }
@@ -267,7 +283,8 @@ async fn run(config: flags::Config) {
     }
     // Before MQTT starts: its first announcement carries the update entity.
     if let Some(bridge) = &bridge {
-        let updates = update::Updates::new(device::current().name, &config.releases, std::path::Path::new(&config.update_store));
+        let updates =
+            update::Updates::new(device::current().name, &config.releases, std::path::Path::new(&config.update_store));
         bridge.attach_updates(updates.clone());
         tokio::spawn(updates.keep_checking());
     }
@@ -279,10 +296,13 @@ async fn run(config: flags::Config) {
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {
         let password = match config.mqtt_password_file.as_str() {
             "" => String::new(),
-            file => std::fs::read_to_string(file).unwrap_or_else(|e| fatal!("{file}: {e}"))
-                .trim_end_matches(['\r', '\n']).to_string(),
+            file => std::fs::read_to_string(file)
+                .unwrap_or_else(|e| fatal!("{file}: {e}"))
+                .trim_end_matches(['\r', '\n'])
+                .to_string(),
         };
-        let (broker, tls) = mqtttls::broker(&config.mqtt, config.mqtt_tls, &config.mqtt_ca).unwrap_or_else(|e| fatal!("{e}"));
+        let (broker, tls) =
+            mqtttls::broker(&config.mqtt, config.mqtt_tls, &config.mqtt_ca).unwrap_or_else(|e| fatal!("{e}"));
         bridge.run(&broker, &config.mqtt_user, &password, tls);
         broker_port = Some(broker.port);
     }
@@ -294,10 +314,15 @@ async fn run(config: flags::Config) {
     }
     if !config.wake_iface.is_empty() {
         let bridge = bridge.clone().filter(|_| broker_port.is_some());
-        wake::start(broker_port, config.matter, config.zigbee,
-                    config.wake_iface.clone(), move || if let Some(bridge) = &bridge { bridge.woke() });
+        wake::start(broker_port, config.matter, config.zigbee, config.wake_iface.clone(), move || {
+            if let Some(bridge) = &bridge {
+                bridge.woke()
+            }
+        });
     }
-    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) { logf!("settings UI: {e}"); }
+    if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) {
+        logf!("settings UI: {e}");
+    }
     if device::current().name == "diamond3" {
         scratch::check();
     }
@@ -322,7 +347,12 @@ async fn run(config: flags::Config) {
 
     let tls = server_tls(&config.cert, &config.key).unwrap_or_else(|e| fatal!("{e}"));
     let cloud = Arc::new(cloud::Cloud {
-        store, outdoor, live: Some(live), origin: config.origin, verbose: config.verbose, hold: config.hold,
+        store,
+        outdoor,
+        live: Some(live),
+        origin: config.origin,
+        verbose: config.verbose,
+        hold: config.hold,
     });
     let stopped = cloud.serve(&config.listen, tls).await;
     fatal!("{stopped}");

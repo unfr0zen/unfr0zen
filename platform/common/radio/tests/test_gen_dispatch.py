@@ -3,6 +3,7 @@ a stand-in arm-none-eabi-nm naming the library callbacks: no SDK needed.
 
 Run from the top: python3 -m unittest discover -s platform/common/radio/tests
 """
+
 import os
 import subprocess
 import sys
@@ -181,8 +182,10 @@ class GenDispatch(unittest.TestCase):
         cls.dir = tempfile.TemporaryDirectory()
         root = cls.dir.name
         zb = os.path.join(root, "zigbee")
-        for path, text in [("app/ncp/plugin/plugin.info", PLUGIN_INFO),
-                           ("app/util/ezsp/command-functions.h", COMMAND_FUNCTIONS)]:
+        for path, text in [
+            ("app/ncp/plugin/plugin.info", PLUGIN_INFO),
+            ("app/util/ezsp/command-functions.h", COMMAND_FUNCTIONS),
+        ]:
             os.makedirs(os.path.dirname(os.path.join(zb, path)), exist_ok=True)
             with open(os.path.join(zb, path), "w") as f:
                 f.write(text)
@@ -192,7 +195,7 @@ class GenDispatch(unittest.TestCase):
             f.write(NM)
         nm = os.path.join(bin_dir, "arm-none-eabi-nm")
         with open(nm, "w") as f:
-            f.write('#!/bin/sh\ncat "%s"\n' % os.path.join(root, "nm.out"))
+            f.write(f'#!/bin/sh\ncat "{os.path.join(root, "nm.out")}"\n')
         os.chmod(nm, 0o755)
         env = dict(os.environ, PATH=bin_dir + os.pathsep + os.environ.get("PATH", ""))
         run = subprocess.run([sys.executable, GEN, zb, "lib.a"], capture_output=True, text=True, env=env)
@@ -209,48 +212,62 @@ class GenDispatch(unittest.TestCase):
         lines = self.out.splitlines()
         start = lines.index(f"    case {command}: {{")
         end = lines.index("      return true;", start)
-        return [line.strip() for line in lines[start + 1:end]]
+        return [line.strip() for line in lines[start + 1 : end]]
 
     def test_a_plugin_mapped_frame_mirrors_the_host_function(self):
-        self.assertEqual(self.case("EZSP_SEND_UNICAST"), [
-            "EmberOutgoingMessageType type = (EmberOutgoingMessageType)fetchInt8u();",
-            "EmberNodeId indexOrDestination = (EmberNodeId)fetchInt16u();",
-            "EmberApsFrame apsFrame;",
-            "fetchEmberApsFrame(&apsFrame);",
-            "uint8_t messageTag = (uint8_t)fetchInt8u();",
-            "uint8_t messageLength = (uint8_t)fetchInt8u();",
-            "uint8_t *messageContents = fetchInt8uPointer(messageLength);",
-            "uint8_t sequence;",
-            "EmberStatus status = emberAfPluginEzspZigbeeProSendUnicastCommandCallback(type, indexOrDestination, "
-            "&apsFrame, messageTag, messageLength, messageContents, &sequence);",
-            "appendInt8u(status);",
-            "appendInt8u(sequence);",
-        ])
-        self.assertEqual(self.case("EZSP_NETWORK_INIT"), [
-            "EmberNetworkInitStruct networkInitStruct;",
-            "fetchEmberNetworkInitStruct(&networkInitStruct);",
-            "EmberStatus status = emberNetworkInit(&networkInitStruct);",
-            "appendInt8u(status);",
-        ])
+        self.assertEqual(
+            self.case("EZSP_SEND_UNICAST"),
+            [
+                "EmberOutgoingMessageType type = (EmberOutgoingMessageType)fetchInt8u();",
+                "EmberNodeId indexOrDestination = (EmberNodeId)fetchInt16u();",
+                "EmberApsFrame apsFrame;",
+                "fetchEmberApsFrame(&apsFrame);",
+                "uint8_t messageTag = (uint8_t)fetchInt8u();",
+                "uint8_t messageLength = (uint8_t)fetchInt8u();",
+                "uint8_t *messageContents = fetchInt8uPointer(messageLength);",
+                "uint8_t sequence;",
+                "EmberStatus status = emberAfPluginEzspZigbeeProSendUnicastCommandCallback(type, indexOrDestination, "
+                "&apsFrame, messageTag, messageLength, messageContents, &sequence);",
+                "appendInt8u(status);",
+                "appendInt8u(sequence);",
+            ],
+        )
+        self.assertEqual(
+            self.case("EZSP_NETWORK_INIT"),
+            [
+                "EmberNetworkInitStruct networkInitStruct;",
+                "fetchEmberNetworkInitStruct(&networkInitStruct);",
+                "EmberStatus status = emberNetworkInit(&networkInitStruct);",
+                "appendInt8u(status);",
+            ],
+        )
 
     def test_a_library_callback_answers_its_frame(self):
-        self.assertEqual(self.case("EZSP_GET_EUI64"), [
-            "uint8_t eui64[8];",
-            "emberAfEzspGetEui64CommandCallback(eui64);",
-            "appendInt8uArray(8, eui64);",
-        ])
-        self.assertEqual(self.case("EZSP_GET_NETWORK_PARAMETERS"), [
-            "EmberNodeType nodeType;",
-            "EmberNetworkParameters parameters;",
-            "EmberStatus status = emberAfEzspGetNetworkParametersCommandCallback(&nodeType, &parameters);",
-            "appendInt8u(status);",
-            "appendInt8u(nodeType);",
-            "appendEmberNetworkParameters(&parameters);",
-        ])
+        self.assertEqual(
+            self.case("EZSP_GET_EUI64"),
+            [
+                "uint8_t eui64[8];",
+                "emberAfEzspGetEui64CommandCallback(eui64);",
+                "appendInt8uArray(8, eui64);",
+            ],
+        )
+        self.assertEqual(
+            self.case("EZSP_GET_NETWORK_PARAMETERS"),
+            [
+                "EmberNodeType nodeType;",
+                "EmberNetworkParameters parameters;",
+                "EmberStatus status = emberAfEzspGetNetworkParametersCommandCallback(&nodeType, &parameters);",
+                "appendInt8u(status);",
+                "appendInt8u(nodeType);",
+                "appendEmberNetworkParameters(&parameters);",
+            ],
+        )
 
     def test_handlers_without_a_header_are_declared(self):
         protos = " ".join(self.out.split("bool emAfProcessEzspCommand")[0].split())
-        self.assertIn("EmberStatus emberAfPluginEzspZigbeeProSendUnicastCommandCallback(EmberOutgoingMessageType type,", protos)
+        self.assertIn(
+            "EmberStatus emberAfPluginEzspZigbeeProSendUnicastCommandCallback(EmberOutgoingMessageType type,", protos
+        )
         self.assertIn("void emberAfEzspGetEui64CommandCallback(EmberEUI64 eui64);", protos)
         # The stack's own functions have their headers.
         self.assertNotIn("emberNetworkInit(", protos)

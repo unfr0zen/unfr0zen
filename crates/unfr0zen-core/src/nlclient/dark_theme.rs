@@ -10,14 +10,38 @@ const STOCK_SHA: &str = "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc3
 /// Each light screen's enter passes `0xffeff1e7` to the background layer's
 /// SetColor (0x17d838) as a `movw`/`movt r1` pair.
 const BACKGROUNDS: [(u32, u32); 32] = [
-    (0xa5f78, 0xa5f7c), (0xb0990, 0xb0994), (0xc53b4, 0xc53b8), (0xcbec8, 0xcbecc),
-    (0xd2368, 0xd236c), (0xd51a8, 0xd51ac), (0xdcc20, 0xdcc24), (0xdd750, 0xdd754),
-    (0xe16b0, 0xe16b4), (0xe3d6c, 0xe3d70), (0xe6af4, 0xe6af8), (0xe9a40, 0xe9a44),
-    (0xea09c, 0xea0a4), (0xfbcec, 0xfbcf0), (0x1018e0, 0x1018e4), (0x102fc0, 0x102fc4),
-    (0x116d70, 0x116d74), (0x116e50, 0x116e54), (0x119894, 0x119898), (0x123a44, 0x123a4c),
-    (0x12da28, 0x12da2c), (0x135e20, 0x135e24), (0x144bdc, 0x144be0), (0x14fb60, 0x14fb64),
-    (0x152de4, 0x152de8), (0x153530, 0x153534), (0x15eecc, 0x15eed0), (0x16d0c4, 0x16d0c8),
-    (0x174dc0, 0x174dc4), (0x193508, 0x19350c), (0x194740, 0x194744), (0x19a540, 0x19a544),
+    (0xa5f78, 0xa5f7c),
+    (0xb0990, 0xb0994),
+    (0xc53b4, 0xc53b8),
+    (0xcbec8, 0xcbecc),
+    (0xd2368, 0xd236c),
+    (0xd51a8, 0xd51ac),
+    (0xdcc20, 0xdcc24),
+    (0xdd750, 0xdd754),
+    (0xe16b0, 0xe16b4),
+    (0xe3d6c, 0xe3d70),
+    (0xe6af4, 0xe6af8),
+    (0xe9a40, 0xe9a44),
+    (0xea09c, 0xea0a4),
+    (0xfbcec, 0xfbcf0),
+    (0x1018e0, 0x1018e4),
+    (0x102fc0, 0x102fc4),
+    (0x116d70, 0x116d74),
+    (0x116e50, 0x116e54),
+    (0x119894, 0x119898),
+    (0x123a44, 0x123a4c),
+    (0x12da28, 0x12da2c),
+    (0x135e20, 0x135e24),
+    (0x144bdc, 0x144be0),
+    (0x14fb60, 0x14fb64),
+    (0x152de4, 0x152de8),
+    (0x153530, 0x153534),
+    (0x15eecc, 0x15eed0),
+    (0x16d0c4, 0x16d0c8),
+    (0x174dc0, 0x174dc4),
+    (0x193508, 0x19350c),
+    (0x194740, 0x194744),
+    (0x19a540, 0x19a544),
 ];
 
 const R0: u32 = 0;
@@ -32,9 +56,15 @@ const WHITE_R2: u32 = 0xe3e024ff; // mvn r2, #0xff000000
 const BLACK_R1: u32 = 0xe3a014ff; // mov r1, #0xff000000
 const BLACK_R12: u32 = 0xe3a0c4ff; // mov r12, #0xff000000
 
-fn movw(rd: u32, value: u32) -> u32 { 0xe3000000 | (value >> 12) << 16 | rd << 12 | value & 0xfff }
-fn movt(rd: u32, value: u32) -> u32 { 0xe3400000 | (value >> 12) << 16 | rd << 12 | value & 0xfff }
-fn store(rd: u32, slot: u32) -> u32 { 0xe5840000 | rd << 12 | slot }
+fn movw(rd: u32, value: u32) -> u32 {
+    0xe3000000 | (value >> 12) << 16 | rd << 12 | value & 0xfff
+}
+fn movt(rd: u32, value: u32) -> u32 {
+    0xe3400000 | (value >> 12) << 16 | rd << 12 | value & 0xfff
+}
+fn store(rd: u32, slot: u32) -> u32 {
+    0xe5840000 | rd << 12 | slot
+}
 
 /// A colour as the `movw`/`movt` pair at `low` and `high`.
 fn colour(low: u32, high: u32, rd: u32, argb: u32) -> [(u32, u32); 2] {
@@ -46,14 +76,35 @@ fn colour(low: u32, high: u32, rd: u32, argb: u32) -> [(u32, u32); 2] {
 fn palette() -> Vec<u32> {
     let mut code = vec![
         0xe1a05001, // mov r5, r1 (the fade, read after the alpha stores)
-        WHITE_R0, store(R0, 0x28), store(R0, 0x34), store(R0, 0x40), // text, pill text, field text
-        movw(R3, 0xc4c4), movt(R3, 0xffc4), store(R3, 0x2c), // secondary text
-        movw(R3, 0x9999), movt(R3, 0xff99), store(R3, 0x30),
-        movw(R3, 0x6666), movt(R3, 0xff66), store(R3, 0x38), store(R3, 0x54), // unselected, field outline
-        movw(R3, 0xa3d9), movt(R3, 0xff00), store(R3, 0x3c), store(R3, 0x50), store(R3, 0x5c), // selection, accent
-        movw(R3, 0x4157), movt(R3, 0xff00), store(R3, 0x44), // field being edited
-        BLACK_R12, store(R12, 0x48), store(R12, 0x4c), store(R12, 0x58), // field fills, dialog
-        movw(R3, 0xe0e0), movt(R3, 0xffe0), store(R3, 0x60),
+        WHITE_R0,
+        store(R0, 0x28),
+        store(R0, 0x34),
+        store(R0, 0x40), // text, pill text, field text
+        movw(R3, 0xc4c4),
+        movt(R3, 0xffc4),
+        store(R3, 0x2c), // secondary text
+        movw(R3, 0x9999),
+        movt(R3, 0xff99),
+        store(R3, 0x30),
+        movw(R3, 0x6666),
+        movt(R3, 0xff66),
+        store(R3, 0x38),
+        store(R3, 0x54), // unselected, field outline
+        movw(R3, 0xa3d9),
+        movt(R3, 0xff00),
+        store(R3, 0x3c),
+        store(R3, 0x50),
+        store(R3, 0x5c), // selection, accent
+        movw(R3, 0x4157),
+        movt(R3, 0xff00),
+        store(R3, 0x44), // field being edited
+        BLACK_R12,
+        store(R12, 0x48),
+        store(R12, 0x4c),
+        store(R12, 0x58), // field fills, dialog
+        movw(R3, 0xe0e0),
+        movt(R3, 0xffe0),
+        store(R3, 0x60),
     ];
     code.resize(31, NOP);
     code
@@ -64,15 +115,37 @@ fn palette() -> Vec<u32> {
 fn constructor() -> Vec<u32> {
     vec![
         store(R2, 0x68),
-        store(R1, 0x14), store(R1, 0x10), store(R1, 0x18), store(R1, 0x64),
-        store(R1, 0x1c), store(R1, 0x6c), store(R1, 0x24),
-        BLACK_R12, store(R12, 0x48), store(R12, 0x58),
-        WHITE_R1, store(R1, 0x28), store(R1, 0x34), store(R1, 0x40),
-        movw(R3, 0xc4c4), movt(R3, 0xffc4), store(R3, 0x2c),
-        movw(R3, 0x9999), movt(R3, 0xff99), store(R3, 0x30),
-        movw(R3, 0x6666), movt(R3, 0xff66), store(R3, 0x38), store(R3, 0x54),
-        movw(R3, 0xa3d9), movt(R3, 0xff00), store(R3, 0x3c), store(R3, 0x50),
-        movw(R3, 0x4157), movt(R3, 0xff00), store(R3, 0x44),
+        store(R1, 0x14),
+        store(R1, 0x10),
+        store(R1, 0x18),
+        store(R1, 0x64),
+        store(R1, 0x1c),
+        store(R1, 0x6c),
+        store(R1, 0x24),
+        BLACK_R12,
+        store(R12, 0x48),
+        store(R12, 0x58),
+        WHITE_R1,
+        store(R1, 0x28),
+        store(R1, 0x34),
+        store(R1, 0x40),
+        movw(R3, 0xc4c4),
+        movt(R3, 0xffc4),
+        store(R3, 0x2c),
+        movw(R3, 0x9999),
+        movt(R3, 0xff99),
+        store(R3, 0x30),
+        movw(R3, 0x6666),
+        movt(R3, 0xff66),
+        store(R3, 0x38),
+        store(R3, 0x54),
+        movw(R3, 0xa3d9),
+        movt(R3, 0xff00),
+        store(R3, 0x3c),
+        store(R3, 0x50),
+        movw(R3, 0x4157),
+        movt(R3, 0xff00),
+        store(R3, 0x44),
     ]
 }
 
@@ -88,7 +161,8 @@ fn edits() -> Vec<(u32, u32)> {
     // Equipment and Proview fade their background in from computed bytes:
     // the colour is cleared and only the alpha byte is inserted.
     for first in [0xbd50c, 0xfc4e4] {
-        edits.extend([(first, 0xe3a01000), (first + 8, NOP), (first + 16, NOP)]); // mov r1, #0
+        edits.extend([(first, 0xe3a01000), (first + 8, NOP), (first + 16, NOP)]);
+        // mov r1, #0
     }
     edits.extend(palette().into_iter().enumerate().map(|(i, code)| (0x2d7878 + 4 * i as u32, code)));
     edits.extend(constructor().into_iter().enumerate().map(|(i, code)| (0x2d7aec + 4 * i as u32, code)));
@@ -191,12 +265,17 @@ mod tests {
 
     #[test]
     fn edits_match_the_independent_golden() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-            "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"))).unwrap();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("UNFR0ZEN_ROOT"),
+            "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"
+        )))
+        .unwrap();
         assert_eq!(STOCK_SHA, golden["stock_sha256"].as_str().unwrap());
-        let hex = |value: &serde_json::Value| u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
-        let expected: Vec<(u32, u32)> = golden["edits"].as_array().unwrap().iter()
-            .map(|edit| (hex(&edit[0]), hex(&edit[2]))).collect();
+        let hex = |value: &serde_json::Value| {
+            u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
+        };
+        let expected: Vec<(u32, u32)> =
+            golden["edits"].as_array().unwrap().iter().map(|edit| (hex(&edit[0]), hex(&edit[2]))).collect();
         let mut emitted = edits();
         emitted.sort();
         let mut expected = expected;

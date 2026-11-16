@@ -6,7 +6,11 @@ local anim = {}
 local MAX_STEP = 0.1
 
 function anim.clamp(x, lo, hi)
-  if x < lo then return lo elseif x > hi then return hi end
+  if x < lo then
+    return lo
+  elseif x > hi then
+    return hi
+  end
   return x
 end
 

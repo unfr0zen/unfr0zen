@@ -49,10 +49,8 @@ const CLEAN_OOB: (usize, [u8; 8]) = (2, [0x85, 0x19, 0x03, 0x20, 0x08, 0x00, 0x0
 /// their name stands for meanwhile: nothing for nestlocal's, which a unit can
 /// always do without until the setup runs again, and the saved stock nlclient
 /// for nlclient's, without which it would have no screen.
-const REPLACED_IN_PLACE: [(&str, Option<&str>); 2] = [
-    ("nestlabs/sbin/nestlocal", None),
-    (crate::nlclient::BINARY, Some(crate::nlclient::ORIGINAL)),
-];
+const REPLACED_IN_PLACE: [(&str, Option<&str>); 2] =
+    [("nestlabs/sbin/nestlocal", None), (crate::nlclient::BINARY, Some(crate::nlclient::ORIGINAL))];
 const COMPR_NONE: u8 = 0x00;
 const COMPR_ZERO: u8 = 0x01;
 const COMPR_RTIME: u8 = 0x02;
@@ -98,7 +96,9 @@ fn rtime_decompress(data: &[u8], size: usize) -> Result<Vec<u8>> {
         let start = positions[value as usize];
         positions[value as usize] = out.len();
         for back in (start..).take(repeat as usize) {
-            let Some(&byte) = out.get(back) else { return device("bad rtime back-reference in JFFS2") };
+            let Some(&byte) = out.get(back) else {
+                return device("bad rtime back-reference in JFFS2");
+            };
             out.push(byte);
         }
     }
@@ -128,7 +128,8 @@ impl Inode {
             COMPR_ZERO => vec![0; size],
             COMPR_ZLIB => {
                 let mut out = Vec::with_capacity(size);
-                flate2::read::ZlibDecoder::new(&self.payload[..]).read_to_end(&mut out)
+                flate2::read::ZlibDecoder::new(&self.payload[..])
+                    .read_to_end(&mut out)
                     .map_err(|e| crate::Error::Device(format!("JFFS2 zlib data: {e}")))?;
                 out
             }
@@ -210,10 +211,26 @@ impl Slot {
             return device("the slot is not a whole number of erase blocks");
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
-        let mut slot = Slot { raw, bad: BTreeSet::new(), free: Vec::new(), inodes: BTreeMap::new(), dirents: BTreeMap::new(),
-                              max_version: BTreeMap::new(), next_ino: 2, blocks: Vec::new(), current: None, nodes: Vec::new(), now,
-                              held: BTreeMap::new(), erase: Vec::new(), erase_after: 0, always_make_room: false,
-                              rewrite: false, stand_in: None, out_of_room: false };
+        let mut slot = Slot {
+            raw,
+            bad: BTreeSet::new(),
+            free: Vec::new(),
+            inodes: BTreeMap::new(),
+            dirents: BTreeMap::new(),
+            max_version: BTreeMap::new(),
+            next_ino: 2,
+            blocks: Vec::new(),
+            current: None,
+            nodes: Vec::new(),
+            now,
+            held: BTreeMap::new(),
+            erase: Vec::new(),
+            erase_after: 0,
+            always_make_room: false,
+            rewrite: false,
+            stand_in: None,
+            out_of_room: false,
+        };
         for block in 0..slot.raw.len() / BLOCK_RAW {
             let chunk = &slot.raw[block * BLOCK_RAW..(block + 1) * BLOCK_RAW];
             if nand::factory_bad(chunk) {
@@ -226,8 +243,8 @@ impl Slot {
             }
             let mut data = Vec::with_capacity(BLOCK);
             for page in chunk.chunks(PAGE_RAW) {
-                let (corrected, _) = nand::correct_page(page)
-                    .map_err(|e| crate::Error::Device(format!("slot block {block}: {e}")))?;
+                let (corrected, _) =
+                    nand::correct_page(page).map_err(|e| crate::Error::Device(format!("slot block {block}: {e}")))?;
                 data.extend(corrected);
             }
             let held = slot.scan(&data);
@@ -241,7 +258,8 @@ impl Slot {
         let (mut held, mut at) = (Held::default(), 0);
         while at + 12 <= data.len() {
             let (magic, kind, total) = (u16_at(data, at), u16_at(data, at + 2), u32_at(data, at + 4) as usize);
-            if magic != MAGIC || crc(&data[at..at + 8]) != u32_at(data, at + 8) || total < 12 || at + total > data.len() {
+            if magic != MAGIC || crc(&data[at..at + 8]) != u32_at(data, at + 8) || total < 12 || at + total > data.len()
+            {
                 held.other |= data[at..at + 4] != [0xff; 4];
                 at += 4;
                 continue;
@@ -282,8 +300,16 @@ impl Slot {
         }
         let (ino, version) = (u32_at(node, 12), u32_at(node, 16));
         self.inodes.entry(ino).or_default().push(Inode {
-            version, mode: u32_at(node, 20), uid: u16_at(node, 24), gid: u16_at(node, 26), isize: u32_at(node, 28),
-            mtime: u32_at(node, 36), offset: u32_at(node, 44), dsize: u32_at(node, 52), compr: node[56], payload: payload.to_vec(),
+            version,
+            mode: u32_at(node, 20),
+            uid: u16_at(node, 24),
+            gid: u16_at(node, 26),
+            isize: u32_at(node, 28),
+            mtime: u32_at(node, 36),
+            offset: u32_at(node, 44),
+            dsize: u32_at(node, 52),
+            compr: node[56],
+            payload: payload.to_vec(),
         });
         self.note(ino, version);
         Some(ino)
@@ -291,7 +317,9 @@ impl Slot {
 
     fn add_dirent(&mut self, node: &[u8]) {
         let nsize = node[28] as usize;
-        let Some(name) = node.get(DIRENT_HEADER..DIRENT_HEADER + nsize) else { return };
+        let Some(name) = node.get(DIRENT_HEADER..DIRENT_HEADER + nsize) else {
+            return;
+        };
         if crc(&node[..DIRENT_HEADER - 8]) != u32_at(node, 32) || crc(name) != u32_at(node, 36) {
             return;
         }
@@ -350,7 +378,9 @@ impl Slot {
                 }
                 _ => {}
             }
-            let Some(ino) = self.child(*stack.last().unwrap(), &part) else { return Ok(None) };
+            let Some(ino) = self.child(*stack.last().unwrap(), &part) else {
+                return Ok(None);
+            };
             if self.mode(ino).is_some_and(|mode| mode & S_IFMT == S_IFLNK) && (follow || !pending.is_empty()) {
                 links += 1;
                 if links > 16 {
@@ -389,8 +419,10 @@ impl Slot {
         if self.current.is_none_or(|(_, used)| used + size > BLOCK) {
             if self.blocks.len() <= SPARE_BLOCKS {
                 self.out_of_room = true;
-                return device(format!("the slot has too few erased blocks left: {}, of which {SPARE_BLOCKS} stay free",
-                                      self.free.len()));
+                return device(format!(
+                    "the slot has too few erased blocks left: {}, of which {SPARE_BLOCKS} stay free",
+                    self.free.len()
+                ));
             }
             self.current = Some((self.blocks.remove(0), 0));
         }
@@ -423,8 +455,13 @@ impl Slot {
     /// or to nothing, then frees the blocks holding nothing but `old`'s
     /// nodes, to be erased once what was placed before is programmed.
     fn make_room(&mut self, parent: u32, base: &str, old: u32, stand_in: Option<u32>) -> Result<()> {
-        let dead: Vec<usize> = self.held.iter().filter(|(_, held)| !held.other && held.inodes == BTreeSet::from([old]))
-            .map(|(&block, _)| block).filter(|block| !self.erase.contains(block)).collect();
+        let dead: Vec<usize> = self
+            .held
+            .iter()
+            .filter(|(_, held)| !held.other && held.inodes == BTreeSet::from([old]))
+            .map(|(&block, _)| block)
+            .filter(|block| !self.erase.contains(block))
+            .collect();
         if dead.is_empty() {
             return Ok(());
         }
@@ -451,7 +488,15 @@ impl Slot {
         self.place(node)
     }
 
-    fn inode_node(&mut self, ino: u32, mode: u32, (uid, gid): (u16, u16), isize: usize, offset: usize, data: &[u8]) -> Result<Vec<u8>> {
+    fn inode_node(
+        &mut self,
+        ino: u32,
+        mode: u32,
+        (uid, gid): (u16, u16),
+        isize: usize,
+        offset: usize,
+        data: &[u8],
+    ) -> Result<Vec<u8>> {
         let (mut payload, mut compr) = (data.to_vec(), COMPR_NONE);
         if !data.is_empty() {
             let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
@@ -472,7 +517,8 @@ impl Slot {
         }
         node.extend(uid.to_le_bytes());
         node.extend(gid.to_le_bytes());
-        for word in [isize as u32, self.now, self.now, self.now, offset as u32, payload.len() as u32, data.len() as u32] {
+        for word in [isize as u32, self.now, self.now, self.now, offset as u32, payload.len() as u32, data.len() as u32]
+        {
             node.extend(word.to_le_bytes());
         }
         node.extend([compr, 0, 0, 0]);
@@ -527,8 +573,7 @@ impl Slot {
         let ino = self.next_ino;
         self.next_ino += 1;
         self.inode(ino, S_IFDIR | mode, (0, 0), 0, 0, &[])?;
-        self.dirent(parent, base, ino, DT_DIR)
-            .map(|_| ino)
+        self.dirent(parent, base, ino, DT_DIR).map(|_| ino)
     }
 
     /// How to program the new nodes (data and ECC): their pages in the order
@@ -553,7 +598,8 @@ impl Slot {
                 if !pages.contains_key(&page) {
                     // A block erased to make room takes its pages after the
                     // erase, whichever write placed them there.
-                    if index < self.erase_after && !self.erase.contains(block) { &mut before } else { &mut after }.push(page);
+                    if index < self.erase_after && !self.erase.contains(block) { &mut before } else { &mut after }
+                        .push(page);
                 }
                 let data = pages.entry(page).or_insert_with(|| vec![0xff; PAGE]);
                 let (lo, hi) = (start.max(page * PAGE), (start + node.len()).min((page + 1) * PAGE));
@@ -592,11 +638,26 @@ impl Slot {
     /// written afresh with its inode number, owner, mode and time.
     fn compacted(&self) -> Result<Slot> {
         let usable: Vec<usize> = (0..self.raw.len() / BLOCK_RAW).filter(|block| !self.bad.contains(block)).collect();
-        let mut out = Slot { raw: self.raw.clone(), bad: self.bad.clone(), free: usable.clone(), inodes: BTreeMap::new(),
-                             dirents: BTreeMap::new(), max_version: BTreeMap::new(), next_ino: self.next_ino,
-                             blocks: usable.clone(), current: None, nodes: Vec::new(), now: self.now, held: BTreeMap::new(),
-                             erase: usable, erase_after: 0, always_make_room: false, rewrite: false, stand_in: None,
-                             out_of_room: false };
+        let mut out = Slot {
+            raw: self.raw.clone(),
+            bad: self.bad.clone(),
+            free: usable.clone(),
+            inodes: BTreeMap::new(),
+            dirents: BTreeMap::new(),
+            max_version: BTreeMap::new(),
+            next_ino: self.next_ino,
+            blocks: usable.clone(),
+            current: None,
+            nodes: Vec::new(),
+            now: self.now,
+            held: BTreeMap::new(),
+            erase: usable,
+            erase_after: 0,
+            always_make_room: false,
+            rewrite: false,
+            stand_in: None,
+            out_of_room: false,
+        };
         let (mut pending, mut written) = (vec![ROOT], BTreeSet::new());
         while let Some(ino) = pending.pop() {
             if !written.insert(ino) {
@@ -647,7 +708,9 @@ impl Slot {
 
 impl Volume for Slot {
     fn read(&mut self, name: &str) -> Result<Option<File<Vec<u8>>>> {
-        let Some(ino) = self.lookup(name, false)? else { return Ok(None) };
+        let Some(ino) = self.lookup(name, false)? else {
+            return Ok(None);
+        };
         match self.mode(ino) {
             Some(mode) if mode & S_IFMT == S_IFLNK => device(format!("{name} on the device is a symbolic link")),
             Some(mode) if mode & S_IFMT == S_IFREG => {
@@ -663,7 +726,9 @@ impl Volume for Slot {
     }
 
     fn directory(&mut self, name: &str) -> Result<Option<String>> {
-        let Some(ino) = self.lookup(name, false)? else { return Ok(None) };
+        let Some(ino) = self.lookup(name, false)? else {
+            return Ok(None);
+        };
         match self.mode(ino) {
             Some(mode) if mode & S_IFMT == S_IFDIR => {
                 let (owner, mode) = self.owner_mode(ino);
@@ -704,7 +769,8 @@ impl Volume for Slot {
 
     fn write(&mut self, name: &str, data: &[u8], owner: &str, mode: u32) -> Result<()> {
         let parse = |id: &str| id.parse::<u16>().map_err(|_| crate::Error::Device(format!("{name}: owner {owner:?}")));
-        let (uid, gid) = owner.split_once(':').ok_or_else(|| crate::Error::Device(format!("{name}: owner {owner:?}")))?;
+        let (uid, gid) =
+            owner.split_once(':').ok_or_else(|| crate::Error::Device(format!("{name}: owner {owner:?}")))?;
         let ids = (parse(uid)?, parse(gid)?);
         let (parent, base) = Self::split(name);
         let parent = self.ensure_directory(parent, 0o755, false)?;
@@ -728,8 +794,10 @@ impl Volume for Slot {
             // nlclient's stock copy, root's, may stand in; without it the old
             // copy stays.
             let stand_in = match stand_in {
-                Some(path) => self.lookup(path, false)?
-                    .filter(|&ino| ino != old && regular(self, ino) && self.owner_mode(ino).0 == "0:0").map(Some),
+                Some(path) => self
+                    .lookup(path, false)?
+                    .filter(|&ino| ino != old && regular(self, ino) && self.owner_mode(ino).0 == "0:0")
+                    .map(Some),
                 None => Some(None),
             };
             if let Some(stand_in) = stand_in.filter(|_| self.always_make_room || !self.fits(&nodes, base)) {
@@ -753,7 +821,9 @@ impl Volume for Slot {
 
     fn remove(&mut self, name: &str) -> Result<()> {
         let (parent, base) = Self::split(name);
-        let Some(parent) = self.lookup(parent, true)? else { return Ok(()) };
+        let Some(parent) = self.lookup(parent, true)? else {
+            return Ok(());
+        };
         if self.child(parent, base).is_some() {
             self.dirent(parent, base, 0, 0)?;
         }
@@ -767,11 +837,19 @@ impl Volume for Slot {
     /// Read back from the slot as programmed, through a fresh scan.
     fn digests(&mut self, names: &[String]) -> Result<Digests> {
         let mut check = Slot::load(self.programmed()?.raw)?;
-        names.iter().map(|name| {
-            let found = check.read(name)?;
-            Ok((name.clone(), (found.as_ref().map(|(_, _, data)| sha256_hex(data)),
-                               found.map(|(owner, mode, _)| format!("{owner} {mode:o}")))))
-        }).collect()
+        names
+            .iter()
+            .map(|name| {
+                let found = check.read(name)?;
+                Ok((
+                    name.clone(),
+                    (
+                        found.as_ref().map(|(_, _, data)| sha256_hex(data)),
+                        found.map(|(owner, mode, _)| format!("{owner} {mode:o}")),
+                    ),
+                ))
+            })
+            .collect()
     }
 }
 
@@ -783,9 +861,16 @@ pub(crate) mod tests {
     fn lzo_inodes_require_complete_data_of_the_declared_size() {
         let raw = b"JFFS2 LZO compatibility block\n".repeat(64);
         let mut inode = Inode {
-            version: 1, mode: S_IFREG | 0o644, uid: 0, gid: 0,
-            isize: raw.len() as u32, mtime: 0, offset: 0, dsize: raw.len() as u32,
-            compr: COMPR_LZO, payload: lzokay::compress::compress(&raw).unwrap(),
+            version: 1,
+            mode: S_IFREG | 0o644,
+            uid: 0,
+            gid: 0,
+            isize: raw.len() as u32,
+            mtime: 0,
+            offset: 0,
+            dsize: raw.len() as u32,
+            compr: COMPR_LZO,
+            payload: lzokay::compress::compress(&raw).unwrap(),
         };
         assert_eq!(inode.data().unwrap(), raw);
         for size in [raw.len() - 1, raw.len() + 1] {
@@ -834,7 +919,12 @@ pub(crate) mod tests {
         let mut slot = reload(&slot);
         let old = slot.lookup("etc/x", false).unwrap().unwrap();
         let mut x = 7u32;
-        let noise: Vec<u8> = (0..7000).map(|_| { x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345); (x >> 16) as u8 }).collect();
+        let noise: Vec<u8> = (0..7000)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (x >> 16) as u8
+            })
+            .collect();
         slot.write("etc/x", &noise, "0:0", 0o600).unwrap();
         assert_ne!(slot.lookup("etc/x", false).unwrap(), Some(old));
         let mut back = reload(&slot);
@@ -882,18 +972,27 @@ pub(crate) mod tests {
     fn spare_blocks_stay_erased() {
         let mut slot = empty(SPARE_BLOCKS + 2);
         let mut x = 1u32;
-        let noise: Vec<u8> = (0..3 * BLOCK).map(|_| {
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            x as u8
-        }).collect();
+        let noise: Vec<u8> = (0..3 * BLOCK)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x as u8
+            })
+            .collect();
         let error = slot.write("big", &noise, "0:0", 0o644).unwrap_err();
         assert!(error.to_string().contains("too few erased blocks"), "{error}");
     }
 
     fn noise(len: usize, mut x: u32) -> Vec<u8> {
-        (0..len).map(|_| { x ^= x << 13; x ^= x >> 17; x ^= x << 5; x as u8 }).collect()
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                x as u8
+            })
+            .collect()
     }
 
     #[test]
@@ -934,8 +1033,10 @@ pub(crate) mod tests {
         };
         let new = noise(BLOCK * 9 / 5, 2);
         let mut alone = build(false);
-        assert!(alone.write(crate::nlclient::BINARY, &new, "0:0", 0o755).is_err(),
-                "without the stock copy, the old nlclient stays");
+        assert!(
+            alone.write(crate::nlclient::BINARY, &new, "0:0", 0o755).is_err(),
+            "without the stock copy, the old nlclient stays"
+        );
         let mut slot = build(true);
         slot.write(crate::nlclient::BINARY, &new, "0:0", 0o755).unwrap();
         let plan = slot.programmed().unwrap();
@@ -947,7 +1048,8 @@ pub(crate) mod tests {
         // Cut short after the erase: nlclient names the stock copy, executable.
         let mut cut = slot.raw.clone();
         for &page in &plan.before {
-            cut[page * PAGE_RAW..(page + 1) * PAGE_RAW].copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
+            cut[page * PAGE_RAW..(page + 1) * PAGE_RAW]
+                .copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
         }
         for &block in &plan.erase {
             cut[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff);
@@ -974,15 +1076,26 @@ pub(crate) mod tests {
         let plan = slot.programmed().unwrap();
         assert!(plan.erase.len() >= 2, "both old copies' blocks are reclaimed: {:?}", plan.erase);
         for &page in &plan.before {
-            assert!(!plan.erase.contains(&(page / PAGES_PER_BLOCK)), "page {page} is programmed before its block's erase");
+            assert!(
+                !plan.erase.contains(&(page / PAGES_PER_BLOCK)),
+                "page {page} is programmed before its block's erase"
+            );
         }
         // As the unit programs it: the pages before, the erase, the pages after.
         let mut nand = slot.raw.clone();
-        let copy = |nand: &mut Vec<u8>, page: usize| nand[page * PAGE_RAW..(page + 1) * PAGE_RAW]
-            .copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW]);
-        for &page in &plan.before { copy(&mut nand, page); }
-        for &block in &plan.erase { nand[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff); }
-        for &page in &plan.after { copy(&mut nand, page); }
+        let copy = |nand: &mut Vec<u8>, page: usize| {
+            nand[page * PAGE_RAW..(page + 1) * PAGE_RAW]
+                .copy_from_slice(&plan.raw[page * PAGE_RAW..(page + 1) * PAGE_RAW])
+        };
+        for &page in &plan.before {
+            copy(&mut nand, page);
+        }
+        for &block in &plan.erase {
+            nand[block * BLOCK_RAW..(block + 1) * BLOCK_RAW].fill(0xff);
+        }
+        for &page in &plan.after {
+            copy(&mut nand, page);
+        }
         let mut back = Slot::load(nand).unwrap();
         assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, nestlocal);
         assert_eq!(back.read(crate::nlclient::BINARY).unwrap().unwrap().2, nlclient);
@@ -1023,7 +1136,10 @@ pub(crate) mod tests {
         assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, new);
         assert_eq!(back.read("etc/log").unwrap().unwrap().2, noise(BLOCK / 2, 5));
         for i in 0..5 {
-            assert_eq!(back.read(&format!("etc/keep{i}")).unwrap(), Some(("1:2".into(), 0o640, format!("{i}").into_bytes())));
+            assert_eq!(
+                back.read(&format!("etc/keep{i}")).unwrap(),
+                Some(("1:2".into(), 0o640, format!("{i}").into_bytes()))
+            );
         }
         assert_eq!(back.read("etc/link").unwrap_err().to_string(), "etc/link on the device is a symbolic link");
         assert_eq!(back.lookup("etc/link", true).unwrap(), back.lookup("etc/keep3", false).unwrap());

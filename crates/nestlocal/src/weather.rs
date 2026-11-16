@@ -144,9 +144,9 @@ impl Outdoor {
     pub fn answer(&self) -> Option<Fields> {
         let s = self.state.lock().unwrap();
         let (temp, humidity) = (s.temp?, s.humidity?);
-        let mut current = fields!{"temp_c" => num(temp), "humidity" => num(humidity.round())};
+        let mut current = fields! {"temp_c" => num(temp), "humidity" => num(humidity.round())};
         current.extend(s.current.clone());
-        let mut answer = fields!{"current" => Value::Object(current)};
+        let mut answer = fields! {"current" => Value::Object(current)};
         if !s.forecast.is_empty() {
             answer.insert("forecast".into(), Value::Object(s.forecast.clone()));
         }
@@ -183,19 +183,30 @@ impl Outdoor {
             current.insert("sunset".into(), setting.timestamp().into());
         }
 
-        let hourly: Vec<Value> = w.hourly.iter().flatten().take(48).enumerate().map(|(i, f)| {
-            let mut h = fields!{"hour" => i + 1, "time" => unix(f.datetime)};
-            put(&mut h, "temp_c", f.temperature);
-            put(&mut h, "humidity", f.humidity);
-            Value::Object(h)
-        }).collect();
-        let daily: Vec<Value> = days(w.daily.as_deref().unwrap_or_default()).into_iter().take(6).map(|f| {
-            let mut d = fields!{"date" => unix(f.datetime)};
-            put(&mut d, "temp_high_c", f.temperature);
-            put(&mut d, "temp_low_c", f.templow);
-            put(&mut d, "humidity", f.humidity);
-            Value::Object(d)
-        }).collect();
+        let hourly: Vec<Value> = w
+            .hourly
+            .iter()
+            .flatten()
+            .take(48)
+            .enumerate()
+            .map(|(i, f)| {
+                let mut h = fields! {"hour" => i + 1, "time" => unix(f.datetime)};
+                put(&mut h, "temp_c", f.temperature);
+                put(&mut h, "humidity", f.humidity);
+                Value::Object(h)
+            })
+            .collect();
+        let daily: Vec<Value> = days(w.daily.as_deref().unwrap_or_default())
+            .into_iter()
+            .take(6)
+            .map(|f| {
+                let mut d = fields! {"date" => unix(f.datetime)};
+                put(&mut d, "temp_high_c", f.temperature);
+                put(&mut d, "temp_low_c", f.templow);
+                put(&mut d, "humidity", f.humidity);
+                Value::Object(d)
+            })
+            .collect();
         let mut forecast = Fields::new();
         if !hourly.is_empty() {
             forecast.insert("hourly".into(), Value::Array(hourly));
@@ -217,23 +228,36 @@ mod tests {
     use serde_json::json;
 
     fn forecast(datetime: &str, temperature: f64, is_daytime: Option<bool>) -> HAForecast {
-        HAForecast { datetime: DateTime::parse_from_rfc3339(datetime).ok(), temperature: Some(temperature),
-                     templow: None, humidity: None, is_daytime }
+        HAForecast {
+            datetime: DateTime::parse_from_rfc3339(datetime).ok(),
+            temperature: Some(temperature),
+            templow: None,
+            humidity: None,
+            is_daytime,
+        }
     }
 
     #[test]
     fn twice_daily_folds_into_days() {
         let lows = |list: &[HAForecast]| days(list).iter().map(|d| (d.temperature, d.templow)).collect::<Vec<_>>();
         // Starting at night: that half is no day, and is dropped.
-        assert_eq!(lows(&[
-            forecast("2026-09-29T18:00:00-04:00", 15.0, Some(false)),
-            forecast("2026-09-30T06:00:00-04:00", 27.8, Some(true)),
-            forecast("2026-09-30T18:00:00-04:00", 16.5, Some(false)),
-            forecast("2026-10-01T06:00:00-04:00", 25.0, Some(true)),
-        ]), vec![(Some(27.8), Some(16.5)), (Some(25.0), None)]);
+        assert_eq!(
+            lows(&[
+                forecast("2026-09-29T18:00:00-04:00", 15.0, Some(false)),
+                forecast("2026-09-30T06:00:00-04:00", 27.8, Some(true)),
+                forecast("2026-09-30T18:00:00-04:00", 16.5, Some(false)),
+                forecast("2026-10-01T06:00:00-04:00", 25.0, Some(true)),
+            ]),
+            vec![(Some(27.8), Some(16.5)), (Some(25.0), None)]
+        );
         // Two days running: the first takes no low from the second.
-        assert_eq!(lows(&[forecast("2026-09-30T06:00:00Z", 20.0, Some(true)), forecast("2026-10-01T06:00:00Z", 21.0, Some(true))]),
-                   vec![(Some(20.0), None), (Some(21.0), None)]);
+        assert_eq!(
+            lows(&[
+                forecast("2026-09-30T06:00:00Z", 20.0, Some(true)),
+                forecast("2026-10-01T06:00:00Z", 21.0, Some(true))
+            ]),
+            vec![(Some(20.0), None), (Some(21.0), None)]
+        );
         // A daily list, templow and all, passes as it is.
         let mut daily = forecast("2026-09-30T00:00:00Z", 20.0, None);
         daily.templow = Some(9.0);
@@ -243,8 +267,10 @@ mod tests {
     #[test]
     fn forecasts_are_cut_to_what_the_unit_reads() {
         let o = Outdoor::default();
-        let hours: Vec<_> = (0..60).map(|h| forecast(&format!("2026-09-29T{:02}:00:00Z", h % 24), f64::from(h), None)).collect();
-        let days_list: Vec<_> = (1..=9).map(|d| forecast(&format!("2026-10-0{d}T12:00:00Z"), f64::from(d), None)).collect();
+        let hours: Vec<_> =
+            (0..60).map(|h| forecast(&format!("2026-09-29T{:02}:00:00Z", h % 24), f64::from(h), None)).collect();
+        let days_list: Vec<_> =
+            (1..=9).map(|d| forecast(&format!("2026-10-0{d}T12:00:00Z"), f64::from(d), None)).collect();
         o.set_weather(&HAWeather { hourly: Some(hours), daily: Some(days_list), ..Default::default() });
         o.set(Some(10.0), Some(50.0));
         let a = Value::Object(o.answer().unwrap());
@@ -257,8 +283,11 @@ mod tests {
         assert!(a["current"].get("sunrise").is_none() && a["current"].get("icon").is_none());
 
         // The next set/weather replaces the last: no forecast, no forecast key.
-        o.set_weather(&HAWeather { condition: "pouring".into(),
-            next_rising: DateTime::parse_from_rfc3339("2026-09-30T11:00:00Z").ok(), ..Default::default() });
+        o.set_weather(&HAWeather {
+            condition: "pouring".into(),
+            next_rising: DateTime::parse_from_rfc3339("2026-09-30T11:00:00Z").ok(),
+            ..Default::default()
+        });
         let a = o.answer().unwrap();
         assert!(a.get("forecast").is_none());
         assert_eq!(Value::Object(a), json!({"current": {"temp_c": 10, "humidity": 50, "icon": "rain"}}));
@@ -280,9 +309,15 @@ mod tests {
         let o = Outdoor::default();
         assert!(o.known().is_empty());
         o.set(Some(7.5), None);
-        o.set_weather(&HAWeather { condition: "rainy".into(), hourly: Some(vec![forecast("2026-11-14T15:00:00+00:00", 8.0, None)]),
-                                   ..Default::default() });
-        assert_eq!(Value::Object(o.known()), json!({"temp_c": 7.5, "icon": "rain", "condition": "rainy",
-            "forecast": {"hourly": [{"hour": 1, "time": 1_794_668_400, "temp_c": 8}]}}));
+        o.set_weather(&HAWeather {
+            condition: "rainy".into(),
+            hourly: Some(vec![forecast("2026-11-14T15:00:00+00:00", 8.0, None)]),
+            ..Default::default()
+        });
+        assert_eq!(
+            Value::Object(o.known()),
+            json!({"temp_c": 7.5, "icon": "rain", "condition": "rainy",
+            "forecast": {"hourly": [{"hour": 1, "time": 1_794_668_400, "temp_c": 8}]}})
+        );
     }
 }

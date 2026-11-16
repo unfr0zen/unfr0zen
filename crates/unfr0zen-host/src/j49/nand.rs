@@ -76,8 +76,13 @@ fn at_block(progress: &mut dyn Progress, nand: &dyn Nand, block: usize) {
 
 /// Runs `step` on each chunk of blocks but those `kept` from an earlier run,
 /// logging each chunk's time.
-fn each_chunk(nand: &mut dyn Nand, progress: &mut dyn Progress, verb: &str, kept: impl Fn(usize) -> bool,
-              mut step: impl FnMut(&mut dyn Nand, &mut dyn Progress, usize, usize) -> Result<()>) -> Result<()> {
+fn each_chunk(
+    nand: &mut dyn Nand,
+    progress: &mut dyn Progress,
+    verb: &str,
+    kept: impl Fn(usize) -> bool,
+    mut step: impl FnMut(&mut dyn Nand, &mut dyn Progress, usize, usize) -> Result<()>,
+) -> Result<()> {
     let blocks = blocks(nand);
     let total = (blocks * BLOCK_RAW) as u64;
     stage_with(progress, &format!("{verb} NAND"), |progress| {
@@ -89,7 +94,11 @@ fn each_chunk(nand: &mut dyn Nand, progress: &mut dyn Progress, verb: &str, kept
             }
             let started = Instant::now();
             step(nand, progress, first, count)?;
-            log::info!("{verb} NAND: blocks {first}-{} of {blocks} ({:.1}s)", first + count - 1, started.elapsed().as_secs_f64());
+            log::info!(
+                "{verb} NAND: blocks {first}-{} of {blocks} ({:.1}s)",
+                first + count - 1,
+                started.elapsed().as_secs_f64()
+            );
         }
         progress.transfer(total, 0, total);
         Ok(())
@@ -119,33 +128,46 @@ fn backup(nand: &mut dyn Nand, progress: &mut dyn Progress, out: &Path, parts: &
     file(parts, fs::create_dir_all(parts))?;
     let part = |first: usize| parts.join(format!("{first:05}.raw"));
     let (mut bad, mut unstable) = (0, 0);
-    each_chunk(nand, progress, "Back up", |first| part(first).exists(), |nand, progress, first, count| {
-        let mut data = Vec::with_capacity(count * BLOCK_RAW);
-        for block in first..first + count {
-            at_block(progress, nand, block);
-            let (raw, stable) = stable_block(nand, block)?;
-            if nand::factory_bad(&raw) {
-                bad += 1;
-            } else if !stable {
-                unstable += 1;
-                log::warn!("block {block}: no two raw reads agreed, nor did the ECC find it clean; the first is kept");
+    each_chunk(
+        nand,
+        progress,
+        "Back up",
+        |first| part(first).exists(),
+        |nand, progress, first, count| {
+            let mut data = Vec::with_capacity(count * BLOCK_RAW);
+            for block in first..first + count {
+                at_block(progress, nand, block);
+                let (raw, stable) = stable_block(nand, block)?;
+                if nand::factory_bad(&raw) {
+                    bad += 1;
+                } else if !stable {
+                    unstable += 1;
+                    log::warn!(
+                        "block {block}: no two raw reads agreed, nor did the ECC find it clean; the first is kept"
+                    );
+                }
+                data.extend(raw);
             }
-            data.extend(raw);
-        }
-        let partial = part(first).with_extension("tmp");
-        file(&partial, fs::write(&partial, &data))?;
-        file(&part(first), fs::rename(&partial, part(first)))
-    })?;
+            let partial = part(first).with_extension("tmp");
+            file(&partial, fs::write(&partial, &data))?;
+            file(&part(first), fs::rename(&partial, part(first)))
+        },
+    )?;
     let partial = out.with_extension("tmp");
-    let mut names: Vec<_> = file(parts, fs::read_dir(parts))?.filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "raw")).collect();
+    let mut names: Vec<_> = file(parts, fs::read_dir(parts))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "raw"))
+        .collect();
     names.sort();
-    file(&partial, File::create(&partial).and_then(|mut image| {
-        for name in &names {
-            io::copy(&mut File::open(name)?, &mut image)?;
-        }
-        Ok(())
-    }))?;
+    file(
+        &partial,
+        File::create(&partial).and_then(|mut image| {
+            for name in &names {
+                io::copy(&mut File::open(name)?, &mut image)?;
+            }
+            Ok(())
+        }),
+    )?;
     file(out, fs::rename(&partial, out))?;
     Ok((bad, unstable))
 }
@@ -153,8 +175,12 @@ fn backup(nand: &mut dyn Nand, progress: &mut dyn Progress, out: &Path, parts: &
 /// Backs the whole NAND up to `out`, with its SHA-256 beside it, each listed
 /// in `kept` once written; the flasher stays loaded for what follows.
 /// Returns the status line.
-pub(crate) fn back_up_whole(nand: &mut dyn Nand, progress: &mut dyn Progress, out: &Path, kept: &mut HandBack)
-                            -> Result<String> {
+pub(crate) fn back_up_whole(
+    nand: &mut dyn Nand,
+    progress: &mut dyn Progress,
+    out: &Path,
+    kept: &mut HandBack,
+) -> Result<String> {
     let parts = out.with_extension("parts");
     kept.0.push(parts.clone());
     let (bad, unstable) = backup(nand, progress, out, &parts)?;
@@ -170,29 +196,46 @@ pub(crate) fn back_up_whole(nand: &mut dyn Nand, progress: &mut dyn Progress, ou
 }
 
 fn verify(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path) -> Result<()> {
-    each_chunk(nand, progress, "Verify", |_| false, |nand, progress, first, count| {
-        for block in first..first + count {
-            at_block(progress, nand, block);
-            let expected = read_at(image, (block * BLOCK_RAW) as u64, BLOCK_RAW)?;
-            let actual = nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?;
-            if let Some(index) = differing_page(&expected, &actual) {
-                return Err(failure(format!("NAND page {} differs from the image", block * PAGES_PER_BLOCK + index)));
+    each_chunk(
+        nand,
+        progress,
+        "Verify",
+        |_| false,
+        |nand, progress, first, count| {
+            for block in first..first + count {
+                at_block(progress, nand, block);
+                let expected = read_at(image, (block * BLOCK_RAW) as u64, BLOCK_RAW)?;
+                let actual = nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?;
+                if let Some(index) = differing_page(&expected, &actual) {
+                    return Err(failure(format!(
+                        "NAND page {} differs from the image",
+                        block * PAGES_PER_BLOCK + index
+                    )));
+                }
             }
-        }
-        Ok(())
-    })
+            Ok(())
+        },
+    )
 }
 
 /// Writes `image` back (see the module's description); `confirm` is asked
 /// once everything is checked and before anything is erased. Returns how
 /// many blocks were written.
-fn restore(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path,
-           confirm: &mut dyn FnMut(&str) -> bool) -> Result<usize> {
+fn restore(
+    nand: &mut dyn Nand,
+    progress: &mut dyn Progress,
+    image: &Path,
+    confirm: &mut dyn FnMut(&str) -> bool,
+) -> Result<usize> {
     let blocks = blocks(nand);
     let len = file(image, fs::metadata(image))?.len();
     if len != (blocks * BLOCK_RAW) as u64 {
-        return Err(failure(format!("{} is a {} MiB NAND's image; this unit has the {}", image.display(),
-                                   (len / PAGE_RAW as u64 * nand::PAGE as u64) >> 20, nand.chip())));
+        return Err(failure(format!(
+            "{} is a {} MiB NAND's image; this unit has the {}",
+            image.display(),
+            (len / PAGE_RAW as u64 * nand::PAGE as u64) >> 20,
+            nand.chip()
+        )));
     }
     // Erasing a factory-bad block would lose its marker; one bad in the image
     // only, or on the chip only, is not this chip's backup or cannot hold it.
@@ -209,51 +252,73 @@ fn restore(nand: &mut dyn Nand, progress: &mut dyn Progress, image: &Path,
         Ok(differ)
     })?;
     if !differ.is_empty() {
-        return Err(failure(format!("bad blocks {differ:?} differ between the chip and {}: it is not this unit's \
-                                    backup, or a block has gone bad since; NAND untouched", image.display())));
+        return Err(failure(format!(
+            "bad blocks {differ:?} differ between the chip and {}: it is not this unit's \
+                                    backup, or a block has gone bad since; NAND untouched",
+            image.display()
+        )));
     }
     if !confirm(&format!("Erase and write the whole NAND ({}) from {}", nand.chip(), image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
     nand.unlock()?;
     let mut written = 0;
-    each_chunk(nand, progress, "Restore", |_| false, |nand, progress, first, count| {
-        for block in first..first + count {
-            at_block(progress, nand, block);
-            let want = read_at(image, (block * BLOCK_RAW) as u64, BLOCK_RAW)?;
-            if nand::factory_bad(&want) || differing_page(&want, &nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?).is_none() {
-                continue;
-            }
-            match nand.erase(block)? {
-                0 => {}
-                status => return Err(failure(format!("erasing block {block}: {}", flasher::status_text(status)))),
-            }
-            for (index, raw) in want.chunks(PAGE_RAW).enumerate() {
-                // Blank pages stay erased; any other is programmed whole, so
-                // a JFFS2 clean marker in the OOB comes back too.
-                if raw.iter().all(|&b| b == 0xff) {
+    each_chunk(
+        nand,
+        progress,
+        "Restore",
+        |_| false,
+        |nand, progress, first, count| {
+            for block in first..first + count {
+                at_block(progress, nand, block);
+                let want = read_at(image, (block * BLOCK_RAW) as u64, BLOCK_RAW)?;
+                if nand::factory_bad(&want)
+                    || differing_page(&want, &nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?).is_none()
+                {
                     continue;
                 }
-                let page = block * PAGES_PER_BLOCK + index;
-                match nand.program(page, raw)? {
+                match nand.erase(block)? {
                     0 => {}
-                    status => return Err(failure(format!("programming page {page}: {}", flasher::status_text(status)))),
+                    status => return Err(failure(format!("erasing block {block}: {}", flasher::status_text(status)))),
                 }
+                for (index, raw) in want.chunks(PAGE_RAW).enumerate() {
+                    // Blank pages stay erased; any other is programmed whole, so
+                    // a JFFS2 clean marker in the OOB comes back too.
+                    if raw.iter().all(|&b| b == 0xff) {
+                        continue;
+                    }
+                    let page = block * PAGES_PER_BLOCK + index;
+                    match nand.program(page, raw)? {
+                        0 => {}
+                        status => {
+                            return Err(failure(format!("programming page {page}: {}", flasher::status_text(status))))
+                        }
+                    }
+                }
+                if let Some(index) = differing_page(&want, &nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?) {
+                    return Err(failure(format!(
+                        "page {} reads back different after its restore",
+                        block * PAGES_PER_BLOCK + index
+                    )));
+                }
+                written += 1;
             }
-            if let Some(index) = differing_page(&want, &nand.read(block * PAGES_PER_BLOCK, PAGES_PER_BLOCK)?) {
-                return Err(failure(format!("page {} reads back different after its restore", block * PAGES_PER_BLOCK + index)));
-            }
-            written += 1;
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     Ok(written)
 }
 
 /// Runs the job and restarts the unit after, on failure too. `confirm` is
 /// asked before a restore writes anything.
-pub(crate) fn run(job: &Job, unit: Unit, wait_usb: Duration, progress: &mut dyn Progress,
-                  confirm: &mut dyn FnMut(&str) -> bool, cancel: &super::CancelFlag) -> Result<String> {
+pub(crate) fn run(
+    job: &Job,
+    unit: Unit,
+    wait_usb: Duration,
+    progress: &mut dyn Progress,
+    confirm: &mut dyn FnMut(&str) -> bool,
+    cancel: &super::CancelFlag,
+) -> Result<String> {
     let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
     let usb = unit.device;
     let (port, _) = find_unit(progress, wait_usb, unit, cancel)?;
@@ -309,12 +374,24 @@ mod tests {
             }
             Ok(data)
         }
-        fn program(&mut self, page: usize, raw: &[u8]) -> Result<u32> { self.image.program(page, raw) }
-        fn erase(&mut self, block: usize) -> Result<u32> { self.image.erase(block) }
-        fn unlock(&mut self) -> Result<()> { self.image.unlock() }
-        fn reset(&mut self) -> Result<()> { Ok(()) }
-        fn chip(&self) -> &str { "flaky" }
-        fn size(&self) -> u64 { self.image.size() }
+        fn program(&mut self, page: usize, raw: &[u8]) -> Result<u32> {
+            self.image.program(page, raw)
+        }
+        fn erase(&mut self, block: usize) -> Result<u32> {
+            self.image.erase(block)
+        }
+        fn unlock(&mut self) -> Result<()> {
+            self.image.unlock()
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn chip(&self) -> &str {
+            "flaky"
+        }
+        fn size(&self) -> u64 {
+            self.image.size()
+        }
     }
 
     struct Silent;
@@ -386,11 +463,19 @@ mod tests {
         unit.raw[20 * BLOCK_RAW + 3 * PAGE_RAW + 5] = 0x00;
         unit.raw[30 * BLOCK_RAW + 9] = 0x00;
         let mut asked = Vec::new();
-        let written = restore(&mut unit, &mut Silent, &path, &mut |what: &str| { asked.push(what.to_string()); true }).unwrap();
+        let written = restore(&mut unit, &mut Silent, &path, &mut |what: &str| {
+            asked.push(what.to_string());
+            true
+        })
+        .unwrap();
         assert_eq!(written, 3, "blocks 0, 20 and 30");
         assert!(unit.raw == backup, "the unit's NAND is the backup, OOB and bad-block marker included");
         assert_eq!(asked.len(), 1);
-        assert_eq!(restore(&mut unit, &mut Silent, &path, &mut |_: &str| true).unwrap(), 0, "a second run writes nothing");
+        assert_eq!(
+            restore(&mut unit, &mut Silent, &path, &mut |_: &str| true).unwrap(),
+            0,
+            "a second run writes nothing"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -405,7 +490,12 @@ mod tests {
         mark_bad(&mut unit.raw, 12);
         let before = unit.raw.clone();
         let mut asked = false;
-        let error = restore(&mut unit, &mut Silent, &path, &mut |_: &str| { asked = true; true }).unwrap_err().to_string();
+        let error = restore(&mut unit, &mut Silent, &path, &mut |_: &str| {
+            asked = true;
+            true
+        })
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("bad blocks [12]") && !asked, "{error}");
         unit.raw[12 * BLOCK_RAW + nand::PAGE] = 0xff;
         let error = restore(&mut unit, &mut Silent, &path, &mut |_: &str| false).unwrap_err().to_string();

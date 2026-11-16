@@ -1,19 +1,19 @@
 //! Build the native account-screen replacement from the unit's own ELF.
 //! Keep hash-guarded byte edits as an undo journal for rollback and upgrades.
-mod branding;
-pub mod external_temperature;
-pub mod theme;
-pub mod dark_theme;
-mod elf;
 mod arm;
-pub mod discovery;
+mod branding;
 pub mod builder;
-pub mod menu;
+pub mod dark_theme;
+pub mod discovery;
+mod elf;
+pub mod external_temperature;
 pub mod linker;
-use std::io::Read;
-use sha2::Digest;
-use crate::{device, Result};
+pub mod menu;
+pub mod theme;
 use crate::shell::sha256_hex;
+use crate::{device, Result};
+use sha2::Digest;
+use std::io::Read;
 
 pub const BINARY: &str = "nestlabs/sbin/nlclient";
 pub const ORIGINAL: &str = "etc/unfr0zen/nlclient.original";
@@ -22,22 +22,36 @@ pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";
 /// A file, so the screen's object and its goldens do not change per revision.
 pub const VERSION: &str = "etc/unfr0zen/version";
 pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
-pub const ICON_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen.png"));
+pub const ICON_BYTES: &[u8] =
+    include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen.png"));
 pub const GLYPH: &str = "nestlabs/share/images/G_unfr0zen_glyph_80px.png";
-pub const GLYPH_BYTES: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
+pub const GLYPH_BYTES: &[u8] =
+    include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/unfr0zen-glyph.png"));
 /// The other settings entries' menu glyphs, for every section.
 pub const SECTION_GLYPHS: [(&str, &[u8]); 4] = [
-    ("nestlabs/share/images/G_unfr0zen_zigbee_80px.png",
-     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/zigbee-glyph.png"))),
-    ("nestlabs/share/images/G_unfr0zen_matter_80px.png",
-     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/matter-glyph.png"))),
-    ("nestlabs/share/images/G_unfr0zen_themes_80px.png",
-     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/themes-glyph.png"))),
-    ("nestlabs/share/images/G_unfr0zen_doom_80px.png",
-     include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/doom-glyph.png"))),
+    (
+        "nestlabs/share/images/G_unfr0zen_zigbee_80px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/zigbee-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_matter_80px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/matter-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_themes_80px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/themes-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_doom_80px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/doom-glyph.png")),
+    ),
 ];
 
-pub struct Edit { pub offset: usize, pub before: Vec<u8>, pub after: Vec<u8> }
+pub struct Edit {
+    pub offset: usize,
+    pub before: Vec<u8>,
+    pub after: Vec<u8>,
+}
 pub struct Patch {
     pub stock_len: usize,
     pub output_len: usize,
@@ -51,13 +65,19 @@ impl Patch {
         flate2::read::GzDecoder::new(bundle).take(1 << 20).read_to_end(&mut data)?;
         let mut input = data.as_slice();
         fn take(input: &mut &[u8], n: usize) -> Result<Vec<u8>> {
-            if input.len() < n { return device("truncated nlclient patch"); }
-            let (head, tail) = input.split_at(n); *input = tail; Ok(head.to_vec())
+            if input.len() < n {
+                return device("truncated nlclient patch");
+            }
+            let (head, tail) = input.split_at(n);
+            *input = tail;
+            Ok(head.to_vec())
         }
         fn word(input: &mut &[u8]) -> Result<usize> {
             Ok(u32::from_le_bytes(take(input, 4)?.try_into().unwrap()) as usize)
         }
-        if take(&mut input, 4)? != b"UFP1" { return device("invalid nlclient patch"); }
+        if take(&mut input, 4)? != b"UFP1" {
+            return device("invalid nlclient patch");
+        }
         let stock_len = word(&mut input)?;
         let output_len = word(&mut input)?;
         let hex = |v: Vec<u8>| v.iter().map(|b| format!("{b:02x}")).collect();
@@ -69,14 +89,17 @@ impl Patch {
             let offset = word(&mut input)?;
             let before = word(&mut input)?;
             let after = word(&mut input)?;
-            if offset.checked_add(before).is_none_or(|end| end > stock_len) ||
-               offset.checked_add(after).is_none_or(|end| end > output_len) ||
-               (offset != stock_len && before != after) {
+            if offset.checked_add(before).is_none_or(|end| end > stock_len)
+                || offset.checked_add(after).is_none_or(|end| end > output_len)
+                || (offset != stock_len && before != after)
+            {
                 return device("invalid nlclient patch bounds");
             }
             edits.push(Edit { offset, before: take(&mut input, before)?, after: take(&mut input, after)? });
         }
-        if !input.is_empty() { return device("trailing nlclient patch data"); }
+        if !input.is_empty() {
+            return device("trailing nlclient patch data");
+        }
         Ok(Self { stock_len, output_len, stock_sha, output_sha, edits })
     }
     /// The journal that turns `stock` into `output` and back: each run of
@@ -84,20 +107,34 @@ impl Patch {
     /// output is the stock with edits and a tail, never shorter.
     pub fn journal(stock: &[u8], output: &[u8]) -> Result<Vec<u8>> {
         use std::io::Write;
-        if output.len() < stock.len() { return device("nlclient output is shorter than its stock"); }
+        if output.len() < stock.len() {
+            return device("nlclient output is shorter than its stock");
+        }
         let mut edits = Vec::new();
         let mut pos = 0;
         while pos < stock.len() {
-            if stock[pos] == output[pos] { pos += 1; continue; }
+            if stock[pos] == output[pos] {
+                pos += 1;
+                continue;
+            }
             let start = pos;
-            while pos < stock.len() && stock[pos] != output[pos] { pos += 1; }
+            while pos < stock.len() && stock[pos] != output[pos] {
+                pos += 1;
+            }
             edits.push((start, &stock[start..pos], &output[start..pos]));
         }
         edits.push((stock.len(), &[][..], &output[stock.len()..]));
         let word = |n: usize| (n as u32).to_le_bytes();
         let digest = |data: &[u8]| -> [u8; 32] { sha2::Sha256::digest(data).into() };
-        let mut raw = [&b"UFP1"[..], &word(stock.len()), &word(output.len()),
-                       &digest(stock), &digest(output), &word(edits.len())].concat();
+        let mut raw = [
+            &b"UFP1"[..],
+            &word(stock.len()),
+            &word(output.len()),
+            &digest(stock),
+            &digest(output),
+            &word(edits.len()),
+        ]
+        .concat();
         for (offset, before, after) in edits {
             raw.extend([&word(offset)[..], &word(before.len()), &word(after.len()), before, after].concat());
         }
@@ -111,17 +148,30 @@ impl Patch {
         if previous.stock_sha != current.stock_sha || previous.stock_len != current.stock_len {
             return device("nlclient patch journal targets different firmware");
         }
-        let mut edits: Vec<Edit> = previous.edits.iter().filter(|e| e.offset < previous.stock_len)
-            .map(|e| Edit { offset: e.offset, before: e.after.clone(), after: e.before.clone() }).collect();
+        let mut edits: Vec<Edit> = previous
+            .edits
+            .iter()
+            .filter(|e| e.offset < previous.stock_len)
+            .map(|e| Edit { offset: e.offset, before: e.after.clone(), after: e.before.clone() })
+            .collect();
         edits.extend(current.edits);
-        Ok(Self { stock_len: previous.output_len, output_len: current.output_len,
-                  stock_sha: previous.output_sha.clone(), output_sha: current.output_sha, edits })
+        Ok(Self {
+            stock_len: previous.output_len,
+            output_len: current.output_len,
+            stock_sha: previous.output_sha.clone(),
+            output_sha: current.output_sha,
+            edits,
+        })
     }
     pub fn apply(&self, source: &[u8], reverse: bool) -> Result<Vec<u8>> {
         let (expected, result_hash, length) = if reverse {
             (&self.output_sha, &self.stock_sha, self.stock_len)
-        } else { (&self.stock_sha, &self.output_sha, self.output_len) };
-        if sha256_hex(source) != *expected { return device("nlclient firmware hash mismatch"); }
+        } else {
+            (&self.stock_sha, &self.output_sha, self.output_len)
+        };
+        if sha256_hex(source) != *expected {
+            return device("nlclient firmware hash mismatch");
+        }
         // Sized exactly: growing a copy of the source would double it.
         let mut output = Vec::with_capacity(self.output_len.max(source.len()));
         output.extend_from_slice(source);
@@ -131,7 +181,9 @@ impl Patch {
             output[edit.offset..edit.offset + bytes.len()].copy_from_slice(bytes);
         }
         output.truncate(length);
-        if sha256_hex(&output) != *result_hash { return device("nlclient patched hash mismatch"); }
+        if sha256_hex(&output) != *result_hash {
+            return device("nlclient patched hash mismatch");
+        }
         Ok(output)
     }
 }
@@ -179,7 +231,10 @@ pub(crate) mod tests {
         let (stock, output) = (b"\x7fELF stock body", b"\x7fELF STOCK bodY and a tail");
         let patch = Patch::parse(&journal(stock, output)).unwrap();
         assert_eq!((patch.stock_len, patch.output_len), (stock.len(), output.len()));
-        assert_eq!((patch.stock_sha.as_str(), patch.output_sha.as_str()), (sha256_hex(stock).as_str(), sha256_hex(output).as_str()));
+        assert_eq!(
+            (patch.stock_sha.as_str(), patch.output_sha.as_str()),
+            (sha256_hex(stock).as_str(), sha256_hex(output).as_str())
+        );
         assert_eq!(patch.edits.iter().map(|e| e.offset).collect::<Vec<_>>(), [5, 14, stock.len()]);
         assert_eq!(patch.apply(stock, false).unwrap(), output);
         assert_eq!(patch.apply(output, true).unwrap(), stock);
@@ -189,7 +244,10 @@ pub(crate) mod tests {
     fn malformed_journals_are_refused() {
         let raw = gunzip(&journal(b"abcd", b"aXcd12"));
         // Header 80 bytes; the edits: (1, "b", "X"), then (4, "", "12").
-        let edit = |mut raw: Vec<u8>, at: usize, value: u32| { raw[80 + at..84 + at].copy_from_slice(&value.to_le_bytes()); raw };
+        let edit = |mut raw: Vec<u8>, at: usize, value: u32| {
+            raw[80 + at..84 + at].copy_from_slice(&value.to_le_bytes());
+            raw
+        };
         let cases: Vec<(&str, Vec<u8>, &str)> = vec![
             ("magic", [&b"UFP2"[..], &raw[4..]].concat(), "invalid nlclient patch"),
             ("cut short", raw[..raw.len() - 1].to_vec(), "truncated"),
@@ -245,14 +303,26 @@ pub(crate) mod tests {
 
     #[test]
     fn upgrades_restore_original_edits_and_replace_a_longer_payload() {
-        let previous = Patch { stock_len: 3, output_len: 8,
-            stock_sha: sha256_hex(b"abc"), output_sha: sha256_hex(b"xbc12345"),
-            edits: vec![Edit { offset: 0, before: b"a".to_vec(), after: b"x".to_vec() },
-                        Edit { offset: 3, before: vec![], after: b"12345".to_vec() }] };
-        let current = Patch { stock_len: 3, output_len: 6,
-            stock_sha: sha256_hex(b"abc"), output_sha: sha256_hex(b"ayc678"),
-            edits: vec![Edit { offset: 1, before: b"b".to_vec(), after: b"y".to_vec() },
-                        Edit { offset: 3, before: vec![], after: b"678".to_vec() }] };
+        let previous = Patch {
+            stock_len: 3,
+            output_len: 8,
+            stock_sha: sha256_hex(b"abc"),
+            output_sha: sha256_hex(b"xbc12345"),
+            edits: vec![
+                Edit { offset: 0, before: b"a".to_vec(), after: b"x".to_vec() },
+                Edit { offset: 3, before: vec![], after: b"12345".to_vec() },
+            ],
+        };
+        let current = Patch {
+            stock_len: 3,
+            output_len: 6,
+            stock_sha: sha256_hex(b"abc"),
+            output_sha: sha256_hex(b"ayc678"),
+            edits: vec![
+                Edit { offset: 1, before: b"b".to_vec(), after: b"y".to_vec() },
+                Edit { offset: 3, before: vec![], after: b"678".to_vec() },
+            ],
+        };
         let update = Patch::upgrade(&previous, current).unwrap();
         assert_eq!(update.apply(b"xbc12345", false).unwrap(), b"ayc678");
         assert!(update.apply(b"xbc12340", false).is_err());

@@ -14,9 +14,15 @@ if ! awk -v dir="$scratch" '$2 == dir { found = 1 } END { exit !found }' /proc/m
         echo "$scratch is not mounted" >&2
         exit 1
     fi
-    [ -d "$scratch" ] || { echo "the root volume has no $scratch to mount scratch on" >&2; exit 1; }
+    [ -d "$scratch" ] || {
+        echo "the root volume has no $scratch to mount scratch on" >&2
+        exit 1
+    }
     mtd=$(awk -F: '$2 ~ /"scratch"$/ { sub("mtd", "", $1); print $1 }' /proc/mtd)
-    [ -n "$mtd" ] || { echo "no scratch partition in /proc/mtd" >&2; exit 1; }
+    [ -n "$mtd" ] || {
+        echo "no scratch partition in /proc/mtd" >&2
+        exit 1
+    }
     mode=rw
     [ "$UNFR0ZEN_DRY_RUN" = 1 ] && mode=ro
     mount -t jffs2 -o "$mode,noatime" "/dev/mtdblock$mtd" "$scratch"

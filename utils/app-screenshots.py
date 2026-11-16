@@ -36,8 +36,9 @@ def framed(window: Image.Image, scale: int) -> Image.Image:
     mask = Image.new("L", (w, h), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius, fill=255)
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((left, top + 14 * scale, left + w, top + h + 14 * scale), radius,
-                                             fill=(0, 0, 0, 150))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        (left, top + 14 * scale, left + w, top + h + 14 * scale), radius, fill=(0, 0, 0, 150)
+    )
     canvas = Image.alpha_composite(canvas, shadow.filter(ImageFilter.GaussianBlur(18 * scale)))
     body = window.convert("RGBA")
     draw = ImageDraw.Draw(body)
@@ -60,7 +61,9 @@ def main() -> None:
     readme = repo / "assets" / "app.png"
     half[0].save(readme, save_all=True, append_images=half[1:], duration=5000, loop=0, optimize=True)
     for name in GUIDE:
-        framed(Image.open(raw / f"guide-{name}.png"), 2).save(repo / "docs" / "assets" / "install" / f"app-{name}.png", optimize=True)
+        framed(Image.open(raw / f"guide-{name}.png"), 2).save(
+            repo / "docs" / "assets" / "install" / f"app-{name}.png", optimize=True
+        )
 
 
 if __name__ == "__main__":

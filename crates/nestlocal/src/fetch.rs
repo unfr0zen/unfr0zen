@@ -19,15 +19,18 @@ const REDIRECTS: usize = 5;
 
 fn tls() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    CONFIG.get_or_init(|| {
-        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        Arc::new(rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth())
-    }).clone()
+    CONFIG
+        .get_or_init(|| {
+            let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+            Arc::new(rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth())
+        })
+        .clone()
 }
 
 /// The body of url, following redirects, at most limit bytes, within timeout.
 pub async fn get(url: &str, limit: usize, timeout: Duration) -> Result<Vec<u8>, String> {
-    tokio::time::timeout(timeout, follow(url, limit)).await
+    tokio::time::timeout(timeout, follow(url, limit))
+        .await
         .unwrap_or_else(|_| Err(format!("{url}: no answer within {}", crate::logger::duration(timeout))))
 }
 
@@ -55,7 +58,11 @@ fn resolve(base: &Uri, location: &str) -> String {
         return location.to_string();
     }
     let origin = format!("{}://{}", base.scheme_str().unwrap_or("http"), base.authority().map_or("", |a| a.as_str()));
-    if location.starts_with('/') { format!("{origin}{location}") } else { format!("{origin}/{location}") }
+    if location.starts_with('/') {
+        format!("{origin}{location}")
+    } else {
+        format!("{origin}/{location}")
+    }
 }
 
 async fn once(uri: &Uri, limit: usize) -> Result<(StatusCode, Option<String>, Vec<u8>), String> {
@@ -82,15 +89,23 @@ async fn once(uri: &Uri, limit: usize) -> Result<(StatusCode, Option<String>, Ve
     }
 }
 
-async fn send(stream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static, request: Request<Empty<Bytes>>, limit: usize)
-              -> Result<(StatusCode, Option<String>, Vec<u8>), String> {
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
+async fn send(
+    stream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    request: Request<Empty<Bytes>>,
+    limit: usize,
+) -> Result<(StatusCode, Option<String>, Vec<u8>), String> {
+    let (mut sender, connection) =
+        hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
     tokio::spawn(connection);
     let response = sender.send_request(request).await.map_err(|e| e.to_string())?;
     let status = response.status();
     let location = response.headers().get(LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
-    let body = Limited::new(response.into_body(), limit).collect().await
-        .map_err(|e| format!("body: {e}"))?.to_bytes().to_vec();
+    let body = Limited::new(response.into_body(), limit)
+        .collect()
+        .await
+        .map_err(|e| format!("body: {e}"))?
+        .to_bytes()
+        .to_vec();
     Ok((status, location, body))
 }
 
@@ -137,7 +152,8 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
             "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".into(),
-        ]).await;
+        ])
+        .await;
         let timeout = Duration::from_secs(30);
         assert_eq!(get(&format!("{base}/release"), 100, timeout).await.unwrap(), b"hello");
         assert!(get(&base, 4, timeout).await.unwrap_err().contains("body"));

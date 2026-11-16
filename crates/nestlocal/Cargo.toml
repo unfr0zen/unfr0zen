@@ -33,7 +33,14 @@ webpki-roots = "1"
 # Assistant's Matter server; pure Rust crypto and mDNS.
 # Not its `os` feature: that brings embassy-time's std driver, whose clock
 # stops while the unit sleeps (src/matter/timer.rs is nestlocal's).
-rs-matter = { git = "https://github.com/project-chip/rs-matter", rev = "5bb06ae", default-features = false, features = ["std", "backtrace", "async-io", "rustcrypto", "log", "persistent-subscriptions"] }
+rs-matter = { git = "https://github.com/project-chip/rs-matter", rev = "5bb06ae", default-features = false, features = [
+  "std",
+  "backtrace",
+  "async-io",
+  "rustcrypto",
+  "log",
+  "persistent-subscriptions",
+] }
 critical-section = { version = "1.1", features = ["std"] }
 embassy-sync = { version = "0.8", features = ["std"] }
 async-io = "2"

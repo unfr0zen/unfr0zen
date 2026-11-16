@@ -32,7 +32,9 @@ fn main() {
                 "diamond" => Device::Diamond,
                 other => fail(format!("no bundle for {other}")),
             };
-            let key = std::env::var("UNFR0ZEN_BUNDLE_KEY").ok().filter(|k| !k.is_empty())
+            let key = std::env::var("UNFR0ZEN_BUNDLE_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
                 .map(|k| bundle::signing_key(&k).unwrap_or_else(|e| fail(e)));
             let data = unfr0zen_host::bundle::pack(device, version, key.as_ref()).unwrap_or_else(|e| fail(e));
             fs::write(out, &data).unwrap_or_else(|e| fail(format!("{out}: {e}")));
@@ -50,12 +52,15 @@ fn main() {
             #[cfg(unix)]
             std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
             use std::io::Write;
-            options.open(path).and_then(|mut file| file.write_all(format!("{text}\n").as_bytes()))
+            options
+                .open(path)
+                .and_then(|mut file| file.write_all(format!("{text}\n").as_bytes()))
                 .unwrap_or_else(|e| fail(format!("{path}: {e}")));
             println!("{}", bundle::public_key_text(&key));
         }
         ["verify", path, public] => {
-            let bundle = Bundle::unpack(&fs::read(path).unwrap_or_else(|e| fail(format!("{path}: {e}")))).unwrap_or_else(|e| fail(e));
+            let bundle = Bundle::unpack(&fs::read(path).unwrap_or_else(|e| fail(format!("{path}: {e}"))))
+                .unwrap_or_else(|e| fail(e));
             bundle.verify(&bundle::verifying_key(public).unwrap_or_else(|e| fail(e))).unwrap_or_else(|e| fail(e));
             println!("{path}: {} {} verified", bundle.manifest.device, bundle.manifest.version);
         }

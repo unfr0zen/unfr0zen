@@ -25,8 +25,24 @@ unfr0zen-cli = { path = "../unfr0zen-cli" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage", "NSMenu", "NSMenuItem", "NSResponder"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAttributedString", "NSDate", "NSDateFormatter", "NSDictionary", "NSFormatter", "NSObject", "NSString"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSApplication",
+  "NSImage",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "NSAttributedString",
+  "NSDate",
+  "NSDateFormatter",
+  "NSDictionary",
+  "NSFormatter",
+  "NSObject",
+  "NSString",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm"] }

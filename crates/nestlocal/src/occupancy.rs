@@ -114,7 +114,9 @@ pub fn watch(occupancy: Arc<Occupancy>, path: PathBuf) {
 
 /// Reads one file of the log until it is no longer the one at path.
 fn follow(occupancy: &Occupancy, file: File, path: &PathBuf) {
-    let Ok(inode) = file.metadata().map(|m| m.ino()) else { return };
+    let Ok(inode) = file.metadata().map(|m| m.ino()) else {
+        return;
+    };
     let mut reader = BufReader::new(file);
     let mut line = String::new();
     loop {
@@ -163,7 +165,9 @@ mod tests {
         let o = Occupancy::default();
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
-        o.on_change(move || { c.fetch_add(1, Ordering::SeqCst); });
+        o.on_change(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
         let t = 1_794_271_245;
         assert!(!o.occupied_at(t));
         o.line("2026-11-10T00:40:48 RealTimeOccupancy 2026-11-10T00:40:45");

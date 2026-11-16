@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::diamond3::usb::EntryPoint;
+use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
 use unfr0zen_host::{init_logging, log_path, mask_url, run, set_selection, CancelFlag, Config, Device, SetupInputs};
@@ -177,7 +177,6 @@ fn parse_device(value: &str) -> Result<Device, String> {
     }
 }
 
-
 /// Asks on the terminal before a restore overwrites NAND.
 fn confirm_restore(what: &str) -> bool {
     ui::waiting(what);
@@ -228,8 +227,9 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
         match flag {
             "--root-password" | "--mqtt-password" | "--matter-code" | "--mqtt-user" => Some("***".into()),
             "--mqtt" => Some(mask_url(value)),
-            "--mqtt-ca" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" =>
-                Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned()),
+            "--mqtt-ca" | "--nand-image" | "--work-dir" | "--data-dir" | "--ssh-public-key" => {
+                Some(std::path::Path::new(value).file_name().unwrap_or_default().to_string_lossy().into_owned())
+            }
             _ => None,
         }
     }
@@ -240,7 +240,9 @@ fn logged_arguments(args: impl Iterator<Item = String>) -> String {
         } else if let Some((name, value)) = arg.split_once('=').filter(|(name, _)| name.starts_with("--")) {
             out.push(format!("{name}={}", shown(name, value).unwrap_or_else(|| value.into())));
         } else {
-            if shown(&arg, "").is_some() { flag = Some(arg.clone()); }
+            if shown(&arg, "").is_some() {
+                flag = Some(arg.clone());
+            }
             out.push(arg);
         }
     }
@@ -263,27 +265,43 @@ pub fn main() {
     });
     if let Some(Command::Nlclient { binary, out, undo, discover }) = &args.command {
         if *discover {
-            let found = std::fs::read(binary).map_err(|e| e.to_string())
+            let found = std::fs::read(binary)
+                .map_err(|e| e.to_string())
                 .and_then(|source| unfr0zen_host::nlclient::discovery::survey(&source).map_err(|e| e.to_string()));
             match found {
                 Ok((found, objection)) => {
-                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({"discovery": found, "objection": objection})).unwrap());
-                    if objection.is_some() { std::process::exit(1); }
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({"discovery": found, "objection": objection}))
+                            .unwrap()
+                    );
+                    if objection.is_some() {
+                        std::process::exit(1);
+                    }
                 }
-                Err(error) => { eprintln!("unfr0zen: {}: {error}", binary.display()); std::process::exit(1); }
+                Err(error) => {
+                    eprintln!("unfr0zen: {}: {error}", binary.display());
+                    std::process::exit(1);
+                }
             }
             return;
         }
         let out = out.as_deref().expect("--out is required without --discover");
         match local_nlclient(binary, out, undo.as_deref()) {
             Ok(message) => println!("{message}"),
-            Err(error) => { eprintln!("unfr0zen: {error}"); std::process::exit(1); }
+            Err(error) => {
+                eprintln!("unfr0zen: {error}");
+                std::process::exit(1);
+            }
         }
         return;
     }
-    let fail = |message: String| -> ! { Args::command().error(clap::error::ErrorKind::ValueValidation, message).exit() };
+    let fail =
+        |message: String| -> ! { Args::command().error(clap::error::ErrorKind::ValueValidation, message).exit() };
 
-    if args.device.is_some_and(|d| d != Device::Diamond3) && matches!(args.command.as_ref(), Some(Command::Boot | Command::Uboot)) {
+    if args.device.is_some_and(|d| d != Device::Diamond3)
+        && matches!(args.command.as_ref(), Some(Command::Boot | Command::Uboot))
+    {
         fail("boot and uboot are diamond3-only".into());
     }
     if args.device == Some(Device::Diamond3) && args.nand_image.is_some() {
@@ -320,14 +338,34 @@ pub fn main() {
         Some(Command::Boot) => unfr0zen_host::flow::boot(config.wait_usb, config.entry_point, &mut progress),
         Some(Command::Backup { out }) => {
             let job = Job::Backup(out.clone().unwrap_or_else(nand::default_backup));
-            nand::run(&job, config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
+            nand::run(
+                &job,
+                config.wait_usb,
+                config.omap,
+                config.entry_point,
+                &mut progress,
+                &mut confirm_restore,
+                &cancel,
+            )
         }
-        Some(Command::Verify { image }) => {
-            nand::run(&Job::Verify(image.clone()), config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
-        }
-        Some(Command::Restore { image }) => {
-            nand::run(&Job::Restore(image.clone()), config.wait_usb, config.omap, config.entry_point, &mut progress, &mut confirm_restore, &cancel)
-        }
+        Some(Command::Verify { image }) => nand::run(
+            &Job::Verify(image.clone()),
+            config.wait_usb,
+            config.omap,
+            config.entry_point,
+            &mut progress,
+            &mut confirm_restore,
+            &cancel,
+        ),
+        Some(Command::Restore { image }) => nand::run(
+            &Job::Restore(image.clone()),
+            config.wait_usb,
+            config.omap,
+            config.entry_point,
+            &mut progress,
+            &mut confirm_restore,
+            &cancel,
+        ),
         Some(Command::Update) => update(),
     };
     finish(result);
@@ -349,25 +387,40 @@ fn finish(result: unfr0zen_host::Result<String>) -> ! {
 }
 
 /// The offline entry point uses exactly the same builder and object as recovery.
-fn local_nlclient(binary: &std::path::Path, out: &std::path::Path, undo: Option<&std::path::Path>) -> unfr0zen_host::Result<String> {
-    use unfr0zen_host::{nlclient, assets};
+fn local_nlclient(
+    binary: &std::path::Path,
+    out: &std::path::Path,
+    undo: Option<&std::path::Path>,
+) -> unfr0zen_host::Result<String> {
+    use unfr0zen_host::{assets, nlclient};
     let source = std::fs::read(binary)?;
     let (output, sidecars) = if let Some(journal) = undo {
         let patch = nlclient::Patch::parse(&std::fs::read(journal)?)?;
         (patch.apply(&source, true)?, None)
     } else {
         let built = nlclient::builder::build(&source, assets::CUSTOM_SCREEN, &nlclient::menu::Section::ALL)?;
-        let manifest = serde_json::to_vec_pretty(&built.manifest).map_err(|e| unfr0zen_host::Error::Io(e.to_string()))?;
+        let manifest =
+            serde_json::to_vec_pretty(&built.manifest).map_err(|e| unfr0zen_host::Error::Io(e.to_string()))?;
         (built.output, Some((built.journal, manifest)))
     };
     // Never overwrite the input or one of its output files by accident.
     let absolute = |p: &std::path::Path| -> std::io::Result<PathBuf> {
-        if p.exists() { p.canonicalize() } else {
-            Ok(p.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new(".")).canonicalize()?.join(p.file_name().ok_or_else(|| std::io::Error::other("output needs a file name"))?))
+        if p.exists() {
+            p.canonicalize()
+        } else {
+            Ok(p.parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .canonicalize()?
+                .join(p.file_name().ok_or_else(|| std::io::Error::other("output needs a file name"))?))
         }
     };
     let input = binary.canonicalize()?;
-    let destinations = if sidecars.is_some() { vec![out.to_path_buf(), out.with_extension("json"), out.with_extension("undo.gz")] } else { vec![out.to_path_buf()] };
+    let destinations = if sidecars.is_some() {
+        vec![out.to_path_buf(), out.with_extension("json"), out.with_extension("undo.gz")]
+    } else {
+        vec![out.to_path_buf()]
+    };
     let mut seen = std::collections::BTreeSet::new();
     for path in &destinations {
         let path = absolute(path)?;
@@ -376,7 +429,8 @@ fn local_nlclient(binary: &std::path::Path, out: &std::path::Path, undo: Option<
         }
     }
     std::fs::write(out, &output)?;
-    #[cfg(unix)] {
+    #[cfg(unix)]
+    {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755))?;
     }
@@ -411,8 +465,10 @@ mod logged_arguments_tests {
         assert!(Args::try_parse_from(["unfr0zen", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).is_err());
         let args = Args::try_parse_from(["unfr0zen", "--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"]).unwrap();
         assert_eq!(args.setup_inputs().ssh_public_key.unwrap(), std::path::Path::new("/home/bob/id_ed25519.pub"));
-        for args in [vec!["--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"],
-                     vec!["--ssh", "--ssh-public-key=/home/bob/id_ed25519.pub"]] {
+        for args in [
+            vec!["--ssh", "--ssh-public-key", "/home/bob/id_ed25519.pub"],
+            vec!["--ssh", "--ssh-public-key=/home/bob/id_ed25519.pub"],
+        ] {
             let logged = logged_arguments(args.into_iter().map(str::to_string));
             assert!(logged.contains("id_ed25519.pub"));
             assert!(!logged.contains("/home/bob"));
@@ -421,11 +477,22 @@ mod logged_arguments_tests {
 
     #[test]
     fn secrets_credentials_and_home_paths_stay_out_of_the_log() {
-        let args = ["--zigbee", "--root-password", "hunter2", "--mqtt=mqtt://bob:pw@broker.lan:1883",
-                    "--mqtt-user", "bob", "--matter-code=20202021", "--mqtt-ca", "/Users/bob/ca.pem"];
-        assert_eq!(logged_arguments(args.iter().map(|a| a.to_string())),
-                   "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
-                    --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem");
+        let args = [
+            "--zigbee",
+            "--root-password",
+            "hunter2",
+            "--mqtt=mqtt://bob:pw@broker.lan:1883",
+            "--mqtt-user",
+            "bob",
+            "--matter-code=20202021",
+            "--mqtt-ca",
+            "/Users/bob/ca.pem",
+        ];
+        assert_eq!(
+            logged_arguments(args.iter().map(|a| a.to_string())),
+            "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
+                    --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem"
+        );
     }
 }
 
@@ -436,7 +503,9 @@ mod entry_point_tests {
 
     #[test]
     fn every_command_takes_the_entry_point() {
-        for command in [&["uboot"][..], &["boot"], &["backup"], &["verify", "nand.bin"], &["restore", "nand.bin"], &["update"]] {
+        for command in
+            [&["uboot"][..], &["boot"], &["backup"], &["verify", "nand.bin"], &["restore", "nand.bin"], &["update"]]
+        {
             let line = [&["unfr0zen"], command, &["--entry-point", "official-loader"]].concat();
             let args = Args::try_parse_from(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"));
             assert_eq!(args.entry_point, Some(EntryPoint::OfficialLoader), "{line:?}");

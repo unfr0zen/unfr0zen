@@ -43,8 +43,10 @@ pub fn main() {
             run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run, live, generation)
         }
         _ => {
-            eprintln!("usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--device=NAME] [--entropy=FILE] \
-                       | update BUNDLE");
+            eprintln!(
+                "usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--device=NAME] [--entropy=FILE] \
+                       | update BUNDLE"
+            );
             std::process::exit(2);
         }
     };
@@ -126,7 +128,9 @@ fn update(path: &Path) -> Result<()> {
     let settings = read_settings(&options)?;
     match bundle.verify(&bundle::verifying_key(bundle::RELEASE_KEY)?) {
         Ok(()) => log::info!("Signed with the release key"),
-        Err(error) if settings.unsigned_updates => log::warn!("{error}: installed anyway, as unsigned updates are allowed"),
+        Err(error) if settings.unsigned_updates => {
+            log::warn!("{error}: installed anyway, as unsigned updates are allowed")
+        }
         Err(error) => return Err(failure(format!("{error}: only updates the release key signs install on this unit"))),
     }
     // Going back is refused: an older release, signed as it is, could
@@ -134,7 +138,9 @@ fn update(path: &Path) -> Result<()> {
     let (installed, new) = (settings.version.as_str(), bundle.manifest.version.as_str());
     match (bundle::is_downgrade(installed, new), bundle::is_downgrade(installed, installed)) {
         (Some(false), _) => {}
-        (_, _) if settings.unsigned_updates => log::warn!("{new} over {installed}: installed anyway, as this unit allows it"),
+        (_, _) if settings.unsigned_updates => {
+            log::warn!("{new} over {installed}: installed anyway, as this unit allows it")
+        }
         (Some(true), _) => return Err(failure(format!("{new} is older than {installed}, which this unit runs"))),
         // Nothing to compare with: the installed version is not one we order.
         (None, None) => {}
@@ -184,14 +190,23 @@ fn run_from_memory<T>(_: &[u8], _: impl FnOnce(&str) -> std::io::Result<T>) -> R
 
 /// `generation`: the gen 1 or gen 2 the host read the unit's environment
 /// as, which share one bundle (named for the j49).
-fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, live: bool,
-       generation: Option<&str>) -> Result<()> {
+fn run(
+    bundle: &Path,
+    options: &Path,
+    root: &Path,
+    out: &Path,
+    dry_run: bool,
+    live: bool,
+    generation: Option<&str>,
+) -> Result<()> {
     fs::create_dir_all(out)?;
     let mut bundle = Bundle::unpack(&fs::read(bundle)?)?;
     let target = match (device(&bundle.manifest.device)?, generation.map(device).transpose()?) {
         (Device::J49 | Device::Diamond, Some(unit @ (Device::J49 | Device::Diamond))) => unit,
         (bundled, None) => bundled,
-        (bundled, Some(unit)) => return Err(failure(format!("the bundle is for a {}, not a {}", bundled.name(), unit.name()))),
+        (bundled, Some(unit)) => {
+            return Err(failure(format!("the bundle is for a {}, not a {}", bundled.name(), unit.name())))
+        }
     };
     log::info!("Bundle {} for the {}", bundle.manifest.version, bundle.manifest.device);
     let mut settings = read_settings(options)?;
@@ -209,9 +224,16 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
     ];
     script(&bundle, bundle::PRE_SETUP, out, &env)?;
 
-    let nestlocal_binary = if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
-        || options.theme.is_some() {
-        bundle.files.remove(bundle::NESTLOCAL).map(|(_, data)| data)
+    let nestlocal_binary = if options.mqtt.is_some()
+        || options.matter.is_some()
+        || options.zigbee
+        || options.doom.is_some()
+        || options.theme.is_some()
+    {
+        bundle
+            .files
+            .remove(bundle::NESTLOCAL)
+            .map(|(_, data)| data)
             .ok_or_else(|| failure(format!("bundle: no {}", bundle::NESTLOCAL)))?
     } else {
         Vec::new()
@@ -244,15 +266,19 @@ fn run(bundle: &Path, options: &Path, root: &Path, out: &Path, dry_run: bool, li
         None => nestlocal::generate_pki(),
     };
     let mut volume = if live { LocalVolume::live(root) } else { LocalVolume::new(root) };
-    let changes = setup::set_up_owned(&mut volume, target, options, nestlocal_binary, &mut new_pki, dry_run,
-                                     &build_screen)?;
+    let changes =
+        setup::set_up_owned(&mut volume, target, options, nestlocal_binary, &mut new_pki, dry_run, &build_screen)?;
     let result = json!({
         "changes": changes.iter().map(|c| json!({"name": c.name, "action": c.action, "old": c.old, "new": c.new}))
             .collect::<Vec<_>>(),
         "nlclient": manifest.into_inner(),
     });
     fs::write(out.join("result.json"), format!("{result:#}\n"))?;
-    log::info!("{} changes{}", changes.len(), if dry_run { " (dry run: nothing written)" } else { ", verified on flash" });
+    log::info!(
+        "{} changes{}",
+        changes.len(),
+        if dry_run { " (dry run: nothing written)" } else { ", verified on flash" }
+    );
     if !dry_run {
         let mut env = env.to_vec();
         env.push(("UNFR0ZEN_CHANGES", changes.len().to_string()));

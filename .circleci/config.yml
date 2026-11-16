@@ -2,8 +2,9 @@ version: 2.1
 
 # The setup half of every pipeline: which workflows run, from the files the
 # push changed against main. Each mapping names a path pattern and the
-# workflow whose parameter it sets: the build image's, and the app's, which
-# builds every module and so runs for anything built. utils/ci/configs.py then
+# workflow whose parameter it sets: the build image's, the formatters' and
+# linters', which run for any change, and the app's, which builds every module
+# and so runs for anything built. utils/ci/configs.py then
 # picks the configs to merge (each workflow's, those defining the jobs it
 # lists, and the shared .circleci/common.yml), adds the build image's tag for
 # the Dockerfile at this commit, makes a push to main run the app workflow,
@@ -46,6 +47,7 @@ jobs:
           base-revision: main
           mapping: |
             utils/ci/Dockerfile build-image true
+            .* lint true
             (crates|platform|utils|\.circleci|\.cargo)/.* app true
             Cargo\.(toml|lock) app true
           output-path: /tmp/pipeline-parameters.json

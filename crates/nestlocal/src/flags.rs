@@ -152,14 +152,15 @@ pub fn usage() -> String {
         out += &format!("  -{name}{typ}\n    \t{help}");
         match kind {
             Kind::Text if !default.is_empty() => out += &format!(" (default {default:?})"),
-            Kind::Duration => out += &format!(" (default {})", crate::logger::duration(parse_duration(default).unwrap())),
+            Kind::Duration => {
+                out += &format!(" (default {})", crate::logger::duration(parse_duration(default).unwrap()))
+            }
             _ => {}
         }
         out.push('\n');
     }
     out
 }
-
 
 /// Parses args (without the program name). Err(None) asks for help.
 pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
@@ -171,7 +172,11 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         if arg == "--" {
             break;
         }
-        let Some(flag) = arg.strip_prefix("--").or_else(|| arg.strip_prefix('-')).filter(|f| !f.is_empty() && !arg.is_empty() && arg != "-") else {
+        let Some(flag) = arg
+            .strip_prefix("--")
+            .or_else(|| arg.strip_prefix('-'))
+            .filter(|f| !f.is_empty() && !arg.is_empty() && arg != "-")
+        else {
             break; // the first non-flag argument ends the flags
         };
         if flag.starts_with('-') || flag.starts_with('=') {
@@ -210,16 +215,27 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
     let flag = |name: &str| parse_bool(&get(name)).unwrap_or(false);
     let duration = |name: &str| parse_duration(&get(name)).unwrap();
     if flag("matter-thread") && (flag("zigbee") || get("wake-iface").is_empty()) {
-        return Err(Some("-matter-thread requires exclusive radio access (-zigbee=false) and a nonempty -wake-iface".into()));
+        return Err(Some(
+            "-matter-thread requires exclusive radio access (-zigbee=false) and a nonempty -wake-iface".into(),
+        ));
     }
-    if flag("external-temperature") && get("mqtt").is_empty() && !flag("matter") && !flag("matter-thread") && !flag("zigbee") {
+    if flag("external-temperature")
+        && get("mqtt").is_empty()
+        && !flag("matter")
+        && !flag("matter-thread")
+        && !flag("zigbee")
+    {
         return Err(Some("-external-temperature takes its readings over -mqtt, -matter or -zigbee".into()));
     }
-    let matter_passcode = get("matter-passcode").parse::<u32>().ok()
+    let matter_passcode = get("matter-passcode")
+        .parse::<u32>()
+        .ok()
         .filter(|p| crate::matter::check_passcode(*p).is_ok())
         .ok_or_else(|| Some(format!("invalid value {:?} for flag -matter-passcode", get("matter-passcode"))))?;
-    let matter_discriminator = get("matter-discriminator").parse::<u16>().ok().filter(|d| *d < 4096)
-        .ok_or_else(|| Some(format!("invalid value {:?} for flag -matter-discriminator", get("matter-discriminator"))))?;
+    let matter_discriminator =
+        get("matter-discriminator").parse::<u16>().ok().filter(|d| *d < 4096).ok_or_else(|| {
+            Some(format!("invalid value {:?} for flag -matter-discriminator", get("matter-discriminator")))
+        })?;
     Ok(Config {
         cert: get("cert"),
         discovery: get("discovery"),
@@ -274,13 +290,20 @@ mod tests {
 
     #[test]
     fn the_options_unfr0zen_writes() {
-        let c = parse(&args("-syslog -mqtt tcp://broker:8883 -mqtt-user u -mqtt-password-file \
-            /etc/nestlocal/mqtt.password -mqtt-tls -mqtt-ca /etc/nestlocal/mqtt-ca.pem")).ok().unwrap();
+        let c = parse(&args(
+            "-syslog -mqtt tcp://broker:8883 -mqtt-user u -mqtt-password-file \
+            /etc/nestlocal/mqtt.password -mqtt-tls -mqtt-ca /etc/nestlocal/mqtt-ca.pem",
+        ))
+        .ok()
+        .unwrap();
         assert!(c.syslog && c.mqtt_tls && !c.verbose && !c.doom);
         assert_eq!((c.mqtt.as_str(), c.mqtt_user.as_str()), ("tcp://broker:8883", "u"));
         assert!(parse(&args("-mqtt= -doom")).ok().unwrap().doom);
         assert_eq!(c.mqtt_ca, "/etc/nestlocal/mqtt-ca.pem");
-        assert_eq!((c.hold, c.stale, c.listen.as_str()), (Duration::from_secs(290), Duration::from_secs(300), "127.0.0.1:443"));
+        assert_eq!(
+            (c.hold, c.stale, c.listen.as_str()),
+            (Duration::from_secs(290), Duration::from_secs(300), "127.0.0.1:443")
+        );
     }
 
     #[test]
@@ -301,7 +324,11 @@ mod tests {
         assert_eq!(parse(&args("---v")).err().unwrap().unwrap(), "bad flag syntax: ---v");
         assert_eq!(parse(&args("-=v")).err().unwrap().unwrap(), "bad flag syntax: -=v");
         assert!(parse(&args("-v=maybe")).err().unwrap().unwrap().starts_with("invalid boolean value \"maybe\""));
-        assert!(parse(&args("-stale -5m")).err().unwrap().unwrap().starts_with("invalid value \"-5m\" for flag -stale"));
+        assert!(parse(&args("-stale -5m"))
+            .err()
+            .unwrap()
+            .unwrap()
+            .starts_with("invalid value \"-5m\" for flag -stale"));
         // A bare boolean takes no value: what follows is the next argument.
         let c = parse(&args("-syslog false -serial S")).ok().unwrap();
         assert!(c.syslog);

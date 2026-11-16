@@ -26,7 +26,9 @@ impl Geometry {
     /// 480x480; any other panel is taken as upright with the theme centred.
     pub fn for_framebuffer(width: u32, height: u32) -> Geometry {
         match (width, height) {
-            (480, 640) => Geometry { fb_width: width, fb_height: height, theme: 480.0, origin: (0.0, 0.0), quarter_turns: 1 },
+            (480, 640) => {
+                Geometry { fb_width: width, fb_height: height, theme: 480.0, origin: (0.0, 0.0), quarter_turns: 1 }
+            }
             _ => {
                 let theme = width.min(height) as f32;
                 Geometry {

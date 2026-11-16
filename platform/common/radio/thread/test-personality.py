@@ -3,21 +3,23 @@
 
 Usage: python test-personality.py build/radio/radio.elf
 """
+
 import runpy
-import struct
 from pathlib import Path
 
 from unicorn import UC_HOOK_CODE
-from unicorn.arm_const import UC_ARM_REG_R0, UC_ARM_REG_PC, UC_ARM_REG_LR
+from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0
 
 rcp = runpy.run_path(str(Path(__file__).with_name("test-source-match.py")))
 cpu, call, symbols, word, put_word = rcp["cpu"], rcp["call"], rcp["symbols"], rcp["word"], rcp["put_word"]
 reached = []
 
+
 def stop(cpu, address, size, user):
     reached.append(user)
     cpu.reg_write(UC_ARM_REG_R0, 0)
     cpu.reg_write(UC_ARM_REG_PC, cpu.reg_read(UC_ARM_REG_LR))
+
 
 for name in ["zigbeeMain", "threadMain", "halReboot", "emberChildIndex", "emLongIdDataPendingForDevice"]:
     cpu.hook_add(UC_HOOK_CODE, stop, name, begin=symbols[name], end=symbols[name])

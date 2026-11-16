@@ -35,7 +35,9 @@ impl Decoder {
             if !(2..=MAX_PAYLOAD).contains(&len) {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid GTL payload length"));
             }
-            if self.0.len() < HEADER + len { return Ok(None); }
+            if self.0.len() < HEADER + len {
+                return Ok(None);
+            }
             let op = u16::from_le_bytes([self.0[9], self.0[10]]);
             let body = self.0[11..HEADER + len].to_vec();
             self.0.drain(..HEADER + len);
@@ -71,10 +73,10 @@ pub fn configuration(service_data: &[u8], serial: &str) -> io::Result<[u8; 86]> 
 /// The unit supplies the firmware; its original image remains unchanged.
 pub fn firmware(stock: &[u8]) -> io::Result<Vec<u8>> {
     use md5::{Digest, Md5};
-    const HASH: [u8; 16] = [0x81, 0xc6, 0x54, 0x30, 0x97, 0x9e, 0x37, 0x11,
-        0x25, 0xd8, 0xa1, 0xa1, 0x46, 0xe8, 0xe2, 0x9e];
-    const ANCHOR: [u8; 18] = [0xaf, 0xfe, 0xb7, 0x9d, 0x9f, 0x42, 0x9c, 0x4f,
-        0x9f, 0x95, 0x59, 0x45, 0x3d, 0x26, 0xf5, 0x2e, 0xee, 0x19];
+    const HASH: [u8; 16] =
+        [0x81, 0xc6, 0x54, 0x30, 0x97, 0x9e, 0x37, 0x11, 0x25, 0xd8, 0xa1, 0xa1, 0x46, 0xe8, 0xe2, 0x9e];
+    const ANCHOR: [u8; 18] =
+        [0xaf, 0xfe, 0xb7, 0x9d, 0x9f, 0x42, 0x9c, 0x4f, 0x9f, 0x95, 0x59, 0x45, 0x3d, 0x26, 0xf5, 0x2e, 0xee, 0x19];
     if Md5::digest(stock).as_slice() != HASH || stock.get(0x6c54..0x6c66) != Some(&ANCHOR) {
         return Err(io::Error::new(io::ErrorKind::Unsupported, "unsupported DA14580 peripheral firmware"));
     }
@@ -84,8 +86,7 @@ pub fn firmware(stock: &[u8]) -> io::Result<Vec<u8>> {
     patched[0x6c54..0x6c56].copy_from_slice(&[0xf6, 0xff]);
     // Matter commissioners subscribe before writing their BTP handshake.
     // Keep the pre-handshake states when CCCD changes, preserving the profile's flags.
-    for (offset, state) in [(0x7778, 20), (0x7780, 20), (0x77c8, 21), (0x77d0, 21),
-        (0x7868, 23), (0x7870, 23)] {
+    for (offset, state) in [(0x7778, 20), (0x7780, 20), (0x77c8, 21), (0x77d0, 21), (0x7868, 23), (0x7870, 23)] {
         patched[offset..offset + 4].copy_from_slice(&0x20005f43u32.to_le_bytes());
         patched[offset + 5] = state;
     }
@@ -98,24 +99,27 @@ mod tests {
 
     #[test]
     fn captured_responses_survive_every_uart_split() {
-        let bytes = [5,1,0xc8,0x3f,0,0x32,0,2,0,7,0,
-            5,1,0xc8,0x3f,0,0x32,0,4,0,4,0,1,1];
+        let bytes = [5, 1, 0xc8, 0x3f, 0, 0x32, 0, 2, 0, 7, 0, 5, 1, 0xc8, 0x3f, 0, 0x32, 0, 4, 0, 4, 0, 1, 1];
         for split in 0..=bytes.len() {
             let mut decoder = Decoder::default();
             decoder.push(&[0xff, 0]).unwrap();
             decoder.push(&bytes[..split]).unwrap();
             let mut messages = Vec::new();
-            while let Some(message) = decoder.next().unwrap() { messages.push(message); }
+            while let Some(message) = decoder.next().unwrap() {
+                messages.push(message);
+            }
             decoder.push(&bytes[split..]).unwrap();
-            while let Some(message) = decoder.next().unwrap() { messages.push(message); }
-            assert_eq!(messages, vec![(7, vec![]), (4, vec![1,1])]);
+            while let Some(message) = decoder.next().unwrap() {
+                messages.push(message);
+            }
+            assert_eq!(messages, vec![(7, vec![]), (4, vec![1, 1])]);
         }
     }
 
     #[test]
     fn malformed_length_cannot_allocate_or_wait_forever() {
         let mut decoder = Decoder::default();
-        decoder.push(&[5,1,0xc8,0x3f,0,0x32,0,0xff,0xff]).unwrap();
+        decoder.push(&[5, 1, 0xc8, 0x3f, 0, 0x32, 0, 0xff, 0xff]).unwrap();
         assert!(decoder.next().is_err());
         assert!(firmware(&[0; 31088]).is_err());
     }
@@ -135,18 +139,18 @@ mod tests {
         assert_eq!(cfg[54], 22);
         assert_eq!(&cfg[59..61], &[17, 9]);
         assert_eq!(&cfg[61..77], serial.as_bytes());
-        assert_eq!(frame(6, &[0]), [5,1,0xc8,0x32,0,0x3f,0,3,0,6,0,0]);
+        assert_eq!(frame(6, &[0]), [5, 1, 0xc8, 0x32, 0, 0x3f, 0, 3, 0, 6, 0, 0]);
     }
 
     #[test]
     fn captured_c1_handshake_negotiates_the_radio_buffer_limit() {
         use rs_matter::transport::network::{btp::Btp, BtAddr};
         let btp = Btp::new();
-        let peer = BtAddr([0xfd,0xd8,0x18,0x57,0x2f,0x84]);
-        btp.process_incoming(Some(131), peer, &[0x65,0x6c,4,0,0,0,0x83,0,5]).unwrap();
+        let peer = BtAddr([0xfd, 0xd8, 0x18, 0x57, 0x2f, 0x84]);
+        btp.process_incoming(Some(131), peer, &[0x65, 0x6c, 4, 0, 0, 0, 0x83, 0, 5]).unwrap();
         let mut packet = [0; MAX_VALUE];
         let len = btp.process_outgoing(Some(131), &mut packet).unwrap();
-        assert_eq!(&packet[..len], &[0x65,0x6c,4,0x80,0,5]);
+        assert_eq!(&packet[..len], &[0x65, 0x6c, 4, 0x80, 0, 5]);
         assert!(btp.is_session_established(peer));
         btp.reset();
         assert!(!btp.is_session_established(peer));
@@ -158,7 +162,7 @@ mod tests {
         let peripheral = Btp::new();
         let central = Btp::new();
         central.set_initiator(true);
-        let peer = BtAddr([1,2,3,4,5,6]);
+        let peer = BtAddr([1, 2, 3, 4, 5, 6]);
         let mut segment = [0; MAX_VALUE];
         let len = central.process_outgoing(Some(131), &mut segment).unwrap();
         peripheral.process_incoming(Some(131), peer, &segment[..len]).unwrap();
@@ -170,7 +174,9 @@ mod tests {
             let mut count = 0;
             loop {
                 let len = peripheral.process_outgoing(Some(131), &mut segment).unwrap();
-                if len == 0 { break; }
+                if len == 0 {
+                    break;
+                }
                 assert!(len <= MAX_VALUE);
                 central.process_incoming(Some(131), peer, &segment[..len]).unwrap();
                 count += 1;
@@ -188,9 +194,18 @@ mod tests {
     fn supported_firmware_changes_only_name_service_and_subscription_transitions() {
         let original = std::fs::read(std::env::var("NEST_BLE_FIRMWARE").unwrap()).unwrap();
         let patched = firmware(&original).unwrap();
-        let changed: Vec<_> = original.iter().zip(&patched).enumerate()
-            .filter_map(|(offset, (a,b))| (a != b).then_some(offset)).collect();
-        assert_eq!(changed, [0x3e56,0x6c54,0x6c55,0x7778,0x777d,0x7780,0x7785,0x77c8,0x77cd,
-            0x77d0,0x77d5,0x7868,0x786d,0x7870,0x7875]);
+        let changed: Vec<_> = original
+            .iter()
+            .zip(&patched)
+            .enumerate()
+            .filter_map(|(offset, (a, b))| (a != b).then_some(offset))
+            .collect();
+        assert_eq!(
+            changed,
+            [
+                0x3e56, 0x6c54, 0x6c55, 0x7778, 0x777d, 0x7780, 0x7785, 0x77c8, 0x77cd, 0x77d0, 0x77d5, 0x7868, 0x786d,
+                0x7870, 0x7875
+            ]
+        );
     }
 }

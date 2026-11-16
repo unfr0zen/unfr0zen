@@ -38,9 +38,9 @@ else
         target/x86_64-apple-darwin/release/unfr0zen
 fi
 cp assets/icon/unfr0zen.icns "$app/Contents/Resources/unfr0zen.icns"
-printf 'APPL????' > "$app/Contents/PkgInfo"
+printf 'APPL????' >"$app/Contents/PkgInfo"
 
-cat > "$app/Contents/Info.plist" <<PLIST
+cat >"$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,9 +63,9 @@ PLIST
 
 # Ad-hoc signature: Apple Silicon refuses to run arm64 code with none.
 if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$app" >/dev/null 2>&1 \
-        && echo "Signed ad-hoc (not notarized)" \
-        || echo "codesign failed; the app will need 'xattr -dr com.apple.quarantine' if quarantined"
+    codesign --force --deep --sign - "$app" >/dev/null 2>&1 &&
+        echo "Signed ad-hoc (not notarized)" ||
+        echo "codesign failed; the app will need 'xattr -dr com.apple.quarantine' if quarantined"
 elif command -v rcodesign >/dev/null 2>&1; then
     rcodesign sign "$app" >/dev/null
     echo "Signed ad-hoc with rcodesign (not notarized)"

@@ -15,7 +15,8 @@ try {
     Import-Certificate -FilePath $public -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
     Import-Certificate -FilePath $public -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
     $signed = Set-AuthenticodeSignature -FilePath $cat -Certificate $cert -HashAlgorithm SHA256
-} finally {
+}
+finally {
     Remove-Item "Cert:\LocalMachine\My\$($cert.Thumbprint)" -DeleteKey
 }
 if ($signed.Status -ne "Valid") { throw "signing the catalog: $($signed.StatusMessage)" }

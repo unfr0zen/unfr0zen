@@ -99,7 +99,8 @@ const SLOT_HUMIDITY: u16 = 2;
 const SLOT_LOW: u16 = 3;
 /// The weather cluster's attributes, ascending.
 static WEATHER_ATTRIBUTES: LazyLock<Vec<u16>> = LazyLock::new(|| {
-    let mut ids = vec![OUTDOOR_TEMPERATURE, OUTDOOR_HUMIDITY, CONDITION, NEXT_RISING, NEXT_SETTING, EXTERNAL_TEMPERATURE];
+    let mut ids =
+        vec![OUTDOOR_TEMPERATURE, OUTDOOR_HUMIDITY, CONDITION, NEXT_RISING, NEXT_SETTING, EXTERNAL_TEMPERATURE];
     ids.extend((0..HOURLY_SLOTS).flat_map(|h| (SLOT_TIME..=SLOT_HUMIDITY).map(move |f| HOURLY | h << 4 | f)));
     ids.extend((0..DAILY_SLOTS).flat_map(|d| (SLOT_TIME..=SLOT_LOW).map(move |f| DAILY | d << 4 | f)));
     ids
@@ -130,7 +131,7 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (11, "auto_away_enable", "Home/Away Assist"),
     (12, "sunlight_correction_enabled", "Sunblock"),
     (13, "preconditioning_enabled", "Early-On"),
-    (14, "away_temperature_low_enabled", "Eco heat limit"),  // to heat
+    (14, "away_temperature_low_enabled", "Eco heat limit"), // to heat
     (15, "away_temperature_high_enabled", "Eco cool limit"), // to cool
     (16, "target_humidity_enabled", "Humidity control"),
     (17, "hot_water_boost", "Hot water boost"),
@@ -168,8 +169,8 @@ const SIMPLE_SENSOR: u16 = 0x000C;
 
 const BASIC_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0007, 0x4000];
 const THERMOSTAT_ATTRIBUTES: &[u16] = &[
-    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016,
-    0x0017, 0x0018, 0x0019, 0x001B, 0x001C, 0x0025, 0x0029,
+    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
+    0x0018, 0x0019, 0x001B, 0x001C, 0x0025, 0x0029,
 ];
 const ANALOG_OUTPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0041, 0x0045, 0x0051, 0x0055, 0x006F, 0x0075];
 const ANALOG_INPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F, 0x0075];
@@ -262,16 +263,26 @@ impl Nest {
             Endpoint { id: BACKPLATE_ENDPOINT, device: TEMPERATURE_SENSOR, clusters: vec![TEMPERATURE] },
         ];
         if has_fan {
-            endpoints.push(Endpoint { id: FAN_TIMER_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
+            endpoints.push(Endpoint {
+                id: FAN_TIMER_ENDPOINT,
+                device: LEVEL_CONTROLLABLE_OUTPUT,
+                clusters: vec![ANALOG_OUTPUT],
+            });
         }
         if humidity_control {
             endpoints.push(Endpoint {
-                id: HUMIDITY_TARGET_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT],
+                id: HUMIDITY_TARGET_ENDPOINT,
+                device: LEVEL_CONTROLLABLE_OUTPUT,
+                clusters: vec![ANALOG_OUTPUT],
             });
         }
         endpoints.push(Endpoint { id: TIME_TO_TARGET_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![ANALOG_INPUT] });
         if has("has_air_filter") {
-            endpoints.push(Endpoint { id: FILTER_RUNTIME_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![ANALOG_INPUT] });
+            endpoints.push(Endpoint {
+                id: FILTER_RUNTIME_ENDPOINT,
+                device: SIMPLE_SENSOR,
+                clusters: vec![ANALOG_INPUT],
+            });
         }
         if has_fan {
             for id in [FAN_SCHEDULE_MINUTES_ENDPOINT, FAN_SCHEDULE_START_ENDPOINT, FAN_SCHEDULE_END_ENDPOINT] {
@@ -307,7 +318,11 @@ impl Nest {
             }
         }
         if bridge.sensor.get().is_some() {
-            endpoints.push(Endpoint { id: TEMPERATURE_SOURCE_ENDPOINT, device: SIMPLE_SENSOR, clusters: vec![BINARY_INPUT] });
+            endpoints.push(Endpoint {
+                id: TEMPERATURE_SOURCE_ENDPOINT,
+                device: SIMPLE_SENSOR,
+                clusters: vec![BINARY_INPUT],
+            });
         }
         Nest { bridge, endpoints, weather: Mutex::new(BTreeMap::new()) }
     }
@@ -318,7 +333,9 @@ impl Nest {
         for e in &self.endpoints {
             for &cluster in &e.clusters {
                 let attributes: &'static [u16] = match cluster {
-                    THERMOSTAT => &[0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0025, 0x0029],
+                    THERMOSTAT => {
+                        &[0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0025, 0x0029]
+                    }
                     POWER => &[0x0020],
                     FAN | DISPLAY | HUMIDITY | TEMPERATURE => &[0x0000],
                     ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT | BINARY_OUTPUT => &[0x0055],
@@ -482,12 +499,22 @@ impl Nest {
             }
             FAN_SCHEDULE_START_ENDPOINT => ("Fan schedule start", HOURS, 0.0, 23.0, hour("fan_duty_start_time")),
             FAN_SCHEDULE_END_ENDPOINT => ("Fan schedule end", HOURS, 0.0, 23.0, hour("fan_duty_end_time")),
-            SCREEN_TIMEOUT_ENDPOINT => ("Screen timeout", SECONDS, *crate::screen::SECONDS.start() as f32,
-                                        *crate::screen::SECONDS.end() as f32, crate::screen::seconds(&dev) as f64),
+            SCREEN_TIMEOUT_ENDPOINT => (
+                "Screen timeout",
+                SECONDS,
+                *crate::screen::SECONDS.start() as f32,
+                *crate::screen::SECONDS.end() as f32,
+                crate::screen::seconds(&dev) as f64,
+            ),
             SCREEN_BRIGHTNESS_ENDPOINT => {
                 let (percent, _) = crate::brightness::reported(&dev, self.bridge.brightness.shown());
-                ("Screen brightness", PERCENT, *crate::brightness::PERCENTS.start() as f32,
-                 *crate::brightness::PERCENTS.end() as f32, percent.unwrap_or(100) as f64)
+                (
+                    "Screen brightness",
+                    PERCENT,
+                    *crate::brightness::PERCENTS.start() as f32,
+                    *crate::brightness::PERCENTS.end() as f32,
+                    percent.unwrap_or(100) as f64,
+                )
             }
             _ => ("Target humidity", PERCENT, 10.0, 60.0, number(dev.get("target_humidity")).unwrap_or(35.0)),
         };
@@ -511,8 +538,11 @@ impl Nest {
             (0x0055, Value::F32(v)) if endpoint == FAN_SCHEDULE_MINUTES_ENDPOINT => {
                 self.apply("fan_schedule_minutes", &(v.round() as i64).to_string())
             }
-            (0x0055, Value::F32(v)) if endpoint == FAN_SCHEDULE_START_ENDPOINT || endpoint == FAN_SCHEDULE_END_ENDPOINT => {
-                let name = if endpoint == FAN_SCHEDULE_START_ENDPOINT { "fan_schedule_start" } else { "fan_schedule_end" };
+            (0x0055, Value::F32(v))
+                if endpoint == FAN_SCHEDULE_START_ENDPOINT || endpoint == FAN_SCHEDULE_END_ENDPOINT =>
+            {
+                let name =
+                    if endpoint == FAN_SCHEDULE_START_ENDPOINT { "fan_schedule_start" } else { "fan_schedule_end" };
                 self.apply(name, &(v.round() as i64).to_string())
             }
             (0x0055, Value::F32(v)) if endpoint == SCREEN_TIMEOUT_ENDPOINT => {
@@ -532,11 +562,16 @@ impl Nest {
         let view = self.view();
         let (description, units, value) = match endpoint {
             TIME_TO_TARGET_ENDPOINT => {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+                let now =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
                 let left = number(view.dev.get("time_to_target")).map_or(0.0, |t| (t - now).max(0.0).round());
                 ("Time to temperature", SECONDS, left)
             }
-            _ => ("Filter runtime", HOURS, number(view.dev.get("filter_runtime_sec")).map_or(0.0, |s| (s / 360.0).round() / 10.0)),
+            _ => (
+                "Filter runtime",
+                HOURS,
+                number(view.dev.get("filter_runtime_sec")).map_or(0.0, |s| (s / 360.0).round() / 10.0),
+            ),
         };
         Some(match attribute {
             0x001C => Value::Str(description.into()),
@@ -554,7 +589,10 @@ impl Nest {
         if let Some(&(key, _, name, _)) = endpoint.checked_sub(STAGE_ENDPOINTS).and_then(|i| stages().nth(i as usize)) {
             return Some((name, truthy(v.state.get(key))));
         }
-        STATES.iter().find(|(e, _, _, _)| *e == endpoint).map(|(_, key, description, _)| (*description, truthy(v.dev.get(*key))))
+        STATES
+            .iter()
+            .find(|(e, _, _, _)| *e == endpoint)
+            .map(|(_, key, description, _)| (*description, truthy(v.dev.get(*key))))
     }
 
     fn switch(&self, endpoint: u8) -> Option<(&'static str, &'static str)> {
@@ -592,26 +630,33 @@ impl Nest {
             _ => {}
         }
         if attribute == EXTERNAL_TEMPERATURE {
-            let Value::I16(t) = value else { return status::INVALID_VALUE };
+            let Value::I16(t) = value else {
+                return status::INVALID_VALUE;
+            };
             return self.apply("external_temperature", &(f64::from(t) / 100.0).to_string());
         }
         let mut weather = self.weather.lock().unwrap();
         weather.insert(attribute, value);
         match attribute {
             OUTDOOR_TEMPERATURE | OUTDOOR_HUMIDITY => {
-                self.bridge.outdoor.set(temperature(&weather, OUTDOOR_TEMPERATURE), humidity(&weather, OUTDOOR_HUMIDITY));
+                self.bridge
+                    .outdoor
+                    .set(temperature(&weather, OUTDOOR_TEMPERATURE), humidity(&weather, OUTDOOR_HUMIDITY));
             }
             _ => {
                 let forecast = |base: u16, slots: u16| -> Vec<HAForecast> {
-                    (0..slots).map(|i| base | i << 4).filter_map(|slot| {
-                        Some(HAForecast {
-                            datetime: Some(time(&weather, slot | SLOT_TIME)?),
-                            temperature: temperature(&weather, slot | SLOT_TEMPERATURE),
-                            templow: temperature(&weather, slot | SLOT_LOW),
-                            humidity: humidity(&weather, slot | SLOT_HUMIDITY),
-                            is_daytime: None,
+                    (0..slots)
+                        .map(|i| base | i << 4)
+                        .filter_map(|slot| {
+                            Some(HAForecast {
+                                datetime: Some(time(&weather, slot | SLOT_TIME)?),
+                                temperature: temperature(&weather, slot | SLOT_TEMPERATURE),
+                                templow: temperature(&weather, slot | SLOT_LOW),
+                                humidity: humidity(&weather, slot | SLOT_HUMIDITY),
+                                is_daytime: None,
+                            })
                         })
-                    }).collect()
+                        .collect()
                 };
                 let condition = match weather.get(&CONDITION) {
                     Some(Value::Str(c)) => c.clone(),
@@ -649,7 +694,9 @@ fn humidity(weather: &BTreeMap<u16, Value>, attribute: u16) -> Option<f64> {
 /// A written Weather time.
 fn time(weather: &BTreeMap<u16, Value>, attribute: u16) -> Option<DateTime<FixedOffset>> {
     match weather.get(&attribute) {
-        Some(Value::Utc(t)) if *t != NO_TIME => DateTime::from_timestamp(ZIGBEE_EPOCH + i64::from(*t), 0).map(|d| d.fixed_offset()),
+        Some(Value::Utc(t)) if *t != NO_TIME => {
+            DateTime::from_timestamp(ZIGBEE_EPOCH + i64::from(*t), 0).map(|d| d.fixed_offset())
+        }
         _ => None,
     }
 }
@@ -720,16 +767,23 @@ impl Clusters for Nest {
             (ANALOG_INPUT, a) => self.analog_input(endpoint, a),
             (BINARY_INPUT | BINARY_OUTPUT, 0x0051) => Some(Value::Bool(false)),
             (BINARY_INPUT | BINARY_OUTPUT, 0x006F) => Some(Value::Bitmap8(0)),
-            (BINARY_INPUT, 0x001C) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => Some(Value::Str("External temperature in use".into())),
-            (BINARY_INPUT, 0x0055) if endpoint == TEMPERATURE_SOURCE_ENDPOINT =>
-                Some(Value::Bool(self.bridge.temperature_source() == Some("external"))),
+            (BINARY_INPUT, 0x001C) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => {
+                Some(Value::Str("External temperature in use".into()))
+            }
+            (BINARY_INPUT, 0x0055) if endpoint == TEMPERATURE_SOURCE_ENDPOINT => {
+                Some(Value::Bool(self.bridge.temperature_source() == Some("external")))
+            }
             (BINARY_INPUT, 0x001C) => self.state(endpoint).map(|(description, _)| Value::Str(description.into())),
             (BINARY_INPUT, 0x0055) => self.state(endpoint).map(|(_, on)| Value::Bool(on)),
             (BINARY_OUTPUT, 0x001C) => self.switch(endpoint).map(|(_, description)| Value::Str(description.into())),
-            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| Value::Bool(match key {
-                "screen_brightness_auto" => crate::brightness::reported(&self.view().dev, self.bridge.brightness.shown()).1,
-                _ => bridge::switch_on(&self.view().dev, key),
-            })),
+            (BINARY_OUTPUT, 0x0055) => self.switch(endpoint).map(|(key, _)| {
+                Value::Bool(match key {
+                    "screen_brightness_auto" => {
+                        crate::brightness::reported(&self.view().dev, self.bridge.brightness.shown()).1
+                    }
+                    _ => bridge::switch_on(&self.view().dev, key),
+                })
+            }),
             (WEATHER, a) => self.weather(a),
             _ => None,
         }
@@ -750,7 +804,11 @@ impl Clusters for Nest {
             },
             (ANALOG_OUTPUT, a, v) => self.write_analog_output(endpoint, a, v),
             (ANALOG_INPUT, 0x0055, Value::F32(hours)) if endpoint == FILTER_RUNTIME_ENDPOINT => {
-                if hours == 0.0 { self.apply("filter_reset", "ON") } else { status::INVALID_VALUE }
+                if hours == 0.0 {
+                    self.apply("filter_reset", "ON")
+                } else {
+                    status::INVALID_VALUE
+                }
             }
             (BINARY_OUTPUT, 0x0055, Value::Bool(on)) => match self.switch(endpoint) {
                 Some((key, _)) => self.apply(key, if on { "ON" } else { "OFF" }),
@@ -774,9 +832,9 @@ impl Clusters for Nest {
 
 #[cfg(test)]
 mod tests {
+    use super::super::zcl::serve;
     use super::*;
     use crate::fields;
-    use super::super::zcl::serve;
 
     fn nest(dev: Fields, sh: Fields) -> Nest {
         let bridge = crate::bridge::tests::test_bridge();
@@ -788,12 +846,17 @@ mod tests {
     #[test]
     fn endpoints_follow_the_equipment() {
         let ids = |n: &Nest| n.endpoints.iter().map(|e| e.id).collect::<Vec<_>>();
-        let n = nest(fields!{}, fields!{"can_heat" => true});
+        let n = nest(fields! {}, fields! {"can_heat" => true});
         assert_eq!(ids(&n), [1, 2, 5, 40, 42, 10, 11, 12, 13, 14, 41, 43, 20, 21, 22, 23]);
         assert!(!n.has(1, FAN));
-        let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
-                     fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 42, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 43, 20, 21, 22, 23, 24, 26]);
+        let n = nest(
+            fields! {"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
+            fields! {"can_heat" => true, "can_cool" => true},
+        );
+        assert_eq!(
+            ids(&n),
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 42, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 43, 20, 21, 22, 23, 24, 26]
+        );
         assert!(n.has(1, FAN));
     }
 
@@ -806,10 +869,12 @@ mod tests {
 
     #[test]
     fn the_thermostat_as_the_screen_shows_it() {
-        let n = nest(fields!{"temperature_scale" => "C", "current_humidity" => 41, "battery_level" => 3.92,
-                             "backplate_temperature" => 22.1},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 21.38377,
-                             "current_temperature" => 18.20557, "can_heat" => true, "hvac_heater_state" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "C", "current_humidity" => 41, "battery_level" => 3.92,
+            "backplate_temperature" => 22.1},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 21.38377,
+            "current_temperature" => 18.20557, "can_heat" => true, "hvac_heater_state" => true},
+        );
         assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(1800)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(2150)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x04)));
@@ -827,9 +892,11 @@ mod tests {
     #[test]
     fn states_and_times() {
         let soon = chrono::Utc::now().timestamp() + 600;
-        let n = nest(fields!{"leaf" => true, "time_to_target" => soon, "has_air_filter" => true,
-                             "filter_runtime_sec" => 36000, "filter_replacement_needed" => false},
-                     fields!{"can_heat" => true});
+        let n = nest(
+            fields! {"leaf" => true, "time_to_target" => soon, "has_air_filter" => true,
+            "filter_runtime_sec" => 36000, "filter_replacement_needed" => false},
+            fields! {"can_heat" => true},
+        );
         assert_eq!(n.read(20, BINARY_INPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.read(23, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.read(24, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
@@ -847,17 +914,20 @@ mod tests {
         assert_eq!(n.write(19, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
         assert_eq!(n.read(19, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::INVALID_VALUE); // no schedule yet
-        n.bridge.store.merge(&format!("schedule.{}", n.bridge.serial), &fields!{"ver" => 2}, 0, 0, true);
+        n.bridge.store.merge(&format!("schedule.{}", n.bridge.serial), &fields! {"ver" => 2}, 0, 0, true);
         assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::SUCCESS);
-        assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false))); // learning off with the schedule
+        assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        // learning off with the schedule
     }
 
     #[test]
     fn every_listed_attribute_reads_and_every_reported_one_is_listed() {
-        let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_dehumidifier" => true,
-                             "has_air_filter" => true, "has_hot_water_control" => true, "has_x2_heat" => true,
-                             "has_emer_heat" => true, "has_x3_cool" => true},
-                     fields!{"can_heat" => true, "can_cool" => true});
+        let n = nest(
+            fields! {"has_fan" => true, "has_humidifier" => true, "has_dehumidifier" => true,
+            "has_air_filter" => true, "has_hot_water_control" => true, "has_x2_heat" => true,
+            "has_emer_heat" => true, "has_x3_cool" => true},
+            fields! {"can_heat" => true, "can_cool" => true},
+        );
         for e in &n.endpoints {
             for &cluster in &e.clusters {
                 let ids = n.attributes(e.id, cluster).unwrap_or_else(|| panic!("{} {cluster:#06x}", e.id));
@@ -879,7 +949,7 @@ mod tests {
 
     #[test]
     fn what_the_unit_has_not_reported_reads_as_zcls_invalid_values() {
-        let n = nest(fields!{}, fields!{});
+        let n = nest(fields! {}, fields! {});
         assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(i16::MIN))); // 0x8000
         assert_eq!(n.read(1, THERMOSTAT, 0x0001), Some(Value::I16(i16::MIN)));
         assert_eq!(n.read(2, TEMPERATURE, 0x0000), Some(Value::I16(i16::MIN)));
@@ -895,9 +965,11 @@ mod tests {
 
     #[test]
     fn cooling_only_and_running_states() {
-        let n = nest(fields!{},
-                     fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_ac_state" => true,
-                             "hvac_fan_state" => true});
+        let n = nest(
+            fields! {},
+            fields! {"target_temperature_type" => "cool", "can_cool" => true, "hvac_ac_state" => true,
+            "hvac_fan_state" => true},
+        );
         assert_eq!(n.read(1, THERMOSTAT, 0x001B), Some(Value::Enum8(0x00)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x03)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0006)));
@@ -908,9 +980,11 @@ mod tests {
 
     #[test]
     fn stages_have_endpoints_as_wired_and_second_ones_running_state_bits() {
-        let n = nest(fields!{"has_x2_heat" => true, "has_aux_heat" => true},
-                     fields!{"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
-                             "hvac_heat_x2_state" => true, "hvac_fan_state" => true});
+        let n = nest(
+            fields! {"has_x2_heat" => true, "has_aux_heat" => true},
+            fields! {"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
+            "hvac_heat_x2_state" => true, "hvac_fan_state" => true},
+        );
         let stage = |id: u8| (STAGE_ENDPOINTS..SCREEN_TIMEOUT_ENDPOINT).contains(&id);
         let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|&id| stage(id)).collect();
         assert_eq!(ids, [30, 31, 33], "heat stages 1 and 2, aux; no cool stage of its own");
@@ -918,9 +992,11 @@ mod tests {
         assert_eq!(n.read(31, BINARY_INPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.read(33, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x000D)));
-        assert!(!nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().any(|e| stage(e.id)));
-        let cool = nest(fields!{"has_x2_cool" => true},
-                        fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true});
+        assert!(!nest(fields! {}, fields! {"can_heat" => true}).endpoints.iter().any(|e| stage(e.id)));
+        let cool = nest(
+            fields! {"has_x2_cool" => true},
+            fields! {"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true},
+        );
         assert_eq!(cool.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0012)));
         assert_eq!(cool.read(38, BINARY_INPUT, 0x001C), Some(Value::Str("Cool stage 2".into())));
     }
@@ -928,9 +1004,11 @@ mod tests {
     #[test]
     fn fahrenheit_temperatures_are_the_whole_degrees_the_screen_shows() {
         // 19.5 °C shows as 67 °F, 22 °C as 72 °F.
-        let n = nest(fields!{"temperature_scale" => "F"},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 19.5,
-                             "current_temperature" => 22.0, "can_heat" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "F"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 19.5,
+            "current_temperature" => 22.0, "can_heat" => true},
+        );
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(1)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(1944)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(2222)));
@@ -942,9 +1020,11 @@ mod tests {
 
     #[test]
     fn in_heat_cool_the_heating_and_cooling_setpoints_are_the_range() {
-        let n = nest(fields!{"temperature_scale" => "C"},
-                     fields!{"target_temperature_type" => "range", "target_temperature_low" => 19.0,
-                             "target_temperature_high" => 24.0, "can_heat" => true, "can_cool" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "range", "target_temperature_low" => 19.0,
+            "target_temperature_high" => 24.0, "can_heat" => true, "can_cool" => true},
+        );
         let range = |n: &Nest| (n.read(1, THERMOSTAT, 0x0012), n.read(1, THERMOSTAT, 0x0011));
         let i16s = |low, high| (Some(Value::I16(low)), Some(Value::I16(high)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x01)));
@@ -966,7 +1046,7 @@ mod tests {
 
     #[test]
     fn the_fan_and_the_analog_outputs_take_what_mqtt_takes() {
-        let n = nest(fields!{"has_fan" => true, "has_humidifier" => true}, fields!{"can_heat" => true});
+        let n = nest(fields! {"has_fan" => true, "has_humidifier" => true}, fields! {"can_heat" => true});
         assert_eq!(n.read(1, FAN, 0x0000), Some(Value::Enum8(0x05)));
         assert_eq!(n.write(1, FAN, 0x0000, Value::Enum8(0x04)), status::SUCCESS);
         assert_eq!(n.read(1, FAN, 0x0000), Some(Value::Enum8(0x04)));
@@ -989,8 +1069,11 @@ mod tests {
 
     #[test]
     fn the_fan_schedule_is_a_switch_and_three_analog_outputs() {
-        let n = nest(fields!{"has_fan" => true, "fan_mode" => "auto", "fan_duty_cycle" => 3600,
-                             "fan_duty_start_time" => 0, "fan_duty_end_time" => 0}, fields!{});
+        let n = nest(
+            fields! {"has_fan" => true, "fan_mode" => "auto", "fan_duty_cycle" => 3600,
+            "fan_duty_start_time" => 0, "fan_duty_end_time" => 0},
+            fields! {},
+        );
         assert_eq!(n.read(29, BINARY_OUTPUT, 0x001C), Some(Value::Str("Fan schedule".into())));
         assert_eq!(n.read(29, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.write(29, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
@@ -1005,24 +1088,30 @@ mod tests {
         assert_eq!(n.write(8, ANALOG_OUTPUT, 0x0055, Value::F32(7.0)), status::SUCCESS);
         assert_eq!(n.write(9, ANALOG_OUTPUT, 0x0055, Value::F32(23.0)), status::SUCCESS);
         assert_eq!(n.write(9, ANALOG_OUTPUT, 0x0055, Value::F32(24.0)), status::INVALID_VALUE);
-        assert_eq!((n.read(8, ANALOG_OUTPUT, 0x0055), n.read(9, ANALOG_OUTPUT, 0x0055)),
-                   (Some(Value::F32(7.0)), Some(Value::F32(23.0))));
-        assert_eq!((&n.view().dev["fan_duty_start_time"], &n.view().dev["fan_duty_end_time"]),
-                   (&serde_json::json!(25_200), &serde_json::json!(82_800)));
+        assert_eq!(
+            (n.read(8, ANALOG_OUTPUT, 0x0055), n.read(9, ANALOG_OUTPUT, 0x0055)),
+            (Some(Value::F32(7.0)), Some(Value::F32(23.0)))
+        );
+        assert_eq!(
+            (&n.view().dev["fan_duty_start_time"], &n.view().dev["fan_duty_end_time"]),
+            (&serde_json::json!(25_200), &serde_json::json!(82_800))
+        );
         assert_eq!(n.read(8, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(HOURS)));
 
-        let without = nest(fields!{}, fields!{});
+        let without = nest(fields! {}, fields! {});
         assert!([7, 8, 9].iter().all(|&id| without.attributes(id, ANALOG_OUTPUT).is_none()));
         assert!(without.attributes(29, BINARY_OUTPUT).is_none());
     }
 
     #[test]
     fn the_screen_timeout_is_an_analog_output_and_always_on_a_switch() {
-        let n = nest(fields!{}, fields!{});
+        let n = nest(fields! {}, fields! {});
         assert_eq!(n.read(40, ANALOG_OUTPUT, 0x001C), Some(Value::Str("Screen timeout".into())));
         assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0055), Some(Value::F32(30.0)), "nlclient's own until set");
-        assert_eq!((n.read(40, ANALOG_OUTPUT, 0x0045), n.read(40, ANALOG_OUTPUT, 0x0041)),
-                   (Some(Value::F32(10.0)), Some(Value::F32(600.0))));
+        assert_eq!(
+            (n.read(40, ANALOG_OUTPUT, 0x0045), n.read(40, ANALOG_OUTPUT, 0x0041)),
+            (Some(Value::F32(10.0)), Some(Value::F32(600.0)))
+        );
         assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(SECONDS)));
         assert_eq!(n.write(40, ANALOG_OUTPUT, 0x0055, Value::F32(119.6)), status::SUCCESS);
         assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0055), Some(Value::F32(120.0)));
@@ -1041,10 +1130,12 @@ mod tests {
 
     #[test]
     fn the_screen_brightness_is_an_analog_output_and_auto_a_switch() {
-        let n = nest(fields!{}, fields!{});
+        let n = nest(fields! {}, fields! {});
         assert_eq!(n.read(42, ANALOG_OUTPUT, 0x001C), Some(Value::Str("Screen brightness".into())));
-        assert_eq!((n.read(42, ANALOG_OUTPUT, 0x0045), n.read(42, ANALOG_OUTPUT, 0x0041)),
-                   (Some(Value::F32(0.0)), Some(Value::F32(100.0))));
+        assert_eq!(
+            (n.read(42, ANALOG_OUTPUT, 0x0045), n.read(42, ANALOG_OUTPUT, 0x0041)),
+            (Some(Value::F32(0.0)), Some(Value::F32(100.0)))
+        );
         assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(PERCENT)));
         assert_eq!(n.read(43, BINARY_OUTPUT, 0x001C), Some(Value::Str("Screen brightness auto".into())));
         assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
@@ -1068,7 +1159,7 @@ mod tests {
 
     #[test]
     fn commands_the_endpoint_does_not_have_are_refused() {
-        let n = nest(fields!{}, fields!{"can_heat" => true});
+        let n = nest(fields! {}, fields! {"can_heat" => true});
         assert_eq!(n.command(10, BINARY_OUTPUT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND);
         assert_eq!(n.write(20, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY); // a state, not a switch
         assert_eq!(n.write(20, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
@@ -1078,8 +1169,10 @@ mod tests {
 
     #[test]
     fn zcl_frames_reach_the_unit() {
-        let n = nest(fields!{"temperature_scale" => "C"},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 20.0, "can_heat" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0, "can_heat" => true},
+        );
         // Write the heating setpoint, 21.5 °C, then as an enum8.
         let out = serve(&n, 1, THERMOSTAT, &[0x00, 1, 0x02, 0x12, 0x00, 0x29, 0x66, 0x08]).unwrap();
         assert_eq!(out, [0x18, 1, 0x04, 0x00]);
@@ -1093,8 +1186,10 @@ mod tests {
 
     #[test]
     fn writes_are_commands() {
-        let n = nest(fields!{"temperature_scale" => "C", "has_fan" => true, "fan_timer_duration" => 900},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 20.0});
+        let n = nest(
+            fields! {"temperature_scale" => "C", "has_fan" => true, "fan_timer_duration" => 900},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0},
+        );
         assert_eq!(n.write(1, THERMOSTAT, 0x0012, Value::I16(2150)), status::SUCCESS);
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(2150)));
         assert_eq!(n.write(1, THERMOSTAT, 0x001C, Value::Enum8(0x03)), status::SUCCESS);
@@ -1119,28 +1214,38 @@ mod tests {
 
     #[test]
     fn switches_and_states_tell_their_names() {
-        let n = nest(fields!{"has_humidifier" => true}, fields!{"can_heat" => true, "can_cool" => true});
-        let names = |cluster, ids: &[u8]| -> Vec<Option<Value>> {
-            ids.iter().map(|&id| n.read(id, cluster, 0x001C)).collect()
-        };
+        let n = nest(fields! {"has_humidifier" => true}, fields! {"can_heat" => true, "can_cool" => true});
+        let names =
+            |cluster, ids: &[u8]| -> Vec<Option<Value>> { ids.iter().map(|&id| n.read(id, cluster, 0x001C)).collect() };
         let text = |names: &[&str]| -> Vec<Option<Value>> {
             names.iter().map(|name| Some(Value::Str((*name).into()))).collect()
         };
-        assert_eq!(names(BINARY_OUTPUT, &[10, 11, 12, 13, 14, 15, 16]),
-                   text(&["Auto-Schedule", "Home/Away Assist", "Sunblock", "Early-On", "Eco heat limit", "Eco cool limit",
-                          "Humidity control"]));
-        assert_eq!(names(BINARY_INPUT, &[20, 21, 22, 23, 26]),
-                   text(&["Leaf", "Early-On active", "Sunblock active", "Safety shutoff", "Humidifier"]));
+        assert_eq!(
+            names(BINARY_OUTPUT, &[10, 11, 12, 13, 14, 15, 16]),
+            text(&[
+                "Auto-Schedule",
+                "Home/Away Assist",
+                "Sunblock",
+                "Early-On",
+                "Eco heat limit",
+                "Eco cool limit",
+                "Humidity control"
+            ])
+        );
+        assert_eq!(
+            names(BINARY_INPUT, &[20, 21, 22, 23, 26]),
+            text(&["Leaf", "Early-On active", "Sunblock active", "Safety shutoff", "Humidifier"])
+        );
         assert!(SWITCHES.iter().all(|(id, _, _)| n.attributes(*id, 0x0006).is_none()), "no On/Off beside them");
     }
 
     #[test]
     fn hot_water_endpoints_come_with_its_control_and_drive_its_fields() {
-        let without = nest(fields!{}, fields!{});
+        let without = nest(fields! {}, fields! {});
         assert!(without.attributes(17, BINARY_OUTPUT).is_none());
         assert!(without.attributes(18, BINARY_OUTPUT).is_none());
 
-        let n = nest(fields!{"has_hot_water_control" => true}, fields!{});
+        let n = nest(fields! {"has_hot_water_control" => true}, fields! {});
         assert_eq!(n.read(17, BINARY_OUTPUT, 0x001C), Some(Value::Str("Hot water boost".into())));
         assert_eq!(n.read(17, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.write(17, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
@@ -1156,7 +1261,7 @@ mod tests {
 
     #[test]
     fn a_write_attributes_frame_flips_a_switch() {
-        let n = nest(fields!{}, fields!{"can_heat" => true});
+        let n = nest(fields! {}, fields! {"can_heat" => true});
         let out = serve(&n, 11, BINARY_OUTPUT, &[0x00, 1, 0x02, 0x55, 0x00, 0x10, 0x01]).unwrap();
         assert_eq!(out, [0x18, 1, 0x04, 0x00]);
         assert_eq!(n.read(11, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
@@ -1164,8 +1269,10 @@ mod tests {
 
     #[test]
     fn setpoints_outside_the_advertised_limits_are_refused() {
-        let n = nest(fields!{"temperature_scale" => "C"},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 20.0, "can_heat" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0, "can_heat" => true},
+        );
         assert_eq!(n.read(1, THERMOSTAT, 0x0015), Some(Value::I16(MIN)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0016), Some(Value::I16(MAX)));
         for t in [450, 899, 3201, 3500] {
@@ -1182,8 +1289,10 @@ mod tests {
 
     #[test]
     fn raise_lower_stays_within_the_limits_and_follows_its_mode() {
-        let n = nest(fields!{"temperature_scale" => "C"},
-                     fields!{"target_temperature_type" => "heat", "target_temperature" => 31.0, "can_heat" => true});
+        let n = nest(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 31.0, "can_heat" => true},
+        );
         let heating = |n: &Nest| n.read(1, THERMOSTAT, 0x0012);
         assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 50]), status::SUCCESS);
         assert_eq!(heating(&n), Some(Value::I16(MAX)));
@@ -1199,13 +1308,22 @@ mod tests {
 
     #[test]
     fn an_external_temperature_written_over_zigbee_is_the_sensors_reading() {
-        let n = nest(fields!{}, fields!{});
+        let n = nest(fields! {}, fields! {});
         assert_eq!(n.read(1, WEATHER, EXTERNAL_TEMPERATURE), Some(Value::I16(NONE)));
-        assert_ne!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2150)), status::SUCCESS, "no -external-temperature");
+        assert_ne!(
+            n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2150)),
+            status::SUCCESS,
+            "no -external-temperature"
+        );
         let dir = std::env::temp_dir().join(format!("nestlocal-zb-sensor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"),
-                                                 std::time::Duration::from_secs(1800)).unwrap();
+        let sensor = crate::sensor::Sensor::open(
+            &dir.join("sensor.json"),
+            "S",
+            &dir.join("none"),
+            std::time::Duration::from_secs(1800),
+        )
+        .unwrap();
         n.bridge.attach_sensor(sensor.clone());
         assert_eq!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2150)), status::SUCCESS);
         assert_eq!(sensor.reading(), Some(21.5));
@@ -1215,15 +1333,20 @@ mod tests {
 
     #[test]
     fn the_external_temperature_has_an_endpoint_saying_whether_it_regulates() {
-        let without = nest(fields!{}, fields!{});
+        let without = nest(fields! {}, fields! {});
         assert!(without.attributes(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT).is_none());
 
         let bridge = crate::bridge::tests::test_bridge();
-        bridge.store.merge(&format!("link.{}", bridge.serial), &fields!{"structure" => "structure.home"}, 0, 0, false);
+        bridge.store.merge(&format!("link.{}", bridge.serial), &fields! {"structure" => "structure.home"}, 0, 0, false);
         let dir = std::env::temp_dir().join(format!("nestlocal-zb-source-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), &bridge.serial, &dir.join("none"),
-                                                 std::time::Duration::from_secs(1800)).unwrap();
+        let sensor = crate::sensor::Sensor::open(
+            &dir.join("sensor.json"),
+            &bridge.serial,
+            &dir.join("none"),
+            std::time::Duration::from_secs(1800),
+        )
+        .unwrap();
         bridge.attach_sensor(sensor.clone());
         crate::sensor::ensure_buckets(&bridge.store, &bridge.serial, &sensor.bucket, None);
         let n = Nest::new(bridge);
@@ -1233,8 +1356,13 @@ mod tests {
         assert_eq!(n.write(1, WEATHER, EXTERNAL_TEMPERATURE, Value::I16(2100)), status::SUCCESS);
         sensor.due().unwrap();
         assert_eq!(source(), Some(Value::Bool(true)));
-        n.bridge.store.merge(&format!("rcs_settings.{}", n.bridge.serial),
-                             &fields!{"active_rcs_sensors" => Vec::<Json>::new()}, 0, 0, true);
+        n.bridge.store.merge(
+            &format!("rcs_settings.{}", n.bridge.serial),
+            &fields! {"active_rcs_sensors" => Vec::<Json>::new()},
+            0,
+            0,
+            true,
+        );
         assert_eq!(source(), Some(Value::Bool(false)), "the backplate is chosen");
         assert_eq!(n.write(TEMPERATURE_SOURCE_ENDPOINT, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
     }
@@ -1242,7 +1370,7 @@ mod tests {
     #[test]
     fn weather_written_over_zigbee_is_what_mqtt_gives() {
         use serde_json::json;
-        let n = nest(fields!{}, fields!{});
+        let n = nest(fields! {}, fields! {});
         let answer = || n.bridge.outdoor.answer().map(Json::Object);
         // The readings: as the thermostat's outdoor temperature too.
         assert_eq!(n.write(1, WEATHER, OUTDOOR_TEMPERATURE, Value::I16(-340)), status::SUCCESS);
@@ -1254,26 +1382,32 @@ mod tests {
         // the first hour and the first day (1790679723 is 2026-09-29 11:02:03 UTC).
         let utc = |unix: u32| (unix - 946_684_800).to_le_bytes();
         let mut frame = vec![0x04, 0xD6, 0x10, 7, 0x02];
-        for (id, type_id, value) in [(CONDITION, 0x42, b"\x0cpartlycloudy"[..].to_vec()),
-                                     (NEXT_RISING, 0xE2, utc(1790679723 + 86400).to_vec()), (NEXT_SETTING, 0xE2, utc(1790722504).to_vec()),
-                                     (HOURLY | SLOT_TIME, 0xE2, utc(1790697600).to_vec()),
-                                     (HOURLY | SLOT_TEMPERATURE, 0x29, 2280i16.to_le_bytes().to_vec()),
-                                     (HOURLY | SLOT_HUMIDITY, 0x20, vec![66]),
-                                     (DAILY | SLOT_TIME, 0xE2, utc(1790694000).to_vec()),
-                                     (DAILY | SLOT_TEMPERATURE, 0x29, 2330i16.to_le_bytes().to_vec()),
-                                     (DAILY | SLOT_LOW, 0x29, 1500i16.to_le_bytes().to_vec())] {
+        for (id, type_id, value) in [
+            (CONDITION, 0x42, b"\x0cpartlycloudy"[..].to_vec()),
+            (NEXT_RISING, 0xE2, utc(1790679723 + 86400).to_vec()),
+            (NEXT_SETTING, 0xE2, utc(1790722504).to_vec()),
+            (HOURLY | SLOT_TIME, 0xE2, utc(1790697600).to_vec()),
+            (HOURLY | SLOT_TEMPERATURE, 0x29, 2280i16.to_le_bytes().to_vec()),
+            (HOURLY | SLOT_HUMIDITY, 0x20, vec![66]),
+            (DAILY | SLOT_TIME, 0xE2, utc(1790694000).to_vec()),
+            (DAILY | SLOT_TEMPERATURE, 0x29, 2330i16.to_le_bytes().to_vec()),
+            (DAILY | SLOT_LOW, 0x29, 1500i16.to_le_bytes().to_vec()),
+        ] {
             frame.extend(id.to_le_bytes());
             frame.push(type_id);
             frame.extend(value);
         }
         assert_eq!(serve(&n, 1, WEATHER, &frame), Some(vec![0x1C, 0xD6, 0x10, 7, 0x04, 0x00]));
-        assert_eq!(answer(), Some(crate::json::canonical(json!({
-            "current": {"temp_c": -3.4, "humidity": 82.0, "icon": "partlycloudy", "sunrise": 1790679723_i64, "sunset": 1790722504_i64},
-            "forecast": {
-                "hourly": [{"hour": 1, "time": 1790697600_i64, "temp_c": 22.8, "humidity": 66.0}],
-                "daily": [{"date": 1790694000_i64, "temp_high_c": 23.3, "temp_low_c": 15.0}],
-            },
-        }))));
+        assert_eq!(
+            answer(),
+            Some(crate::json::canonical(json!({
+                "current": {"temp_c": -3.4, "humidity": 82.0, "icon": "partlycloudy", "sunrise": 1790679723_i64, "sunset": 1790722504_i64},
+                "forecast": {
+                    "hourly": [{"hour": 1, "time": 1790697600_i64, "temp_c": 22.8, "humidity": 66.0}],
+                    "daily": [{"date": 1790694000_i64, "temp_high_c": 23.3, "temp_low_c": 15.0}],
+                },
+            })))
+        );
         assert_eq!(n.read(1, WEATHER, CONDITION), Some(Value::Str("partlycloudy".into())));
         assert_eq!(n.read(1, WEATHER, HOURLY | 1 << 4 | SLOT_TIME), Some(Value::Utc(NO_TIME)), "an hour not written");
         // An hour with its time taken away leaves the forecast; a condition
@@ -1285,8 +1419,10 @@ mod tests {
         // Out of range, and the wrong type over the air.
         assert_eq!(n.write(1, WEATHER, OUTDOOR_TEMPERATURE, Value::I16(6100)), status::INVALID_VALUE);
         assert_eq!(n.write(1, WEATHER, DAILY | SLOT_HUMIDITY, Value::U8(101)), status::INVALID_VALUE);
-        assert_eq!(serve(&n, 1, WEATHER, &[0x04, 0xD6, 0x10, 8, 0x02, 0x01, 0x00, 0x29, 0x00, 0x00]),
-                   Some(vec![0x1C, 0xD6, 0x10, 8, 0x04, 0x8D, 0x01, 0x00]));
+        assert_eq!(
+            serve(&n, 1, WEATHER, &[0x04, 0xD6, 0x10, 8, 0x02, 0x01, 0x00, 0x29, 0x00, 0x00]),
+            Some(vec![0x1C, 0xD6, 0x10, 8, 0x04, 0x8D, 0x01, 0x00])
+        );
         assert_eq!(n.read(1, THERMOSTAT, 0x0001), Some(Value::I16(-340)), "the readings stay");
     }
 }

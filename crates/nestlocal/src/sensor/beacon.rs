@@ -41,7 +41,8 @@ pub fn report(id: u64, key: &[u8; 16], sequence: u32, tenths: i16) -> [u8; REPOR
     nonce[1..9].copy_from_slice(&id.to_be_bytes());
     nonce[10..13].copy_from_slice(&[sequence[2], sequence[1], sequence[0]]);
     let cipher = Ccm::<Aes128, U8, U13>::new(key.into());
-    let tag = cipher.encrypt_inout_detached((&nonce).into(), &[], (&mut body[..]).into())
+    let tag = cipher
+        .encrypt_inout_detached((&nonce).into(), &[], (&mut body[..]).into())
         .expect("a 5-byte body is within CCM's limits");
 
     let mut data = [0u8; DATA_LEN];
@@ -65,14 +66,18 @@ mod tests {
     use super::*;
 
     const ID: u64 = 0x18B4_3000_00A1_B2C3;
-    const KEY: [u8; 16] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+    const KEY: [u8; 16] =
+        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
 
     /// A beacon stock nlclient 6.4-8 decrypted: 2100 in the 12 bits is -199.6 °C.
     #[test]
     fn matches_a_beacon_nlclient_accepted() {
         let hex: String = report(ID, &KEY, 3, 2100).iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "0300c3b2a1000030181716affe1303c3b2030000e7be27289b531299c7fd0766\
-                         2200000000000000ce");
+        assert_eq!(
+            hex,
+            "0300c3b2a1000030181716affe1303c3b2030000e7be27289b531299c7fd0766\
+                         2200000000000000ce"
+        );
     }
 
     #[test]

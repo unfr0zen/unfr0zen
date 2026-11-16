@@ -79,7 +79,8 @@ pub trait Nand {
 }
 
 fn erasable(block: usize) -> bool {
-    nand::ENV_COPIES.iter().any(|&env| block == env / nand::BLOCK) || BOOT_TAILS.iter().any(|tail| tail.contains(&block))
+    nand::ENV_COPIES.iter().any(|&env| block == env / nand::BLOCK)
+        || BOOT_TAILS.iter().any(|tail| tail.contains(&block))
 }
 
 fn programmable(page: usize) -> bool {
@@ -115,7 +116,9 @@ impl<B: Bulk> Flasher<B> {
             }
         }
         if !(raw.len() == 20 || raw.len() == 24) || &raw[..4] != CMD_HELLO {
-            return device(format!("no flasher hello (got {raw:02x?}); the flasher did not start, power-cycle the unit"));
+            return device(format!(
+                "no flasher hello (got {raw:02x?}); the flasher did not start, power-cycle the unit"
+            ));
         }
         let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().unwrap());
         let (config1, config7) = (word(4), word(8));
@@ -237,7 +240,9 @@ impl Image {
 
 impl Nand for Image {
     fn read(&mut self, first: usize, count: usize) -> Result<Vec<u8>> {
-        self.raw.get(first * PAGE_RAW..(first + count) * PAGE_RAW).map(<[u8]>::to_vec)
+        self.raw
+            .get(first * PAGE_RAW..(first + count) * PAGE_RAW)
+            .map(<[u8]>::to_vec)
             .ok_or_else(|| Error::Device(format!("pages {first}+{count} are past the image's end")))
     }
 
@@ -292,31 +297,54 @@ mod tests {
     #[test]
     fn the_hello_names_a_known_chip_at_its_width() {
         let x16 = (2 << 10) | (1 << 12);
-        let flasher = Flasher::connect(Scripted { replies: VecDeque::from([b"USBf".to_vec(), hello([0x2c, 0xba], x16)]),
-                                                  ..Default::default() }).unwrap();
+        let flasher = Flasher::connect(Scripted {
+            replies: VecDeque::from([b"USBf".to_vec(), hello([0x2c, 0xba], x16)]),
+            ..Default::default()
+        })
+        .unwrap();
         assert_eq!((flasher.chip(), flasher.idcode), ("Micron MT29F2G16, 256 MiB", None));
         let with_idcode = [hello([0x2c, 0xba], x16), 0x2b89_102fu32.to_le_bytes().to_vec()].concat();
-        let flasher = Flasher::connect(Scripted { replies: VecDeque::from([with_idcode]), ..Default::default() }).unwrap();
+        let flasher =
+            Flasher::connect(Scripted { replies: VecDeque::from([with_idcode]), ..Default::default() }).unwrap();
         assert_eq!(flasher.idcode, Some(0x2b89_102f));
-        let wrong = Flasher::connect(Scripted { replies: VecDeque::from([hello([0x2c, 0xba], 2 << 10)]), ..Default::default() });
+        let wrong = Flasher::connect(Scripted {
+            replies: VecDeque::from([hello([0x2c, 0xba], 2 << 10)]),
+            ..Default::default()
+        });
         assert!(wrong.err().unwrap().to_string().contains("x16 but GPMC CS0 is x8"));
-        for (id, chip, size) in [([0x01, 0xba], "Spansion 2 Gbit x16, 256 MiB", 0x1000_0000), ([0xad, 0xbc], "Hynix 4 Gbit x16, 512 MiB", 0x2000_0000)] {
-            let flasher = Flasher::connect(Scripted { replies: VecDeque::from([hello(id, x16)]), ..Default::default() }).unwrap();
+        for (id, chip, size) in [
+            ([0x01, 0xba], "Spansion 2 Gbit x16, 256 MiB", 0x1000_0000),
+            ([0xad, 0xbc], "Hynix 4 Gbit x16, 512 MiB", 0x2000_0000),
+        ] {
+            let flasher =
+                Flasher::connect(Scripted { replies: VecDeque::from([hello(id, x16)]), ..Default::default() }).unwrap();
             assert_eq!((flasher.chip(), flasher.size()), (chip, size));
         }
-        let unknown = Flasher::connect(Scripted { replies: VecDeque::from([hello([0x98, 0xba], x16)]), ..Default::default() });
+        let unknown =
+            Flasher::connect(Scripted { replies: VecDeque::from([hello([0x98, 0xba], x16)]), ..Default::default() });
         assert!(unknown.err().unwrap().to_string().contains("unknown NAND ID [98, ba"));
     }
 
     #[test]
     fn a_read_takes_whole_packets_and_the_short_one_that_ends_it() {
-        let mut flasher = Flasher { idcode: None, size: 0, bulk: Scripted { replies: VecDeque::from([vec![1; 2048], vec![2; 64]]), ..Default::default() },
-                                    chip: String::new() };
+        let mut flasher = Flasher {
+            idcode: None,
+            size: 0,
+            bulk: Scripted { replies: VecDeque::from([vec![1; 2048], vec![2; 64]]), ..Default::default() },
+            chip: String::new(),
+        };
         let page = flasher.read(5, 1).unwrap();
         assert_eq!(page.len(), PAGE_RAW);
         assert_eq!(flasher.bulk.sent[0], [&b"USBr"[..], &5u32.to_le_bytes(), &1u32.to_le_bytes()].concat());
-        let mut busy = Flasher { idcode: None, size: 0, bulk: Scripted { replies: VecDeque::from([[&b"USBe"[..], &9u32.to_le_bytes()].concat()]),
-                                                  ..Default::default() }, chip: String::new() };
+        let mut busy = Flasher {
+            idcode: None,
+            size: 0,
+            bulk: Scripted {
+                replies: VecDeque::from([[&b"USBe"[..], &9u32.to_le_bytes()].concat()]),
+                ..Default::default()
+            },
+            chip: String::new(),
+        };
         assert!(busy.read(9, 1).unwrap_err().to_string().contains("busy reading page 9"));
     }
 
@@ -341,17 +369,28 @@ mod tests {
     #[test]
     fn a_page_goes_out_in_one_transfer_after_its_command() {
         let status = [&b"USBs"[..], &7u32.to_le_bytes(), &0u32.to_le_bytes()].concat();
-        let mut flasher = Flasher { idcode: None, size: 0, chip: String::new(),
-                                    bulk: Scripted { replies: VecDeque::from([status]), ..Default::default() } };
+        let mut flasher = Flasher {
+            idcode: None,
+            size: 0,
+            chip: String::new(),
+            bulk: Scripted { replies: VecDeque::from([status]), ..Default::default() },
+        };
         assert_eq!(flasher.program(7, &[0x5a; PAGE_RAW]).unwrap(), 0);
-        assert_eq!(flasher.bulk.sent, [[&b"USBp"[..], &7u32.to_le_bytes(), &0u32.to_le_bytes()].concat(), vec![0x5a; PAGE_RAW]]);
+        assert_eq!(
+            flasher.bulk.sent,
+            [[&b"USBp"[..], &7u32.to_le_bytes(), &0u32.to_le_bytes()].concat(), vec![0x5a; PAGE_RAW]]
+        );
     }
 
     #[test]
     fn unlocking_sends_the_magic_word_and_needs_the_flasher_to_agree() {
         let status = |status: u32| [&b"USBs"[..], &0u32.to_le_bytes(), &status.to_le_bytes()].concat();
-        let flasher = |reply| Flasher { idcode: None, size: 0, chip: String::new(),
-                                        bulk: Scripted { replies: VecDeque::from([reply]), ..Default::default() } };
+        let flasher = |reply| Flasher {
+            idcode: None,
+            size: 0,
+            chip: String::new(),
+            bulk: Scripted { replies: VecDeque::from([reply]), ..Default::default() },
+        };
         let mut unlocked = flasher(status(0));
         unlocked.unlock().unwrap();
         assert_eq!(unlocked.bulk.sent[0], [&b"USBU"[..], b"ALL!", &0u32.to_le_bytes()].concat());

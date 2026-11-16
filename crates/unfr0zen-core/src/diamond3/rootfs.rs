@@ -1,7 +1,7 @@
 //! The diamond3's part of the root filesystem setup: the USB root shell
 //! (inittab, usb-gadget and `unlocked`), its OpenSSH, and root's shell profile.
 
-use crate::setup::{check_mode, set_up_shell, put, text, Options, Rootfs, Tree, PROFILE};
+use crate::setup::{check_mode, put, set_up_shell, text, Options, Rootfs, Tree, PROFILE};
 use crate::{device, Result};
 
 pub(crate) const OLD_GETTY: &str = "null::respawn:/usr/sbin/unlocked-getty -L ttyGS0 115200";
@@ -10,39 +10,58 @@ pub(crate) const OLD_GETTY: &str = "null::respawn:/usr/sbin/unlocked-getty -L tt
 const NEW_SHELL: &str = "ttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l";
 /// inittab's root shell line, and the same commented out with the USB root
 /// shell off. The newline before each keeps one from matching inside the other.
-pub(crate) const SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n",
-                                              "\n#ttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n");
+pub(crate) const SHELL_LINES: (&str, &str) = (
+    "\nttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n",
+    "\n#ttyGS0::respawn:/usr/bin/env HOME=/root /bin/sh -l\n",
+);
 /// The plain shell earlier releases put there, on and off, replaced by the
 /// login shell.
 const PLAIN_SHELL_LINES: (&str, &str) = ("\nttyGS0::respawn:/bin/sh\n", "\n#ttyGS0::respawn:/bin/sh\n");
 /// usb-gadget's choice when `unlocked` says yes: ACM, the root shell's port,
 /// with mass storage; with the USB root shell off, mass storage only, as a
 /// locked unit has it.
-pub(crate) const GADGET_LINES: (&str, &str) = ("  USB_GADGET_MOD=g_acm_ms\n",
-                                               "  USB_GADGET_MOD=g_mass_storage # unfr0zen: no USB root shell\n");
+pub(crate) const GADGET_LINES: (&str, &str) =
+    ("  USB_GADGET_MOD=g_acm_ms\n", "  USB_GADGET_MOD=g_mass_storage # unfr0zen: no USB root shell\n");
 /// The files the setup requires: the root shell's and SSH's among them.
-pub const FILES: [&str; 9] = ["etc/shadow", "etc/inittab", "usr/sbin/unlocked", "etc/init.d/usb-gadget", "etc/init.d/rcS",
-                              "etc/init.d/rcH", "etc/ssh/sshd_config", "etc/init.d/sshd", "etc/nestlabs/client.config"];
+pub const FILES: [&str; 9] = [
+    "etc/shadow",
+    "etc/inittab",
+    "usr/sbin/unlocked",
+    "etc/init.d/usb-gadget",
+    "etc/init.d/rcS",
+    "etc/init.d/rcH",
+    "etc/ssh/sshd_config",
+    "etc/init.d/sshd",
+    "etc/nestlabs/client.config",
+];
 /// (file, mode, stock text, SSH text)
 const SSH_EDITS: [(&str, u32, &str, &str); 4] = [
     ("etc/ssh/sshd_config", 0o644, "PermitRootLogin no\n", "PermitRootLogin yes\n"),
-    ("etc/ssh/sshd_config", 0o644, "HostKey /media/system-config/ssh/ssh_host_rsa_key\n",
-     "HostKey /media/system-config/ssh/ssh_host_rsa_key\nHostKey /media/system-config/ssh/ssh_host_ecdsa_key\n"),
-    ("etc/init.d/sshd", 0o750, "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\n",
-     "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\nSSHECDSAKEY=${SSHCONFDIR}/ssh_host_ecdsa_key\n"),
-    ("etc/init.d/sshd", 0o750, "    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n",
-     "    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n    CreateKeyIfAbsent ecdsa \"${SSHECDSAKEY}\"\n"),
+    (
+        "etc/ssh/sshd_config",
+        0o644,
+        "HostKey /media/system-config/ssh/ssh_host_rsa_key\n",
+        "HostKey /media/system-config/ssh/ssh_host_rsa_key\nHostKey /media/system-config/ssh/ssh_host_ecdsa_key\n",
+    ),
+    (
+        "etc/init.d/sshd",
+        0o750,
+        "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\n",
+        "SSHRSAKEY=${SSHCONFDIR}/ssh_host_rsa_key\nSSHECDSAKEY=${SSHCONFDIR}/ssh_host_ecdsa_key\n",
+    ),
+    (
+        "etc/init.d/sshd",
+        0o750,
+        "    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n",
+        "    CreateKeyIfAbsent rsa \"${SSHRSAKEY}\"\n    CreateKeyIfAbsent ecdsa \"${SSHECDSAKEY}\"\n",
+    ),
 ];
 /// rcS starts sshd with this line; without SSH it is commented out. The
 /// newline before it keeps the stock line from matching inside the other.
 const SSHD_START: (&str, &str) = ("\n${INITDIR}/sshd start\n", "\n#${INITDIR}/sshd start\n");
 
-pub(crate) static ROOTFS: Rootfs = Rootfs {
-    files: &FILES,
-    shadow_modes: &[0o640],
-    optional_files: |_| Vec::new(),
-    set_up,
-};
+pub(crate) static ROOTFS: Rootfs =
+    Rootfs { files: &FILES, shadow_modes: &[0o640], optional_files: |_| Vec::new(), set_up };
 
 fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
     set_up_usb_shell(tree, options.usb_shell)?;

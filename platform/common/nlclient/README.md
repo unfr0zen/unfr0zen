@@ -60,6 +60,7 @@ holding it no longer starts Zigbee pairing.
 While an activity page is visible, stock user-activity notifications keep the
 display and device awake: for the open Matter window, or at most 30 seconds
 for Zigbee. Back or completion stops those notifications and restores normal inactivity behavior.
+
 ## The settings menu
 
 Each entry is a stock screen whose factory builds unfr0zen's screen instead

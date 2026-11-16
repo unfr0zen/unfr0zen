@@ -8,7 +8,6 @@
 -- snow, lightning, the readout, near rain and snow, drops on the glass.
 -- Without weather from Home Assistant it shows a clear sky for the time of
 -- day and leaves the outside out.
-local anim = require("common:anim")
 local thermostat = require("common:thermostat")
 local palette = require("palette")
 local sky = require("sky")
@@ -43,7 +42,9 @@ local function big_number(g, value, unit, x, y, size, color)
   local hw = half and g:measure(half, small) or 0
   local left = x - (w + hw) / 2
   shadowed(g, whole, left, y, big)
-  if half then shadowed(g, half, left + w + 2, y - (size - small.size) * 0.7, small) end
+  if half then
+    shadowed(g, half, left + w + 2, y - (size - small.size) * 0.7, small)
+  end
 end
 
 -- What the system is doing, in words and their colour.
@@ -54,11 +55,21 @@ local function status(t)
       t.range == "low" and colors.heat or colors.cool
   end
   local state = thermostat.state(t)
-  if state == "heating" then return "Heating", colors.heat end
-  if state == "cooling" then return "Cooling", colors.cool end
-  if state == "off" then return "Off", colors.soft end
-  if state == "heat-cool" then return "Heat · Cool", colors.soft end
-  if state == "eco" then return "Eco", colors.soft end
+  if state == "heating" then
+    return "Heating", colors.heat
+  end
+  if state == "cooling" then
+    return "Cooling", colors.cool
+  end
+  if state == "off" then
+    return "Off", colors.soft
+  end
+  if state == "heat-cool" then
+    return "Heat · Cool", colors.soft
+  end
+  if state == "eco" then
+    return "Eco", colors.soft
+  end
   return state == "cool" and "Cool" or "Heat", colors.soft
 end
 
@@ -77,8 +88,12 @@ end
 -- The readout: drawn into a layer, again only when what it shows changes.
 local function readout(g, c, t, w, kind, clock)
   local s = text
-  g:text(thermostat.time_text(clock), c, s.clock.y,
-    { font = "medium", size = s.clock.size, color = colors.faint, align = "center" })
+  g:text(
+    thermostat.time_text(clock),
+    c,
+    s.clock.y,
+    { font = "medium", size = s.clock.size, color = colors.faint, align = "center" }
+  )
   if w.temp_c then
     local line = outside_text(w.temp_c, t.unit) .. (kind.name and "  ·  " .. tr(kind.name) or "")
     shadowed(g, line, c, s.outside.y, { font = "medium", size = s.outside.size, color = colors.text, align = "center" })
@@ -87,11 +102,18 @@ local function readout(g, c, t, w, kind, clock)
   if t.mode == "off" then
     shadowed(g, tr("Off"), c, s.off.y, { font = "light", size = s.off.size, color = colors.text, align = "center" })
   elseif t.mode == "heat-cool" then
-    local function tone(side) return (t.range and t.range ~= side) and colors.dim or colors.text end
+    local function tone(side)
+      return (t.range and t.range ~= side) and colors.dim or colors.text
+    end
     big_number(g, t.low, t.unit, c - s.range.gap, s.range.y, s.range.size, tone("low"))
     big_number(g, t.high, t.unit, c + s.range.gap, s.range.y, s.range.size, tone("high"))
-    shadowed(g, "·", c, s.range.y - s.range.size * 0.25,
-      { font = "light", size = s.range.size * 0.5, color = colors.faint, align = "center" })
+    shadowed(
+      g,
+      "·",
+      c,
+      s.range.y - s.range.size * 0.25,
+      { font = "light", size = s.range.size * 0.5, color = colors.faint, align = "center" }
+    )
   else
     big_number(g, t.target, t.unit, c, s.target.y, s.target.size, colors.text)
   end
@@ -99,7 +121,9 @@ local function readout(g, c, t, w, kind, clock)
   local words, accent = status(t)
   shadowed(g, tr(words), c, s.status.y, { font = "medium", size = s.status.size, color = accent, align = "center" })
   local inside = tr("Inside") .. " " .. thermostat.text(t.current, t.unit) .. "°"
-  if t.humidity then inside = inside .. "  ·  " .. string.format("%d%%", math.floor(t.humidity + 0.5)) end
+  if t.humidity then
+    inside = inside .. "  ·  " .. string.format("%d%%", math.floor(t.humidity + 0.5))
+  end
   shadowed(g, inside, c, s.inside.y, { font = "regular", size = s.inside.size, color = colors.soft, align = "center" })
 
   local hours = upcoming(w, clock)
@@ -108,17 +132,38 @@ local function readout(g, c, t, w, kind, clock)
     local x = c + (i - (#hours + 1) / 2) * f.step
     local hour = thermostat.hour_text(clock, thermostat.local_hour(clock, h.time))
     shadowed(g, hour, x, f.hour_y, { font = "regular", size = f.hour_size, color = colors.faint, align = "center" })
-    shadowed(g, outside_text(h.temp_c, t.unit), x, f.temp_y,
-      { font = "medium", size = f.temp_size, color = colors.text, align = "center" })
+    shadowed(
+      g,
+      outside_text(h.temp_c, t.unit),
+      x,
+      f.temp_y,
+      { font = "medium", size = f.temp_size, color = colors.text, align = "center" }
+    )
   end
 end
 
 -- The readout's key: everything it shows.
 local function readout_key(t, w, clock)
-  local parts = { t.mode, t.unit, t.target, t.low, t.high, t.current, tostring(t.humidity), t.hvac,
-                  t.range or "", tostring(t.range_editing), clock.hour, clock.minute, tostring(clock.twelve_hour),
-                  tostring(w.temp_c), tostring(w.condition or w.icon) }
-  for _, h in ipairs(upcoming(w, clock)) do parts[#parts + 1] = h.time .. ":" .. h.temp_c end
+  local parts = {
+    t.mode,
+    t.unit,
+    t.target,
+    t.low,
+    t.high,
+    t.current,
+    tostring(t.humidity),
+    t.hvac,
+    t.range or "",
+    tostring(t.range_editing),
+    clock.hour,
+    clock.minute,
+    tostring(clock.twelve_hour),
+    tostring(w.temp_c),
+    tostring(w.condition or w.icon),
+  }
+  for _, h in ipairs(upcoming(w, clock)) do
+    parts[#parts + 1] = h.time .. ":" .. h.temp_c
+  end
   return table.concat(parts, "|")
 end
 
@@ -141,9 +186,17 @@ function home.draw(gfx, ui)
   weather.draw_precipitation(gfx, kind, now, false)
   weather.draw_lightning(gfx, kind, now)
 
-  sprites.stamp(gfx, "glow", c, c + 20, palette.scrim.radius,
-    "#000000" .. string.format("%02x", math.floor(255 * palette.scrim.alpha)))
-  gfx:layer("readout", readout_key(t, w, clock), function(g) readout(g, c, t, w, kind, clock) end)
+  sprites.stamp(
+    gfx,
+    "glow",
+    c,
+    c + 20,
+    palette.scrim.radius,
+    "#000000" .. string.format("%02x", math.floor(255 * palette.scrim.alpha))
+  )
+  gfx:layer("readout", readout_key(t, w, clock), function(g)
+    readout(g, c, t, w, kind, clock)
+  end)
   gfx:paint_layer("readout", "#ffffff")
 
   weather.draw_precipitation(gfx, kind, now, true)
@@ -151,7 +204,9 @@ function home.draw(gfx, ui)
 
   -- Precipitation needs every frame; drifting clouds, fog and stars a
   -- calmer rate; a clear sky only the next minute's clock and light.
-  if weather.busy(kind) then return true end
+  if weather.busy(kind) then
+    return true
+  end
   if kind.clouds > 0 or kind.fog or twinkling then
     gfx:wake(1 / palette.rate.calm)
   else

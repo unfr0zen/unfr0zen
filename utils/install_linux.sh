@@ -12,7 +12,10 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$repo_dir"
 
 bin=target/release/unfr0zen
-[ -x "$bin" ] || { echo "build first: cargo build --release -p unfr0zen-gui"; exit 1; }
+[ -x "$bin" ] || {
+    echo "build first: cargo build --release -p unfr0zen-gui"
+    exit 1
+}
 
 share="${XDG_DATA_HOME:-$HOME/.local/share}"
 bindir="$HOME/.local/bin"
@@ -22,7 +25,7 @@ mkdir -p "$bindir" "$icons" "$apps"
 
 install -m755 "$bin" "$bindir/unfr0zen"
 install -m644 assets/icon/unfr0zen.png "$icons/dev.unfr0zen.gui.png"
-sed "s|^Exec=.*|Exec=$bindir/unfr0zen|" assets/unfr0zen.desktop > "$apps/dev.unfr0zen.gui.desktop"
+sed "s|^Exec=.*|Exec=$bindir/unfr0zen|" assets/unfr0zen.desktop >"$apps/dev.unfr0zen.gui.desktop"
 
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -f "$share/icons/hicolor" 2>/dev/null || true
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" 2>/dev/null || true

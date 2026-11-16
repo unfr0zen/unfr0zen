@@ -1,0 +1,8 @@
+# The C and C++ of platform/. Includes stay in their order: some headers
+# depend on what an earlier one defines.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+SortIncludes: Never
+AlignConsecutiveMacros: AcrossComments
+AlignEscapedNewlines: Left

@@ -23,6 +23,8 @@ if [ -d "$dir/patches/recovery" ]; then
 else
     patches="$dir/recovery.patch"
 fi
+# $patches is a list of paths, split where it is used.
+# shellcheck disable=SC2086
 if git -C "$tree" apply --reverse --check $patches 2>/dev/null; then
     : # The current patches are already applied.
 elif git -C "$tree" apply --check $patches 2>/dev/null; then
@@ -55,8 +57,8 @@ official="$repo_dir/build/u-boot-sdp-official.hab"
 official_sha=abbde0ce71d8764067ddc982b8ac4f49d27ad3d2587b44d92c55c8a73a5fe826
 if [ ! -f "$official" ] || [ "$(sha256sum "$official" | cut -d' ' -f1)" != "$official_sha" ]; then
     echo "Fetching official SDP loader"
-    curl -fsSL 'https://nest-open-source.googlesource.com/nest-learning-thermostat/5.7/u-boot/+/3e6d8487fcc10d400584dce41900e66733cb41a3/bin/diamond3/release/u-boot-sdp-5.2d43.hab?format=TEXT' \
-        | base64 -d > "$official.part"
+    curl -fsSL 'https://nest-open-source.googlesource.com/nest-learning-thermostat/5.7/u-boot/+/3e6d8487fcc10d400584dce41900e66733cb41a3/bin/diamond3/release/u-boot-sdp-5.2d43.hab?format=TEXT' |
+        base64 -d >"$official.part"
     test "$(sha256sum "$official.part" | cut -d' ' -f1)" = "$official_sha"
     mv "$official.part" "$official"
 fi

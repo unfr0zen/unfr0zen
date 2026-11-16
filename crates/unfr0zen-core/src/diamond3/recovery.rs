@@ -86,7 +86,8 @@ pub fn boot_order(values: &BTreeMap<String, String>) -> Result<[Slot; 2]> {
     for (place, number) in order.iter_mut().zip(&numbers[..2]) {
         let script = values.get(&format!("nandboot{number}")).map(String::as_str).unwrap_or("");
         if !script.contains(&format!("ubifsmount ubi0:root{number}"))
-            || !script.contains(&format!("root=ubi0:root{number}")) {
+            || !script.contains(&format!("root=ubi0:root{number}"))
+        {
             return device(format!("installed nandboot{number} does not select root{number}"));
         }
         *place = Slot::parse(&format!("root{number}")).unwrap();
@@ -98,7 +99,11 @@ pub fn boot_order(values: &BTreeMap<String, String>) -> Result<[Slot; 2]> {
 pub fn newest(candidates: Vec<Environment>) -> Option<Environment> {
     candidates.into_iter().reduce(|newest, candidate| {
         let ahead = candidate.generation.wrapping_sub(newest.generation);
-        if 0 < ahead && ahead < 128 { candidate } else { newest }
+        if 0 < ahead && ahead < 128 {
+            candidate
+        } else {
+            newest
+        }
     })
 }
 
@@ -179,9 +184,8 @@ pub fn md_words(response: &str, address: u32, count: usize) -> Result<Vec<u32>> 
 
 /// The DRAM banks bdinfo reports: (start, size).
 pub fn dram_banks(bdinfo: &str) -> Vec<(u64, u64)> {
-    static BANK: LazyLock<Regex> = LazyLock::new(|| {
-        regex(r"(?i)-> start\s*=\s*0x([0-9a-f]+)\s*-> size\s*=\s*0x([0-9a-f]+)")
-    });
+    static BANK: LazyLock<Regex> =
+        LazyLock::new(|| regex(r"(?i)-> start\s*=\s*0x([0-9a-f]+)\s*-> size\s*=\s*0x([0-9a-f]+)"));
     BANK.captures_iter(bdinfo)
         .map(|c| (u64::from_str_radix(&c[1], 16).unwrap(), u64::from_str_radix(&c[2], 16).unwrap()))
         .collect()
@@ -191,8 +195,10 @@ pub fn dram_banks(bdinfo: &str) -> Vec<(u64, u64)> {
 pub fn check_ram(bdinfo: &str, end: u64) -> Result<()> {
     let banks = dram_banks(bdinfo);
     if !banks.iter().any(|&(start, size)| start <= RAM_BASE as u64 && end <= start + size) {
-        return device(format!("U-Boot reports DRAM {banks:x?}; the initramfs up to {end:#x} \
-                               would lie outside the memory the kernel is given"));
+        return device(format!(
+            "U-Boot reports DRAM {banks:x?}; the initramfs up to {end:#x} \
+                               would lie outside the memory the kernel is given"
+        ));
     }
     Ok(())
 }
@@ -207,12 +213,14 @@ pub fn initramfs_bootargs(values: &BTreeMap<String, String>, slot: Slot) -> Resu
         return device(format!("installed {name} sets no bootargs before bootm"));
     };
     let mut missing = None;
-    let bootargs = VARIABLE.replace_all(&found[1], |variable: &regex::Captures| {
-        values.get(&variable[1]).cloned().unwrap_or_else(|| {
-            missing.get_or_insert_with(|| variable[1].to_string());
-            String::new()
+    let bootargs = VARIABLE
+        .replace_all(&found[1], |variable: &regex::Captures| {
+            values.get(&variable[1]).cloned().unwrap_or_else(|| {
+                missing.get_or_insert_with(|| variable[1].to_string());
+                String::new()
+            })
         })
-    }).into_owned();
+        .into_owned();
     if let Some(variable) = missing {
         return device(format!("installed environment has no {variable} for bootargs"));
     }
@@ -244,11 +252,16 @@ pub(crate) fn fcb_fields(response: &str) -> Option<BTreeMap<String, i64>> {
     static FIELD: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^\s+(\w+) = (0x[0-9a-fA-F]+|-?\d+)\s*$"));
     // The DBBT repeats fingerprint, checksum and version.
     let fcb = response.split("DBBT :").next().unwrap_or("");
-    let fields: BTreeMap<String, i64> = FIELD.captures_iter(fcb).map(|c| {
-        let value = c[2].strip_prefix("0x").map(|hex| i64::from_str_radix(hex, 16).unwrap())
-            .unwrap_or_else(|| c[2].parse().unwrap());
-        (c[1].to_string(), value)
-    }).collect();
+    let fields: BTreeMap<String, i64> = FIELD
+        .captures_iter(fcb)
+        .map(|c| {
+            let value = c[2]
+                .strip_prefix("0x")
+                .map(|hex| i64::from_str_radix(hex, 16).unwrap())
+                .unwrap_or_else(|| c[2].parse().unwrap());
+            (c[1].to_string(), value)
+        })
+        .collect();
     (fields.get("fingerprint") == Some(&FCB_FINGERPRINT) && fields.contains_key("fw2_pages")).then_some(fields)
 }
 
@@ -272,8 +285,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     }
 
     pub fn attach_ubi(&mut self) -> Result<()> {
-        self.console.command("setenv mtdparts 'mtdparts=gpmi-nand:4m(boot),500m(ubipart),8m(oopsdata)'",
-                             seconds(60))?;
+        self.console
+            .command("setenv mtdparts 'mtdparts=gpmi-nand:4m(boot),500m(ubipart),8m(oopsdata)'", seconds(60))?;
         self.console.command("ubi part ubipart", seconds(90))?;
         Ok(())
     }
@@ -306,7 +319,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         let mut candidates = Vec::new();
         for volume in ["env0", "env1"] {
             let mut read = || -> Result<Environment> {
-                let response = self.console.command(&format!("ubi read {RAM_BASE:#x} {volume} 0x10000"), seconds(60))?;
+                let response =
+                    self.console.command(&format!("ubi read {RAM_BASE:#x} {volume} 0x10000"), seconds(60))?;
                 if !response.contains(&format!("Read 65536 bytes from volume {volume}")) {
                     return device("UBI did not return the full environment");
                 }
@@ -322,8 +336,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
                 Err(failure) => log::info!("{volume}: unavailable: {failure}"),
             }
         }
-        let newest = newest(candidates).map_or_else(
-            || device("could not validate either installed NAND environment"), Ok)?;
+        let newest =
+            newest(candidates).map_or_else(|| device("could not validate either installed NAND environment"), Ok)?;
         log::info!("Using {} generation {}: {:?}", newest.volume, newest.generation, newest.order);
         Ok(newest)
     }
@@ -346,14 +360,18 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
                 }
                 self.firmware = Some(found.to_string());
             }
-            let loaded = self.console.command_allow_failure(
-                &format!("ubifsload {FIT_ADDR:#x} /boot/kernel_fdt.itb"), seconds(60))?;
+            let loaded = self
+                .console
+                .command_allow_failure(&format!("ubifsload {FIT_ADDR:#x} /boot/kernel_fdt.itb"), seconds(60))?;
             // A raw `ubi read` can corrupt a live UBIFS mount's volume
             // descriptor; unmount, so nothing raw runs against a mount.
             self.console.command_allow_failure("ubifsumount", seconds(30))?;
             let lower = loaded.to_lowercase();
-            if loaded.contains("Loading file '/boot/kernel_fdt.itb'") && loaded.contains("Done")
-                && !lower.contains("error") && !lower.contains("fail") {
+            if loaded.contains("Loading file '/boot/kernel_fdt.itb'")
+                && loaded.contains("Done")
+                && !lower.contains("error")
+                && !lower.contains("fail")
+            {
                 let image = self.console.command_allow_failure(&format!("iminfo {FIT_ADDR:#x}"), seconds(30))?;
                 if verified_fit(&image) {
                     // What boot_initramfs checks the FIT against, instead of
@@ -374,7 +392,8 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     fn loaded_size(&mut self) -> Result<usize> {
         static SIZE: LazyLock<Regex> = LazyLock::new(|| regex(r"filesize=([0-9a-fA-F]+)"));
         let response = self.console.command("printenv filesize", seconds(10))?;
-        SIZE.captures(&response).and_then(|c| usize::from_str_radix(&c[1], 16).ok())
+        SIZE.captures(&response)
+            .and_then(|c| usize::from_str_radix(&c[1], 16).ok())
             .map_or_else(|| device("U-Boot did not report the loaded file's size"), Ok)
     }
 
@@ -420,12 +439,15 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         self.console.command(&format!("setenv bootargs '{bootargs}'"), seconds(60))?;
         log::info!("Booting {slot} FIT #{model} with initramfs {length:#x} bytes; bootargs {bootargs}");
         // One line: the USB PHY power-down drops the ACM console.
-        self.console.send_last(&format!("{CONSOLE_OFF_USB}; mw.l {USBPHY1_PWD:#x} 0x00100000; \
-                                         bootm {FIT_ADDR:#x}#{model} {RAM_BASE:#x}:{length:#x}"))
+        self.console.send_last(&format!(
+            "{CONSOLE_OFF_USB}; mw.l {USBPHY1_PWD:#x} 0x00100000; \
+                                         bootm {FIT_ADDR:#x}#{model} {RAM_BASE:#x}:{length:#x}"
+        ))
     }
 
     fn nand_read(&mut self, address: u32, offset: u32, length: u32) -> Result<()> {
-        let response = self.console.command(&format!("nand read {address:#x} {offset:#x} {length:#x}"), seconds(120))?;
+        let response =
+            self.console.command(&format!("nand read {address:#x} {offset:#x} {length:#x}"), seconds(120))?;
         if !response.contains(&format!("{length} bytes read: OK")) {
             return device(format!("nand read {offset:#x}+{length:#x} failed"));
         }
@@ -469,12 +491,21 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
         let boot = self.words(RAM_BASE + (boot_data - load), 3)?;
         let (start, length, plugin) = (boot[0], boot[1], boot[2]);
         if start != load || plugin != 0 {
-            return device(format!("IVT boot data start {start:#x} (plugin {plugin}) does not match the IVT at {own:#x}"));
+            return device(format!(
+                "IVT boot data start {start:#x} (plugin {plugin}) does not match the IVT at {own:#x}"
+            ));
         }
-        if !(HEADER_READ <= length && length <= room && DDR.0 <= load && load as u64 + length as u64 <= DDR.1
-             && load <= entry && entry < load + length) {
-            return device(format!("implausible U-Boot image: load {load:#x}, length {length:#x}, \
-                                   entry {entry:#x}, FCB room {room:#x}"));
+        if !(HEADER_READ <= length
+            && length <= room
+            && DDR.0 <= load
+            && load as u64 + length as u64 <= DDR.1
+            && load <= entry
+            && entry < load + length)
+        {
+            return device(format!(
+                "implausible U-Boot image: load {load:#x}, length {length:#x}, \
+                                   entry {entry:#x}, FCB room {room:#x}"
+            ));
         }
         self.nand_read(load, offset, length)?;
         if self.words(own, 2)? != [header, entry] {
@@ -486,13 +517,20 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     /// Chainloads the stock U-Boot from NAND; it then runs its own bootcmd.
     pub fn boot_vendor(mut self) -> Result<VendorImage> {
         let image = self.stage_vendor()?;
-        log::info!("Chainloading vendor U-Boot: NAND {:#x}, {:#x} bytes at {:#x}, entry {:#x}",
-                   image.offset, image.length, image.load, image.entry);
+        log::info!(
+            "Chainloading vendor U-Boot: NAND {:#x}, {:#x} bytes at {:#x}, entry {:#x}",
+            image.offset,
+            image.length,
+            image.load,
+            image.entry
+        );
         // One line: the USB PHY power-down drops the ACM console. A recovery
         // with its data cache on must write the loaded image out, and drop
         // instructions cached from where recovery first ran, before go.
-        self.console.send_last(&format!("{CONSOLE_OFF_USB}; dcache off; icache off; mw.l {USBPHY1_PWD:#x} 0x00100000; go {:#x}",
-                                        image.entry))?;
+        self.console.send_last(&format!(
+            "{CONSOLE_OFF_USB}; dcache off; icache off; mw.l {USBPHY1_PWD:#x} 0x00100000; go {:#x}",
+            image.entry
+        ))?;
         Ok(image)
     }
 }
@@ -525,9 +563,11 @@ pub(crate) mod tests {
     /// from; stock U-Boot's dumps nothing then.
     #[test]
     fn a_differing_fcb_copy_does_not_hide_the_fcb() {
-        let warning = "NAND FCB read from 0x0 offset 0x400 read: OK\nNAND FCB read from 0x20000 offset 0x400 read: OK\n\
+        let warning =
+            "NAND FCB read from 0x0 offset 0x400 read: OK\nNAND FCB read from 0x20000 offset 0x400 read: OK\n\
                        FCB at 0x20000: 1 bit(s) corrected\nFCB copies are not identical\n";
-        let dump = "FCB :\n  fingerprint = 0x20424346\n  fw1_start = 0x80\n  fw1_pages = 0x100\n  fw2_start = 0x180\n  \
+        let dump =
+            "FCB :\n  fingerprint = 0x20424346\n  fw1_start = 0x80\n  fw1_pages = 0x100\n  fw2_start = 0x180\n  \
                     fw2_pages = 0x100\nDBBT :\n  fingerprint = 0x54424244\n";
         assert_eq!(fcb_fields(&format!("{warning}{dump}")).unwrap()["fw1_start"], 0x80);
         assert_eq!(fcb_fields(warning), None);
@@ -558,11 +598,16 @@ pub(crate) mod tests {
 
     impl Unit {
         fn peek(&self, address: u32, length: usize) -> Vec<u8> {
-            (0..length as u32).map(|i| {
-                let at = address + i;
-                self.ram.iter().rev().find(|(start, data)| *start <= at && at < start + data.len() as u32)
-                    .map_or(0, |(start, data)| data[(at - start) as usize])
-            }).collect()
+            (0..length as u32)
+                .map(|i| {
+                    let at = address + i;
+                    self.ram
+                        .iter()
+                        .rev()
+                        .find(|(start, data)| *start <= at && at < start + data.len() as u32)
+                        .map_or(0, |(start, data)| data[(at - start) as usize])
+                })
+                .collect()
         }
 
         fn reply(&mut self, line: &str) -> String {
@@ -589,15 +634,24 @@ pub(crate) mod tests {
                 ["md.l", address, count] => {
                     let (address, count) = (hex(address), hex(count) as usize);
                     let data = self.peek(address, count * 4);
-                    data.chunks(16).enumerate().map(|(i, chunk)| {
-                        let values: String = chunk.chunks(4)
-                            .map(|w| format!(" {:08x}", u32::from_le_bytes(w.try_into().unwrap()))).collect();
-                        format!("{:08x}:{values}    ................\n", address + 16 * i as u32)
-                    }).collect()
+                    data.chunks(16)
+                        .enumerate()
+                        .map(|(i, chunk)| {
+                            let values: String = chunk
+                                .chunks(4)
+                                .map(|w| format!(" {:08x}", u32::from_le_bytes(w.try_into().unwrap())))
+                                .collect();
+                            format!("{:08x}:{values}    ................\n", address + 16 * i as u32)
+                        })
+                        .collect()
                 }
                 ["ubifsmount", volume] => {
                     let slot = volume.trim_start_matches("ubi0:");
-                    if self.bootable.contains(slot) { "UBIFS mounted\n".into() } else { "UBIFS error (ubi0:0)\n".into() }
+                    if self.bootable.contains(slot) {
+                        "UBIFS mounted\n".into()
+                    } else {
+                        "UBIFS error (ubi0:0)\n".into()
+                    }
                 }
                 ["ubifsload", ..] => {
                     self.loads += 1;
@@ -607,12 +661,17 @@ pub(crate) mod tests {
                 ["ubifsls", _] => "<DIR>\t        32  Wed Nov  5 07:22:11 2025  4.1.15-6.4-8\n".into(),
                 ["printenv", "filesize"] => "filesize=384\n".into(),
                 ["iminfo", _] => format!("FIT image found\n{}", "Hash(es) for Image: sha256+\n".repeat(10)),
-                ["bdinfo"] => format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {:#010x}\n", self.dram),
+                ["bdinfo"] => {
+                    format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {:#010x}\n", self.dram)
+                }
                 ["nandbcb", "dump", _] => {
                     let offset = *self.nand.keys().next().unwrap();
                     let (first, pages) = (offset / PAGE, 0x80000 / PAGE);
-                    format!("FCB :\n  fingerprint = 0x20424346\n  fw1_start = {first:#x}\n  fw1_pages = {pages:#x}\n  \
-                             fw2_start = {:#x}\n  fw2_pages = {pages:#x}\nDBBT :\n  fingerprint = 0x54424244\n", first + pages)
+                    format!(
+                        "FCB :\n  fingerprint = 0x20424346\n  fw1_start = {first:#x}\n  fw1_pages = {pages:#x}\n  \
+                             fw2_start = {:#x}\n  fw2_pages = {pages:#x}\nDBBT :\n  fingerprint = 0x54424244\n",
+                        first + pages
+                    )
                 }
                 ["nand", "read", address, offset, length] => {
                     let (address, offset, length) = (hex(address), hex(offset), hex(length) as usize);
@@ -622,9 +681,12 @@ pub(crate) mod tests {
                     let end = offset + length as u32;
                     let flaky = self.flaky_reads > 0;
                     self.flaky_reads = self.flaky_reads.saturating_sub(1);
-                    if self.ecc_errors || flaky || self.uncorrectable.iter().any(|&b| b < end && offset < b + 0x2_0000) {
-                        return format!("\nNAND read: device 0 offset {offset:#x}, size {length:#x}\n\
-                                        NAND read from offset {offset:x} failed -74\n {length} bytes read: ERROR\n");
+                    if self.ecc_errors || flaky || self.uncorrectable.iter().any(|&b| b < end && offset < b + 0x2_0000)
+                    {
+                        return format!(
+                            "\nNAND read: device 0 offset {offset:#x}, size {length:#x}\n\
+                                        NAND read from offset {offset:x} failed -74\n {length} bytes read: ERROR\n"
+                        );
                     }
                     format!("\nNAND read: device 0 offset {offset:#x}, size {length:#x}\n {length} bytes read: OK\n")
                 }
@@ -642,7 +704,10 @@ pub(crate) mod tests {
                         data[0] ^= 1;
                     }
                     self.nand.insert(hex(offset), data);
-                    format!("\nNAND write: device 0 offset {offset}, size {length}\n {} bytes written: OK\n", hex(length))
+                    format!(
+                        "\nNAND write: device 0 offset {offset}, size {length}\n {} bytes written: OK\n",
+                        hex(length)
+                    )
                 }
                 _ => String::new(),
             }
@@ -693,13 +758,24 @@ pub(crate) mod tests {
     }
 
     fn installed() -> BTreeMap<String, String> {
-        [("console", "ttymxc0"), ("baudrate", "115200"), ("mtdoopsdev", "3"), ("brightness", "1024"),
-         ("nlmodel", "Display-3.4"), ("fit_addr", "0x83000000"),
-         ("nandboot0", "ubifsmount ubi0:root0 && ubifsload ${fit_addr} /boot/kernel_fdt.itb && \
+        [
+            ("console", "ttymxc0"),
+            ("baudrate", "115200"),
+            ("mtdoopsdev", "3"),
+            ("brightness", "1024"),
+            ("nlmodel", "Display-3.4"),
+            ("fit_addr", "0x83000000"),
+            (
+                "nandboot0",
+                "ubifsmount ubi0:root0 && ubifsload ${fit_addr} /boot/kernel_fdt.itb && \
                         setenv bootargs console=${console},${baudrate} mtdoops.mtddev=${mtdoopsdev} \
                         ubi.mtd=ubipart root=ubi0:root0 rootfstype=ubifs rootwait \
-                        lm3695_bl.default_brightness=${brightness} && bootm ${fit_addr}#${nlmodel}")]
-            .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+                        lm3695_bl.default_brightness=${brightness} && bootm ${fit_addr}#${nlmodel}",
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
     }
 
     #[test]
@@ -713,8 +789,12 @@ pub(crate) mod tests {
 
     #[test]
     fn newest_environment_handles_generation_wrap() {
-        let env = |generation, volume| Environment { generation, order: [Slot::Root0, Slot::Root1],
-                                                     volume, values: BTreeMap::new() };
+        let env = |generation, volume| Environment {
+            generation,
+            order: [Slot::Root0, Slot::Root1],
+            volume,
+            values: BTreeMap::new(),
+        };
         assert_eq!(newest(vec![env(255, "env0"), env(0, "env1")]).unwrap().volume, "env1");
         assert_eq!(newest(vec![env(61, "env0"), env(60, "env1")]).unwrap().volume, "env0");
     }
@@ -773,9 +853,11 @@ pub(crate) mod tests {
 
     #[test]
     fn bootargs_come_from_the_installed_boot_script() {
-        assert_eq!(initramfs_bootargs(&installed(), Slot::Root0).unwrap(),
-                   "console=ttymxc0,115200 mtdoops.mtddev=3 ubi.mtd=ubipart root=ubi0:root0 rootfstype=ubifs \
-                    rootwait lm3695_bl.default_brightness=1024 rdinit=/init unfr0zen.slot=root0 loglevel=4");
+        assert_eq!(
+            initramfs_bootargs(&installed(), Slot::Root0).unwrap(),
+            "console=ttymxc0,115200 mtdoops.mtddev=3 ubi.mtd=ubipart root=ubi0:root0 rootfstype=ubifs \
+                    rootwait lm3695_bl.default_brightness=1024 rdinit=/init unfr0zen.slot=root0 loglevel=4"
+        );
         let mut missing = installed();
         missing.remove("brightness");
         assert!(initramfs_bootargs(&missing, Slot::Root0).unwrap_err().to_string().contains("no brightness"));
@@ -784,7 +866,8 @@ pub(crate) mod tests {
 
     #[test]
     fn initramfs_must_lie_in_reported_dram() {
-        let bdinfo = |size: u64| format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {size:#010x}\n");
+        let bdinfo =
+            |size: u64| format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {size:#010x}\n");
         assert!(check_ram(&bdinfo(0x2000_0000), RAM_BASE as u64 + 0x10_0000).is_ok());
         assert!(check_ram(&bdinfo(0x0800_0000), RAM_BASE as u64 + 0x10_0000).is_err());
     }
@@ -802,8 +885,11 @@ pub(crate) mod tests {
         let lines = &unit.borrow().lines;
         assert!(lines.contains(&"setenv initrd_high 0xffffffff".to_string()));
         assert!(lines.iter().any(|l| l.starts_with("setenv bootargs 'console=ttymxc0,115200")));
-        assert_eq!(lines.last().unwrap(), "setenv stdout serial; setenv stderr serial; mw.l 0x20c9004 0x00100000; \
-                                          bootm 0x83000000#Display-3.4 0x88000000:0x1234");
+        assert_eq!(
+            lines.last().unwrap(),
+            "setenv stdout serial; setenv stderr serial; mw.l 0x20c9004 0x00100000; \
+                                          bootm 0x83000000#Display-3.4 0x88000000:0x1234"
+        );
     }
 
     #[test]
@@ -848,10 +934,15 @@ pub(crate) mod tests {
         let mut unit = Unit::default();
         unit.nand.insert(0x10_0000, uboot(0x66000, 0x4020_00d1));
         let (board, unit) = board(unit);
-        assert_eq!(board.boot_vendor().unwrap(),
-                   VendorImage { offset: 0x10_0000, load: 0x877f_f000, length: 0x66000, entry: 0x8780_0000 });
-        assert_eq!(unit.borrow().lines.last().unwrap(), "setenv stdout serial; setenv stderr serial; dcache off; icache off; \
-                                                        mw.l 0x20c9004 0x00100000; go 0x87800000");
+        assert_eq!(
+            board.boot_vendor().unwrap(),
+            VendorImage { offset: 0x10_0000, load: 0x877f_f000, length: 0x66000, entry: 0x8780_0000 }
+        );
+        assert_eq!(
+            unit.borrow().lines.last().unwrap(),
+            "setenv stdout serial; setenv stderr serial; dcache off; icache off; \
+                                                        mw.l 0x20c9004 0x00100000; go 0x87800000"
+        );
         let lines = &unit.borrow().lines;
         let first = |prefix: &str| lines.iter().position(|l| l.starts_with(prefix)).unwrap();
         assert!(first("nand bad") < first("nandbcb"), "nandbcb must not be the first NAND command");
@@ -861,8 +952,9 @@ pub(crate) mod tests {
     fn chainload_loads_nothing_over_memory_for_an_implausible_ivt() {
         let mut outside = uboot(0x66000, 0x4020_00d1);
         outside[0x410..0x414].copy_from_slice(&(0x877f_f000u32 + 0x2000).to_le_bytes());
-        for (image, error) in [(uboot(0x90000, 0x4020_00d1), "implausible U-Boot image"),
-                               (outside, "outside the image header")] {
+        for (image, error) in
+            [(uboot(0x90000, 0x4020_00d1), "implausible U-Boot image"), (outside, "outside the image header")]
+        {
             let mut unit = Unit::default();
             unit.nand.insert(0x10_0000, image);
             let (mut board, unit) = board(unit);
@@ -875,13 +967,17 @@ pub(crate) mod tests {
     fn boot_order_needs_both_slots_each_selecting_its_own_root() {
         let values = |bootcmd: &str, nandboot1: &str| -> BTreeMap<String, String> {
             [("bootcmd", bootcmd), ("nandboot0", "ubifsmount ubi0:root0 && root=ubi0:root0"), ("nandboot1", nandboot1)]
-                .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
         };
         let good = "ubifsmount ubi0:root1 && root=ubi0:root1";
         assert!(boot_order(&values("run nandboot0 || run nandboot1", good)).is_ok());
         assert!(boot_order(&values("run nandboot0 || run nandboot0", good)).is_err());
         assert!(boot_order(&values("run nandboot1", good)).is_err());
-        assert!(boot_order(&values("run nandboot1 || run nandboot0", "ubifsmount ubi0:root1 && root=ubi0:root0")).is_err());
+        assert!(
+            boot_order(&values("run nandboot1 || run nandboot0", "ubifsmount ubi0:root1 && root=ubi0:root0")).is_err()
+        );
         assert!(parse_environment(&environment((0, 1), 1)[..ENV_SIZE - 1]).is_err());
     }
 
@@ -889,7 +985,10 @@ pub(crate) mod tests {
     fn nothing_from_the_environment_can_break_out_of_the_boot_line() {
         let mut quoted = installed();
         quoted.insert("brightness".into(), "1024' ; nand erase.chip ; '".into());
-        assert!(initramfs_bootargs(&quoted, Slot::Root0).unwrap_err().to_string().contains("unexpected installed bootargs"));
+        assert!(initramfs_bootargs(&quoted, Slot::Root0)
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected installed bootargs"));
         let unit = Unit { dram: 0x2000_0000, bootable: ["root0".to_string()].into(), ..Unit::default() };
         let (board, unit) = board(unit);
         let mut environment = installed_environment();
