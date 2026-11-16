@@ -3,16 +3,16 @@
 //! as a j49 until the flasher runs and the NAND's U-Boot environment names
 //! the generation (j49::route), unless `--device` names it first.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use unfr0zen_core::{Error, Result};
 
-use crate::{diamond3, j49, onyx};
 use crate::progress::{stage, Progress};
 use crate::usb::{self, Id};
+use crate::{diamond3, j49, onyx};
 
 /// The step that waits for the person to put the unit in its boot ROM's USB
 /// download mode, named so a front end can present it its own way.
@@ -27,7 +27,9 @@ const ALL: [Device; 4] = [Device::Diamond3, Device::Diamond, Device::J49, Device
 
 /// The device a USB identity belongs to, in any of its modes.
 pub fn identify(id: Id) -> Option<Device> {
-    if id == j49::usb::ROM { return Some(Device::J49); }
+    if id == j49::usb::ROM {
+        return Some(Device::J49);
+    }
     ALL.into_iter().find(|&device| mode_name(device, id).is_some())
 }
 
@@ -62,9 +64,7 @@ pub struct Unit {
 
 /// Every supported unit on the bus.
 fn units() -> Result<Vec<Unit>> {
-    Ok(usb::list()?.into_iter()
-        .filter_map(|(port, id)| identify(id).map(|device| Unit { device, port, id }))
-        .collect())
+    Ok(usb::list()?.into_iter().filter_map(|(port, id)| identify(id).map(|device| Unit { device, port, id })).collect())
 }
 
 /// The one unit, from units on the bus.
@@ -77,7 +77,9 @@ fn single(mut found: Vec<Unit>) -> Result<Option<Unit>> {
 }
 
 fn selected(mut unit: Unit, omap: Option<Device>) -> Unit {
-    if unit.id == j49::usb::ROM { unit.device = if omap == Some(Device::Diamond) { Device::Diamond } else { Device::J49 }; }
+    if unit.id == j49::usb::ROM {
+        unit.device = if omap == Some(Device::Diamond) { Device::Diamond } else { Device::J49 };
+    }
     unit
 }
 
@@ -87,15 +89,23 @@ pub type CancelFlag = Arc<AtomicBool>;
 /// The unit on the bus, in whatever mode it is in. With none, asks for the
 /// button and waits up to `wait` for one in its boot ROM's USB download mode.
 /// A set `cancel` flag cuts the wait short.
-pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>,
-              cancel: &CancelFlag) -> Result<Unit> {
+pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>, cancel: &CancelFlag) -> Result<Unit> {
     if let Some(unit) = single(units()?)?.map(|unit| selected(unit, omap)) {
         if omap.is_some_and(|wanted| unit.device != wanted) {
-            return Err(Error::Device(format!("selected {}, but USB has {}", omap.unwrap().name(), unit.device.name())));
+            return Err(Error::Device(format!(
+                "selected {}, but USB has {}",
+                omap.unwrap().name(),
+                unit.device.name()
+            )));
         }
         let mode = mode_name(unit.device, unit.id).unwrap_or("unknown");
-        progress.status(&format!("Detected {} in {mode} mode at {} ({:04x}:{:04x})",
-                                 unit.device.name(), unit.port, unit.id.0, unit.id.1));
+        progress.status(&format!(
+            "Detected {} in {mode} mode at {} ({:04x}:{:04x})",
+            unit.device.name(),
+            unit.port,
+            unit.id.0,
+            unit.id.1
+        ));
         progress.device(unit.device.description());
         return Ok(unit);
     }
@@ -107,13 +117,20 @@ pub fn detect(progress: &mut dyn Progress, wait: Duration, omap: Option<Device>,
         while Instant::now() < until && !cancel.load(Ordering::Relaxed) {
             let found: Vec<Unit> = units()?.into_iter().filter(|u| u.id == usb_boot(u.device)).collect();
             if last.as_ref() != Some(&found) {
-                log::info!("USB: {:?}", found.iter().map(|u| format!("{} {} {:04x}:{:04x}", u.device.name(), u.port, u.id.0, u.id.1))
-                    .collect::<Vec<_>>());
+                log::info!(
+                    "USB: {:?}",
+                    found
+                        .iter()
+                        .map(|u| format!("{} {} {:04x}:{:04x}", u.device.name(), u.port, u.id.0, u.id.1))
+                        .collect::<Vec<_>>()
+                );
                 last = Some(found.clone());
             }
             if let Some(unit) = single(found)? {
                 let unit = selected(unit, omap);
-                if omap.is_some_and(|wanted| unit.device != wanted) { continue; }
+                if omap.is_some_and(|wanted| unit.device != wanted) {
+                    continue;
+                }
                 return Ok(unit);
             }
             thread::sleep(Duration::from_millis(500));

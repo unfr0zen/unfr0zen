@@ -50,7 +50,9 @@ fn rows_at(kernel: &[u8], start: usize, load: u32) -> Vec<Partition> {
     let mut rows = Vec::new();
     let mut next = 0u64;
     for row in (start..).step_by(ROW) {
-        let (Some(pointer), Some(size), Some(offset)) = (u32_at(kernel, row), u64_at(kernel, row + 8), u64_at(kernel, row + 16)) else {
+        let (Some(pointer), Some(size), Some(offset)) =
+            (u32_at(kernel, row), u64_at(kernel, row + 8), u64_at(kernel, row + 16))
+        else {
             break;
         };
         let base = (pointer & 0xf000_0000).wrapping_add(load & 0x0fff_ffff);
@@ -186,12 +188,22 @@ mod tests {
         raw
     }
 
-    const ROWS: [(&str, u64, u64); 4] = [("boot", BLOCK as u64, 0), ("root0", 2 * BLOCK as u64, APPEND),
-                                         ("system-config", BLOCK as u64, 8 * BLOCK as u64), ("data", BLOCK as u64, APPEND)];
+    const ROWS: [(&str, u64, u64); 4] = [
+        ("boot", BLOCK as u64, 0),
+        ("root0", 2 * BLOCK as u64, APPEND),
+        ("system-config", BLOCK as u64, 8 * BLOCK as u64),
+        ("data", BLOCK as u64, APPEND),
+    ];
 
     fn expected() -> Vec<Partition> {
-        [("boot", BLOCK, 0), ("root0", 2 * BLOCK, BLOCK), ("system-config", BLOCK, 8 * BLOCK), ("data", BLOCK, 9 * BLOCK)]
-            .map(|(name, size, offset)| Partition { name: name.into(), offset, size: Some(size) }).to_vec()
+        [
+            ("boot", BLOCK, 0),
+            ("root0", 2 * BLOCK, BLOCK),
+            ("system-config", BLOCK, 8 * BLOCK),
+            ("data", BLOCK, 9 * BLOCK),
+        ]
+        .map(|(name, size, offset)| Partition { name: name.into(), offset, size: Some(size) })
+        .to_vec()
     }
 
     #[test]
@@ -201,7 +213,12 @@ mod tests {
 
     #[test]
     fn a_size_of_zero_is_the_rest_of_the_chip() {
-        let rows = [("nand0", 0, 0), ("boot", BLOCK as u64, 0), ("root0", BLOCK as u64, APPEND), ("data", BLOCK as u64, APPEND)];
+        let rows = [
+            ("nand0", 0, 0),
+            ("boot", BLOCK as u64, 0),
+            ("root0", BLOCK as u64, APPEND),
+            ("data", BLOCK as u64, APPEND),
+        ];
         let table = table_in(&kernel(&rows), LOAD).unwrap();
         assert_eq!(table[0], Partition { name: "nand0".into(), offset: 0, size: None });
         assert_eq!(table[2], Partition { name: "root0".into(), offset: BLOCK, size: Some(BLOCK) });
@@ -218,7 +235,10 @@ mod tests {
         // Filler that gzip cannot shrink keeps the kernel across blocks.
         let mut filler = kernel(&ROWS);
         let mut state = 1u32;
-        filler.extend((0..3 * BLOCK).map(|_| { state = state.wrapping_mul(1_664_525).wrapping_add(1); (state >> 24) as u8 }));
+        filler.extend((0..3 * BLOCK).map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1);
+            (state >> 24) as u8
+        }));
         let image = uimage(&gzip(&filler));
         assert!(image.len() > 2 * BLOCK);
         let mut raw = raw_blocks(&uimage(b"a boot loader, no gzip in it"));

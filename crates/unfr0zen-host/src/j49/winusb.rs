@@ -18,8 +18,12 @@ const INF_NAME: &str = "unfr0zen-omap-rom.inf";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn output(program: &str, args: &[&str]) -> String {
-    Command::new(program).args(args).creation_flags(CREATE_NO_WINDOW).output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).to_ascii_lowercase()).unwrap_or_default()
+    Command::new(program)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// Whether Windows enumerates the ROM without the BOS query and binds it
@@ -27,10 +31,16 @@ fn output(program: &str, args: &[&str]) -> String {
 /// bound with Zadig), or this package is in the driver store for the ROM's
 /// first appearance.
 pub fn installed() -> bool {
-    output("reg.exe", &["query", r"HKLM\SYSTEM\CurrentControlSet\Control\usbflags\0451D00E0000", "/v", "SkipBOSDescriptorQuery"])
-        .contains("0x1")
-        && (output("reg.exe", &["query", r"HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_0451&PID_D00E", "/s", "/v", "Service"])
-            .contains("winusb")
+    output(
+        "reg.exe",
+        &["query", r"HKLM\SYSTEM\CurrentControlSet\Control\usbflags\0451D00E0000", "/v", "SkipBOSDescriptorQuery"],
+    )
+    .contains("0x1")
+        && (output(
+            "reg.exe",
+            &["query", r"HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_0451&PID_D00E", "/s", "/v", "Service"],
+        )
+        .contains("winusb")
             || output("pnputil.exe", &["/enum-drivers"]).contains(INF_NAME))
 }
 
@@ -47,13 +57,17 @@ pub fn install() -> Result<()> {
     let command = format!("$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden \
                            -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{}\" -Dir \"{}\"'; exit $p.ExitCode",
                           quoted(&script), quoted(&dir));
-    let status = Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", &command])
-        .creation_flags(CREATE_NO_WINDOW).status();
+    let status = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &command])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
     let _ = std::fs::remove_dir_all(&dir);
     let status = status?;
     if status.success() && installed() {
         return Ok(());
     }
-    Err(failure(format!("the boot ROM's USB driver (WinUSB) is not installed: the administrator prompt was declined, \
-                         or the install failed ({status})")))
+    Err(failure(format!(
+        "the boot ROM's USB driver (WinUSB) is not installed: the administrator prompt was declined, \
+                         or the install failed ({status})"
+    )))
 }

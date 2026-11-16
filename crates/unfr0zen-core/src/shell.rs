@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use regex::bytes::Regex;
 
 use crate::console::{read_some, tail, Serial};
@@ -32,7 +32,8 @@ pub trait Volume {
     fn inspect(&mut self, name: &str) -> Result<Option<File<String>>>;
     /// Length of a regular file, without moving its contents when supported.
     fn file_size(&mut self, name: &str) -> Result<u64> {
-        self.read(name)?.map(|(_, _, data)| data.len() as u64)
+        self.read(name)?
+            .map(|(_, _, data)| data.len() as u64)
             .ok_or_else(|| Error::Device(format!("{name} disappeared during inspection")))
     }
     /// "uid:gid mode" of a directory; None if it is absent.
@@ -62,8 +63,8 @@ pub trait Volume {
     /// Replace a verified binary via an atomic staged copy. Implementations
     /// can transfer just the patch bytes rather than the entire executable.
     fn patch_nlclient(&mut self, patch: &crate::nlclient::Patch) -> Result<()> {
-        let (owner, mode, source) = self.read(crate::nlclient::BINARY)?
-            .ok_or_else(|| crate::Error::Device("missing nlclient".into()))?;
+        let (owner, mode, source) =
+            self.read(crate::nlclient::BINARY)?.ok_or_else(|| crate::Error::Device("missing nlclient".into()))?;
         let data = patch.apply(&source, false)?;
         self.write(crate::nlclient::BINARY, &data, &owner, mode)
     }
@@ -120,12 +121,13 @@ impl<S: Serial> InitramfsShell<S> {
     pub fn run_with(&mut self, script: &str, timeout: Duration, quiet: bool) -> Result<String> {
         let marker = marker();
         let command = script.lines().next().unwrap_or(""); // what the log shows: no file contents
-        // The script's status first, before echo resets $?. No quotes in the
-        // marker lines: one cut short cannot leave the shell inside a string.
-        // The start marker keeps output a nudge left from an earlier command
-        // out of this one's.
+                                                           // The script's status first, before echo resets $?. No quotes in the
+                                                           // marker lines: one cut short cannot leave the shell inside a string.
+                                                           // The start marker keeps output a nudge left from an earlier command
+                                                           // out of this one's.
         let sent = format!("echo {marker}:begin\n{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n");
-        let failed = |step: &str, e: std::io::Error| Error::Io(format!("{step} {command:?} ({} bytes): {e}", sent.len()));
+        let failed =
+            |step: &str, e: std::io::Error| Error::Io(format!("{step} {command:?} ({} bytes): {e}", sent.len()));
         self.port.clear_input().map_err(|e| failed("clearing input for", e))?;
         self.port.write_all(sent.as_bytes()).map_err(|e| failed("sending", e))?;
         self.port.flush().map_err(|e| failed("flushing", e))?;
@@ -140,7 +142,8 @@ impl<S: Serial> InitramfsShell<S> {
                 let stop = found.get(0).unwrap().start();
                 let start = begin.find(&data[..stop]).map_or(0, |found| found.end());
                 let output = String::from_utf8_lossy(&data[start..stop]).into_owned();
-                let shown = if quiet { format!("({} bytes of output)", output.len()) } else { tail(output.as_bytes(), 2000) };
+                let shown =
+                    if quiet { format!("({} bytes of output)", output.len()) } else { tail(output.as_bytes(), 2000) };
                 let nudged = if nudges > 0 { format!(" (answered after {nudges} nudges)") } else { String::new() };
                 log::debug!("initramfs$ {command}{nudged}\n{shown}");
                 if &found[1] != b"0" {
@@ -160,14 +163,18 @@ impl<S: Serial> InitramfsShell<S> {
                 heard.1 = Instant::now();
             }
         }
-        Err(Error::Timeout(format!("initramfs shell did not answer {command:?} ({} bytes received, {nudges} nudges)", data.len())))
+        Err(Error::Timeout(format!(
+            "initramfs shell did not answer {command:?} ({} bytes received, {nudges} nudges)",
+            data.len()
+        )))
     }
 
     /// Chunk `index` of the file at the quoted `path`, tried up to three times.
     fn read_chunk(&mut self, name: &str, path: &str, index: usize) -> Result<Vec<u8>> {
         let chunk = format!("dd if={path} bs={READ_CHUNK} skip={index} count=1 2>/dev/null");
         for attempt in 1..=3 {
-            let output = self.run_with(&format!("{chunk} | sha256sum; {chunk} | base64"), Duration::from_secs(60), true)?;
+            let output =
+                self.run_with(&format!("{chunk} | sha256sum; {chunk} | base64"), Duration::from_secs(60), true)?;
             let (first, encoded) = output.trim_start_matches('\n').split_once('\n').unwrap_or((output.trim(), ""));
             let sha = first.split_whitespace().next().unwrap_or("");
             let compact: String = encoded.split_whitespace().collect();
@@ -189,11 +196,18 @@ impl<S: Serial> InitramfsShell<S> {
         let output = self.run(&format!("if [ -L {path} ]; then echo link; elif [ -f {path} ]; then \
                                         stat -c '%u:%g %a' {path}; stat -c %s {path}; sha256sum {path}; else echo absent; fi"))?;
         let mut lines = output.trim().lines();
-        let Some((owner, mode)) = file_header(name, lines.next().unwrap_or(""))? else { return Ok(None) };
-        let size: usize = lines.next().and_then(|line| line.trim().parse().ok())
+        let Some((owner, mode)) = file_header(name, lines.next().unwrap_or(""))? else {
+            return Ok(None);
+        };
+        let size: usize = lines
+            .next()
+            .and_then(|line| line.trim().parse().ok())
             .map_or_else(|| device(format!("{name}: no size from the unit")), Ok)?;
-        let sha = lines.next().and_then(|line| line.split_whitespace().next())
-            .map_or_else(|| device(format!("{name}: no sha256sum from the unit")), Ok)?.to_string();
+        let sha = lines
+            .next()
+            .and_then(|line| line.split_whitespace().next())
+            .map_or_else(|| device(format!("{name}: no sha256sum from the unit")), Ok)?
+            .to_string();
         let mut data = Vec::with_capacity(size);
         for index in 0..size.div_ceil(READ_CHUNK) {
             data.extend(self.read_chunk(name, &path, index)?);
@@ -218,7 +232,8 @@ fn file_header(name: &str, first: &str) -> Result<Option<(String, u32)>> {
         "absent" => Ok(None),
         "link" => device(format!("{name} on the device is a symbolic link")),
         _ => {
-            let (owner, mode) = first.split_once(' ').map_or_else(|| device(format!("{name}: unexpected stat {first:?}")), Ok)?;
+            let (owner, mode) =
+                first.split_once(' ').map_or_else(|| device(format!("{name}: unexpected stat {first:?}")), Ok)?;
             let mode = u32::from_str_radix(mode, 8).or_else(|_| device(format!("{name}: unexpected mode {mode:?}")))?;
             Ok(Some((owner.to_string(), mode)))
         }
@@ -250,7 +265,15 @@ mod tests {
     impl FakeShell {
         fn new(answers: Vec<(&'static str, &'static str, u8)>) -> Self {
             let used = vec![false; answers.len()];
-            FakeShell { answers, used, input: Vec::new(), output: VecDeque::new(), scripts: Vec::new(), stall: false, held: None }
+            FakeShell {
+                answers,
+                used,
+                input: Vec::new(),
+                output: VecDeque::new(),
+                scripts: Vec::new(),
+                stall: false,
+                held: None,
+            }
         }
     }
 
@@ -264,12 +287,15 @@ mod tests {
                 self.input.clear();
                 return Ok(data.len());
             }
-            let marker = regex::Regex::new(r"(?s)^echo ([0-9a-f]{16}):begin\n(.*)\nunfr0zen_rc=\$\?; echo; echo ([0-9a-f]{16}):\$unfr0zen_rc\n$").unwrap();
+            let marker = regex::Regex::new(
+                r"(?s)^echo ([0-9a-f]{16}):begin\n(.*)\nunfr0zen_rc=\$\?; echo; echo ([0-9a-f]{16}):\$unfr0zen_rc\n$",
+            )
+            .unwrap();
             if let Some(found) = marker.captures(&text) {
                 assert_eq!(found[1], found[3], "one marker per command");
                 let script = found[2].to_string();
-                let matching: Vec<usize> = (0..self.answers.len())
-                    .filter(|&i| script.starts_with(self.answers[i].0)).collect();
+                let matching: Vec<usize> =
+                    (0..self.answers.len()).filter(|&i| script.starts_with(self.answers[i].0)).collect();
                 let pick = matching.iter().copied().find(|&i| !self.used[i]).or(matching.last().copied());
                 let (_, output, code) = pick.map_or(("", "", 0), |i| {
                     self.used[i] = true;
@@ -277,7 +303,11 @@ mod tests {
                 });
                 let end = format!("{}:{code}\n", &found[3]);
                 self.output.extend(format!("{}:begin\n{output}\n", &found[1]).bytes());
-                if std::mem::take(&mut self.stall) { self.held = Some(end) } else { self.output.extend(end.bytes()) }
+                if std::mem::take(&mut self.stall) {
+                    self.held = Some(end)
+                } else {
+                    self.output.extend(end.bytes())
+                }
                 self.scripts.push(script);
                 self.input.clear();
             }
@@ -342,7 +372,8 @@ mod tests {
 
     #[test]
     fn absent_files_and_links() {
-        let mut shell = shell(vec![("if [ -L \'/mnt/missing\' ]", "absent", 0), ("if [ -L \'/mnt/link\' ]", "link", 0)]);
+        let mut shell =
+            shell(vec![("if [ -L \'/mnt/missing\' ]", "absent", 0), ("if [ -L \'/mnt/link\' ]", "link", 0)]);
         assert_eq!(shell.read_file("/mnt/missing").unwrap(), None);
         assert!(shell.read_file("/mnt/link").unwrap_err().to_string().contains("symbolic link"));
     }
@@ -400,7 +431,11 @@ mod tests {
         let sha = sha256_hex(&big);
         let mut connection = shell(vec![
             ("if [ -L \'/mnt/bin/big\' ]", leak(format!("0:0 755\n49\n{sha}  /mnt/bin/big")), 0),
-            ("dd if=\'/mnt/bin/big\'", leak(format!("{sha}  -\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKiss\nLS4vMA==")), 0),
+            (
+                "dd if=\'/mnt/bin/big\'",
+                leak(format!("{sha}  -\nAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKiss\nLS4vMA==")),
+                0,
+            ),
             ("if [ -L \'/mnt/etc/garbled\' ]", "0:0 644\n9\nabcd  /mnt/etc/garbled", 0),
             ("dd if=\'/mnt/etc/garbled\'", "abcd  -\nnot base64!", 0),
             ("if [ -L \'/mnt/etc/odd\' ]", "0:0 rw-r--r--\n1\nabcd  /mnt/etc/odd", 0),
@@ -421,8 +456,11 @@ mod tests {
         let encoded = STANDARD.encode(first);
         let damaged = format!("{}  -\n{}{}", sha256_hex(first), &encoded[..76], &encoded[152..]);
         let mut connection = shell(vec![
-            ("if [ -L \'/mnt/nestlabs/sbin/nlclient\' ]",
-             leak(format!("0:0 755\n{}\n{}  /mnt/nestlabs/sbin/nlclient", data.len(), sha256_hex(&data))), 0),
+            (
+                "if [ -L \'/mnt/nestlabs/sbin/nlclient\' ]",
+                leak(format!("0:0 755\n{}\n{}  /mnt/nestlabs/sbin/nlclient", data.len(), sha256_hex(&data))),
+                0,
+            ),
             ("dd if=\'/mnt/nestlabs/sbin/nlclient\' bs=262144 skip=0 ", leak(damaged), 0),
             ("dd if=\'/mnt/nestlabs/sbin/nlclient\' bs=262144 skip=0 ", leak(chunk(first)), 0),
             ("dd if=\'/mnt/nestlabs/sbin/nlclient\' bs=262144 skip=1 ", leak(chunk(second)), 0),
@@ -446,11 +484,14 @@ mod tests {
     fn paths_reach_the_shell_as_single_words() {
         let mut connection = shell(vec![("if [ -L", "absent", 0)]);
         assert_eq!(connection.read_file("/mnt/etc/it's;reboot").unwrap(), None);
-        assert!(connection.port.scripts[1].starts_with(r"if [ -L '/mnt/etc/it'\''s;reboot' ]"), "{}", connection.port.scripts[1]);
+        assert!(
+            connection.port.scripts[1].starts_with(r"if [ -L '/mnt/etc/it'\''s;reboot' ]"),
+            "{}",
+            connection.port.scripts[1]
+        );
     }
 
     fn leak(text: String) -> &'static str {
         Box::leak(text.into_boxed_str())
     }
-
 }

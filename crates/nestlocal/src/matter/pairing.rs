@@ -15,7 +15,9 @@ pub struct Replacement {
     previous: Option<Vec<NonZeroU8>>,
 }
 
-fn io_error(_: impl std::fmt::Debug) -> Error { ErrorCode::StdIoError.into() }
+fn io_error(_: impl std::fmt::Debug) -> Error {
+    ErrorCode::StdIoError.into()
+}
 
 fn committed(kv: &impl KvBlobStoreAccess, index: NonZeroU8) -> Result<bool, Error> {
     kv.access(|store, buf| store.load(FABRIC_KEYS_START + index.get() as u16, buf).map(|data| data.is_some()))
@@ -24,7 +26,9 @@ fn committed(kv: &impl KvBlobStoreAccess, index: NonZeroU8) -> Result<bool, Erro
 pub fn has_committed_fabrics(matter: &Matter<'_>, kv: &impl KvBlobStoreAccess) -> Result<bool, Error> {
     let indices: Vec<_> = matter.with_state(|s| s.fabrics.iter().map(|f| f.fab_idx()).collect());
     for index in indices {
-        if committed(kv, index)? { return Ok(true); }
+        if committed(kv, index)? {
+            return Ok(true);
+        }
     }
     Ok(false)
 }
@@ -34,20 +38,26 @@ impl Replacement {
         let path = storage.join("pairing-replacement.json");
         let previous = match std::fs::read(&path) {
             // Unreadable, the intent is set aside: every fabric stays.
-            Ok(data) => serde_json::from_slice(&data).map_err(|e| {
-                crate::logf!("matter: pairing replacement intent unreadable, keeping every fabric: {e}");
-                if let Err(e) = std::fs::rename(&path, path.with_extension("corrupt")) {
-                    crate::logf!("matter: {}: {e}", path.display());
-                }
-            }).ok(),
+            Ok(data) => serde_json::from_slice(&data)
+                .map_err(|e| {
+                    crate::logf!("matter: pairing replacement intent unreadable, keeping every fabric: {e}");
+                    if let Err(e) = std::fs::rename(&path, path.with_extension("corrupt")) {
+                        crate::logf!("matter: {}: {e}", path.display());
+                    }
+                })
+                .ok(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(io_error(e)),
         };
         Ok(Self { path, previous })
     }
 
-    pub async fn forget(&mut self, matter: &Matter<'_>, kv: &impl KvBlobStoreAccess,
-                        notify: &impl rs_matter::dm::AttrChangeNotifier) -> Result<Vec<NonZeroU8>, Error> {
+    pub async fn forget(
+        &mut self,
+        matter: &Matter<'_>,
+        kv: &impl KvBlobStoreAccess,
+        notify: &impl rs_matter::dm::AttrChangeNotifier,
+    ) -> Result<Vec<NonZeroU8>, Error> {
         matter.close_comm_window(notify)?;
         matter.with_state(|state| state.sessions.remove_where(|_| true));
         matter.transport().notify_session_removed();
@@ -68,8 +78,8 @@ impl Replacement {
         matter.with_state(|state| state.sessions.remove_where(|_| true));
         matter.transport().notify_session_removed();
         match std::fs::remove_file(&self.path) {
-            Ok(()) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_error(e)),
         }
         self.previous = None;
@@ -78,16 +88,21 @@ impl Replacement {
 
     pub fn begin(&mut self, matter: &Matter<'_>, kv: &impl KvBlobStoreAccess) -> Result<(), Error> {
         // Keep the baseline when a second click reopens an unfinished attempt.
-        if self.previous.is_some() { return Ok(()); }
+        if self.previous.is_some() {
+            return Ok(());
+        }
         let indices: Vec<_> = matter.with_state(|s| s.fabrics.iter().map(|f| f.fab_idx()).collect());
         let mut previous = Vec::new();
         for index in indices {
-            if committed(kv, index)? { previous.push(index); }
+            if committed(kv, index)? {
+                previous.push(index);
+            }
         }
         let temp = self.path.with_extension("tmp");
         let mut options = std::fs::OpenOptions::new();
         options.create(true).truncate(true).write(true);
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
@@ -100,14 +115,20 @@ impl Replacement {
     }
 
     pub fn finish(&mut self, matter: &Matter<'_>, kv: &impl KvBlobStoreAccess) -> Result<Vec<NonZeroU8>, Error> {
-        let Some(previous) = &self.previous else { return Ok(Vec::new()); };
-        if !matches!(matter.comm_window_state(), CommWindowState::Closed) { return Ok(Vec::new()); }
+        let Some(previous) = &self.previous else {
+            return Ok(Vec::new());
+        };
+        if !matches!(matter.comm_window_state(), CommWindowState::Closed) {
+            return Ok(Vec::new());
+        }
         let indices: Vec<_> = matter.with_state(|s| s.fabrics.iter().map(|f| f.fab_idx()).collect());
         let mut accepted = false;
         for index in indices {
             // rs-matter writes this blob only on CommissioningComplete, after
             // the new controller proves its operational credentials over CASE.
-            if !previous.contains(&index) && committed(kv, index)? { accepted = true; }
+            if !previous.contains(&index) && committed(kv, index)? {
+                accepted = true;
+            }
         }
         let mut removed = Vec::new();
         if accepted {
@@ -118,12 +139,16 @@ impl Replacement {
                 persist.remove(index)?;
                 let present = matter.with_state(|state| {
                     let present = state.fabrics.get(index).is_some();
-                    if present { state.fabrics.remove(index)?; }
+                    if present {
+                        state.fabrics.remove(index)?;
+                    }
                     state.sessions.remove_where(|session| session.get_local_fabric_idx() == index.get());
                     Ok::<_, Error>(present)
                 })?;
                 // A fabric its controller already removed is not reported again.
-                if present { removed.push(index); }
+                if present {
+                    removed.push(index);
+                }
             }
             persist.run()?;
             matter.transport().notify_session_removed();
@@ -139,14 +164,14 @@ impl Replacement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
-    use rs_matter::dm::devices::test::TEST_DEV_ATT;
-    use rs_matter::persist::DirKvBlobStore;
-    use rs_matter::BasicCommData;
-    use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
     use rs_matter::crypto::default_crypto;
-    use rs_matter::dm::AttrChangeNotifier;
+    use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
     use rs_matter::dm::devices::test::DAC_PRIVKEY;
+    use rs_matter::dm::devices::test::TEST_DEV_ATT;
+    use rs_matter::dm::AttrChangeNotifier;
+    use rs_matter::persist::DirKvBlobStore;
+    use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
+    use rs_matter::BasicCommData;
 
     struct Notify;
     impl AttrChangeNotifier for Notify {
@@ -158,7 +183,9 @@ mod tests {
 
     fn credentials() -> BasicCommData {
         BasicCommData {
-            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(&20202021u32.to_le_bytes())),
+            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(
+                &20202021u32.to_le_bytes(),
+            )),
             discriminator: 3840,
         }
     }
@@ -166,17 +193,27 @@ mod tests {
     struct Store(PathBuf);
     impl Store {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("unfr0zen-matter-pairing-{}-{}", std::process::id(), rand::random::<u64>()));
+            let path = std::env::temp_dir().join(format!(
+                "unfr0zen-matter-pairing-{}-{}",
+                std::process::id(),
+                rand::random::<u64>()
+            ));
             std::fs::create_dir(&path).unwrap();
             Self(path)
         }
     }
-    impl Drop for Store { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
+    impl Drop for Store {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn add(matter: &Matter<'_>, kv: &impl KvBlobStoreAccess, save: bool) -> NonZeroU8 {
         matter.with_state(|state| {
             let fabric = state.fabrics.add_with_post_init(|_| Ok(())).unwrap();
-            if save { FabricPersist::new(kv).store(fabric).unwrap(); }
+            if save {
+                FabricPersist::new(kv).store(fabric).unwrap();
+            }
             fabric.fab_idx()
         })
     }
@@ -196,7 +233,10 @@ mod tests {
         matter.with_state(|state| {
             state.sessions.add(0, false, rs_matter::transport::network::Address::new(), None).unwrap();
         });
-        assert_eq!(futures_lite::future::block_on(replacement.forget(&matter, &kv, &Notify)).unwrap(), vec![first, second]);
+        assert_eq!(
+            futures_lite::future::block_on(replacement.forget(&matter, &kv, &Notify)).unwrap(),
+            vec![first, second]
+        );
         assert!(!matter.has_fabrics());
         assert_eq!(matter.with_state(|state| state.sessions.iter().count()), 0);
         assert!(matches!(matter.comm_window_state(), CommWindowState::Closed));
@@ -296,7 +336,8 @@ mod tests {
         let old = add(&matter, &kv, true);
         let mut replacement = Replacement::load(&store.0).unwrap();
         replacement.begin(&matter, &kv).unwrap();
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(store.0.join("pairing-replacement.json")).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);

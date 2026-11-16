@@ -30,10 +30,8 @@ const HANDOVER_IMPORTS: [(&str, &str); 6] = [
     ("native_usleep", "usleep"),
     ("native_getpid", "getpid"),
 ];
-const EGL_IMPORTS: [(&str, &str); 2] = [
-    ("native_egl_swap", "eglSwapBuffers"),
-    ("native_pthread_create", "pthread_create"),
-];
+const EGL_IMPORTS: [(&str, &str); 2] =
+    [("native_egl_swap", "eglSwapBuffers"), ("native_pthread_create", "pthread_create")];
 const FRAMEBUFFER_IMPORTS: [(&str, &str); 1] = [("native_mmap", "mmap")];
 /// The screen hand-over this build gets (layout_HANDOVER): 1 where nlclient
 /// presents through eglSwapBuffers (the gen 3), 2 where it pans its own
@@ -155,26 +153,16 @@ pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<()> {
 }
 fn unique<T: Ord>(values: impl IntoIterator<Item = T>, label: &str) -> Result<T> {
     let mut values: BTreeSet<T> = values.into_iter().collect();
-    require(
-        values.len() == 1,
-        format!("{label}: expected one result, found {}", values.len()),
-    )?;
+    require(values.len() == 1, format!("{label}: expected one result, found {}", values.len()))?;
     Ok(values.pop_first().unwrap())
 }
 fn immediate(w: u32) -> u32 {
     (w & 255).rotate_right(((w >> 8) & 15) * 2)
 }
 fn imported(elf: &Elf) -> Result<BTreeMap<String, u32>> {
-    let (rel, sym, strings, plt) = (
-        elf.section(".rel.plt")?,
-        elf.section(".dynsym")?,
-        elf.section(".dynstr")?,
-        elf.section(".plt")?,
-    );
-    require(
-        rel.size % 8 == 0 && sym.size % 16 == 0,
-        "invalid PLT metadata",
-    )?;
+    let (rel, sym, strings, plt) =
+        (elf.section(".rel.plt")?, elf.section(".dynsym")?, elf.section(".dynstr")?, elf.section(".plt")?);
+    require(rel.size % 8 == 0 && sym.size % 16 == 0, "invalid PLT metadata")?;
     let mut got = BTreeMap::new();
     for off in (rel.offset..rel.offset + rel.size).step_by(8) {
         let target = word(elf.data, off)?;
@@ -186,32 +174,18 @@ fn imported(elf: &Elf) -> Result<BTreeMap<String, u32>> {
     }
     let mut result = BTreeMap::new();
     for off in (plt.offset..plt.offset + plt.size.saturating_sub(11)).step_by(4) {
-        let (a, b, c) = (
-            word(elf.data, off)?,
-            word(elf.data, off + 4)?,
-            word(elf.data, off + 8)?,
-        );
-        if (a & 0xfffff000, b & 0xfffff000, c & 0xfffff000) != (0xe28fc000, 0xe28cc000, 0xe5bcf000)
-        {
+        let (a, b, c) = (word(elf.data, off)?, word(elf.data, off + 4)?, word(elf.data, off + 8)?);
+        if (a & 0xfffff000, b & 0xfffff000, c & 0xfffff000) != (0xe28fc000, 0xe28cc000, 0xe5bcf000) {
             continue;
         }
         let address = plt.address + (off - plt.offset) as u32;
-        let target = address
-            .wrapping_add(8)
-            .wrapping_add(immediate(a))
-            .wrapping_add(immediate(b))
-            .wrapping_add(c & 0xfff);
+        let target =
+            address.wrapping_add(8).wrapping_add(immediate(a)).wrapping_add(immediate(b)).wrapping_add(c & 0xfff);
         if let Some(name) = got.get(&target) {
-            require(
-                result.insert(name.clone(), address).is_none(),
-                "duplicate PLT symbol",
-            )?;
+            require(result.insert(name.clone(), address).is_none(), "duplicate PLT symbol")?;
         }
     }
-    require(
-        result.len() == got.len(),
-        "not every PLT relocation has a decoded stub",
-    )?;
+    require(result.len() == got.len(), "not every PLT relocation has a decoded stub")?;
     Ok(result)
 }
 #[derive(Clone)]
@@ -242,11 +216,7 @@ fn registry(elf: &Elf) -> Result<Registry> {
                     p += 8;
                 }
                 if names.len() >= 10 && best.as_ref().is_none_or(|b| names.len() > b.names.len()) {
-                    best = Some(Registry {
-                        address: va,
-                        names,
-                        code_first,
-                    });
+                    best = Some(Registry { address: va, names, code_first });
                 }
                 va = if p > va { p + 8 } else { va + 4 };
             }
@@ -266,7 +236,10 @@ fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
             at += i + 1;
         }
     }
-    match found[..] { [one] => Some(one), _ => None }
+    match found[..] {
+        [one] => Some(one),
+        _ => None,
+    }
 }
 
 /// The ARM code's words, by address.
@@ -306,7 +279,8 @@ fn references(elf: &Elf, words: &[(u32, u32)], target: u32) -> Vec<usize> {
             let low = ((w >> 4) & 0xf000) | (w & 0xfff);
             if let Some(j) = window(6).find(|&j| {
                 let x = words[j].1;
-                x & 0xfff0_f000 == 0xe340_0000 | register << 12 && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == target
+                x & 0xfff0_f000 == 0xe340_0000 | register << 12
+                    && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == target
             }) {
                 found.push(j);
             }
@@ -336,14 +310,17 @@ fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
     let mut pairs = Vec::new();
     for at in references(elf, &words, string) {
         // The logger's call, then the copy.
-        let Some(call) = (at + 1..(at + 16).min(words.len())).find(|&j| words[j].1 >> 24 == 0xeb) else { continue };
+        let Some(call) = (at + 1..(at + 16).min(words.len())).find(|&j| words[j].1 >> 24 == 0xeb) else {
+            continue;
+        };
         for j in call + 1..(call + 6).min(words.len()) {
             let load = words[j].1;
             if load & 0xfff0_0000 != 0xe590_0000 {
                 continue;
             }
             let (value, base) = ((load >> 12) & 0xf, (load >> 16) & 0xf);
-            if let Some(store) = (j + 1..(j + 5).min(words.len())).map(|k| words[k].1)
+            if let Some(store) = (j + 1..(j + 5).min(words.len()))
+                .map(|k| words[k].1)
                 .find(|x| x & 0xfff0_0000 == 0xe580_0000 && (x >> 12) & 0xf == value && (x >> 16) & 0xf == base)
             {
                 pairs.push((load & 0xfff, store & 0xfff));
@@ -386,23 +363,35 @@ fn brightness(elf: &Elf) -> Option<Brightness> {
             callers.entry(target).or_default().push(i);
         }
     }
-    let [reference] = references(elf, &words, string)[..] else { return None };
+    let [reference] = references(elf, &words, string)[..] else {
+        return None;
+    };
     let referenced = words[reference].0;
     let set = *callers.range(referenced.saturating_sub(0x100)..=referenced).next_back()?.0;
     let start = index(set)?;
     // str r1, [rN, #mode]
-    let mode = words[start..(start + 16).min(words.len())].iter()
-        .find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1 & 0xfff;
+    let mode =
+        words[start..(start + 16).min(words.len())].iter().find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1 & 0xfff;
     let mut found = Vec::new();
     for &call in callers.get(&set)? {
         // bl accessor, then (within a few) bl set.
-        let Some(accessor) = (call.saturating_sub(3)..call).rev()
-            .find_map(|j| branch_target(words[j].0, words[j].1, true)) else { continue };
+        let Some(accessor) =
+            (call.saturating_sub(3)..call).rev().find_map(|j| branch_target(words[j].0, words[j].1, true))
+        else {
+            continue;
+        };
         let first = index(accessor)?;
-        let Some(globals) = words[first..(first + 4).min(words.len())].iter()
-            .find(|(_, w)| w & 0xffff_f000 == 0xe590_0000).map(|(_, w)| w & 0xfff) else { continue };
+        let Some(globals) = words[first..(first + 4).min(words.len())]
+            .iter()
+            .find(|(_, w)| w & 0xffff_f000 == 0xe590_0000)
+            .map(|(_, w)| w & 0xfff)
+        else {
+            continue;
+        };
         for j in call + 1..(call + 12).min(words.len()) {
-            let Some(apply) = branch_target(words[j].0, words[j].1, true).filter(|&t| t != accessor) else { continue };
+            let Some(apply) = branch_target(words[j].0, words[j].1, true).filter(|&t| t != accessor) else {
+                continue;
+            };
             if let Some(high) = high_level(&words, index(apply)?, mode) {
                 found.push((apply, globals, high));
             }
@@ -475,11 +464,7 @@ pub(super) fn settings(elf: &Elf) -> Result<(u32, Vec<String>)> {
         let (mut run, mut start) = (Vec::new(), 0);
         for relative in (0..=s.size).step_by(4) {
             let address = s.address + relative as u32;
-            let name = if relative + 4 <= s.size {
-                elf.ident(word(elf.data, s.offset + relative)?)
-            } else {
-                None
-            };
+            let name = if relative + 4 <= s.size { elf.ident(word(elf.data, s.offset + relative)?) } else { None };
             if let Some(name) = name {
                 if run.is_empty() {
                     start = address;
@@ -488,10 +473,7 @@ pub(super) fn settings(elf: &Elf) -> Result<(u32, Vec<String>)> {
                 continue;
             }
             if run.len() >= 15 {
-                let first = run
-                    .iter()
-                    .position(|n| screens.contains(n))
-                    .unwrap_or(run.len());
+                let first = run.iter().position(|n| screens.contains(n)).unwrap_or(run.len());
                 let last = run.iter().rposition(|n| screens.contains(n));
                 if let Some(last) = last {
                     let names = &run[first..=last];
@@ -499,8 +481,7 @@ pub(super) fn settings(elf: &Elf) -> Result<(u32, Vec<String>)> {
                         && names.first().is_some_and(|n| n == "temperature")
                         && names.last().is_some_and(|n| n == "temperature")
                         && names.iter().filter(|n| n.as_str() == "account").count() == 1
-                        && names.iter().filter(|n| screens.contains(*n)).count() * 4
-                            >= names.len() * 3
+                        && names.iter().filter(|n| screens.contains(*n)).count() * 4 >= names.len() * 3
                     {
                         candidates.push((start + 4 * first as u32, names.to_vec()));
                     }
@@ -509,13 +490,7 @@ pub(super) fn settings(elf: &Elf) -> Result<(u32, Vec<String>)> {
             run.clear();
         }
     }
-    require(
-        candidates.len() == 1,
-        format!(
-            "settings menu expected one result, found {}",
-            candidates.len()
-        ),
-    )?;
+    require(candidates.len() == 1, format!("settings menu expected one result, found {}", candidates.len()))?;
     Ok(candidates.pop().unwrap())
 }
 fn number(stores: &BTreeMap<i32, Value>, offset: i32) -> Result<u32> {
@@ -554,9 +529,7 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     for (key, name) in IMPORTS {
         api.insert(
             key.to_owned(),
-            *imports
-                .get(name)
-                .ok_or_else(|| crate::Error::Device(format!("missing import {name}")))?,
+            *imports.get(name).ok_or_else(|| crate::Error::Device(format!("missing import {name}")))?,
         );
     }
     if let Some(&rename) = imports.get("rename") {
@@ -579,25 +552,17 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     )?;
     let mut screens = BTreeMap::new();
     for (i, name) in table.names.iter().enumerate() {
-        screens.insert(
-            name.as_str(),
-            elf.read(table.address + i as u32 * 8 + if table.code_first { 0 } else { 4 })?,
-        );
+        screens.insert(name.as_str(), elf.read(table.address + i as u32 * 8 + if table.code_first { 0 } else { 4 })?);
     }
-    let account = *screens
-        .get("account")
-        .ok_or_else(|| crate::Error::Device("missing account registration".into()))?;
-    let screen = *screens
-        .get("legalinfo")
-        .ok_or_else(|| crate::Error::Device("missing legalinfo registration".into()))?;
+    let account = *screens.get("account").ok_or_else(|| crate::Error::Device("missing account registration".into()))?;
+    let screen =
+        *screens.get("legalinfo").ok_or_else(|| crate::Error::Device("missing legalinfo registration".into()))?;
     let mut layers = Vec::new();
     for s in &elf.sections {
         if s.kind == 1 && s.flags & 7 == 3 {
             for r in (0..s.size.saturating_sub(7)).step_by(4) {
                 let va = s.address + r as u32;
-                if elf.ident(elf.read(va + 4)?).as_deref() == Some("legalinfolayer")
-                    && elf.text(elf.read(va)?)
-                {
+                if elf.ident(elf.read(va + 4)?).as_deref() == Some("legalinfolayer") && elf.text(elf.read(va)?) {
                     layers.push(elf.read(va)?);
                 }
             }
@@ -607,14 +572,8 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let arm = Arm::new(&elf)?;
     let lc = arm.calls(layer)?;
     let sc = arm.calls(screen)?;
-    require(
-        lc.len() >= 2 && sc.len() >= 3,
-        "factory call graph incomplete",
-    )?;
-    require(
-        lc[0] == sc[0] && sc[0] == api["native_new"],
-        "factory allocator mismatch",
-    )?;
+    require(lc.len() >= 2 && sc.len() >= 3, "factory call graph incomplete")?;
+    require(lc[0] == sc[0] && sc[0] == api["native_new"], "factory allocator mismatch")?;
     api.insert("native_layer_ctor".into(), lc[1]);
     api.insert("native_screen_ctor".into(), sc[1]);
     let (ls, _) = arm.stores(lc[1], None)?;
@@ -627,32 +586,20 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let (lv, sv) = (number(&ls, 0)?, number(&ss, 0)?);
     for vptr in [lv, sv] {
         require(
-            elf.at(vptr)
-                .is_some_and(|s| s.flags & 6 == 2 && vptr - s.address >= 12)
+            elf.at(vptr).is_some_and(|s| s.flags & 6 == 2 && vptr - s.address >= 12)
                 && vptr.checked_add(0x400).is_some(),
             "invalid constructor vtable address",
         )?;
     }
     let common = elf.read(lv - 12)?;
     require(common == 0xa4, "unrecognised common base adjustment")?;
-    let parts = [
-        number(&ls, common as i32)?,
-        number(&ls, common as i32 + 4)?,
-        number(&ls, common as i32 + 8)?,
-    ];
-    require(
-        number(&ss, 0xec)? == 0,
-        "unrecognised screen constructor stores",
-    )?;
+    let parts = [number(&ls, common as i32)?, number(&ls, common as i32 + 4)?, number(&ls, common as i32 + 8)?];
+    require(number(&ss, 0xec)? == 0, "unrecognised screen constructor stores")?;
     let second = number(&ss, 4)?;
     let third = number(&ss, 8)?;
     require(
-        parts
-            .iter()
-            .all(|p| p.wrapping_sub(lv) < 0x400 && *p >= lv + 8)
-            && [second, third]
-                .iter()
-                .all(|p| p.wrapping_sub(sv) < 0x400 && *p >= sv + 8),
+        parts.iter().all(|p| p.wrapping_sub(lv) < 0x400 && *p >= lv + 8)
+            && [second, third].iter().all(|p| p.wrapping_sub(sv) < 0x400 && *p >= sv + 8),
         "invalid secondary vtable group",
     )?;
     let end = group_end(&elf, sv)?;
@@ -668,14 +615,8 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let mut layout = BTreeMap::from([
         ("PRIMARY_SIZE".into(), 0x140),
         ("COMMON_OFFSET".into(), common),
-        (
-            "LAYER_VTABLE_SIZE".into(),
-            group_end(&elf, parts[2])? - lv + 12,
-        ),
-        (
-            "SCREEN_VTABLE_SIZE".into(),
-            group_end(&elf, third)? - sv + 8,
-        ),
+        ("LAYER_VTABLE_SIZE".into(), group_end(&elf, parts[2])? - lv + 12),
+        ("SCREEN_VTABLE_SIZE".into(), group_end(&elf, third)? - sv + 8),
         ("LAYER_COMMON_VPTR".into(), parts[0] - lv + 12),
         ("LAYER_SECOND_VPTR".into(), parts[1] - lv + 12),
         ("LAYER_THIRD_VPTR".into(), parts[2] - lv + 12),
@@ -717,25 +658,13 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         calls.extend(arm.calls(body)?);
         (draw, dc) = (body, calls);
     }
-    require(
-        [4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()),
-        "Legal Info lifecycle call shape changed",
-    )?;
+    require([4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()), "Legal Info lifecycle call shape changed")?;
     api.insert("native_config_invalidate".into(), ec[3]);
     let wrapper = unique(arm.tails(enter)?, "layout wrapper")?;
-    api.insert(
-        "native_config_layout".into(),
-        unique(arm.tails(wrapper)?, "layout implementation")?,
-    );
+    api.insert("native_config_layout".into(), unique(arm.tails(wrapper)?, "layout implementation")?);
     let image_calls = arm.calls(ec[2])?;
-    require(
-        [3, 4].contains(&image_calls.len()),
-        "image helper call shape changed",
-    )?;
-    require(
-        dc[1] == dc[5] && dc[1] == dc[7],
-        "renderer style calls disagree",
-    )?;
+    require([3, 4].contains(&image_calls.len()), "image helper call shape changed")?;
+    require(dc[1] == dc[5] && dc[1] == dc[7], "renderer style calls disagree")?;
     for (name, value) in [
         ("native_image_load", image_calls[1]),
         ("native_style", dc[1]),
@@ -750,24 +679,13 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let mut heights = Vec::new();
     for (i, ins) in code.iter().enumerate() {
         if ins.name == "ldr" && ins.text == "r0, [r0, #8]" {
-            heights.push(if i > 0 && code[i - 1].text == "ip, sp" {
-                code[i - 1].address
-            } else {
-                ins.address
-            });
+            heights.push(if i > 0 && code[i - 1].text == "ip, sp" { code[i - 1].address } else { ins.address });
         }
     }
-    api.insert(
-        "native_image_height".into(),
-        unique(heights, "image height getter")?,
-    );
+    api.insert("native_image_height".into(), unique(heights, "image height getter")?);
     let event = elf.read(lv + 0x14)?;
     let legacy = arm.code(event, None)?[0].name != "b";
-    let handler = if legacy {
-        event
-    } else {
-        unique(arm.tails(event)?, "layer event handler")?
-    };
+    let handler = if legacy { event } else { unique(arm.tails(event)?, "layer event handler")? };
     api.insert("native_layer_event".into(), handler);
     let calls = arm.calls(if legacy { event } else { handler })?;
     require(!calls.is_empty(), "missing generic event call")?;
@@ -784,10 +702,7 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         ("LEGACY_CLICK".into(), legacy as u32),
         ("TIMER_EVENT_FIRST".into(), *timers.first().unwrap()),
         ("TIMER_EVENT_SECOND".into(), *timers.last().unwrap()),
-        (
-            "RENAME_SYSCALL".into(),
-            (!imports.contains_key("rename")) as u32,
-        ),
+        ("RENAME_SYSCALL".into(), (!imports.contains_key("rename")) as u32),
     ]);
     let mut anchors = BTreeMap::from([
         ("account_factory".into(), account),
@@ -802,11 +717,26 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
         ("screen_title".into(), elf.read(sv + title)?),
         ("generic_event".into(), generic),
     ]);
-    let known: serde_json::Value = serde_json::from_str(include_str!("abi_shapes.json"))
-        .map_err(|e| crate::Error::Device(e.to_string()))?;
+    let known: serde_json::Value =
+        serde_json::from_str(include_str!("abi_shapes.json")).map_err(|e| crate::Error::Device(e.to_string()))?;
     // Screen port additions: real activity notification and periodic refresh.
     activity(&elf, &arm, &imports, &known, &mut api, &mut layout)?;
-    for(name,symbol)in [("native_send_timeout","_ZN12nlEventUtils11SendTimeoutERP21nlEventTimeoutRequestjjP12nlEventQueueP15nlIEventHandlerP7nlTimer"),("native_cancel_timeout","_ZN21nlEventTimeoutRequest6CancelEv"),("native_release","_ZNK10nlRefCount7ReleaseEv"),("native_timeout_id","_ZNK15nlEventTimedOut5GetIDEv")]{api.insert(name.into(),*imports.get(symbol).ok_or_else(||crate::Error::Device(format!("missing status-refresh import {symbol}")))?);}
+    for (name, symbol) in [
+        (
+            "native_send_timeout",
+            "_ZN12nlEventUtils11SendTimeoutERP21nlEventTimeoutRequestjjP12nlEventQueueP15nlIEventHandlerP7nlTimer",
+        ),
+        ("native_cancel_timeout", "_ZN21nlEventTimeoutRequest6CancelEv"),
+        ("native_release", "_ZNK10nlRefCount7ReleaseEv"),
+        ("native_timeout_id", "_ZNK15nlEventTimedOut5GetIDEv"),
+    ] {
+        api.insert(
+            name.into(),
+            *imports
+                .get(symbol)
+                .ok_or_else(|| crate::Error::Device(format!("missing status-refresh import {symbol}")))?,
+        );
+    }
     let screen_draw = elf.read(sv + 0xc)?;
     api.insert("native_screen_draw".into(), screen_draw);
     let menu_hidden = unique(arm.calls(screen_draw)?, "menu visibility accessor")?;
@@ -827,12 +757,8 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     require(select.len() == 3, "unknown native scroll selection calls")?;
     let target = arm.code(select[1], None)?;
     require(
-        target
-            .iter()
-            .any(|i| i.name == "vstr" && i.text == "s0, [r0, #0x10]")
-            && target
-                .iter()
-                .any(|i| i.name == "vldr" && i.text.contains("[r0, #0x24]"))
+        target.iter().any(|i| i.name == "vstr" && i.text == "s0, [r0, #0x10]")
+            && target.iter().any(|i| i.name == "vldr" && i.text.contains("[r0, #0x24]"))
             && target.iter().any(|i| i.name == "vcvt.s32.f32"),
         "unknown native scroll target ABI",
     )?;
@@ -845,9 +771,11 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     // its natives (BRIGHTNESS_MODE_OFFSET 0); they are bound to the screen
     // initializer so the payload still links.
     let bright = brightness(&elf);
-    for (key, value) in [("BRIGHTNESS_GLOBALS_OFFSET", bright.as_ref().map_or(0, |b| b.globals)),
-                         ("BRIGHTNESS_MODE_OFFSET", bright.as_ref().map_or(0, |b| b.mode)),
-                         ("BRIGHTNESS_HIGH_OFFSET", bright.as_ref().map_or(0, |b| b.high))] {
+    for (key, value) in [
+        ("BRIGHTNESS_GLOBALS_OFFSET", bright.as_ref().map_or(0, |b| b.globals)),
+        ("BRIGHTNESS_MODE_OFFSET", bright.as_ref().map_or(0, |b| b.mode)),
+        ("BRIGHTNESS_HIGH_OFFSET", bright.as_ref().map_or(0, |b| b.high)),
+    ] {
         layout.insert(key.into(), value);
     }
     let unused = api["native_screen_init"];
@@ -884,9 +812,8 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     }
     let layout_value = serde_json::to_value(&layout).unwrap();
     let fingerprint_value = serde_json::to_value(&fingerprints).unwrap();
-    let variants = known["variants"]
-        .as_array()
-        .ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
+    let variants =
+        known["variants"].as_array().ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
     let variant = variants
         .iter()
         .find(|v| v["layout"] == layout_value && v["functions"] == fingerprint_value)
@@ -901,14 +828,17 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let unmatched: Vec<_> = evidence
         .iter()
         .filter(|(name, calls)| !variants.iter().any(|v| v["imports"][name.as_str()] == serde_json::json!(calls)))
-        .map(|(name, calls)| format!("{name} calls {}", if calls.is_empty() { "nothing".to_owned() } else { calls.join(", ") }))
+        .map(|(name, calls)| {
+            format!("{name} calls {}", if calls.is_empty() { "nothing".to_owned() } else { calls.join(", ") })
+        })
         .collect();
     let objection = (!unmatched.is_empty())
         .then(|| format!("no reviewed build's native makes these library calls: {}", unmatched.join("; ")));
     let validation = match &variant {
         Some(label) => format!("instruction shapes of the reviewed {label} build; guest acceptance required"),
         None => {
-            let (label, count) = matches.iter().max_by_key(|(_, n)| **n).map(|(l, n)| (l.as_str(), *n)).unwrap_or(("none", 0));
+            let (label, count) =
+                matches.iter().max_by_key(|(_, n)| **n).map(|(l, n)| (l.as_str(), *n)).unwrap_or(("none", 0));
             format!("unreviewed build: structurally consistent, {count} of {} natives' library calls as the reviewed {label} build; \
                      no reviewed instruction shapes", evidence.len())
         }
@@ -934,16 +864,31 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
 /// of each one assumes, which a recompile keeps and a wrong slot does not.
 fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>) -> Result<()> {
     let body = |name: &str| arm.body(api.get(name).or_else(|| anchors.get(name)).copied().unwrap());
-    let loads = |code: &[Ins], disp: i32| code.iter().filter(|i| i.name == "ldr" && i.ops.get(1).and_then(Op::mem)
-        .is_some_and(|(b, d, _)| b != "sp" && b != "pc" && d == disp)).count();
-    let stores = |code: &[Ins], disp: i32| code.iter().any(|i| i.name == "str" && i.ops.last().and_then(Op::mem)
-        .is_some_and(|(b, d, _)| b != "sp" && d == disp));
+    let loads = |code: &[Ins], disp: i32| {
+        code.iter()
+            .filter(|i| {
+                i.name == "ldr"
+                    && i.ops.get(1).and_then(Op::mem).is_some_and(|(b, d, _)| b != "sp" && b != "pc" && d == disp)
+            })
+            .count()
+    };
+    let stores = |code: &[Ins], disp: i32| {
+        code.iter()
+            .any(|i| i.name == "str" && i.ops.last().and_then(Op::mem).is_some_and(|(b, d, _)| b != "sp" && d == disp))
+    };
     let calls = |code: &[Ins]| code.iter().filter(|i| i.name == "bl").count();
-    let indirect = |code: &[Ins]| code.iter().any(|i| matches!(i.name.as_str(), "bx" | "blx") && i.ops[0].reg().is_some_and(|r| r != "lr"));
+    let indirect = |code: &[Ins]| {
+        code.iter().any(|i| matches!(i.name.as_str(), "bx" | "blx") && i.ops[0].reg().is_some_and(|r| r != "lr"))
+    };
     // A getter: one load through a register, no call, nothing else of note.
     let getter = |code: &[Ins]| -> Option<i32> {
-        let fields: Vec<_> = code.iter().filter(|i| i.name == "ldr").filter_map(|i| i.ops.get(1).and_then(Op::mem))
-            .filter(|(b, _, _)| *b != "sp" && *b != "pc").map(|(_, d, _)| d).collect();
+        let fields: Vec<_> = code
+            .iter()
+            .filter(|i| i.name == "ldr")
+            .filter_map(|i| i.ops.get(1).and_then(Op::mem))
+            .filter(|(b, _, _)| *b != "sp" && *b != "pc")
+            .map(|(_, d, _)| d)
+            .collect();
         (fields.len() == 1 && calls(code) == 0 && !indirect(code)).then(|| fields[0])
     };
     for (name, check) in [
@@ -953,30 +898,57 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
         ("native_activity_client", getter(&body("native_activity_client")?).is_some()),
         ("native_menu_scale", {
             let code = body("native_menu_scale")?;
-            loads(&code, i32::MAX) == 0 && calls(&code) == 0 && code.last().is_some_and(|i| i.name == "b")
+            loads(&code, i32::MAX) == 0
+                && calls(&code) == 0
+                && code.last().is_some_and(|i| i.name == "b")
                 && code.iter().filter(|i| i.name == "ldr").count() == 1
         }),
-        ("native_menu_hidden", { let code = body("native_menu_hidden")?; loads(&code, 0x28) == 1 && indirect(&code) }),
-        ("native_screen_event", { let code = body("native_screen_event")?; loads(&code, 0x20) == 1 && loads(&code, 0) >= 2 && indirect(&code) }),
-        ("native_screen_enter", { let code = body("native_screen_enter")?; loads(&code, 0x20) == 1 && loads(&code, 0xc) == 1 && indirect(&code) }),
-        ("native_layer_init", { let code = body("native_layer_init")?; stores(&code, 0x8c) && calls(&code) == 1 && indirect(&code) }),
+        ("native_menu_hidden", {
+            let code = body("native_menu_hidden")?;
+            loads(&code, 0x28) == 1 && indirect(&code)
+        }),
+        ("native_screen_event", {
+            let code = body("native_screen_event")?;
+            loads(&code, 0x20) == 1 && loads(&code, 0) >= 2 && indirect(&code)
+        }),
+        ("native_screen_enter", {
+            let code = body("native_screen_enter")?;
+            loads(&code, 0x20) == 1 && loads(&code, 0xc) == 1 && indirect(&code)
+        }),
+        ("native_layer_init", {
+            let code = body("native_layer_init")?;
+            stores(&code, 0x8c) && calls(&code) == 1 && indirect(&code)
+        }),
         ("native_config_invalidate", {
             let code = body("native_config_invalidate")?;
-            stores(&code, 0x18) && calls(&code) == 2 && code.iter().any(|i| i.name == "cmn" && i.ops[1].imm() == Some(1))
+            stores(&code, 0x18)
+                && calls(&code) == 2
+                && code.iter().any(|i| i.name == "cmn" && i.ops[1].imm() == Some(1))
         }),
-        ("layout_wrapper", { let code = body("layout_wrapper")?; loads(&code, 0xc) == 1 && code.last().is_some_and(|i| i.name == "b") }),
+        ("layout_wrapper", {
+            let code = body("layout_wrapper")?;
+            loads(&code, 0xc) == 1 && code.last().is_some_and(|i| i.name == "b")
+        }),
         ("native_layer_wheel", {
             let code = body("native_layer_wheel")?;
-            calls(&code) == 2 && code.iter().any(|i| i.name == "vcvt.f32.s32") && code.iter().any(|i| i.name == "vdiv.f32")
+            calls(&code) == 2
+                && code.iter().any(|i| i.name == "vcvt.f32.s32")
+                && code.iter().any(|i| i.name == "vdiv.f32")
         }),
-        ("native_screen_init", { let code = body("native_screen_init")?; stores(&code, 0xe4) && loads(&code, 0xe8) == 1 && calls(&code) == 5 }),
+        ("native_screen_init", {
+            let code = body("native_screen_init")?;
+            stores(&code, 0xe4) && loads(&code, 0xe8) == 1 && calls(&code) == 5
+        }),
         ("native_config_draw", {
             // The renderer's body is its own function the native calls, or
             // inlined: its measure and draw calls, and the stack check.
             let code = body("native_config_draw")?;
             [1, 4].contains(&calls(&code)) && [0x28, 0x2c, 0x34, 0x38, 0x3c].iter().all(|&d| loads(&code, d) == 1)
         }),
-        ("view_dispatch", { let code = body("view_dispatch")?; loads(&code, 0) >= 2 && indirect(&code) }),
+        ("view_dispatch", {
+            let code = body("view_dispatch")?;
+            loads(&code, 0) >= 2 && indirect(&code)
+        }),
     ] {
         require(check, format!("{name} does not have the native's shape"))?;
     }
@@ -987,11 +959,7 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
 fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
     let refs = |value: u32| -> Result<Vec<u32>> {
         let mut result = Vec::new();
-        for s in elf
-            .sections
-            .iter()
-            .filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0)
-        {
+        for s in elf.sections.iter().filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0) {
             for off in (s.offset..s.offset + s.size.saturating_sub(3)).step_by(4) {
                 if word(elf.data, off)? == value {
                     result.push(s.address + (off - s.offset) as u32);
@@ -1002,11 +970,7 @@ fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
     };
     let needle = format!("{name}\0");
     let off = unique(
-        elf.data
-            .windows(needle.len())
-            .enumerate()
-            .filter(|(_, b)| *b == needle.as_bytes())
-            .map(|(off, _)| off),
+        elf.data.windows(needle.len()).enumerate().filter(|(_, b)| *b == needle.as_bytes()).map(|(off, _)| off),
         &format!("{name} RTTI name"),
     )?;
     let address = unique(
@@ -1032,11 +996,8 @@ fn relocated(elf: &Elf, slot: u32, what: &str) -> Result<()> {
     if half(elf.data, 16)? != 3 {
         return Ok(());
     }
-    let relocations = elf
-        .sections
-        .iter()
-        .filter(|s| s.kind == 9)
-        .flat_map(|s| (s.offset..s.offset + s.size).step_by(8));
+    let relocations =
+        elf.sections.iter().filter(|s| s.kind == 9).flat_map(|s| (s.offset..s.offset + s.size).step_by(8));
     let mut relative = false;
     for off in relocations {
         if word(elf.data, off)? == slot {
@@ -1054,7 +1015,8 @@ fn dial(elf: &Elf, imports: &BTreeMap<String, u32>) -> Result<Dial> {
     require(elf.text(draw) && elf.text(event), "dial methods are not code")?;
     relocated(elf, slot, "dial vtable")?;
     relocated(elf, event_slot, "dial vtable")?;
-    let value = *imports.get("_ZNK7nlEvent8GetValueEv")
+    let value = *imports
+        .get("_ZNK7nlEvent8GetValueEv")
         .ok_or_else(|| crate::Error::Device("missing event value import".into()))?;
     let figures_slot = primary_vtable(elf, "11nlTempLayer")? + 0x10;
     let figures = elf.read(figures_slot)?;
@@ -1079,7 +1041,9 @@ fn framebuffer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<
     let code = arm.body(flip)?;
     let pan = code.iter().position(|i| i.name == "movw" && i.text.ends_with("#0x4606"));
     require(
-        pan.is_some_and(|p| code[p..].iter().any(|i| matches!(i.name.as_str(), "bl" | "b") && target(i) == Some(ioctl))),
+        pan.is_some_and(|p| {
+            code[p..].iter().any(|i| matches!(i.name.as_str(), "bl" | "b") && target(i) == Some(ioctl))
+        }),
         "framebuffer flip does not pan",
     )?;
     let code = arm.code(init, None)?;
@@ -1145,8 +1109,7 @@ fn downlink(
                 code.iter()
                     .find(|i| i.name == "bl")
                     .and_then(|i| i.ops[0].imm())
-                    .ok_or_else(|| crate::Error::Device("missing view dispatcher".into()))?
-                    as u32
+                    .ok_or_else(|| crate::Error::Device("missing view dispatcher".into()))? as u32
             } else {
                 function
             };
@@ -1169,15 +1132,11 @@ fn downlink(
     }
     api.insert(
         "native_delete".into(),
-        *imports
-            .get("_ZdlPv")
-            .ok_or_else(|| crate::Error::Device("missing operator delete import".into()))?,
+        *imports.get("_ZdlPv").ok_or_else(|| crate::Error::Device("missing operator delete import".into()))?,
     );
     api.insert(
         "native_time".into(),
-        *imports
-            .get("time")
-            .ok_or_else(|| crate::Error::Device("missing time import".into()))?,
+        *imports.get("time").ok_or_else(|| crate::Error::Device("missing time import".into()))?,
     );
     Ok(())
 }
@@ -1193,24 +1152,15 @@ fn activity(
     for (name, symbol) in [
         ("native_activity_ctor", "_ZN7nlEventC1Ev"),
         ("native_activity_init", "_ZN7nlEvent4InitEji"),
-        (
-            "native_enqueue",
-            "_ZN12nlEventQueue7EnqueueEPK7nlEventP15nlIEventHandler",
-        ),
+        ("native_enqueue", "_ZN12nlEventQueue7EnqueueEPK7nlEventP15nlIEventHandler"),
     ] {
         api.insert(
             name.into(),
-            *imports
-                .get(symbol)
-                .ok_or_else(|| crate::Error::Device(format!("missing activity import {symbol}")))?,
+            *imports.get(symbol).ok_or_else(|| crate::Error::Device(format!("missing activity import {symbol}")))?,
         );
     }
     let mut candidates = Vec::new();
-    for s in elf
-        .sections
-        .iter()
-        .filter(|s| s.kind == 1 && s.flags & 4 != 0)
-    {
+    for s in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
         for off in (s.offset + 64..(s.offset + s.size).saturating_sub(32)).step_by(4) {
             let w = word(elf.data, off)?;
             if w & 0xfffff000 != 0xe3a01000 || immediate(w) != 0x40000005 {
@@ -1218,10 +1168,7 @@ fn activity(
             }
             let address = s.address + (off - s.offset) as u32;
             let c = arm.decode(address - 64, bytes(elf.data, off - 64, 96)?)?;
-            if !c
-                .iter()
-                .any(|i| i.name == "bl" && i.ops[0].imm() == Some(api["native_activity_init"]))
-            {
+            if !c.iter().any(|i| i.name == "bl" && i.ops[0].imm() == Some(api["native_activity_init"])) {
                 continue;
             }
             let indices: Vec<_> = c
@@ -1237,17 +1184,12 @@ fn activity(
             if j < 3 || c[j - 1].name != "bl" {
                 continue;
             }
-            if !c[j - 3..j - 1]
-                .iter()
-                .any(|i| i.name == "ldr" && i.text == "r0, [r4, #0x70]")
-            {
+            if !c[j - 3..j - 1].iter().any(|i| i.name == "ldr" && i.text == "r0, [r4, #0x70]") {
                 continue;
             }
             let dest: Vec<_> = c
                 .iter()
-                .filter(|i| {
-                    i.address > address && i.name == "ldr" && i.text.starts_with("r0, [r4, #")
-                })
+                .filter(|i| i.address > address && i.name == "ldr" && i.text.starts_with("r0, [r4, #"))
                 .filter_map(|i| i.ops[1].mem().map(|(_, d, _)| d as u32))
                 .collect();
             if dest.len() == 1 {
@@ -1260,11 +1202,7 @@ fn activity(
     layout.insert("ACTIVITY_QUEUE_OFFSET".into(), queue);
     fn refs(elf: &Elf, value: u32) -> Result<Vec<u32>> {
         let mut found = Vec::new();
-        for s in elf
-            .sections
-            .iter()
-            .filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0)
-        {
+        for s in elf.sections.iter().filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0) {
             for off in (s.offset..s.offset + s.size.saturating_sub(3)).step_by(4) {
                 if word(elf.data, off)? == value {
                     found.push(s.address + (off - s.offset) as u32);
@@ -1316,11 +1254,7 @@ fn activity(
     let code = arm.code(getter, Some(20))?;
     require(
         code.len() >= 2
-            && code[..2]
-                .iter()
-                .filter(|i| i.name == "ldr" && i.text.starts_with("r0, [r0, #"))
-                .count()
-                == 1
+            && code[..2].iter().filter(|i| i.name == "ldr" && i.text.starts_with("r0, [r0, #")).count() == 1
             && (code[1].name == "bx" || code[0].text == "ip, sp"),
         "unknown client accessor ABI",
     )?;
@@ -1328,18 +1262,13 @@ fn activity(
     Ok(())
 }
 fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
-    let ctor = *imports
-        .get("_ZN7nlTimerC1Ev")
-        .ok_or_else(|| crate::Error::Device("missing timer constructor".into()))?;
+    let ctor =
+        *imports.get("_ZN7nlTimerC1Ev").ok_or_else(|| crate::Error::Device("missing timer constructor".into()))?;
     let init = *imports
         .get("_ZN7nlTimer4InitEP12nlEventQueue")
         .ok_or_else(|| crate::Error::Device("missing timer init".into()))?;
     let mut offsets = Vec::new();
-    for s in elf
-        .sections
-        .iter()
-        .filter(|s| s.kind == 1 && s.flags & 4 != 0)
-    {
+    for s in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
         for off in (s.offset..s.offset + s.size.saturating_sub(20)).step_by(4) {
             let w = word(elf.data, off)?;
             if w >> 24 != 0xeb {
@@ -1351,36 +1280,21 @@ fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
                 continue;
             }
             let code = arm.code(site + 4, Some(32))?;
-            let Some(index) = code
-                .iter()
-                .position(|i| i.name == "bl" && i.ops[0].imm() == Some(init))
-            else {
+            let Some(index) = code.iter().position(|i| i.name == "bl" && i.ops[0].imm() == Some(init)) else {
                 continue;
             };
             let code = &code[..index];
-            if code
-                .iter()
-                .any(|i| !matches!(i.name.as_str(), "ldr" | "str" | "mov" | "cmp" | "beq"))
-            {
+            if code.iter().any(|i| !matches!(i.name.as_str(), "ldr" | "str" | "mov" | "cmp" | "beq")) {
                 continue;
             }
-            let saves: Vec<_> = code
-                .iter()
-                .filter(|i| i.name == "str" && i.ops[1].mem().is_some())
-                .collect();
-            let loads: Vec<_> = code
-                .iter()
-                .filter(|i| i.name == "ldr" && i.ops[0].reg() == Some("r1"))
-                .collect();
+            let saves: Vec<_> = code.iter().filter(|i| i.name == "str" && i.ops[1].mem().is_some()).collect();
+            let loads: Vec<_> = code.iter().filter(|i| i.name == "ldr" && i.ops[0].reg() == Some("r1")).collect();
             if saves.len() != 1 || loads.len() != 1 {
                 continue;
             }
             let (save, load) = (saves[0], loads[0]);
             let reg = save.ops[0].reg().unwrap();
-            if !code
-                .iter()
-                .any(|i| i.name == "mov" && i.text == format!("r0, {reg}"))
-            {
+            if !code.iter().any(|i| i.name == "mov" && i.text == format!("r0, {reg}")) {
                 continue;
             }
             let Some((sb, sd, _)) = save.ops[1].mem() else {
@@ -1401,4 +1315,3 @@ fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
     }
     Ok(unique(offsets, "nlGlobals timer field")?.0)
 }
-

@@ -7,11 +7,15 @@ static void *current_layer, *current_screen;
 static int no_template, fail_layer, fail_screen, associated, layer_creations, screen_creations, posts;
 static void *pointer_at(void *object, int offset) {
     if (object == &globals) {
-        if (offset == 0xb0) return &handler;
-        if (offset == 0x98) return settings ? &settings : 0;
-        if (offset == 0x9c) return registry ? &registry : 0;
+        if (offset == 0xb0)
+            return &handler;
+        if (offset == 0x98)
+            return settings ? &settings : 0;
+        if (offset == 0x9c)
+            return registry ? &registry : 0;
     }
-    if (object == &template_layer && offset == 0x14) return &handler;
+    if (object == &template_layer && offset == 0x14)
+        return &handler;
     assert(!"unexpected native pointer offset");
     return 0;
 }
@@ -19,10 +23,9 @@ static int word_at(void *object, int offset) {
     assert(object == &template_layer && (offset == 0x64 || offset == 0x68));
     return 320;
 }
-#define PTR(p, n) pointer_at((p), (n))
+#define PTR(p, n)  pointer_at((p), (n))
 #define WORD(p, n) word_at((p), (n))
 #include "../src/rcs_screen.c"
-
 
 void *rcs_screen_lookup(void *g, const char *name) {
     assert(g == &globals && name);
@@ -30,7 +33,8 @@ void *rcs_screen_lookup(void *g, const char *name) {
 }
 void *rcs_layer_lookup(void *g, const char *name) {
     assert(g == &globals);
-    if (!strcmp(name, "legalinfolayer")) return no_template ? 0 : &template_layer;
+    if (!strcmp(name, "legalinfolayer"))
+        return no_template ? 0 : &template_layer;
     assert(!strcmp(name, "remotecomfortlayer"));
     return current_layer;
 }
@@ -80,16 +84,19 @@ int rcs_poll(struct rcs_poll_descriptor *descriptor, int count, unsigned ticks) 
     assert(descriptor->fd == &socket_fd && descriptor->wanted == 1 && descriptor->ready == 0);
     assert(count == 1 && ticks == 123);
     poll_count++;
-    if (stop_on_poll) running = 0;
+    if (stop_on_poll)
+        running = 0;
     return chunks[chunk_index] ? 1 : 0;
 }
 int rcs_native_read(void *fd, void *out, int size) {
     assert(fd == &socket_fd && size > 0);
-    if (read_error) return -1;
+    if (read_error)
+        return -1;
     const char *data = chunks[chunk_index++];
     assert(data);
     int length = (int)strlen(data);
-    if (length > size) length = size;
+    if (length > size)
+        length = size;
     memcpy(out, data, (unsigned)length);
     return length;
 }
@@ -106,38 +113,51 @@ static void reset_reader(void) {
 static void read_tests(void) {
     char buffer[128], reply[16];
     reset_reader();
-    chunks[0] = "kryptonitedata "; chunks[1] = "kryptonite.AB -30 "; chunks[2] = "20.0 100\n";
+    chunks[0] = "kryptonitedata ";
+    chunks[1] = "kryptonite.AB -30 ";
+    chunks[2] = "20.0 100\n";
     strcpy(reply, "Done");
     int length = rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply);
     assert(length == (int)strlen("kryptonitedata kryptonite.AB -30 20.0 100\n"));
     assert(!strcmp(buffer, "kryptonitedata kryptonite.AB -30 20.0 100\n"));
     assert(clear_count == 1 && poll_count == 3 && !reply[0]);
 
-    reset_reader(); chunks[0] = "complete"; chunks[1] = "";
+    reset_reader();
+    chunks[0] = "complete";
+    chunks[1] = "";
     assert(rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply) == 8);
     assert(!strcmp(buffer, "complete"));
 
-    reset_reader(); chunks[0] = "unfinished";
+    reset_reader();
+    chunks[0] = "unfinished";
     strcpy(reply, "Done");
     assert(rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply) == 0);
     assert(!buffer[0] && !reply[0] && poll_count == 2);
 
-    reset_reader(); running = 0;
+    reset_reader();
+    running = 0;
     assert(rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply) == 0 && poll_count == 0);
-    reset_reader(); chunks[0] = "data"; stop_on_poll = 1;
+    reset_reader();
+    chunks[0] = "data";
+    stop_on_poll = 1;
     assert(rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply) == 0 && chunk_index == 0);
-    reset_reader(); chunks[0] = "data"; read_error = 1;
+    reset_reader();
+    chunks[0] = "data";
+    read_error = 1;
     assert(rcs_read_command(&socket_fd, buffer, sizeof(buffer), &running, reply) == 0);
-    reset_reader(); chunks[0] = "too much data";
+    reset_reader();
+    chunks[0] = "too much data";
     assert(rcs_read_command(&socket_fd, buffer, 8, &running, reply) == 0 && !buffer[0]);
 }
 int main(void) {
     assert(!custom_factory(&globals, "unrelated-screen") && !layer_creations);
     no_template = 1;
     assert(!custom_factory(&globals, "remotecomfortscreen") && !layer_creations);
-    no_template = 0; fail_layer = 1;
+    no_template = 0;
+    fail_layer = 1;
     assert(!custom_factory(&globals, "remotecomfortscreen") && layer_creations == 1 && !screen_creations);
-    fail_layer = 0; fail_screen = 1;
+    fail_layer = 0;
+    fail_screen = 1;
     assert(!custom_factory(&globals, "remotecomfortscreen") && current_layer == &layer && !current_screen);
     fail_screen = 0;
     assert(custom_factory(&globals, "remotecomfortscreen") == &screen);

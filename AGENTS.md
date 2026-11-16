@@ -43,7 +43,7 @@ The firmware build supplies assets embedded by the host crates; cargo runs it wh
 
 ## Coding Style & Naming Conventions
 
-Match surrounding style and use four-space indentation in Rust. Use `snake_case` for functions/modules, `PascalCase` for types, and `SCREAMING_SNAKE_CASE` for constants. Keep changes focused; avoid unrelated formatting or refactoring. Comments explain current behavior and lasting constraints, not debugging history.
+Every language has a formatter and a linter, run by pre-commit (`.pre-commit-config.yaml`, each tool's configuration at the root); before committing run `pre-commit run --all-files`, or `pre-commit install` to run them on each commit. Match surrounding style and use four-space indentation in Rust. Use `snake_case` for functions/modules, `PascalCase` for types, and `SCREAMING_SNAKE_CASE` for constants. Keep changes focused; avoid unrelated formatting or refactoring. Comments explain current behavior and lasting constraints, not debugging history.
 
 ## Testing Guidelines
 
@@ -60,20 +60,22 @@ For binary patch changes, follow `platform/common/nlclient/tests/README.md`; str
 
 ## Commits and PR titles
 
-    subsys: lowercase imperative summary
+```text
+subsys: lowercase imperative summary
+```
 
 Everything after the colon is **lowercase**. The subject fits in 72 columns, no trailing period. The subsystem prefix matches the area the change touches — check `git log --format=%s -20 -- <path>` for precedent. Common prefixes:
 
-| Prefix | Area |
-|-|-|
-| `app:` | the unfr0zen application (GUI, CLI, self-update, host library) |
-| `nestlocal:` | the on-device service; nest deeper with `nestlocal: thread:` |
-| `client-ng:` | the thermostat UI submodule |
-| `ci:` | CircleCI configs and build infrastructure |
-| `radio:` | radio firmware and Thread/Zigbee protocol |
-| `j49:` | gen 2 device-specific code |
-| `platform:` | build scripts, bootstrap, x-loader, kernel modules |
-| `docs:` | documentation only |
+| Prefix       | Area                                                           |
+| ------------ | -------------------------------------------------------------- |
+| `app:`       | the unfr0zen application (GUI, CLI, self-update, host library) |
+| `nestlocal:` | the on-device service; nest deeper with `nestlocal: thread:`   |
+| `client-ng:` | the thermostat UI submodule                                    |
+| `ci:`        | CircleCI configs and build infrastructure                      |
+| `radio:`     | radio firmware and Thread/Zigbee protocol                      |
+| `j49:`       | gen 2 device-specific code                                     |
+| `platform:`  | build scripts, bootstrap, x-loader, kernel modules             |
+| `docs:`      | documentation only                                             |
 
 Never `WIP`, `fix`, or bare verbs without a subsystem prefix.
 
@@ -86,7 +88,7 @@ Body is optional — omit it for self-explanatory changes. When present, wrap at
 
 ## Pull requests
 
-- A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with ` (#N)` appended), so it must follow the `subsys: lowercase summary` format above.
+- A PR is one self-contained change. PRs are squash-merged: the PR title becomes the commit subject on `main` (with `(#N)` appended after a space), so it must follow the `subsys: lowercase summary` format above.
 - PR body is short — one or two sentences describing the change. No padding.
 - CI (`.circleci/`) runs the app's workflow for a PR changing anything built and for a push to `main`: it builds each module of the firmware, the app for `linux-x86_64`, `windows-x86_64` and `macos`, and the tests above. A job runs only when its inputs changed since it last passed (the build image, its sources, the modules it takes: `MODULES` and `CHECK` in `utils/ci/configs.py`, to update when a job reads a new path), and otherwise reports success at once; a release runs every job, and a pipeline started with the parameter `force` (job names, or `all`) runs those and everything taking them whatever the cache holds. A PR merges only when it is green. A `vX.Y.Z` tag on `main` runs the release workflow, building the app for every target and publishing them as a GitHub release. After editing any config, run `utils/ci/configs.py validate`.
 - Never describe an undisclosed vulnerability in a public issue, PR or commit.

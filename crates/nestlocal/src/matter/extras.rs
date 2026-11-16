@@ -163,8 +163,11 @@ impl ui_config::ClusterHandler for Display {
         })
     }
 
-    fn set_temperature_display_mode(&self, _ctx: impl WriteContext, value: ui_config::TemperatureDisplayModeEnum)
-        -> Result<(), Error> {
+    fn set_temperature_display_mode(
+        &self,
+        _ctx: impl WriteContext,
+        value: ui_config::TemperatureDisplayModeEnum,
+    ) -> Result<(), Error> {
         let scale = match value {
             ui_config::TemperatureDisplayModeEnum::Fahrenheit => "F",
             ui_config::TemperatureDisplayModeEnum::Celsius => "C",
@@ -212,9 +215,8 @@ pub struct Battery {
 }
 
 impl power_source::ClusterHandler for Battery {
-    const CLUSTER: Cluster<'static> = power_source::FULL_CLUSTER
-        .with_features(power_source::Feature::BATTERY.bits())
-        .with_attrs(with!(
+    const CLUSTER: Cluster<'static> =
+        power_source::FULL_CLUSTER.with_features(power_source::Feature::BATTERY.bits()).with_attrs(with!(
             required;
             power_source::AttributeId::BatVoltage
                 | power_source::AttributeId::BatChargeLevel
@@ -336,9 +338,8 @@ pub struct FanTimer {
 }
 
 impl mode_select::ClusterHandler for FanTimer {
-    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
-        .with_attrs(with!(required))
-        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
 
     dataver!();
 
@@ -353,7 +354,10 @@ impl mode_select::ClusterHandler for FanTimer {
     fn supported_modes<P: TLVBuilderParent>(
         &self,
         _ctx: impl ReadContext,
-        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
     ) -> Result<P, Error> {
         macro_rules! option {
             ($b:expr, $i:expr, $minutes:expr) => {
@@ -377,14 +381,19 @@ impl mode_select::ClusterHandler for FanTimer {
 
     fn current_mode(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
         let minutes = self.nest.view().device_number("fan_timer_duration").map_or(15.0, |s| s / 60.0);
-        let nearest = FAN_TIMER_MINUTES.iter().enumerate()
+        let nearest = FAN_TIMER_MINUTES
+            .iter()
+            .enumerate()
             .min_by_key(|(_, m)| ((**m as f64) - minutes).abs() as u64)
             .map_or(0, |(i, _)| i);
         Ok(nearest as u8)
     }
 
-    fn handle_change_to_mode(&self, _ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
-        -> Result<(), Error> {
+    fn handle_change_to_mode(
+        &self,
+        _ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
         let minutes = FAN_TIMER_MINUTES.get(request.new_mode()? as usize).ok_or(ErrorCode::ConstraintError)?;
         self.nest.apply("fan_timer_duration", &minutes.to_string()).map_err(failed)
     }
@@ -413,9 +422,8 @@ fn external_celsius(mode: u8) -> Option<f64> {
 }
 
 impl mode_select::ClusterHandler for ExternalTemperature {
-    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
-        .with_attrs(with!(required))
-        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
 
     dataver!();
 
@@ -430,11 +438,18 @@ impl mode_select::ClusterHandler for ExternalTemperature {
     fn supported_modes<P: TLVBuilderParent>(
         &self,
         _ctx: impl ReadContext,
-        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
     ) -> Result<P, Error> {
         macro_rules! option {
             ($b:expr, $mode:expr) => {
-                $b.label(&format!("{:.1} °C", external_celsius($mode).unwrap_or_default()))?.mode($mode)?.semantic_tags()?.end()?.end()
+                $b.label(&format!("{:.1} °C", external_celsius($mode).unwrap_or_default()))?
+                    .mode($mode)?
+                    .semantic_tags()?
+                    .end()?
+                    .end()
             };
         }
         match builder {
@@ -454,8 +469,11 @@ impl mode_select::ClusterHandler for ExternalTemperature {
         Ok(self.nest.external_reading().map_or(EXTERNAL_NO_READING, external_mode))
     }
 
-    fn handle_change_to_mode(&self, _ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
-        -> Result<(), Error> {
+    fn handle_change_to_mode(
+        &self,
+        _ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
         let celsius = external_celsius(request.new_mode()?).ok_or(ErrorCode::ConstraintError)?;
         self.nest.apply("external_temperature", &celsius.to_string()).map_err(failed)
     }
@@ -478,9 +496,8 @@ impl TemperatureSource {
 }
 
 impl mode_select::ClusterHandler for TemperatureSource {
-    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
-        .with_attrs(with!(required))
-        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
 
     dataver!();
 
@@ -495,7 +512,10 @@ impl mode_select::ClusterHandler for TemperatureSource {
     fn supported_modes<P: TLVBuilderParent>(
         &self,
         _ctx: impl ReadContext,
-        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
     ) -> Result<P, Error> {
         macro_rules! option {
             ($b:expr, $mode:expr, $label:expr) => {
@@ -521,9 +541,16 @@ impl mode_select::ClusterHandler for TemperatureSource {
         Ok(self.mode())
     }
 
-    fn handle_change_to_mode(&self, _ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
-        -> Result<(), Error> {
-        if request.new_mode()? == self.mode() { Ok(()) } else { Err(ErrorCode::InvalidAction.into()) }
+    fn handle_change_to_mode(
+        &self,
+        _ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
+        if request.new_mode()? == self.mode() {
+            Ok(())
+        } else {
+            Err(ErrorCode::InvalidAction.into())
+        }
     }
 }
 
@@ -546,7 +573,9 @@ struct ScheduleSetting {
 impl FanSchedule {
     fn setting(endpoint: u16) -> Result<ScheduleSetting, Error> {
         let hours = |name, command| ScheduleSetting {
-            name, command, choices: (0..24).map(|h| (format!("{h:02}:00"), h.to_string())).collect(),
+            name,
+            command,
+            choices: (0..24).map(|h| (format!("{h:02}:00"), h.to_string())).collect(),
         };
         match endpoint {
             FAN_SCHEDULE => Ok(ScheduleSetting {
@@ -566,7 +595,9 @@ impl FanSchedule {
         match endpoint {
             FAN_SCHEDULE => {
                 let minutes = view.device_number("fan_duty_cycle").map_or(60.0, |s| s / 60.0);
-                Ok(bridge::FAN_SCHEDULE_MINUTES.iter().enumerate()
+                Ok(bridge::FAN_SCHEDULE_MINUTES
+                    .iter()
+                    .enumerate()
                     .min_by_key(|(_, m)| ((**m as f64) - minutes).abs() as u64)
                     .map_or(0, |(i, _)| i as u8))
             }
@@ -578,9 +609,8 @@ impl FanSchedule {
 }
 
 impl mode_select::ClusterHandler for FanSchedule {
-    const CLUSTER: Cluster<'static> = mode_select::FULL_CLUSTER
-        .with_attrs(with!(required))
-        .with_cmds(with!(mode_select::CommandId::ChangeToMode));
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
 
     dataver!();
 
@@ -595,7 +625,10 @@ impl mode_select::ClusterHandler for FanSchedule {
     fn supported_modes<P: TLVBuilderParent>(
         &self,
         ctx: impl ReadContext,
-        builder: ArrayAttributeRead<mode_select::ModeOptionStructArrayBuilder<P>, mode_select::ModeOptionStructBuilder<P>>,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
     ) -> Result<P, Error> {
         let choices = Self::setting(ctx.attr().endpoint_id)?.choices;
         macro_rules! option {
@@ -622,8 +655,11 @@ impl mode_select::ClusterHandler for FanSchedule {
         self.mode(ctx.attr().endpoint_id)
     }
 
-    fn handle_change_to_mode(&self, ctx: impl InvokeContext, request: mode_select::ChangeToModeRequest<'_>)
-        -> Result<(), Error> {
+    fn handle_change_to_mode(
+        &self,
+        ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
         let setting = Self::setting(ctx.cmd().endpoint_id)?;
         let (_, arg) = setting.choices.get(usize::from(request.new_mode()?)).ok_or(ErrorCode::ConstraintError)?;
         self.nest.apply(setting.command, arg).map_err(failed)
@@ -672,8 +708,11 @@ impl on_off::ClusterHandler for Switches {
         self.set(ctx.cmd().endpoint_id, None)
     }
 
-    fn handle_off_with_effect(&self, _ctx: impl InvokeContext, _request: on_off::OffWithEffectRequest<'_>)
-        -> Result<(), Error> {
+    fn handle_off_with_effect(
+        &self,
+        _ctx: impl InvokeContext,
+        _request: on_off::OffWithEffectRequest<'_>,
+    ) -> Result<(), Error> {
         Err(ErrorCode::CommandNotFound.into())
     }
 
@@ -681,8 +720,11 @@ impl on_off::ClusterHandler for Switches {
         Err(ErrorCode::CommandNotFound.into())
     }
 
-    fn handle_on_with_timed_off(&self, _ctx: impl InvokeContext, _request: on_off::OnWithTimedOffRequest<'_>)
-        -> Result<(), Error> {
+    fn handle_on_with_timed_off(
+        &self,
+        _ctx: impl InvokeContext,
+        _request: on_off::OnWithTimedOffRequest<'_>,
+    ) -> Result<(), Error> {
         Err(ErrorCode::CommandNotFound.into())
     }
 }
@@ -710,18 +752,18 @@ mod tests {
     use crate::fields;
     use crate::json::Fields;
     use crate::matter::tests::{ctx, field, nest};
-    use rs_matter::dm::clusters::decl::globals::LabelStruct;
     use fan_control::ClusterHandler as _;
     use fixed_label::ClusterHandler as _;
     use mode_select::ClusterHandler as _;
     use on_off::ClusterHandler as _;
     use power_source::ClusterHandler as _;
     use relative_humidity_measurement::ClusterHandler as _;
-    use temperature_measurement::ClusterHandler as _;
-    use ui_config::ClusterHandler as _;
+    use rs_matter::dm::clusters::decl::globals::LabelStruct;
     use rs_matter::tlv::{TLVArray, TLVElement, TLVTag, TLVWriteParent};
     use rs_matter::utils::storage::WriteBuf;
     use serde_json::Value;
+    use temperature_measurement::ClusterHandler as _;
+    use ui_config::ClusterHandler as _;
 
     fn code(result: Result<(), Error>) -> ErrorCode {
         result.expect_err("accepted").code()
@@ -729,32 +771,56 @@ mod tests {
 
     #[test]
     fn switches_follow_the_equipment_on_consecutive_endpoints() {
-        let keys = |dev: Fields, sh: Fields| {
-            switches(&nest(dev, sh)).iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>()
-        };
-        let common = [(10, "learning_mode"), (11, "auto_away_enable"), (12, "sunlight_correction_enabled"),
-                      (13, "preconditioning_enabled")];
-        assert_eq!(keys(fields!{}, fields!{}), common);
-        assert_eq!(keys(fields!{}, fields!{"can_cool" => true})[4..], [(14, "away_temperature_high_enabled")]);
-        assert_eq!(keys(fields!{"has_dehumidifier" => true}, fields!{"can_heat" => true, "can_cool" => true})[4..],
-                   [(14, "away_temperature_low_enabled"), (15, "away_temperature_high_enabled"),
-                    (16, "target_humidity_enabled")]);
-        assert_eq!(keys(fields!{"has_hot_water_control" => true}, fields!{"can_heat" => true})[4..],
-                   [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]);
-        assert_eq!(keys(fields!{"has_air_filter" => true}, fields!{})[4..],
-                   [(14, "filter_reminder_enabled"), (15, "filter_reset")]);
+        let keys =
+            |dev: Fields, sh: Fields| switches(&nest(dev, sh)).iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>();
+        let common = [
+            (10, "learning_mode"),
+            (11, "auto_away_enable"),
+            (12, "sunlight_correction_enabled"),
+            (13, "preconditioning_enabled"),
+        ];
+        assert_eq!(keys(fields! {}, fields! {}), common);
+        assert_eq!(keys(fields! {}, fields! {"can_cool" => true})[4..], [(14, "away_temperature_high_enabled")]);
+        assert_eq!(
+            keys(fields! {"has_dehumidifier" => true}, fields! {"can_heat" => true, "can_cool" => true})[4..],
+            [
+                (14, "away_temperature_low_enabled"),
+                (15, "away_temperature_high_enabled"),
+                (16, "target_humidity_enabled")
+            ]
+        );
+        assert_eq!(
+            keys(fields! {"has_hot_water_control" => true}, fields! {"can_heat" => true})[4..],
+            [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]
+        );
+        assert_eq!(
+            keys(fields! {"has_air_filter" => true}, fields! {})[4..],
+            [(14, "filter_reminder_enabled"), (15, "filter_reset")]
+        );
         // The fan schedule's switch comes last.
-        assert_eq!(keys(fields!{"has_air_filter" => true, "has_fan" => true}, fields!{})[4..],
-                   [(14, "filter_reminder_enabled"), (15, "filter_reset"), (16, "fan_schedule")]);
+        assert_eq!(
+            keys(fields! {"has_air_filter" => true, "has_fan" => true}, fields! {})[4..],
+            [(14, "filter_reminder_enabled"), (15, "filter_reset"), (16, "fan_schedule")]
+        );
     }
 
     #[test]
     fn fan_schedule_shows_and_sets_its_run_time_start_and_end() {
-        let schedule = FanSchedule { dataver: Dataver::new(0), nest: nest(fields!{"fan_duty_cycle" => 1800,
-            "fan_duty_start_time" => 25_200, "fan_duty_end_time" => 82_800}, fields!{}) };
+        let schedule = FanSchedule {
+            dataver: Dataver::new(0),
+            nest: nest(
+                fields! {"fan_duty_cycle" => 1800,
+                "fan_duty_start_time" => 25_200, "fan_duty_end_time" => 82_800},
+                fields! {},
+            ),
+        };
         assert_eq!([40, 41, 42].map(|e| schedule.current_mode(ctx(e)).unwrap()), [1, 7, 23]);
-        let change = |endpoint: u16, mode: u8| schedule.handle_change_to_mode(ctx(endpoint),
-            mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])));
+        let change = |endpoint: u16, mode: u8| {
+            schedule.handle_change_to_mode(
+                ctx(endpoint),
+                mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])),
+            )
+        };
         change(40, 3).unwrap();
         change(41, 0).unwrap();
         change(42, 12).unwrap();
@@ -765,13 +831,13 @@ mod tests {
         assert_eq!(code(change(42, 24)), ErrorCode::ConstraintError);
         assert_eq!(code(change(43, 0)), ErrorCode::NotFound);
         // A unit that has said nothing: always on, all day.
-        let fresh = FanSchedule { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{}) };
+        let fresh = FanSchedule { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {}) };
         assert_eq!([40, 41, 42].map(|e| fresh.current_mode(ctx(e)).unwrap()), [3, 0, 0]);
     }
 
     #[test]
     fn the_filter_reset_switch_reads_off_and_resets_when_turned_on() {
-        let unit = nest(fields!{"has_air_filter" => true, "filter_changed_date" => 0}, fields!{});
+        let unit = nest(fields! {"has_air_filter" => true, "filter_changed_date" => 0}, fields! {});
         let s = Switches { dataver: Dataver::new(0), nest: unit.clone(), all: switches(&unit) };
         s.handle_off(ctx(15)).unwrap();
         assert_eq!(field(&unit, "device", "filter_changed_date").as_f64(), Some(0.0));
@@ -785,7 +851,7 @@ mod tests {
 
     #[test]
     fn each_switch_sets_its_own_setting() {
-        let unit = nest(fields!{"learning_mode" => true, "auto_away_enable" => false}, fields!{});
+        let unit = nest(fields! {"learning_mode" => true, "auto_away_enable" => false}, fields! {});
         let s = Switches { dataver: Dataver::new(0), nest: unit.clone(), all: switches(&unit) };
         assert!(s.on_off(ctx(10)).unwrap());
         assert!(!s.on_off(ctx(11)).unwrap());
@@ -804,8 +870,11 @@ mod tests {
 
     #[test]
     fn sensors_in_their_clusters_units() {
-        let unit = nest(fields!{"current_humidity" => 41.26, "backplate_temperature" => 22.137,
-                                "battery_level" => 3.9215}, fields!{});
+        let unit = nest(
+            fields! {"current_humidity" => 41.26, "backplate_temperature" => 22.137,
+            "battery_level" => 3.9215},
+            fields! {},
+        );
         let humidity = Humidity { dataver: Dataver::new(0), nest: unit.clone() };
         assert_eq!(humidity.measured_value(ctx(1)).unwrap(), Nullable::some(4126));
         // The backplate's own reading, not rounded as the screen shows it.
@@ -814,21 +883,32 @@ mod tests {
         let battery = Battery { dataver: Dataver::new(0), nest: unit };
         assert_eq!(battery.bat_voltage(ctx(3)).unwrap(), Nullable::some(3922));
 
-        let unit = nest(fields!{}, fields!{});
-        assert_eq!(Humidity { dataver: Dataver::new(0), nest: unit.clone() }.measured_value(ctx(1)).unwrap(),
-                   Nullable::none());
-        assert_eq!(Backplate { dataver: Dataver::new(0), nest: unit.clone() }.measured_value(ctx(2)).unwrap(),
-                   Nullable::none());
+        let unit = nest(fields! {}, fields! {});
+        assert_eq!(
+            Humidity { dataver: Dataver::new(0), nest: unit.clone() }.measured_value(ctx(1)).unwrap(),
+            Nullable::none()
+        );
+        assert_eq!(
+            Backplate { dataver: Dataver::new(0), nest: unit.clone() }.measured_value(ctx(2)).unwrap(),
+            Nullable::none()
+        );
         assert_eq!(Battery { dataver: Dataver::new(0), nest: unit }.bat_voltage(ctx(3)).unwrap(), Nullable::none());
     }
 
     #[test]
     fn battery_charge_level_by_voltage() {
         use power_source::BatChargeLevelEnum::{Critical, Warning, OK};
-        for (volts, want) in [(Some(3.2), Critical), (Some(3.499), Critical), (Some(3.5), Warning),
-                              (Some(3.599), Warning), (Some(3.6), OK), (Some(3.95), OK), (None, OK)] {
-            let dev = volts.map_or_else(Fields::new, |v| fields!{"battery_level" => v});
-            let battery = Battery { dataver: Dataver::new(0), nest: nest(dev, fields!{}) };
+        for (volts, want) in [
+            (Some(3.2), Critical),
+            (Some(3.499), Critical),
+            (Some(3.5), Warning),
+            (Some(3.599), Warning),
+            (Some(3.6), OK),
+            (Some(3.95), OK),
+            (None, OK),
+        ] {
+            let dev = volts.map_or_else(Fields::new, |v| fields! {"battery_level" => v});
+            let battery = Battery { dataver: Dataver::new(0), nest: nest(dev, fields! {}) };
             assert_eq!(battery.bat_charge_level(ctx(3)).unwrap(), want, "{volts:?}");
         }
     }
@@ -836,21 +916,23 @@ mod tests {
     #[test]
     fn display_scale_round_trips() {
         use ui_config::TemperatureDisplayModeEnum::{Celsius, Fahrenheit};
-        let display = Display { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{}) };
+        let display = Display { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {}) };
         assert_eq!(display.temperature_display_mode(ctx(1)).unwrap(), Celsius);
         display.set_temperature_display_mode(ctx(1), Fahrenheit).unwrap();
         assert_eq!(field(&display.nest, "device", "temperature_scale"), Value::from("F"));
         assert_eq!(display.temperature_display_mode(ctx(1)).unwrap(), Fahrenheit);
         display.set_temperature_display_mode(ctx(1), Celsius).unwrap();
         assert_eq!(display.temperature_display_mode(ctx(1)).unwrap(), Celsius);
-        assert_eq!(code(display.set_keypad_lockout(ctx(1), ui_config::KeypadLockoutEnum::Lockout1)),
-                   ErrorCode::UnsupportedAccess);
+        assert_eq!(
+            code(display.set_keypad_lockout(ctx(1), ui_config::KeypadLockoutEnum::Lockout1)),
+            ErrorCode::UnsupportedAccess
+        );
     }
 
     #[test]
     fn fan_on_runs_the_timer_and_off_leaves_it_to_the_equipment() {
         use fan_control::FanModeEnum::{High, Off};
-        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields!{"fan_timer_duration" => 1800}, fields!{}) };
+        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields! {"fan_timer_duration" => 1800}, fields! {}) };
         assert_eq!((fan.fan_mode(ctx(4)).unwrap(), fan.percent_setting(ctx(4)).unwrap()), (Off, Nullable::some(0)));
         fan.set_fan_mode(ctx(4), High).unwrap();
         let timeout = field(&fan.nest, "device", "fan_timer_timeout").as_f64().unwrap();
@@ -861,8 +943,12 @@ mod tests {
         assert_eq!(field(&fan.nest, "device", "fan_timer_timeout").as_f64(), Some(0.0));
         assert_eq!(fan.fan_mode(ctx(4)).unwrap(), Off);
 
-        for (percent, on) in [(Nullable::some(1), true), (Nullable::some(0), false), (Nullable::some(100), true),
-                              (Nullable::none(), false)] {
+        for (percent, on) in [
+            (Nullable::some(1), true),
+            (Nullable::some(0), false),
+            (Nullable::some(100), true),
+            (Nullable::none(), false),
+        ] {
             fan.set_percent_setting(ctx(4), percent.clone()).unwrap();
             assert_eq!(fan.fan_mode(ctx(4)).unwrap() == High, on, "{percent:?}");
         }
@@ -871,10 +957,13 @@ mod tests {
     #[test]
     fn fan_modes_outside_off_high_are_refused() {
         use fan_control::FanModeEnum::{Auto, High, Low, Medium, Off, On, Smart};
-        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields!{"fan_timer_duration" => 1800}, fields!{}) };
+        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields! {"fan_timer_duration" => 1800}, fields! {}) };
         for mode in [Low, Medium, Auto, Smart] {
-            assert_eq!(fan.set_fan_mode(ctx(4), mode).expect_err("accepted").code(), ErrorCode::ConstraintError,
-                       "{mode:?}");
+            assert_eq!(
+                fan.set_fan_mode(ctx(4), mode).expect_err("accepted").code(),
+                ErrorCode::ConstraintError,
+                "{mode:?}"
+            );
             assert_eq!(fan.fan_mode(ctx(4)).unwrap(), Off);
         }
         assert_eq!(field(&fan.nest, "device", "fan_timer_timeout"), serde_json::Value::Null);
@@ -885,28 +974,43 @@ mod tests {
 
     #[test]
     fn fan_running_is_what_the_equipment_does() {
-        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{"hvac_fan_state" => true}) };
+        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {"hvac_fan_state" => true}) };
         assert_eq!(fan.percent_current(ctx(4)).unwrap(), 100);
         assert_eq!(fan.fan_mode(ctx(4)).unwrap(), fan_control::FanModeEnum::Off);
-        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{"hvac_fan_state" => false}) };
+        let fan = Fan { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {"hvac_fan_state" => false}) };
         assert_eq!(fan.percent_current(ctx(4)).unwrap(), 0);
     }
 
     #[test]
     fn fan_timer_shows_the_nearest_choice_and_sets_minutes() {
-        for (seconds, mode) in [(None, 0), (Some(900.0), 0), (Some(1500.0), 1), (Some(2700.0), 2), (Some(5400.0), 3),
-                                (Some(28800.0), 6), (Some(86400.0), 7), (Some(60.0), 0)] {
-            let dev = seconds.map_or_else(Fields::new, |s| fields!{"fan_timer_duration" => s});
-            let timer = FanTimer { dataver: Dataver::new(0), nest: nest(dev, fields!{}) };
+        for (seconds, mode) in [
+            (None, 0),
+            (Some(900.0), 0),
+            (Some(1500.0), 1),
+            (Some(2700.0), 2),
+            (Some(5400.0), 3),
+            (Some(28800.0), 6),
+            (Some(86400.0), 7),
+            (Some(60.0), 0),
+        ] {
+            let dev = seconds.map_or_else(Fields::new, |s| fields! {"fan_timer_duration" => s});
+            let timer = FanTimer { dataver: Dataver::new(0), nest: nest(dev, fields! {}) };
             assert_eq!(timer.current_mode(ctx(5)).unwrap(), mode, "{seconds:?} s");
         }
-        let timer = FanTimer { dataver: Dataver::new(0), nest: nest(fields!{"fan_timer_duration" => 900}, fields!{}) };
-        let change = |mode: u8| timer.handle_change_to_mode(ctx(5),
-            mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])));
+        let timer =
+            FanTimer { dataver: Dataver::new(0), nest: nest(fields! {"fan_timer_duration" => 900}, fields! {}) };
+        let change = |mode: u8| {
+            timer.handle_change_to_mode(
+                ctx(5),
+                mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])),
+            )
+        };
         for mode in 0..FAN_TIMER_MINUTES.len() as u8 {
             change(mode).unwrap();
-            assert_eq!(field(&timer.nest, "device", "fan_timer_duration").as_f64(),
-                       Some(f64::from(FAN_TIMER_MINUTES[mode as usize] * 60)));
+            assert_eq!(
+                field(&timer.nest, "device", "fan_timer_duration").as_f64(),
+                Some(f64::from(FAN_TIMER_MINUTES[mode as usize] * 60))
+            );
             assert_eq!(timer.current_mode(ctx(5)).unwrap(), mode);
         }
         assert_eq!(code(change(FAN_TIMER_MINUTES.len() as u8)), ErrorCode::ConstraintError);
@@ -915,9 +1019,13 @@ mod tests {
 
     #[test]
     fn temperature_source_shows_the_regulating_sensor_and_refuses_another() {
-        let source = TemperatureSource { dataver: Dataver::new(0), nest: nest(fields!{}, fields!{}) };
-        let change = |mode: u8| source.handle_change_to_mode(ctx(7),
-            mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])));
+        let source = TemperatureSource { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {}) };
+        let change = |mode: u8| {
+            source.handle_change_to_mode(
+                ctx(7),
+                mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])),
+            )
+        };
         assert_eq!(source.current_mode(ctx(7)).unwrap(), 0);
         change(0).unwrap();
         assert_eq!(code(change(1)), ErrorCode::InvalidAction);
@@ -926,8 +1034,10 @@ mod tests {
 
     #[test]
     fn labels_name_each_endpoint_beside_the_thermostat() {
-        let labels = Labels { dataver: Dataver::new(0), names: vec![(BACKPLATE, "Backplate temperature"),
-                                                                     (SWITCHES, "Auto-Schedule")] };
+        let labels = Labels {
+            dataver: Dataver::new(0),
+            names: vec![(BACKPLATE, "Backplate temperature"), (SWITCHES, "Auto-Schedule")],
+        };
         let read = |endpoint: u16| {
             let mut buf = [0u8; 128];
             let mut wb = WriteBuf::new(&mut buf);
@@ -935,10 +1045,12 @@ mod tests {
             labels.label_list(ctx(endpoint), ArrayAttributeRead::ReadAll(array)).unwrap();
             let len = wb.get_tail();
             let list: TLVArray<'_, LabelStruct<'_>> = TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
-            list.iter().map(|l| {
-                let l = l.unwrap();
-                (l.label().unwrap().to_string(), l.value().unwrap().to_string())
-            }).collect::<Vec<_>>()
+            list.iter()
+                .map(|l| {
+                    let l = l.unwrap();
+                    (l.label().unwrap().to_string(), l.value().unwrap().to_string())
+                })
+                .collect::<Vec<_>>()
         };
         assert_eq!(read(SWITCHES), [("ha_entitylabel".to_string(), "Auto-Schedule".to_string())]);
         assert_eq!(read(BACKPLATE)[0].1, "Backplate temperature");

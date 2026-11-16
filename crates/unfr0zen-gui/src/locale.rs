@@ -6,7 +6,10 @@ use std::sync::OnceLock;
 
 fn english() -> &'static HashMap<String, String> {
     static CATALOG: OnceLock<HashMap<String, String>> = OnceLock::new();
-    CATALOG.get_or_init(|| serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.json"))).expect("valid English GUI catalog"))
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.json")))
+            .expect("valid English GUI catalog")
+    })
 }
 
 pub fn text(key: &str) -> &'static str {
@@ -23,7 +26,9 @@ fn render(mut template: &str, arguments: &[(&str, &dyn Display)]) -> String {
     while let Some((before, rest)) = template.split_once('{') {
         output.push_str(before);
         let (name, after) = rest.split_once('}').expect("closed GUI message placeholder");
-        let value = arguments.iter().find(|(argument, _)| *argument == name)
+        let value = arguments
+            .iter()
+            .find(|(argument, _)| *argument == name)
             .unwrap_or_else(|| panic!("missing GUI message argument: {name}"));
         use std::fmt::Write;
         write!(output, "{}", value.1).expect("write GUI message to String");
@@ -64,12 +69,21 @@ mod tests {
 
     #[test]
     fn every_gui_message_key_exists_in_the_catalog() {
-        let sources = [include_str!("main.rs"), include_str!("form.rs"), include_str!("terminal.rs"),
-                       include_str!("about.rs"), include_str!("macos_about.rs"), include_str!("backups.rs"),
-                       include_str!("bus.rs"), include_str!("nandmap.rs"), include_str!("setup.rs")];
+        let sources = [
+            include_str!("main.rs"),
+            include_str!("form.rs"),
+            include_str!("terminal.rs"),
+            include_str!("about.rs"),
+            include_str!("macos_about.rs"),
+            include_str!("backups.rs"),
+            include_str!("bus.rs"),
+            include_str!("nandmap.rs"),
+            include_str!("setup.rs"),
+        ];
         let mut used = std::collections::HashSet::new();
         for source in sources {
-            for call in source.split("tr!(\"").skip(1) {
+            for call in source.split("tr!(").skip(1) {
+                let call = call.trim_start().strip_prefix('"').expect("a literal message key");
                 let (key, _) = call.split_once('"').expect("a literal message key");
                 assert!(english().contains_key(key), "missing GUI message: {key}");
                 used.insert(key);
@@ -90,7 +104,10 @@ mod tests {
             while let Some((before, after)) = rest.split_once('{') {
                 assert!(!before.contains('}'), "{key}: unmatched closing brace");
                 let (name, after) = after.split_once('}').expect("closed message placeholder");
-                assert!(!name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'), "{key}: {name}");
+                assert!(
+                    !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_'),
+                    "{key}: {name}"
+                );
                 names.push(name);
                 rest = after;
             }

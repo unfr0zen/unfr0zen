@@ -20,8 +20,13 @@ pub fn start() {
         }
         logf!("doom: launching");
         let launcher = crate::scratch::installed(&LAUNCHERS);
-        match Command::new("setsid").arg(launcher)
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status() {
+        match Command::new("setsid")
+            .arg(launcher)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
             Ok(status) => logf!("doom: over ({status})"),
             Err(e) => logf!("doom: {launcher}: {e}"),
         }

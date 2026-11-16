@@ -27,11 +27,11 @@ pub fn structure_id(serial: &str) -> String {
 pub fn ensure_structure(store: &Store, serial: &str) {
     let id = format!("structure.{}", structure_id(serial));
     if store.get(&format!("link.{serial}")).is_none() {
-        store.merge(&format!("link.{serial}"), &fields!{"structure" => id.clone()}, 0, 0, false);
+        store.merge(&format!("link.{serial}"), &fields! {"structure" => id.clone()}, 0, 0, false);
     }
     if store.get(&id).is_none() {
         let devices = Value::Array(vec![Value::from(format!("device.{serial}"))]);
-        store.merge(&id, &fields!{"name" => "Home", "devices" => devices}, 0, 0, false);
+        store.merge(&id, &fields! {"name" => "Home", "devices" => devices}, 0, 0, false);
     }
 }
 
@@ -69,7 +69,7 @@ mod tests {
         assert_eq!(s.get("link.S").unwrap().value["structure"], json!(sid));
         assert_eq!(s.get(&sid).unwrap().value["devices"], json!(["device.S"]));
         // What the unit changed stays.
-        s.merge(&sid, &fields!{"away" => true}, 0, 0, true);
+        s.merge(&sid, &fields! {"away" => true}, 0, 0, true);
         ensure_structure(&s, "S");
         assert_eq!(s.get(&sid).unwrap().value["away"], json!(true));
     }
@@ -80,13 +80,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nestlocal-seed-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         for (i, (input, output)) in [
-            ("<settings>\n  <s key=\"structure_id\" value=\"\"/>\n</settings>\n".to_string(),
-             format!("<settings>\n  {want}\n</settings>\n")),
-            ("<settings>\n  <s key=\"a\" value=\"1\"/>\n</settings>\n".to_string(),
-             format!("<settings>\n  <s key=\"a\" value=\"1\"/>\n  {want}\n</settings>\n")),
-            ("<settings>\n  <s key=\"structure_id\" value=\"nest-cloud-id\"/>\n</settings>\n".to_string(),
-             "<settings>\n  <s key=\"structure_id\" value=\"nest-cloud-id\"/>\n</settings>\n".to_string()),
-        ].into_iter().enumerate() {
+            (
+                "<settings>\n  <s key=\"structure_id\" value=\"\"/>\n</settings>\n".to_string(),
+                format!("<settings>\n  {want}\n</settings>\n"),
+            ),
+            (
+                "<settings>\n  <s key=\"a\" value=\"1\"/>\n</settings>\n".to_string(),
+                format!("<settings>\n  <s key=\"a\" value=\"1\"/>\n  {want}\n</settings>\n"),
+            ),
+            (
+                "<settings>\n  <s key=\"structure_id\" value=\"nest-cloud-id\"/>\n</settings>\n".to_string(),
+                "<settings>\n  <s key=\"structure_id\" value=\"nest-cloud-id\"/>\n</settings>\n".to_string(),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let path = dir.join(format!("settings{i}.config"));
             std::fs::write(&path, &input).unwrap();
             let changed = seed_structure_id(path.to_str().unwrap(), "S").unwrap();
@@ -107,11 +116,15 @@ mod tests {
             (r.map_err(|e| e.to_string()), std::fs::read_to_string(&path).unwrap())
         };
         // Every empty one is filled, not just the first.
-        let (r, out) = seed("<settings><s key=\"structure_id\" value=\"\"/><s key=\"structure_id\" value=\"\"/></settings>");
+        let (r, out) =
+            seed("<settings><s key=\"structure_id\" value=\"\"/><s key=\"structure_id\" value=\"\"/></settings>");
         assert_eq!((r, out), (Ok(true), format!("<settings>{want}{want}</settings>")));
         // One cut short is no setting: a whole one goes before the last </settings>.
         let (r, out) = seed("<settings>\n<s key=\"structure_id\" value=\"x</settings>\n");
-        assert_eq!((r, out), (Ok(true), format!("<settings>\n<s key=\"structure_id\" value=\"x  {want}\n</settings>\n")));
+        assert_eq!(
+            (r, out),
+            (Ok(true), format!("<settings>\n<s key=\"structure_id\" value=\"x  {want}\n</settings>\n"))
+        );
         // No </settings>: an error, and the file as it was.
         let (r, out) = seed("<settings>\n");
         assert!(r.unwrap_err().ends_with("no </settings>"));
@@ -122,7 +135,7 @@ mod tests {
     #[test]
     fn ensure_structure_keeps_a_link_the_unit_has() {
         let s = temp_store();
-        s.merge("link.S", &fields!{"structure" => "structure.from-nest"}, 5, 100, true);
+        s.merge("link.S", &fields! {"structure" => "structure.from-nest"}, 5, 100, true);
         ensure_structure(&s, "S");
         let link = s.get("link.S").unwrap();
         assert_eq!((link.revision, link.value["structure"].clone()), (5, json!("structure.from-nest")));

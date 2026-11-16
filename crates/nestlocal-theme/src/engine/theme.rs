@@ -32,7 +32,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use log::debug;
-use mlua::{chunk::ChunkMode, Function, HookTriggers, Lua, LuaOptions, StdLib, Table, UserData, UserDataFields, UserDataMethods, Value as LuaValue, VmState};
+use mlua::{
+    chunk::ChunkMode, Function, HookTriggers, Lua, LuaOptions, StdLib, Table, UserData, UserDataFields,
+    UserDataMethods, Value as LuaValue, VmState,
+};
 
 use super::paint::{Align, Baseline, Color, Painter, TextStyle};
 
@@ -94,11 +97,9 @@ fn sandbox(dir: &Path) -> mlua::Result<(Lua, Deadline)> {
     lua.set_memory_limit(MEMORY_LIMIT)?;
     let deadline: Deadline = Rc::new(Cell::new(None));
     let watched = deadline.clone();
-    lua.set_hook(HookTriggers::new().every_nth_instruction(1_000_000), move |_, _| {
-        match watched.get() {
-            Some(end) if Instant::now() > end => Err(mlua::Error::runtime(format!("ran for longer than {TIME_LIMIT:?}"))),
-            _ => Ok(VmState::Continue),
-        }
+    lua.set_hook(HookTriggers::new().every_nth_instruction(1_000_000), move |_, _| match watched.get() {
+        Some(end) if Instant::now() > end => Err(mlua::Error::runtime(format!("ran for longer than {TIME_LIMIT:?}"))),
+        _ => Ok(VmState::Continue),
     })?;
     let globals = lua.globals();
     // The base library is always loaded: two of it read files, and loading
@@ -111,24 +112,29 @@ fn sandbox(dir: &Path) -> mlua::Result<(Lua, Deadline)> {
     // Patterns backtrack: a match is refused where its worst case is long.
     for (name, plain) in [("find", Some(3)), ("match", None), ("gmatch", None), ("gsub", None)] {
         let real: Function = string.get(name)?;
-        string.set(name, lua.create_function(move |_, args: mlua::MultiValue| {
-            // A number is matched as the text Lua makes of it: short.
-            let length = match args.front() {
-                Some(LuaValue::String(s)) => s.as_bytes().len(),
-                _ => 32,
-            };
-            let pattern = match args.get(1) {
-                Some(LuaValue::String(s)) => s.as_bytes().to_vec(),
-                _ => Vec::new(),
-            };
-            let literal = plain.is_some_and(|i| !matches!(args.get(i), None | Some(LuaValue::Nil | LuaValue::Boolean(false))));
-            if length > MATCHED_LIMIT || (!literal && pattern_cost(length, &pattern) > PATTERN_STEPS) {
-                return Err(mlua::Error::runtime(format!(
-                    "string.{name}: {length} bytes are too many for pattern {:?}; match less text or simplify it",
-                    String::from_utf8_lossy(&pattern))));
-            }
-            real.call::<mlua::MultiValue>(args)
-        })?)?;
+        string.set(
+            name,
+            lua.create_function(move |_, args: mlua::MultiValue| {
+                // A number is matched as the text Lua makes of it: short.
+                let length = match args.front() {
+                    Some(LuaValue::String(s)) => s.as_bytes().len(),
+                    _ => 32,
+                };
+                let pattern = match args.get(1) {
+                    Some(LuaValue::String(s)) => s.as_bytes().to_vec(),
+                    _ => Vec::new(),
+                };
+                let literal = plain
+                    .is_some_and(|i| !matches!(args.get(i), None | Some(LuaValue::Nil | LuaValue::Boolean(false))));
+                if length > MATCHED_LIMIT || (!literal && pattern_cost(length, &pattern) > PATTERN_STEPS) {
+                    return Err(mlua::Error::runtime(format!(
+                        "string.{name}: {length} bytes are too many for pattern {:?}; match less text or simplify it",
+                        String::from_utf8_lossy(&pattern)
+                    )));
+                }
+                real.call::<mlua::MultiValue>(args)
+            })?,
+        )?;
     }
     // Case for every language, not only ASCII ("KÜHLEN", not "KüHLEN"); a
     // text that is not UTF-8 changes as the C library would.
@@ -137,7 +143,9 @@ fn sandbox(dir: &Path) -> mlua::Result<(Lua, Deadline)> {
             let bytes = text.as_bytes();
             match std::str::from_utf8(&bytes) {
                 Ok(t) => lua.create_string(if unicode { t.to_uppercase() } else { t.to_lowercase() }),
-                Err(_) => lua.create_string(if unicode { bytes.to_ascii_uppercase() } else { bytes.to_ascii_lowercase() }),
+                Err(_) => {
+                    lua.create_string(if unicode { bytes.to_ascii_uppercase() } else { bytes.to_ascii_lowercase() })
+                }
             }
         })?;
         string.set(name, f)?;
@@ -161,13 +169,43 @@ fn sandbox(dir: &Path) -> mlua::Result<(Lua, Deadline)> {
     let require = requirer(&lua, themes, lua.create_table()?, Default::default(), own.clone(), own)?;
     globals.set("require", require)?;
     // The method closures live for the theme; each frame lends one scoped dispatcher.
-    let methods: Table = lua.load(r#"
+    let methods: Table = lua
+        .load(
+            r#"
         local methods = {}
         for _, name in ipairs(...) do
             methods[name] = function(self, ...) return self:_dispatch(name, ...) end
         end
         return methods
-    "#).call(lua.create_sequence_from(["circle", "ring", "arc", "gradient_arc", "radial_glow", "line", "lines", "rect", "polygon", "text", "measure", "has_glyphs", "image", "sprite", "wake", "save", "restore", "translate", "rotate", "scale", "alpha", "clear", "layer", "paint_layer", "warp_layer"])?)?;
+    "#,
+        )
+        .call(lua.create_sequence_from([
+            "circle",
+            "ring",
+            "arc",
+            "gradient_arc",
+            "radial_glow",
+            "line",
+            "lines",
+            "rect",
+            "polygon",
+            "text",
+            "measure",
+            "has_glyphs",
+            "image",
+            "sprite",
+            "wake",
+            "save",
+            "restore",
+            "translate",
+            "rotate",
+            "scale",
+            "alpha",
+            "clear",
+            "layer",
+            "paint_layer",
+            "warp_layer",
+        ])?)?;
     let metatable = lua.create_table()?;
     metatable.set("__index", methods)?;
     lua.set_named_registry_value("theme.gfx_metatable", metatable)?;
@@ -177,7 +215,9 @@ fn sandbox(dir: &Path) -> mlua::Result<(Lua, Deadline)> {
 /// Whether `name` can name a theme (its folder's name) or a font: letters,
 /// digits, `_` and `-`.
 fn theme_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= NAME_LIMIT && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !name.is_empty()
+        && name.len() <= NAME_LIMIT
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// The steps matching `pattern` on `length` bytes may take at worst: each
@@ -190,10 +230,16 @@ fn pattern_cost(length: usize, pattern: &[u8]) -> f64 {
             b'%' => i += 1,
             b'[' => {
                 i += 1;
-                if pattern.get(i) == Some(&b'^') { i += 1; }
-                if pattern.get(i) == Some(&b']') { i += 1; }
+                if pattern.get(i) == Some(&b'^') {
+                    i += 1;
+                }
+                if pattern.get(i) == Some(&b']') {
+                    i += 1;
+                }
                 while i < pattern.len() && pattern[i] != b']' {
-                    if pattern[i] == b'%' { i += 1; }
+                    if pattern[i] == b'%' {
+                        i += 1;
+                    }
                     i += 1;
                 }
             }
@@ -232,7 +278,9 @@ fn checked(themes: &Path, path: &Path, limit: u64) -> Result<(), String> {
 fn source(themes: &Path, path: &Path) -> Result<String, String> {
     checked(themes, path, SOURCE_LIMIT)?;
     let mut bytes = Vec::new();
-    std::fs::File::open(path).and_then(|f| f.take(SOURCE_LIMIT + 1).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+    std::fs::File::open(path)
+        .and_then(|f| f.take(SOURCE_LIMIT + 1).read_to_end(&mut bytes))
+        .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > SOURCE_LIMIT {
         return Err(format!("is longer than {SOURCE_LIMIT} bytes"));
     }
@@ -244,7 +292,14 @@ fn source(themes: &Path, path: &Path) -> Result<String, String> {
 /// theme `other` beside it. Each module is loaded once (`loading` holds
 /// those not yet loaded through, which cannot be required again); another
 /// theme's modules see a `require` of their own theme's.
-fn requirer(lua: &Lua, themes: Rc<Path>, loaded: Table, loading: Rc<RefCell<Vec<String>>>, main: String, theme: String) -> mlua::Result<Function> {
+fn requirer(
+    lua: &Lua,
+    themes: Rc<Path>,
+    loaded: Table,
+    loading: Rc<RefCell<Vec<String>>>,
+    main: String,
+    theme: String,
+) -> mlua::Result<Function> {
     lua.create_function(move |lua, name: String| {
         let (from, module) = name.split_once(':').unwrap_or((theme.as_str(), name.as_str()));
         let key = format!("{from}:{module}");
@@ -252,7 +307,11 @@ fn requirer(lua: &Lua, themes: Rc<Path>, loaded: Table, loading: Rc<RefCell<Vec<
         if !found.is_nil() {
             return Ok(found);
         }
-        if !theme_name(from) || !module.split('.').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')) {
+        if !theme_name(from)
+            || !module
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+        {
             return Err(mlua::Error::runtime(format!("require: bad module name {name:?}")));
         }
         if loading.borrow().contains(&key) {
@@ -268,7 +327,10 @@ fn requirer(lua: &Lua, themes: Rc<Path>, loaded: Table, loading: Rc<RefCell<Vec<
             let meta = lua.create_table()?;
             meta.set("__index", lua.globals())?;
             env.set_metatable(Some(meta))?;
-            env.set("require", requirer(lua, themes.clone(), loaded.clone(), loading.clone(), main.clone(), from.to_string())?)?;
+            env.set(
+                "require",
+                requirer(lua, themes.clone(), loaded.clone(), loading.clone(), main.clone(), from.to_string())?,
+            )?;
             chunk = chunk.set_name(format!("@{key}.lua")).set_environment(env);
         }
         loading.borrow_mut().push(key.clone());
@@ -336,11 +398,16 @@ impl std::fmt::Debug for Theme {
 impl Theme {
     pub fn load(dir: &Path) -> Result<Theme, String> {
         if !dir.file_name().and_then(|n| n.to_str()).is_some_and(theme_name) {
-            return Err(format!("{}: a theme's folder is named in letters, digits, - and _, {NAME_LIMIT} at most", dir.display()));
+            return Err(format!(
+                "{}: a theme's folder is named in letters, digits, - and _, {NAME_LIMIT} at most",
+                dir.display()
+            ));
         }
         let (lua, deadline) = sandbox(dir).map_err(|e| e.to_string())?;
         let source = source(themes_of(dir), &dir.join("theme.lua")).map_err(|e| format!("theme.lua: {e}"))?;
-        let manifest: LuaValue = limited(&deadline, || lua.load(source).set_mode(ChunkMode::Text).set_name("@theme.lua").eval()).map_err(|e| e.to_string())?;
+        let manifest: LuaValue =
+            limited(&deadline, || lua.load(source).set_mode(ChunkMode::Text).set_name("@theme.lua").eval())
+                .map_err(|e| e.to_string())?;
         let LuaValue::Table(table) = manifest else {
             return Err(format!("theme.lua returns a {}, not the theme's table", manifest.type_name()));
         };
@@ -378,18 +445,28 @@ impl Theme {
                         _ => return Err("theme.lua fonts: each font has a name".into()),
                     };
                     if !theme_name(&font) {
-                        return Err(format!("theme.lua fonts: {font:?} is not a name of letters, digits, - and _, {NAME_LIMIT} at most"));
+                        return Err(format!(
+                            "theme.lua fonts: {font:?} is not a name of letters, digits, - and _, {NAME_LIMIT} at most"
+                        ));
                     }
                     if fonts.len() == FONTS {
                         return Err(format!("theme.lua fonts: more than {FONTS}"));
                     }
                     let files: Vec<String> = match files {
                         LuaValue::String(s) => vec![s.to_str().map_err(|e| e.to_string())?.to_string()],
-                        LuaValue::Table(t) if t.raw_len() <= FONT_FILES => t.sequence_values::<LuaValue>().map(|file| match file {
-                            Ok(LuaValue::String(s)) => s.to_str().map(|s| s.to_string()).map_err(|e| e.to_string()),
-                            _ => Err("a list of files".to_string()),
-                        }).collect::<Result<_, _>>().map_err(|e| format!("theme.lua fonts.{font}: {e}"))?,
-                        _ => return Err(format!("theme.lua fonts.{font}: a file or a list of {FONT_FILES} files at most")),
+                        LuaValue::Table(t) if t.raw_len() <= FONT_FILES => t
+                            .sequence_values::<LuaValue>()
+                            .map(|file| match file {
+                                Ok(LuaValue::String(s)) => s.to_str().map(|s| s.to_string()).map_err(|e| e.to_string()),
+                                _ => Err("a list of files".to_string()),
+                            })
+                            .collect::<Result<_, _>>()
+                            .map_err(|e| format!("theme.lua fonts.{font}: {e}"))?,
+                        _ => {
+                            return Err(format!(
+                                "theme.lua fonts.{font}: a file or a list of {FONT_FILES} files at most"
+                            ))
+                        }
                     };
                     let file = font_file(dir, &files).map_err(|e| format!("theme.lua fonts.{font}: {e}"))?;
                     fonts.push((font, file));
@@ -399,7 +476,21 @@ impl Theme {
         }
         fonts.sort();
         debug!("theme: {name} loaded from {}: design {design}, {} fonts", dir.display(), fonts.len());
-        Ok(Theme { lua, deadline, name, dir: dir.to_path_buf(), design, fonts, draw, converting: Default::default(), wake: Cell::new(None), last: Default::default(), nest: Default::default(), layers: Default::default(), images: Default::default() })
+        Ok(Theme {
+            lua,
+            deadline,
+            name,
+            dir: dir.to_path_buf(),
+            design,
+            fonts,
+            draw,
+            converting: Default::default(),
+            wake: Cell::new(None),
+            last: Default::default(),
+            nest: Default::default(),
+            layers: Default::default(),
+            images: Default::default(),
+        })
     }
 
     /// Draws one frame; true while the theme is animating and wants another.
@@ -430,11 +521,22 @@ impl Theme {
         self.converting.set(self.converting.get() + started.elapsed());
         self.wake.set(None);
         let saves = Cell::new(0);
-        limited(&self.deadline, || self.lua.scope(|scope| {
-            let gfx = scope.create_userdata(Gfx { painter, dir: &self.dir, wake: &self.wake, design: self.design, saves: &saves, layers: &self.layers, images: &self.images })?;
-            let result: LuaValue = self.draw.call((gfx, state))?;
-            Ok(matches!(result, LuaValue::Boolean(true)))
-        })).map_err(|e| e.to_string())
+        limited(&self.deadline, || {
+            self.lua.scope(|scope| {
+                let gfx = scope.create_userdata(Gfx {
+                    painter,
+                    dir: &self.dir,
+                    wake: &self.wake,
+                    design: self.design,
+                    saves: &saves,
+                    layers: &self.layers,
+                    images: &self.images,
+                })?;
+                let result: LuaValue = self.draw.call((gfx, state))?;
+                Ok(matches!(result, LuaValue::Boolean(true)))
+            })
+        })
+        .map_err(|e| e.to_string())
     }
 
     /// How long after the last frame the theme asked to be drawn again,
@@ -452,14 +554,18 @@ impl Theme {
 fn font_file(dir: &Path, files: &[String]) -> Result<PathBuf, String> {
     let themes = themes_of(dir);
     let resolve = |file: &str| match file.split_once(':') {
-        Some(("unit", name)) if !name.contains('/') && !name.starts_with('.') => Ok((Path::new(UNIT_SHARE).join("fonts").join(name), false)),
+        Some(("unit", name)) if !name.contains('/') && !name.starts_with('.') => {
+            Ok((Path::new(UNIT_SHARE).join("fonts").join(name), false))
+        }
         Some(("unit", _)) => Err(format!("{file:?} is not a font name")),
         Some((theme, path)) if theme_name(theme) => inside(&themes.join(theme), path).map(|p| (p, true)),
         Some(_) => Err(format!("{file:?} names no theme")),
         None => inside(dir, file).map(|p| (p, true)),
     };
     let paths = files.iter().map(|f| resolve(f)).collect::<Result<Vec<_>, _>>()?;
-    let Some((path, own)) = paths.iter().find(|(p, _)| p.exists()).or(paths.last()) else { return Err("no files".into()) };
+    let Some((path, own)) = paths.iter().find(|(p, _)| p.exists()).or(paths.last()) else {
+        return Err("no files".into());
+    };
     if !path.exists() {
         return Err(format!("{} is missing", path.display()));
     }
@@ -479,10 +585,12 @@ const RUN_IMAGES: &str = "/var/run/unfr0zen";
 /// An image a theme names: a file inside the theme, `unit:NAME` among the
 /// unit's images or `run:NAME` among unfr0zen's.
 fn image_file(dir: &Path, file: &str) -> Result<String, String> {
-    let named = |name: &str, root: &str| if !name.contains('/') && !name.starts_with('.') {
-        Ok(format!("{root}/{name}"))
-    } else {
-        Err(format!("{file:?} is not an image name"))
+    let named = |name: &str, root: &str| {
+        if !name.contains('/') && !name.starts_with('.') {
+            Ok(format!("{root}/{name}"))
+        } else {
+            Err(format!("{file:?} is not an image name"))
+        }
     };
     if let Some(name) = file.strip_prefix("unit:") {
         named(name, &Path::new(UNIT_SHARE).join("images").display().to_string())
@@ -500,13 +608,19 @@ fn image_checked(dir: &Path, file: &str) -> Result<(), String> {
     checked(themes_of(dir), &path, IMAGE_LIMIT).map_err(|e| format!("image {file:?} {e}"))?;
     // A PNG's header: its signature, then the IHDR chunk's width and height.
     let mut header = [0u8; 24];
-    std::fs::File::open(&path).and_then(|mut f| f.read_exact(&mut header)).map_err(|e| format!("image {file:?}: {e}"))?;
+    std::fs::File::open(&path)
+        .and_then(|mut f| f.read_exact(&mut header))
+        .map_err(|e| format!("image {file:?}: {e}"))?;
     let side = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
     if header[..8] != *b"\x89PNG\r\n\x1a\n" || header[12..16] != *b"IHDR" {
         return Err(format!("image {file:?} is not a PNG"));
     }
     if !(1..=IMAGE_SIDE).contains(&side(16)) || !(1..=IMAGE_SIDE).contains(&side(20)) {
-        return Err(format!("image {file:?} is {} by {} pixels; at most {IMAGE_SIDE} a side are drawn", side(16), side(20)));
+        return Err(format!(
+            "image {file:?} is {} by {} pixels; at most {IMAGE_SIDE} a side are drawn",
+            side(16),
+            side(20)
+        ));
     }
     Ok(())
 }
@@ -601,13 +715,24 @@ fn style(table: Option<Table>, design: f32) -> mlua::Result<TextStyle> {
     };
     let Some(t) = table else { return Ok(style) };
     if let Some(c) = t.get::<Option<String>>("outline")? {
-        style.outline = Some((Color::parse(&c).map_err(mlua::Error::runtime)?, t.get::<Option<f32>>("outline_width")?.unwrap_or(2.0)));
+        style.outline = Some((
+            Color::parse(&c).map_err(mlua::Error::runtime)?,
+            t.get::<Option<f32>>("outline_width")?.unwrap_or(2.0),
+        ));
     }
-    if let Some(font) = t.get::<Option<String>>("font")? { style.font = font; }
-    if let Some(size) = t.get::<Option<f32>>("size")? { style.size = size; }
+    if let Some(font) = t.get::<Option<String>>("font")? {
+        style.font = font;
+    }
+    if let Some(size) = t.get::<Option<f32>>("size")? {
+        style.size = size;
+    }
     style.color = color(t.get("color")?)?;
-    if let Some(spacing) = t.get::<Option<f32>>("spacing")? { style.spacing = spacing; }
-    if let Some(snap) = t.get::<Option<bool>>("snap")? { style.snap = snap; }
+    if let Some(spacing) = t.get::<Option<f32>>("spacing")? {
+        style.spacing = spacing;
+    }
+    if let Some(snap) = t.get::<Option<bool>>("snap")? {
+        style.snap = snap;
+    }
     style.align = match t.get::<Option<String>>("align")?.as_deref() {
         None | Some("left") => Align::Left,
         Some("center") => Align::Center,
@@ -652,7 +777,9 @@ impl UserData for Gfx<'_> {
 }
 
 fn gfx_method<A: mlua::FromLuaMulti, R: mlua::IntoLuaMulti>(
-    lua: &Lua, g: &mut Gfx<'_>, args: mlua::MultiValue,
+    lua: &Lua,
+    g: &mut Gfx<'_>,
+    args: mlua::MultiValue,
     call: impl FnOnce(&Lua, &mut Gfx<'_>, A) -> mlua::Result<R>,
 ) -> mlua::Result<mlua::MultiValue> {
     call(lua, g, A::from_lua_multi(args, lua)?)?.into_lua_multi(lua)
@@ -663,12 +790,17 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
     // there) is a place, a size, an angle or a count.
     if name != "layer" && name != "wake" {
         if let Some(at) = args.iter().position(|v| number(v).is_some_and(|n| !n.is_finite() || n.abs() > REACH)) {
-            return Err(mlua::Error::runtime(format!("gfx:{name}: argument {} is not a number within {REACH}", at + 1)));
+            return Err(mlua::Error::runtime(format!(
+                "gfx:{name}: argument {} is not a number within {REACH}",
+                at + 1
+            )));
         }
     }
     macro_rules! method {
         ($name:literal, $call:expr) => {
-            if name == $name { return gfx_method(lua, g, args, $call); }
+            if name == $name {
+                return gfx_method(lua, g, args, $call);
+            }
         };
     }
     method!("circle", |_, g, (x, y, r, c): (f32, f32, f32, Option<String>)| {
@@ -683,8 +815,28 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
         g.painter.arc(x, y, r, from.to_radians(), to.to_radians(), color(c)?, width);
         Ok(())
     });
-    method!("gradient_arc", |_, g, (x, y, r, from, to, width, start, end): (f32, f32, f32, f32, f32, f32, String, String)| {
-        g.painter.gradient_arc(x, y, r, from.to_radians(), to.to_radians(), color(Some(start))?, color(Some(end))?, width);
+    method!("gradient_arc", |_,
+                             g,
+                             (x, y, r, from, to, width, start, end): (
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        f32,
+        String,
+        String
+    )| {
+        g.painter.gradient_arc(
+            x,
+            y,
+            r,
+            from.to_radians(),
+            to.to_radians(),
+            color(Some(start))?,
+            color(Some(end))?,
+            width,
+        );
         Ok(())
     });
     method!("radial_glow", |_, g, (x, y, radius, steps): (f32, f32, f32, u32)| {
@@ -694,10 +846,13 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
         g.painter.radial_glow(x, y, radius, steps);
         Ok(())
     });
-    method!("line", |_, g, (x1, y1, x2, y2, width, c, round): (f32, f32, f32, f32, f32, Option<String>, Option<bool>)| {
-        g.painter.line(x1, y1, x2, y2, color(c)?, width, round.unwrap_or(false));
-        Ok(())
-    });
+    method!(
+        "line",
+        |_, g, (x1, y1, x2, y2, width, c, round): (f32, f32, f32, f32, f32, Option<String>, Option<bool>)| {
+            g.painter.line(x1, y1, x2, y2, color(c)?, width, round.unwrap_or(false));
+            Ok(())
+        }
+    );
     method!("lines", |_, g, (coords, width, c): (Vec<f32>, f32, Option<String>)| {
         in_reach(&coords)?;
         if coords.len() % 4 != 0 {
@@ -746,7 +901,9 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
     // nothing when the image cannot be loaded (a unit image off the unit).
     method!("sprite", |_, g, (file, frame, columns, w, h, x, y): (String, u32, u32, f32, f32, f32, f32)| {
         if columns == 0 || w < 1.0 || h < 1.0 {
-            return Err(mlua::Error::runtime("a sprite sheet has a column at least, of frames a unit wide and high at least"));
+            return Err(mlua::Error::runtime(
+                "a sprite sheet has a column at least, of frames a unit wide and high at least",
+            ));
         }
         let Some(file) = g.image(&file)? else { return Ok(None) };
         Ok(g.painter.sprite(&file, frame, columns, w, h, x, y).ok())
@@ -772,11 +929,26 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
         g.painter.restore();
         Ok(())
     });
-    method!("translate", |_, g, (x, y): (f32, f32)| { g.painter.translate(x, y); Ok(()) });
-    method!("rotate", |_, g, degrees: f32| { g.painter.rotate(degrees.to_radians()); Ok(()) });
-    method!("scale", |_, g, (x, y): (f32, Option<f32>)| { g.painter.scale(x, y.unwrap_or(x)); Ok(()) });
-    method!("alpha", |_, g, a: f32| { g.painter.alpha(a); Ok(()) });
-    method!("clear", |_, g, c: Option<String>| { g.painter.clear(color(c)?); Ok(()) });
+    method!("translate", |_, g, (x, y): (f32, f32)| {
+        g.painter.translate(x, y);
+        Ok(())
+    });
+    method!("rotate", |_, g, degrees: f32| {
+        g.painter.rotate(degrees.to_radians());
+        Ok(())
+    });
+    method!("scale", |_, g, (x, y): (f32, Option<f32>)| {
+        g.painter.scale(x, y.unwrap_or(x));
+        Ok(())
+    });
+    method!("alpha", |_, g, a: f32| {
+        g.painter.alpha(a);
+        Ok(())
+    });
+    method!("clear", |_, g, c: Option<String>| {
+        g.painter.clear(color(c)?);
+        Ok(())
+    });
     method!("layer", |lua, g, (name, key, draw, w, h): (String, LuaValue, Function, Option<f32>, Option<f32>)| {
         let key = match key {
             LuaValue::String(s) => s.to_str()?.to_string(),
@@ -786,13 +958,20 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
             _ => return Err(mlua::Error::runtime("layer keys are strings, numbers or booleans")),
         };
         if name.is_empty() || name.len() > NAME_LIMIT || key.len() > TEXT_LIMIT {
-            return Err(mlua::Error::runtime(format!("a layer's name is 1 to {NAME_LIMIT} bytes, its key {TEXT_LIMIT} at most")));
+            return Err(mlua::Error::runtime(format!(
+                "a layer's name is 1 to {NAME_LIMIT} bytes, its key {TEXT_LIMIT} at most"
+            )));
         }
         let (dir, wake, design, saves, layers, images) = (g.dir, g.wake, g.design, g.saves, g.layers, g.images);
         let size = match (w, h) {
             (Some(w), Some(h)) if w > 0.0 && h > 0.0 && w <= 2.0 * design && h <= 2.0 * design => Some((w, h)),
             (None, None) => None,
-            _ => return Err(mlua::Error::runtime(format!("a layer's size is a width and height over 0, {} at most", 2.0 * design))),
+            _ => {
+                return Err(mlua::Error::runtime(format!(
+                    "a layer's size is a width and height over 0, {} at most",
+                    2.0 * design
+                )))
+            }
         };
         {
             let mut layers = layers.borrow_mut();
@@ -802,13 +981,21 @@ fn dispatch(lua: &Lua, g: &mut Gfx<'_>, name: &str, args: mlua::MultiValue) -> m
                     "layer {name}: a theme keeps {LAYERS} layers at most, {LAYER_AREA} dials in all; draw into a fixed set of names")));
             }
         }
-        g.painter.layer(&name, &key, size, &mut |painter| {
-            lua.scope(|scope| draw.call::<()>(scope.create_userdata(Gfx { painter, dir, wake, design, saves, layers, images })?)).map_err(|e| e.to_string())
-        }).map_err(mlua::Error::runtime)
+        g.painter
+            .layer(&name, &key, size, &mut |painter| {
+                lua.scope(|scope| {
+                    draw.call::<()>(scope.create_userdata(Gfx { painter, dir, wake, design, saves, layers, images })?)
+                })
+                .map_err(|e| e.to_string())
+            })
+            .map_err(mlua::Error::runtime)
     });
     method!("paint_layer", |_, g, (name, c, clip): (String, Option<String>, Option<Vec<f32>>)| {
-        if let Some(clip) = &clip { in_reach(clip)?; }
-        let points: Option<Vec<(f32, f32)>> = clip.map(|c| c.chunks(2).filter(|p| p.len() == 2).map(|p| (p[0], p[1])).collect());
+        if let Some(clip) = &clip {
+            in_reach(clip)?;
+        }
+        let points: Option<Vec<(f32, f32)>> =
+            clip.map(|c| c.chunks(2).filter(|p| p.len() == 2).map(|p| (p[0], p[1])).collect());
         if points.as_ref().is_some_and(|p| p.len() < 3) {
             return Err(mlua::Error::runtime("paint_layer's clip needs at least three x, y pairs"));
         }
@@ -1085,19 +1272,28 @@ pub fn diagnostic(painter: &mut dyn Painter, ui: &Ui, theme: &str, error: &str) 
     let d = ui.design;
     painter.clear(Color::BLACK);
     let mut line = |text: &str, y: f32, size: f32, color: Color| {
-        painter.text(text, d / 2.0, d * y, &TextStyle {
-            font: "diagnostic".into(),
-            size: d * size,
-            color,
-            align: Align::Center,
-            baseline: Baseline::Middle,
-            spacing: 0.0,
-            outline: None,
-            snap: true,
-        });
+        painter.text(
+            text,
+            d / 2.0,
+            d * y,
+            &TextStyle {
+                font: "diagnostic".into(),
+                size: d * size,
+                color,
+                align: Align::Center,
+                baseline: Baseline::Middle,
+                spacing: 0.0,
+                outline: None,
+                snap: true,
+            },
+        );
     };
     let grey = |level: f32| Color { r: level, g: level, b: level, a: 1.0 };
-    let target = if ui.thermostat.unit == "F" { format!("{:.0}", ui.thermostat.target) } else { format!("{:.1}", ui.thermostat.target) };
+    let target = if ui.thermostat.unit == "F" {
+        format!("{:.0}", ui.thermostat.target)
+    } else {
+        format!("{:.1}", ui.thermostat.target)
+    };
     line(&target, 0.3, 0.2, Color::WHITE);
     line("THEME ERROR", 0.48, 0.045, Color { r: 1.0, g: 0.7, b: 0.2, a: 1.0 });
     line(theme, 0.545, 0.04, Color::WHITE);
@@ -1146,7 +1342,6 @@ fn wrapped(text: &str, width: usize, lines: usize) -> Vec<String> {
     out
 }
 
-
 #[cfg(test)]
 mod dispatch_tests {
     use super::*;
@@ -1160,16 +1355,28 @@ mod dispatch_tests {
         let (saves, layers, images) = (Cell::new(0), RefCell::default(), RefCell::default());
         let mut painter = renderer.painter(Path::new("."));
         lua.scope(|scope| {
-            let gfx = scope.create_userdata(Gfx { painter: &mut painter, dir: Path::new("."), wake: &wake, design: 4.0, saves: &saves, layers: &layers, images: &images })?;
+            let gfx = scope.create_userdata(Gfx {
+                painter: &mut painter,
+                dir: Path::new("."),
+                wake: &wake,
+                design: 4.0,
+                saves: &saves,
+                layers: &layers,
+                images: &images,
+            })?;
             lua.globals().set("saved", gfx)?;
-            lua.load(r##"
+            lua.load(
+                r##"
                 saved:clear("#123456")
                 saved:layer("square", "1", function(g) g:rect(0, 0, 2, 2, "#ffffff") end, 4, 4)
                 saved:paint_layer("square", "#ff0000")
                 saved:wake(0.5)
                 saved:wake(1.0)
-            "##).exec()
-        }).unwrap();
+            "##,
+            )
+            .exec()
+        })
+        .unwrap();
         drop(painter);
         assert_eq!(wake.get(), Some(0.5));
         let red = renderer.pixmap.pixel(0, 0).unwrap();
@@ -1189,7 +1396,11 @@ mod validation_tests {
 
     /// A themes folder holding the theme `t` made of `files`, and `t`'s.
     fn themes(files: &[(&str, &[u8])]) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("nestlocal-theme-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let root = std::env::temp_dir().join(format!(
+            "nestlocal-theme-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let dir = root.join("t");
         for (name, data) in files {
             let path = dir.join(name);
@@ -1249,18 +1460,33 @@ mod validation_tests {
         assert!(refused(&format!("return {{ name = ('n'):rep(65), api = 1, {DRAW} }}")).contains("name"));
         assert!(refused("return { name = 't', api = 1, draw = 'home' }").contains("draw"));
         for design in ["0", "-480", "1e9", "0/0", "'480'"] {
-            assert!(refused(&format!("return {{ name = 't', api = 1, design = {design}, {DRAW} }}")).contains("design"), "{design}");
+            assert!(
+                refused(&format!("return {{ name = 't', api = 1, design = {design}, {DRAW} }}")).contains("design"),
+                "{design}"
+            );
         }
-        for (fonts, why) in [("7", "a table"), ("{ 'a.ttf' }", "has a name"), ("{ ['a b'] = 'a.ttf' }", "not a name"),
-                             ("{ a = 7 }", "a file or a list"), ("{ a = {} }", "no files"), ("{ a = { 'a.ttf', 7 } }", "a list of files"),
-                             ("{ a = { '1', '2', '3', '4', '5' } }", "4 files at most"), ("{ a = 'a.ttf' }", "is missing"),
-                             ("{ a = '../a.ttf' }", "outside the theme"), ("{ a = '/etc/hosts' }", "outside the theme"),
-                             ("{ a = 'no theme:a.ttf' }", "names no theme"), ("{ a = 'unit:../a.ttf' }", "not a font name")] {
+        for (fonts, why) in [
+            ("7", "a table"),
+            ("{ 'a.ttf' }", "has a name"),
+            ("{ ['a b'] = 'a.ttf' }", "not a name"),
+            ("{ a = 7 }", "a file or a list"),
+            ("{ a = {} }", "no files"),
+            ("{ a = { 'a.ttf', 7 } }", "a list of files"),
+            ("{ a = { '1', '2', '3', '4', '5' } }", "4 files at most"),
+            ("{ a = 'a.ttf' }", "is missing"),
+            ("{ a = '../a.ttf' }", "outside the theme"),
+            ("{ a = '/etc/hosts' }", "outside the theme"),
+            ("{ a = 'no theme:a.ttf' }", "names no theme"),
+            ("{ a = 'unit:../a.ttf' }", "not a font name"),
+        ] {
             let error = refused(&format!("return {{ name = 't', api = 1, fonts = {fonts}, {DRAW} }}"));
             assert!(error.contains(why), "{fonts}: {error}");
         }
         let many: String = (0..17).map(|i| format!("f{i} = 'a.ttf', ")).collect();
-        let (root, dir) = themes(&[("theme.lua", format!("return {{ name = 't', api = 1, fonts = {{ {many} }}, {DRAW} }}").as_bytes()), ("a.ttf", b"font")]);
+        let (root, dir) = themes(&[
+            ("theme.lua", format!("return {{ name = 't', api = 1, fonts = {{ {many} }}, {DRAW} }}").as_bytes()),
+            ("a.ttf", b"font"),
+        ]);
         assert!(Theme::load(&dir).unwrap_err().contains("more than 16"));
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1287,7 +1513,11 @@ mod validation_tests {
         let (root, dir) = themes(&[("theme.lua", b"\xff\xfe")]);
         assert!(Theme::load(&dir).unwrap_err().contains("not UTF-8"));
         std::fs::create_dir_all(dir.join("big")).unwrap();
-        std::fs::write(dir.join("theme.lua"), format!("return {{ name = 't', api = 1, fonts = {{ a = 'big' }}, {DRAW} }}")).unwrap();
+        std::fs::write(
+            dir.join("theme.lua"),
+            format!("return {{ name = 't', api = 1, fonts = {{ a = 'big' }}, {DRAW} }}"),
+        )
+        .unwrap();
         assert!(Theme::load(&dir).unwrap_err().contains("is not a file"));
         std::fs::remove_dir_all(dir.join("big")).unwrap();
         let font = std::fs::File::create(dir.join("big")).unwrap();
@@ -1299,7 +1529,10 @@ mod validation_tests {
     #[cfg(unix)]
     #[test]
     fn links_out_of_the_themes_are_not_followed() {
-        let (root, dir) = themes(&[("theme.lua", format!("return {{ name = 't', api = 1, fonts = {{ a = 'a.ttf' }}, {DRAW} }}").as_bytes())]);
+        let (root, dir) = themes(&[(
+            "theme.lua",
+            format!("return {{ name = 't', api = 1, fonts = {{ a = 'a.ttf' }}, {DRAW} }}").as_bytes(),
+        )]);
         let outside = root.with_extension("outside");
         std::fs::write(&outside, "return {}").unwrap();
         std::os::unix::fs::symlink(&outside, dir.join("a.ttf")).unwrap();
@@ -1325,14 +1558,23 @@ mod validation_tests {
         assert!(refused("return ('x'):rep(2 ^ 30)").contains("memory"));
         assert!(drawn("while true do end", &[]).unwrap_err().contains("ran for longer"));
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
-        for gone in ["io", "os", "package", "debug", "ffi", "jit", "dofile", "loadfile", "load", "loadstring", "string.dump"] {
-            assert!(refused(&format!("assert({gone} == nil, 'present') return 1")).contains("not the theme's table"), "{gone}");
+        for gone in
+            ["io", "os", "package", "debug", "ffi", "jit", "dofile", "loadfile", "load", "loadstring", "string.dump"]
+        {
+            assert!(
+                refused(&format!("assert({gone} == nil, 'present') return 1")).contains("not the theme's table"),
+                "{gone}"
+            );
         }
     }
 
     #[test]
     fn modules_load_once_and_never_through_themselves() {
-        let (root, dir) = themes(&[("theme.lua", b"return require('a')"), ("a.lua", b"return require('b')"), ("b.lua", b"return require('a')")]);
+        let (root, dir) = themes(&[
+            ("theme.lua", b"return require('a')"),
+            ("a.lua", b"return require('b')"),
+            ("b.lua", b"return require('a')"),
+        ]);
         assert!(Theme::load(&dir).unwrap_err().contains("requires itself"));
         std::fs::write(dir.join("b.lua"), format!("return {{ name = 't', api = 1, {DRAW} }}")).unwrap();
         Theme::load(&dir).unwrap();
@@ -1348,14 +1590,20 @@ mod validation_tests {
         assert_eq!(pattern_cost(10, b"plain"), 10.0);
         assert_eq!(pattern_cost(10, b"(%d+)%.(%d*)"), 1000.0);
         assert_eq!(pattern_cost(10, b"[%w-]+ %- %* [^]+*]"), 100.0, "only repetitions outside sets and escapes count");
-        assert_eq!(drawn(r#"
+        assert_eq!(
+            drawn(
+                r#"
             local whole, part = ("21.5"):match("^(%d+)%.(%d+)$")
             local words = 0
             for _ in ("partly cloudy night"):gmatch("%a+") do words = words + 1 end
             local long = ("a"):rep(5000)
             return whole == "21" and part == "5" and words == 3 and (long:gsub("a", "b")) == ("b"):rep(5000)
               and long:find("a-a-a-a-b", 1, true) == nil and ("a+b"):find("+", 1, true) == 2
-        "#, &[]), Ok(true));
+        "#,
+                &[]
+            ),
+            Ok(true)
+        );
         let error = drawn(r#"return (("a"):rep(200)):find("a-a-a-a-a-a-b") ~= nil"#, &[]).unwrap_err();
         assert!(error.contains("string.find") && error.contains("too many"), "{error}");
         assert!(drawn(r#"return (("a"):rep(70000)):match("b") ~= nil"#, &[]).unwrap_err().contains("string.match"));
@@ -1396,7 +1644,9 @@ mod validation_tests {
             assert!(error.contains(why), "{body}: {error}");
         }
         // Within the bounds, and frame after frame into the same layers.
-        assert_eq!(drawn(r##"
+        assert_eq!(
+            drawn(
+                r##"
             for i = 1, 64 do gfx:save() gfx:restore() end
             for i = 1, 63 do gfx:layer("l" .. i, ui.now, function(g) g:rect(0, 0, 1, 1, "#fff") end, 40, 40) end
             gfx:layer("dial", 1e12, function(g) g:clear("#000") end)
@@ -1404,11 +1654,20 @@ mod validation_tests {
             gfx:radial_glow(240, 240, 100, 255)
             gfx:wake(1e9)
             return gfx:image("unit:Weather_Default.png", 0, 0, 8, 8) == false
-        "##, &[]), Ok(true));
+        "##,
+                &[]
+            ),
+            Ok(true)
+        );
         // An image that is no PNG of a size to draw leaves its place empty.
         let dir = Path::new("/nonexistent/themes/t");
         assert!(image_checked(dir, "missing.png").is_err());
-        let (root, dir) = themes(&[("text.png", &[b'x'; 64]), ("wide.png", &png_header(1025, 8)), ("empty.png", &png_header(0, 8)), ("fine.png", &png_header(1024, 1))]);
+        let (root, dir) = themes(&[
+            ("text.png", &[b'x'; 64]),
+            ("wide.png", &png_header(1025, 8)),
+            ("empty.png", &png_header(0, 8)),
+            ("fine.png", &png_header(1024, 1)),
+        ]);
         assert!(image_checked(&dir, "text.png").unwrap_err().contains("is not a PNG"));
         assert!(image_checked(&dir, "wide.png").unwrap_err().contains("1025 by 8 pixels"));
         assert!(image_checked(&dir, "empty.png").unwrap_err().contains("0 by 8 pixels"));
@@ -1416,10 +1675,16 @@ mod validation_tests {
         std::fs::File::create(dir.join("big.png")).unwrap().set_len(IMAGE_LIMIT + 1).unwrap();
         assert!(image_checked(&dir, "big.png").unwrap_err().contains("at most 4194304"));
         std::fs::remove_dir_all(root).unwrap();
-        assert_eq!(drawn(r#"
+        assert_eq!(
+            drawn(
+                r#"
             return gfx:image("text.png", 0, 0, 8, 8) == false and gfx:image("missing.png", 0, 0, 8, 8) == false
               and gfx:sprite("text.png", 0, 4, 8, 8, 0, 0) == nil
-        "#, &[("text.png", &[b'x'; 64])]), Ok(true));
+        "#,
+                &[("text.png", &[b'x'; 64])]
+            ),
+            Ok(true)
+        );
     }
 }
 
@@ -1429,7 +1694,10 @@ mod diagnostic_tests {
 
     #[test]
     fn an_error_is_one_reason_in_lines_the_dial_holds() {
-        assert_eq!(reason("runtime error: home.lua:12: attempt to index\tfield 'x'\nstack traceback:\n\t[C]"), "home.lua:12: attempt to index field 'x'");
+        assert_eq!(
+            reason("runtime error: home.lua:12: attempt to index\tfield 'x'\nstack traceback:\n\t[C]"),
+            "home.lua:12: attempt to index field 'x'"
+        );
         assert_eq!(reason("syntax error: theme.lua:3: '}' expected"), "theme.lua:3: '}' expected");
         assert_eq!(reason(""), "");
         assert_eq!(wrapped("one two three four", 9, 4), ["one two", "three", "four"]);
@@ -1448,8 +1716,11 @@ mod diagnostic_tests {
             (ui.thermostat.unit, ui.thermostat.target) = (unit, 21.5);
             diagnostic(&mut renderer.painter(Path::new(".")), &ui, "Mine", error);
             // Lit pixels above the middle (the target) and below it (the error).
-            let lit = |rows: std::ops::Range<u32>| rows.flat_map(|y| (0..240).map(move |x| (x, y)))
-                .filter(|&(x, y)| renderer.pixmap.pixel(x, y).is_some_and(|p| p.red() > 100)).count();
+            let lit = |rows: std::ops::Range<u32>| {
+                rows.flat_map(|y| (0..240).map(move |x| (x, y)))
+                    .filter(|&(x, y)| renderer.pixmap.pixel(x, y).is_some_and(|p| p.red() > 100))
+                    .count()
+            };
             (lit(40..110), lit(110..220))
         };
         let (target, short) = lit("C", "runtime error: home.lua:1: boom");

@@ -1,0 +1,7 @@
+config:
+  # Lines are as long as their prose.
+  MD013: false
+  # The README lays out its images and details in HTML.
+  MD033: false
+  # CLAUDE.md is an include, the pull request template its sections.
+  MD041: false

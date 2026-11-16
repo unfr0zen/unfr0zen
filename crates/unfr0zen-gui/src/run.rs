@@ -1,9 +1,9 @@
 //! Running the recovery flow or a NAND job off the UI thread. A [`Run`] spawns
 //! it and streams its progress back as [`Event`]s the window drains each frame.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -15,13 +15,21 @@ use unfr0zen_host::{run_after_backup, CancelFlag, Config, Phase, Progress};
 /// One thing that happened in the flow, for the window.
 pub enum Event {
     Begin(String),
-    End { label: String, elapsed: Duration, ok: bool },
+    End {
+        label: String,
+        elapsed: Duration,
+        ok: bool,
+    },
     Status(String),
     Waiting(String),
     /// The unit, as far as it is identified.
     Device(String),
     /// The running step has moved `done` of `total` bytes, with `next` under way.
-    Transfer { done: u64, next: u64, total: u64 },
+    Transfer {
+        done: u64,
+        next: u64,
+        total: u64,
+    },
     /// The job waits for a yes or no to the question before it writes.
     Confirm(String, Sender<bool>),
     /// A setup run entered this phase; the one before it is done.
@@ -81,7 +89,9 @@ impl Run {
 
     /// A whole-NAND backup or restore.
     pub fn nand(job: Job, wait_usb: Duration, entry_point: EntryPoint) -> Self {
-        Self::spawn(move |progress, tx, cancel| nand::run(&job, wait_usb, None, entry_point, progress, &mut |question| confirm(&tx, question), &cancel))
+        Self::spawn(move |progress, tx, cancel| {
+            nand::run(&job, wait_usb, None, entry_point, progress, &mut |question| confirm(&tx, question), &cancel)
+        })
     }
 
     /// Any other job that reports through a [`Progress`]: the advanced
@@ -95,8 +105,9 @@ impl Run {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
-    fn spawn(job: impl FnOnce(&mut ChannelProgress, Sender<Event>, CancelFlag) -> unfr0zen_host::Result<String> + Send + 'static)
-             -> Self {
+    fn spawn(
+        job: impl FnOnce(&mut ChannelProgress, Sender<Event>, CancelFlag) -> unfr0zen_host::Result<String> + Send + 'static,
+    ) -> Self {
         let (tx, events) = mpsc::channel();
         let cancel: CancelFlag = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();

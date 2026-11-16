@@ -17,9 +17,12 @@ typedef unsigned char u8;
  * one object serves every build. Numeric layouts must not acquire the PIE
  * load bias: an ABS32 literal holds the discovered number, including
  * offsets within native vtables. */
-#define LAYOUT(name) __extension__ ({ u32 value; \
-    __asm__("ldr %0, 1f\n b 2f\n .balign 4\n1: .word layout_" #name "\n2:" \
-            : "=r" (value)); value; })
+#define LAYOUT(name)                                                                           \
+    __extension__({                                                                            \
+        u32 value;                                                                             \
+        __asm__("ldr %0, 1f\n b 2f\n .balign 4\n1: .word layout_" #name "\n2:" : "=r"(value)); \
+        value;                                                                                 \
+    })
 #define DECLARE_LAYOUT(name) extern const u8 layout_##name __attribute__((visibility("hidden")))
 DECLARE_LAYOUT(ACTIVITY_QUEUE_OFFSET);
 #define ACTIVITY_QUEUE_OFFSET LAYOUT(ACTIVITY_QUEUE_OFFSET)
@@ -62,7 +65,7 @@ DECLARE_LAYOUT(BRIGHTNESS_HIGH_OFFSET);
  * (custom_swap, the keeper thread), 2 where it pans its own fb0 mapping
  * (custom_flip, with the FB_ fields of its framebuffer object), 0 neither. */
 DECLARE_LAYOUT(HANDOVER);
-#define HANDOVER LAYOUT(HANDOVER)
+#define HANDOVER      LAYOUT(HANDOVER)
 #define HANDOVER_SWAP 1
 #define HANDOVER_FLIP 2
 DECLARE_LAYOUT(FB_FD_OFFSET);
@@ -84,136 +87,138 @@ DECLARE_LAYOUT(TIMER_EVENT_FIRST);
 DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 #define TIMER_EVENT_SECOND LAYOUT(TIMER_EVENT_SECOND)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
-#define VTABLE_MAX 0x400
+#define VTABLE_MAX         0x400
 
 /* --- Fixed layouts ----------------------------------------------------------
  * The same in every audited build. */
-#define WORD(p, offset) (*(u32 *)((u8 *)(p) + (offset)))
-#define PTR(p, offset) (*(void **)((u8 *)(p) + (offset)))
+#define WORD(p, offset)  (*(u32 *)((u8 *)(p) + (offset)))
+#define PTR(p, offset)   (*(void **)((u8 *)(p) + (offset)))
 #define FLOAT(p, offset) (*(float *)((u8 *)(p) + (offset)))
 
 /* The layer (`raw`, the derived object), from its start. */
-#define LAYER_SCROLL_Y 0x08         /* float: the viewport's offset */
-#define LAYER_SCROLLER 0x0c         /* the stock scroller */
+#define LAYER_SCROLL_Y       0x08 /* float: the viewport's offset */
+#define LAYER_SCROLLER       0x0c /* the stock scroller */
 /* floats: the furthest the scroller goes is their difference */
 #define LAYER_CONTENT_HEIGHT 0x18
-#define LAYER_VIEW_HEIGHT 0x30
-#define LAYER_SCROLL_FACTOR 0x84    /* float */
-#define LAYER_IMAGE 0xa0            /* the page's image, or 0 */
+#define LAYER_VIEW_HEIGHT    0x30
+#define LAYER_SCROLL_FACTOR  0x84 /* float */
+#define LAYER_IMAGE          0xa0 /* the page's image, or 0 */
 /* Its vtable's slots. */
-#define LAYER_EVENT_SLOT 0x14
-#define LAYER_WHEEL_SLOT 0x18
-#define LAYER_CLICK_SLOT 0x1c
-#define LAYER_DRAW_SLOT 0x28
-#define LAYER_ENTER_SLOT 0x2c
-#define LAYER_RELOAD_SLOT 0x30
+#define LAYER_EVENT_SLOT     0x14
+#define LAYER_WHEEL_SLOT     0x18
+#define LAYER_CLICK_SLOT     0x1c
+#define LAYER_DRAW_SLOT      0x28
+#define LAYER_ENTER_SLOT     0x2c
+#define LAYER_RELOAD_SLOT    0x30
 /* Bytes before the vptr in its vtable: offset-to-top, RTTI and the
  * adjustment metadata, all copied. */
-#define LAYER_VTABLE_HEAD 12
+#define LAYER_VTABLE_HEAD    12
 
 /* The layer's nlLayer part (`base`, at COMMON_OFFSET), and any stock
  * nlLayer's (the template). */
-#define COMMON_TEXT_BOX 0x0c        /* passed to the text layout as stock does */
-#define COMMON_EVENT_TARGET 0x14
-#define COMMON_WIDTH 0x64
-#define COMMON_HEIGHT 0x68
+#define COMMON_TEXT_BOX        0x0c /* passed to the text layout as stock does */
+#define COMMON_EVENT_TARGET    0x14
+#define COMMON_WIDTH           0x64
+#define COMMON_HEIGHT          0x68
 #define COMMON_SELECTION_SHOWN 0x74
-#define COMMON_SELECTION 0x7c
-#define COMMON_GLOBALS 0x8c
-#define COMMON_CHOICE_IDS 0x90      /* null-terminated */
-#define COMMON_CHOICE_FIRST 0x94
-#define COMMON_CHOICE_LAST 0x98
+#define COMMON_SELECTION       0x7c
+#define COMMON_GLOBALS         0x8c
+#define COMMON_CHOICE_IDS      0x90 /* null-terminated */
+#define COMMON_CHOICE_FIRST    0x94
+#define COMMON_CHOICE_LAST     0x98
 /* Its vtable's slots. */
-#define COMMON_EVENT_SLOT 0x00
-#define COMMON_ENTER_SLOT 0x0c
-#define COMMON_DRAW_SLOT 0x10
-#define COMMON_SET_STYLE_SLOT 0x5c
+#define COMMON_EVENT_SLOT      0x00
+#define COMMON_ENTER_SLOT      0x0c
+#define COMMON_DRAW_SLOT       0x10
+#define COMMON_SET_STYLE_SLOT  0x5c
 
 /* The Settings screen object. */
-#define SCREEN_SIZE 0xf0
-#define SCREEN_ACTIVE_LAYER 0x20
-#define SCREEN_GLOBALS 0x3c
-#define SCREEN_TITLE 0x54           /* nl_string */
-#define SCREEN_SUBTITLE 0x70        /* nl_string */
-#define SCREEN_LAYER 0xec           /* our layer (raw) */
+#define SCREEN_SIZE             0xf0
+#define SCREEN_ACTIVE_LAYER     0x20
+#define SCREEN_GLOBALS          0x3c
+#define SCREEN_TITLE            0x54 /* nl_string */
+#define SCREEN_SUBTITLE         0x70 /* nl_string */
+#define SCREEN_LAYER            0xec /* our layer (raw) */
 /* Its vtable's slots, and the third part's title slot (its this is 8
  * bytes into the screen). */
-#define SCREEN_EVENT_SLOT 0x00
-#define SCREEN_DRAW_SLOT 0x0c
-#define SCREEN_ENTER_SLOT 0x1c
-#define SCREEN_EXIT_SLOT 0x20
+#define SCREEN_EVENT_SLOT       0x00
+#define SCREEN_DRAW_SLOT        0x0c
+#define SCREEN_ENTER_SLOT       0x1c
+#define SCREEN_EXIT_SLOT        0x20
 #define SCREEN_THIRD_TITLE_SLOT 0x10
-#define SCREEN_THIRD_THIS 8
+#define SCREEN_THIRD_THIS       8
 /* Bytes before the vptr in its vtable. */
-#define SCREEN_VTABLE_HEAD 8
+#define SCREEN_VTABLE_HEAD      8
 
 /* The drawing context's vtable: its size and slots. */
-#define CONTEXT_VTABLE_SIZE 0xc4
-#define CONTEXT_DRAW_TEXT_SLOT 0x30
-#define CONTEXT_DRAW_IMAGE_SLOT 0x50
+#define CONTEXT_VTABLE_SIZE      0xc4
+#define CONTEXT_DRAW_TEXT_SLOT   0x30
+#define CONTEXT_DRAW_IMAGE_SLOT  0x50
 #define CONTEXT_DRAW_SCALED_SLOT 0x60
 /* An image's vtable slot that destroys it. */
-#define IMAGE_DESTROY_SLOT 4
+#define IMAGE_DESTROY_SLOT       4
 /* The client's globals, which tells the stock client from another queue. */
-#define CLIENT_GLOBALS 0x70
+#define CLIENT_GLOBALS           0x70
 
 /* nlclient's events and their size. */
-#define EVENT_SIZE 0x10
-#define EVENT_TIMEOUT 0x30000003
-#define EVENT_CLICK 0x40000001
-#define EVENT_WHEEL 0x40000004
-#define EVENT_ACTIVITY 0x40000005
-#define EVENT_BACK 0x40000006
+#define EVENT_SIZE           0x10
+#define EVENT_TIMEOUT        0x30000003
+#define EVENT_CLICK          0x40000001
+#define EVENT_WHEEL          0x40000004
+#define EVENT_ACTIVITY       0x40000005
+#define EVENT_BACK           0x40000006
 /* A handler's UI results: handled, leave the screen, and light the display
  * on the client's normal wake timer. */
-#define RESULT_HANDLED 1
-#define RESULT_EXIT 2
+#define RESULT_HANDLED       1
+#define RESULT_EXIT          2
 #define RESULT_LIGHT_DISPLAY 5
 
 /* 16.16 fixed point's 1, and full opacity. */
 #define FIXED_ONE 0x10000
-#define OPAQUE 255
+#define OPAQUE    255
 
 /* --- Files --------------------------------------------------------------- */
-#define IMAGES "/nestlabs/share/images/"
-#define CUSTOM_IMAGE IMAGES "G_unfr0zen_192px.png"
+#define IMAGES         "/nestlabs/share/images/"
+#define CUSTOM_IMAGE   IMAGES "G_unfr0zen_192px.png"
 /* The menu glyphs: each entry's, 80 px. */
-#define MENU_GLYPH IMAGES "G_unfr0zen_glyph_80px.png"
-#define ZIGBEE_GLYPH IMAGES "G_unfr0zen_zigbee_80px.png"
-#define MATTER_GLYPH IMAGES "G_unfr0zen_matter_80px.png"
-#define THEMES_GLYPH IMAGES "G_unfr0zen_themes_80px.png"
-#define DOOM_GLYPH IMAGES "G_unfr0zen_doom_80px.png"
+#define MENU_GLYPH     IMAGES "G_unfr0zen_glyph_80px.png"
+#define ZIGBEE_GLYPH   IMAGES "G_unfr0zen_zigbee_80px.png"
+#define MATTER_GLYPH   IMAGES "G_unfr0zen_matter_80px.png"
+#define THEMES_GLYPH   IMAGES "G_unfr0zen_themes_80px.png"
+#define DOOM_GLYPH     IMAGES "G_unfr0zen_doom_80px.png"
 /* Doom's title, made from the WAD when the app installs Doom (246x120). */
-#define DOOM_IMAGE IMAGES "G_unfr0zen_doom.png"
+#define DOOM_IMAGE     IMAGES "G_unfr0zen_doom.png"
 /* nestlocal's files. */
-#define RUN "/var/run/unfr0zen/"
-#define MATTER_STATUS RUN "matter.status"
-#define ZIGBEE_STATUS RUN "zigbee.status"
-#define MATTER_CODE RUN "matter.code"
+#define RUN            "/var/run/unfr0zen/"
+#define MATTER_STATUS  RUN "matter.status"
+#define ZIGBEE_STATUS  RUN "zigbee.status"
+#define MATTER_CODE    RUN "matter.code"
 #define MATTER_REQUEST RUN "matter-reset.request"
-#define THEME_REQUEST RUN "theme.request"
-#define NOT_ENABLED "Not enabled or service unavailable"
+#define THEME_REQUEST  RUN "theme.request"
+#define NOT_ENABLED    "Not enabled or service unavailable"
 
 /* The largest images shown: Doom's title is wider than the others. */
-#define IMAGE_MAX 192
+#define IMAGE_MAX            192
 #define DOOM_IMAGE_MAX_WIDTH 256
 /* The spinner's frames, activity-0.png to activity-7.png. */
-#define ACTIVITY_FRAMES 8
+#define ACTIVITY_FRAMES      8
 /* Status polls a second apart, four a second during a pairing. */
-#define REFRESH_IDLE_MS 1000
-#define REFRESH_ACTIVE_MS 250
+#define REFRESH_IDLE_MS      1000
+#define REFRESH_ACTIVE_MS    250
 /* A pairing keeps the display lit every this many polls. */
-#define KEEP_AWAKE_TICKS 4
+#define KEEP_AWAKE_TICKS     4
 /* The gen 3's display width, which every layout length is given for. */
-#define GEN3_WIDTH 480
+#define GEN3_WIDTH           480
 
 /* Page texts shown both as the heading and as the body. */
-#define SERVICE_FAILED "Service unavailable. Try again."
+#define SERVICE_FAILED      "Service unavailable. Try again."
 #define MATTER_CONFIRM_TEXT "Forget all Matter controllers and pair again? This cannot be undone."
 #define ZIGBEE_CONFIRM_TEXT "Leave current network and pair again? Permit joining on your coordinator first."
 
 /* --- Native types and calls ------------------------------------------------ */
-typedef struct { u32 words[7]; } nl_string;
+typedef struct {
+    u32 words[7];
+} nl_string;
 /* The stock text layout's configuration: text rows then choice rows. */
 typedef struct {
     int text_count;
@@ -292,7 +297,11 @@ typedef void draw_image_fn(void *context, int x, int y, void *image, int style);
 typedef void draw_scaled_fn(void *context, int x, int y, void *image, int style, int scale, void *unused);
 
 /* --- State ------------------------------------------------------------------ */
-struct theme_catalog { char *text; char **ids, **labels; int count; };
+struct theme_catalog {
+    char *text;
+    char **ids, **labels;
+    int count;
+};
 struct custom_state {
     struct custom_flow flow;
     int active;
@@ -328,15 +337,15 @@ struct custom_state {
 static void bytes_copy(void *to, const void *from, unsigned int count) {
     u8 *dest = to;
     const u8 *source = from;
-    while (count--) *dest++ = *source++;
+    while (count--)
+        *dest++ = *source++;
 }
 static void bytes_zero(void *to, unsigned int count) {
     u8 *dest = to;
-    while (count--) *dest++ = 0;
+    while (count--)
+        *dest++ = 0;
 }
-static struct custom_state *state(void *raw) {
-    return (struct custom_state *)((u8 *)raw + PRIMARY_SIZE);
-}
+static struct custom_state *state(void *raw) { return (struct custom_state *)((u8 *)raw + PRIMARY_SIZE); }
 static void *raw_layer(void *screen) { return PTR(screen, SCREEN_LAYER); }
 static void *common(void *raw) { return (u8 *)raw + COMMON_OFFSET; }
 
@@ -350,19 +359,20 @@ static void *stock_client(void *globals) {
 /* Tells the stock client of user activity, which keeps the display lit. */
 static void notify_activity(void *globals) {
     void *client = stock_client(globals);
-    if (!client) return;
+    if (!client)
+        return;
     void *queue = PTR(client, ACTIVITY_QUEUE_OFFSET);
-    if (!queue) return;
+    if (!queue)
+        return;
     void *event = native_new(EVENT_SIZE);
-    if (!event) return;
+    if (!event)
+        return;
     native_activity_ctor(event);
     native_mark_activity(globals);
     native_activity_init(event, EVENT_ACTIVITY, 0);
     native_enqueue(queue, event, 0);
 }
-static void keep_awake(void *raw) {
-    notify_activity(PTR(common(raw), COMMON_GLOBALS));
-}
+static void keep_awake(void *raw) { notify_activity(PTR(common(raw), COMMON_GLOBALS)); }
 #ifdef CUSTOM_TRACE
 static void write_char(int value, void *file) {
     u8 byte = (u8)value;
@@ -371,10 +381,19 @@ static void write_char(int value, void *file) {
 /* Appends the event and the layer's selection and scroll fields, in hex. */
 static void trace(void *raw, u32 type, u32 value) {
     void *file = native_fopen("/media/user-config/nlcustom-wheel.log", "a");
-    if (!file) return;
-    u32 fields[] = {type, value, WORD(raw, 0x7c), WORD(common(raw), 0x74),
-                    WORD(common(raw), 0x7c), WORD(common(raw), 0x18),
-                    WORD(common(raw), 0x14), WORD(raw, 0x64), WORD(raw, 8), WORD(raw, 0x14), WORD(raw, 0x18)};
+    if (!file)
+        return;
+    u32 fields[] = {type,
+                    value,
+                    WORD(raw, 0x7c),
+                    WORD(common(raw), 0x74),
+                    WORD(common(raw), 0x7c),
+                    WORD(common(raw), 0x18),
+                    WORD(common(raw), 0x14),
+                    WORD(raw, 0x64),
+                    WORD(raw, 8),
+                    WORD(raw, 0x14),
+                    WORD(raw, 0x18)};
     for (unsigned int i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
         for (int shift = 28; shift >= 0; shift -= 4)
             write_char("0123456789abcdef"[(fields[i] >> shift) & 15], file);
@@ -384,7 +403,8 @@ static void trace(void *raw, u32 type, u32 value) {
 }
 #endif
 static int custom_wheel(void *raw, int value) {
-    if (value) state(raw)->at_top = 0;
+    if (value)
+        state(raw)->at_top = 0;
     int result = native_layer_wheel(raw, value);
 #ifdef CUSTOM_TRACE
     trace(raw, EVENT_WHEEL, value);
@@ -395,15 +415,23 @@ static int custom_wheel(void *raw, int value) {
 static void read_text(const char *path, char *out, unsigned int size, const char *fallback) {
     void *file = native_fopen(path, "r");
     unsigned int n = 0;
-    if (file) { n = native_fread(out, 1, size - 1, file); native_fclose(file); }
-    if (!n) { while (*fallback && n < size - 1) out[n++] = *fallback++; }
-    while (n && (out[n-1] == '\n' || out[n-1] == '\r')) n--;
+    if (file) {
+        n = native_fread(out, 1, size - 1, file);
+        native_fclose(file);
+    }
+    if (!n) {
+        while (*fallback && n < size - 1)
+            out[n++] = *fallback++;
+    }
+    while (n && (out[n - 1] == '\n' || out[n - 1] == '\r'))
+        n--;
     out[n] = 0;
 }
 /* The decimal number at text[*at], up to `count`, moving *at past it. */
 static u32 parse_number(const char *text, int *at, int count) {
     u32 value = 0;
-    for (; *at < count && text[*at] >= '0' && text[*at] <= '9'; ++*at) value = value * 10 + (text[*at] - '0');
+    for (; *at < count && text[*at] >= '0' && text[*at] <= '9'; ++*at)
+        value = value * 10 + (text[*at] - '0');
     return value;
 }
 /* The framebuffer's width: 480 on a gen 3, 320 on a gen 1 or gen 2. */
@@ -417,7 +445,10 @@ static int display_width(void) {
 /* A length of the gen 3's 480-pixel layout, on this display. */
 #define SCALED(s, n) ((n) * (s)->display / GEN3_WIDTH)
 static int same_text(const char *a, const char *b) {
-    while (*a && *a == *b) { a++; b++; }
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
     return *a == *b;
 }
 /* ARM Linux EABI's __NR_rename. */
@@ -445,13 +476,15 @@ static int rename_setting(const char *from, const char *to) {
 #define ATTEMPT "/var/run/unfr0zen-screen.attempt"
 static int attempt_pending(void) {
     void *file = native_fopen(ATTEMPT, "r");
-    if (!file) return 0;
+    if (!file)
+        return 0;
     native_fclose(file);
     return 1;
 }
 static void attempt_begin(void) {
     void *file = native_fopen(ATTEMPT, "w");
-    if (file) native_fclose(file);
+    if (file)
+        native_fclose(file);
 }
 static void attempt_end(void) { rename_setting(ATTEMPT, "/var/run/unfr0zen-screen.done"); }
 
@@ -470,11 +503,16 @@ static int light_display(struct wake_handler *handler, void *event) {
 }
 static void queue_handler(void *globals, int (*handle)(struct wake_handler *, void *)) {
     void *client = stock_client(globals);
-    if (!client) return;
+    if (!client)
+        return;
     struct wake_handler *handler = native_new(sizeof(*handler));
-    if (!handler) return;
+    if (!handler)
+        return;
     void *event = native_new(EVENT_SIZE);
-    if (!event) { native_delete(handler); return; }
+    if (!event) {
+        native_delete(handler);
+        return;
+    }
     /* Its vtable is its own handle field: slot 0 is the handler. */
     handler->vtable = &handler->handle;
     handler->handle = handle;
@@ -493,9 +531,11 @@ static void wake_display(void *globals) { queue_handler(globals, light_display);
  * from Home Assistant). */
 static void downlink_activity(void *bucket) {
     const char *taken = RUN "display.taken";
-    if (rename_setting(RUN "display.request", taken)) return;
+    if (rename_setting(RUN "display.request", taken))
+        return;
     void *file = native_fopen(taken, "rb");
-    if (!file) return;
+    if (!file)
+        return;
     u32 expires = 0;
     unsigned int count = native_fread(&expires, 1, sizeof(expires), file);
     native_fclose(file);
@@ -513,8 +553,8 @@ static void downlink_activity(void *bucket) {
  * it straight back; a stale file does nothing. KEEPER holds the pid of the
  * nlclient that hands over (and, for HANDOVER_FLIP, its globals after a
  * space): the owner's launcher checks it. */
-#define SCREEN_OWNER RUN "screen.owner"
-#define KEEPER RUN "keeper.pid"
+#define SCREEN_OWNER  RUN "screen.owner"
+#define KEEPER        RUN "keeper.pid"
 /* How often the display is lit while owned, in seconds. */
 #define KEEPER_PERIOD 2
 /* The file's leading number, and the second, after a space, in *second. */
@@ -522,7 +562,8 @@ static u32 read_numbers(const char *path, u32 *second) {
     char text[32];
     *second = 0;
     int fd = native_open(path, 0);
-    if (fd < 0) return 0;
+    if (fd < 0)
+        return 0;
     int count = native_read(fd, text, sizeof(text) - 1);
     native_close(fd);
     int at = 0;
@@ -540,9 +581,12 @@ static int read_pid(const char *path) {
 /* Writes `value` in decimal at `text`: its length. */
 static unsigned int put_number(char *text, u32 value) {
     unsigned int length = 0;
-    for (u32 rest = value; rest; rest /= 10) length++;
-    if (!length) length = 1;
-    for (unsigned int i = length; i > 0; value /= 10) text[--i] = '0' + value % 10;
+    for (u32 rest = value; rest; rest /= 10)
+        length++;
+    if (!length)
+        length = 1;
+    for (unsigned int i = length; i > 0; value /= 10)
+        text[--i] = '0' + value % 10;
     return length;
 }
 /* Writes `first`, and with `both` a space and `second`, as the file. */
@@ -554,7 +598,8 @@ static void write_numbers(const char *path, u32 first, u32 second, int both) {
         length += put_number(text + length, second);
     }
     void *file = native_fopen(path, "w");
-    if (!file) return;
+    if (!file)
+        return;
     native_fwrite(text, 1, length, file);
     native_fclose(file);
 }
@@ -564,7 +609,8 @@ static int screen_owned(void) {
 }
 /* Replaces nlclient's eglSwapBuffers (HANDOVER_SWAP). */
 u32 custom_swap(void *display, void *surface) {
-    if (screen_owned()) return 1; /* EGL_TRUE: drawn, not shown */
+    if (screen_owned())
+        return 1; /* EGL_TRUE: drawn, not shown */
     return native_egl_swap(display, surface);
 }
 /* While the owner has the display, nlclient sees none of the ring and button
@@ -574,7 +620,8 @@ u32 custom_swap(void *display, void *surface) {
 static void *keeper(void *globals) {
     for (;;) {
         native_usleep(KEEPER_PERIOD * 1000000);
-        if (screen_owned()) wake_display(globals);
+        if (screen_owned())
+            wake_display(globals);
     }
     return 0;
 }
@@ -583,13 +630,16 @@ static void *keeper(void *globals) {
  * is the mark that the thread runs (HANDOVER_SWAP), or where the flip finds
  * the globals (HANDOVER_FLIP). */
 static void keeper_start(void *globals) {
-    if (!HANDOVER) return;
+    if (!HANDOVER)
+        return;
     int pid = native_getpid();
-    if (read_pid(KEEPER) == pid) return;
+    if (read_pid(KEEPER) == pid)
+        return;
     write_numbers(KEEPER, pid, (u32)globals, HANDOVER == HANDOVER_FLIP);
     /* Until nestlocal makes its directory the mark cannot be written: the
      * threads wait for a commit after that, so they start only once. */
-    if (HANDOVER != HANDOVER_SWAP || read_pid(KEEPER) != pid) return;
+    if (HANDOVER != HANDOVER_SWAP || read_pid(KEEPER) != pid)
+        return;
     unsigned int thread;
     native_pthread_create(&thread, 0, keeper, globals);
 }
@@ -600,10 +650,10 @@ static void keeper_start(void *globals) {
  * skips would have, so nlclient doesn't draw flat out. FB_PRIVATE marks the
  * swap and holds when the display was last lit (every KEEPER_PERIOD, as the
  * keeper thread does); once the owner is gone, fb0 is mapped back. */
-#define FB_PRIVATE RUN "fb.private"
-#define FLIP_WAIT 100000 /* us */
-#define PROT_READ_WRITE 3
-#define MAP_SHARED_FIXED 0x11
+#define FB_PRIVATE                  RUN "fb.private"
+#define FLIP_WAIT                   100000 /* us */
+#define PROT_READ_WRITE             3
+#define MAP_SHARED_FIXED            0x11
 #define MAP_PRIVATE_FIXED_ANONYMOUS 0x32
 int custom_flip(void *fb, void *surface) {
     void *map = PTR(fb, FB_MAP_OFFSET);
@@ -620,7 +670,8 @@ int custom_flip(void *fb, void *surface) {
     }
     if (!lit || now - lit >= KEEPER_PERIOD) {
         u32 globals;
-        if ((int)read_numbers(KEEPER, &globals) == native_getpid() && globals) wake_display((void *)globals);
+        if ((int)read_numbers(KEEPER, &globals) == native_getpid() && globals)
+            wake_display((void *)globals);
         write_numbers(FB_PRIVATE, now, 0, 0);
     }
     native_usleep(FLIP_WAIT);
@@ -629,21 +680,26 @@ int custom_flip(void *fb, void *surface) {
 /* The screen timeout nestlocal asks for (screen.timeout, in ms, which its
  * setting's bucket change follows), as the client's default; the one in
  * force follows when it was the default, not a screen's own. */
-#define SCREEN_TIMEOUT RUN "screen.timeout"
+#define SCREEN_TIMEOUT     RUN "screen.timeout"
 #define SCREEN_TIMEOUT_MIN 1000
 #define SCREEN_TIMEOUT_MAX 86400000
 static void apply_screen_timeout(void *globals) {
-    if (!SLEEP_DEFAULT_OFFSET || !SLEEP_ACTIVE_OFFSET) return;
+    if (!SLEEP_DEFAULT_OFFSET || !SLEEP_ACTIVE_OFFSET)
+        return;
     char text[16];
     read_text(SCREEN_TIMEOUT, text, sizeof(text), "");
     int at = 0;
     u32 timeout = parse_number(text, &at, sizeof(text));
-    if (!at || text[at] || timeout < SCREEN_TIMEOUT_MIN || timeout > SCREEN_TIMEOUT_MAX) return;
+    if (!at || text[at] || timeout < SCREEN_TIMEOUT_MIN || timeout > SCREEN_TIMEOUT_MAX)
+        return;
     void *client = stock_client(globals);
-    if (!client) return;
+    if (!client)
+        return;
     u32 old = WORD(client, SLEEP_DEFAULT_OFFSET);
-    if (old == timeout) return;
-    if (WORD(client, SLEEP_ACTIVE_OFFSET) == old) WORD(client, SLEEP_ACTIVE_OFFSET) = timeout;
+    if (old == timeout)
+        return;
+    if (WORD(client, SLEEP_ACTIVE_OFFSET) == old)
+        WORD(client, SLEEP_ACTIVE_OFFSET) = timeout;
     WORD(client, SLEEP_DEFAULT_OFFSET) = timeout;
 }
 /* The brightness nestlocal asks for (screen.brightness: "auto", or 0 to 100
@@ -651,17 +707,22 @@ static void apply_screen_timeout(void *globals) {
  * Brightness screen stays until the next request: a level is the high
  * setting's, in place of its own (kept in BRIGHTNESS_HIGH, which auto puts
  * back). What the unit shows goes to screen.brightness.state. */
-#define SCREEN_BRIGHTNESS RUN "screen.brightness"
-#define BRIGHTNESS_APPLIED RUN "screen.brightness.applied"
-#define BRIGHTNESS_STATE RUN "screen.brightness.state"
-#define BRIGHTNESS_HIGH RUN "brightness.high"
+#define SCREEN_BRIGHTNESS    RUN "screen.brightness"
+#define BRIGHTNESS_APPLIED   RUN "screen.brightness.applied"
+#define BRIGHTNESS_STATE     RUN "screen.brightness.state"
+#define BRIGHTNESS_HIGH      RUN "brightness.high"
 #define BRIGHTNESS_AUTO_CODE 101
 enum { BRIGHTNESS_HIGH_MODE = 2, BRIGHTNESS_AUTO_MODE = 3 };
-union level { float percent; u32 bits; };
+union level {
+    float percent;
+    u32 bits;
+};
 static void apply_brightness(void *globals) {
-    if (!BRIGHTNESS_MODE_OFFSET) return;
+    if (!BRIGHTNESS_MODE_OFFSET)
+        return;
     void *manager = PTR(globals, BRIGHTNESS_GLOBALS_OFFSET);
-    if (!manager) return;
+    if (!manager)
+        return;
     char text[16];
     read_text(SCREEN_BRIGHTNESS, text, sizeof(text), "");
     int at = 0, automatic = same_text(text, "auto");
@@ -669,8 +730,8 @@ static void apply_brightness(void *globals) {
     u32 applied, unused, pid = (u32)native_getpid();
     if ((automatic || (at && !text[at] && code <= 100)) &&
         (read_numbers(BRIGHTNESS_APPLIED, &applied) != pid || applied != code)) {
-        union level high = { .percent = FLOAT(manager, BRIGHTNESS_HIGH_OFFSET) };
-        union level original = { .bits = read_numbers(BRIGHTNESS_HIGH, &unused) };
+        union level high = {.percent = FLOAT(manager, BRIGHTNESS_HIGH_OFFSET)};
+        union level original = {.bits = read_numbers(BRIGHTNESS_HIGH, &unused)};
         if (!original.bits) {
             original = high;
             write_numbers(BRIGHTNESS_HIGH, original.bits, 0, 0);
@@ -682,7 +743,8 @@ static void apply_brightness(void *globals) {
     }
     /* The state: auto, or the level of the setting in force. */
     u32 mode = WORD(manager, BRIGHTNESS_MODE_OFFSET);
-    if (mode > BRIGHTNESS_AUTO_MODE) return;
+    if (mode > BRIGHTNESS_AUTO_MODE)
+        return;
     char state[8], shown[8];
     unsigned int length = 4;
     if (mode == BRIGHTNESS_AUTO_MODE) {
@@ -693,9 +755,11 @@ static void apply_brightness(void *globals) {
     }
     state[length] = 0;
     read_text(BRIGHTNESS_STATE, shown, sizeof(shown), "");
-    if (same_text(state, shown)) return;
+    if (same_text(state, shown))
+        return;
     void *file = native_fopen(BRIGHTNESS_STATE, "w");
-    if (!file) return;
+    if (!file)
+        return;
     native_fwrite(state, 1, length, file);
     native_fclose(file);
 }
@@ -725,7 +789,8 @@ static void load_themes(struct theme_catalog *themes) {
         for (;;) {
             unsigned int n = native_fread(text + used, 1, capacity - used - 1, file);
             used += n;
-            if (used < capacity - 1) break;
+            if (used < capacity - 1)
+                break;
             char *larger = native_new(capacity * 2);
             bytes_copy(larger, text, used);
             native_delete(text);
@@ -740,34 +805,51 @@ static void load_themes(struct theme_catalog *themes) {
     }
     text[used] = 0;
     int count = 0;
-    for (unsigned int i = 0; i < used; i++) if (text[i] == '\n') count++;
+    for (unsigned int i = 0; i < used; i++)
+        if (text[i] == '\n')
+            count++;
     char **ids = native_new(2 * count * sizeof(char *));
     char **labels = ids + count;
     int index = 0;
     char *id = text, *label = 0;
     for (unsigned int i = 0; i < used; i++) {
-        if (text[i] == '\t') { text[i] = 0; label = text + i + 1; }
-        else if (text[i] == '\n') {
+        if (text[i] == '\t') {
             text[i] = 0;
-            if (label) { ids[index] = id; labels[index++] = label; }
+            label = text + i + 1;
+        } else if (text[i] == '\n') {
+            text[i] = 0;
+            if (label) {
+                ids[index] = id;
+                labels[index++] = label;
+            }
             id = text + i + 1;
             label = 0;
         }
     }
-    if (themes->text) native_delete(themes->text);
-    if (themes->ids) native_delete(themes->ids);
-    themes->text = text; themes->ids = ids; themes->labels = labels; themes->count = index;
+    if (themes->text)
+        native_delete(themes->text);
+    if (themes->ids)
+        native_delete(themes->ids);
+    themes->text = text;
+    themes->ids = ids;
+    themes->labels = labels;
+    themes->count = index;
 }
 /* Room for `count` choice rows. */
 static void choices_capacity(struct custom_state *s, int count) {
-    if (count <= s->choice_capacity) return;
+    if (count <= s->choice_capacity)
+        return;
     native_config_invalidate(&s->config);
-    for (int i = 0; i < s->choice_capacity; i++) native_string_destroy(&s->choices[i]);
-    if (s->choices) native_delete(s->choices);
-    if (s->choice_ids) native_delete(s->choice_ids);
+    for (int i = 0; i < s->choice_capacity; i++)
+        native_string_destroy(&s->choices[i]);
+    if (s->choices)
+        native_delete(s->choices);
+    if (s->choice_ids)
+        native_delete(s->choice_ids);
     s->choices = native_new(count * sizeof(nl_string));
     s->choice_ids = native_new((count + 1) * sizeof(char *));
-    for (int i = 0; i < count; i++) native_string_ctor(&s->choices[i]);
+    for (int i = 0; i < count; i++)
+        native_string_ctor(&s->choices[i]);
     s->choice_capacity = count;
     s->config.choices = s->choices;
 }
@@ -775,9 +857,11 @@ static void choices_capacity(struct custom_state *s, int count) {
  * so nestlocal never reads a partial request: 0 once written. */
 static int write_request(const char *tmp, const char *path, const char *data, unsigned int length) {
     void *file = native_fopen(tmp, "w");
-    if (!file) return -1;
+    if (!file)
+        return -1;
     unsigned int written = native_fwrite(data, 1, length, file);
-    if (native_fclose(file) != 0 || written != length) return -1;
+    if (native_fclose(file) != 0 || written != length)
+        return -1;
     return rename_setting(tmp, path);
 }
 /* Whether a service's status says it cannot take a request yet: disabled
@@ -793,10 +877,12 @@ static int service_unready(const char *status) {
 static int request_action(int which, void *context) {
     struct custom_state *s = context;
     if (which >= REQUEST_THEME) {
-        if (which - REQUEST_THEME >= s->themes.count) return -1;
+        if (which - REQUEST_THEME >= s->themes.count)
+            return -1;
         const char *name = s->themes.ids[which - REQUEST_THEME];
         unsigned int length = 0;
-        while (name[length]) length++;
+        while (name[length])
+            length++;
         return write_request(THEME_REQUEST ".tmp", THEME_REQUEST, name, length);
     }
     const char *status_path, *tmp, *path;
@@ -813,19 +899,26 @@ static int request_action(int which, void *context) {
     }
     char status[96];
     read_text(status_path, status, sizeof(status), "Unavailable");
-    if (service_unready(status)) return -1;
+    if (service_unready(status))
+        return -1;
     return write_request(tmp, path, "1", 1);
 }
 /* The Matter pairing page's body: the code, a blank line, the status. */
 static void matter_detail(struct custom_state *s) {
     unsigned int n = 0;
     const char *code = s->activity_started ? s->code : "";
-    const char *status = s->flow.page == CUSTOM_MATTER_PAIRING && !s->activity_started ? "Opening pairing..." : s->status;
-    if (starts_with(status, "Pairing open. ")) status += sizeof("Pairing open. ") - 1;
-    while (*code && n < sizeof(s->detail) - 1) s->detail[n++] = *code++;
-    if (n < sizeof(s->detail) - 1) s->detail[n++] = '\n';
-    if (n < sizeof(s->detail) - 1) s->detail[n++] = '\n';
-    while (*status && n < sizeof(s->detail) - 1) s->detail[n++] = *status++;
+    const char *status =
+        s->flow.page == CUSTOM_MATTER_PAIRING && !s->activity_started ? "Opening pairing..." : s->status;
+    if (starts_with(status, "Pairing open. "))
+        status += sizeof("Pairing open. ") - 1;
+    while (*code && n < sizeof(s->detail) - 1)
+        s->detail[n++] = *code++;
+    if (n < sizeof(s->detail) - 1)
+        s->detail[n++] = '\n';
+    if (n < sizeof(s->detail) - 1)
+        s->detail[n++] = '\n';
+    while (*status && n < sizeof(s->detail) - 1)
+        s->detail[n++] = *status++;
     s->detail[n] = 0;
 }
 static void release_image(void *image) {
@@ -843,23 +936,28 @@ static void load_image(void *raw) {
     int error = 0;
     void *image = 0;
     enum custom_page page = state(raw)->flow.page;
-    const char *path = page == CUSTOM_MATTER_PAIRING ? RUN "matter.png" :
-                       page == CUSTOM_DOOM ? DOOM_IMAGE : CUSTOM_IMAGE;
+    const char *path = page == CUSTOM_MATTER_PAIRING ? RUN "matter.png"
+                       : page == CUSTOM_DOOM         ? DOOM_IMAGE
+                                                     : CUSTOM_IMAGE;
     if (page == CUSTOM_HOME || page == CUSTOM_DOOM || (page == CUSTOM_MATTER_PAIRING && state(raw)->activity_started)) {
         void *file = native_fopen(path, "rb");
-        if (file) { native_fclose(file); image = native_image_load(path, &error); }
+        if (file) {
+            native_fclose(file);
+            image = native_image_load(path, &error);
+        }
     }
     if (image && (native_image_width(image) > (page == CUSTOM_DOOM ? DOOM_IMAGE_MAX_WIDTH : IMAGE_MAX) ||
                   native_image_height(image) > IMAGE_MAX)) {
-        release_image(image); image = 0;
+        release_image(image);
+        image = 0;
     }
     state(raw)->image_page = page;
     PTR(raw, LAYER_IMAGE) = image; /* Missing images leave a usable text-only screen. */
 #ifdef CUSTOM_TRACE
     state(raw)->image_traced = 0;
     trace(raw, 0x494d4701, (u32)image);
-    trace(raw, 0x494d4702, image ? ((u32)native_image_width(image) << 16) |
-                                 (u32)native_image_height(image) : (u32)error);
+    trace(raw, 0x494d4702,
+          image ? ((u32)native_image_width(image) << 16) | (u32)native_image_height(image) : (u32)error);
 #endif
 }
 /* The spinner's frames nestlocal has made. */
@@ -867,11 +965,13 @@ static void load_activity(void *raw) {
     struct custom_state *s = state(raw);
     char path[] = RUN "activity-0.png";
     for (unsigned int i = 0; i < ACTIVITY_FRAMES; i++) {
-        if (s->activity_images[i]) continue;
+        if (s->activity_images[i])
+            continue;
         /* The digit, before ".png" and the terminator. */
         path[sizeof(path) - 6] = '0' + i;
         void *file = native_fopen(path, "rb");
-        if (!file) continue;
+        if (!file)
+            continue;
         native_fclose(file);
         int error = 0;
         s->activity_images[i] = native_image_load(path, &error);
@@ -883,7 +983,8 @@ static void read_status(enum custom_page page, char *out, unsigned int size) {
 }
 /* Blanks choice rows `from` on. */
 static void clear_choices(struct custom_state *s, int from) {
-    for (int i = from; i < CHOICE_ROWS; i++) native_string_copy(&s->choices[i], "");
+    for (int i = from; i < CHOICE_ROWS; i++)
+        native_string_copy(&s->choices[i], "");
 }
 /* Lays out the current page: its texts, choices, selection and scroll.
  * `opening` is entering the page; otherwise its status refreshed and the
@@ -900,20 +1001,24 @@ static void show(void *raw, int opening) {
             s->activity_ticks = 0;
     }
     native_config_invalidate(&s->config);
-    if (theme && opening) { load_themes(&s->themes); s->flow.theme_count = s->themes.count; }
+    if (theme && opening) {
+        load_themes(&s->themes);
+        s->flow.theme_count = s->themes.count;
+    }
     choices_capacity(s, theme && s->themes.count + 1 > CHOICE_ROWS ? s->themes.count + 1 : CHOICE_ROWS);
     int activity = custom_activity(s->flow.page);
     int matter_pairing = s->flow.page == CUSTOM_MATTER_PAIRING;
-    int choice_count = s->flow.page == CUSTOM_HOME ? 1 :
-                       theme ? s->themes.count + 1 : activity ? 1 : 2;
+    int choice_count = s->flow.page == CUSTOM_HOME ? 1 : theme ? s->themes.count + 1 : activity ? 1 : 2;
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
     s->config.text_count = activity ? 3 : 2;
     /* Text row 0 reserves the image's room in blank lines, so images
      * scroll with the text: their positions come from the native text-row
      * anchors. Matter labels its open window above the code. */
-    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n" : doom ? "\n\n\n\n\n" :
-                       matter_pairing ? (s->activity_started ? "Ready to pair\n\n\n\n\n" :
-                                         "Opening pairing...\n\n\n\n\n") : "");
+    native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n"
+                                    : doom                      ? "\n\n\n\n\n"
+                                    : matter_pairing            ? (s->activity_started ? "Ready to pair\n\n\n\n\n"
+                                                                                       : "Opening pairing...\n\n\n\n\n")
+                                                                : "");
     native_string_copy(&s->text[2], "");
     if (s->flow.page == CUSTOM_HOME) {
         char name[64];
@@ -922,15 +1027,17 @@ static void show(void *raw, int opening) {
         native_string_copy(&s->choices[0], "Done");
         clear_choices(s, 1);
     } else if (theme) {
-        native_string_copy(&s->text[0], s->flow.action_failed ? "nestlocal is unavailable. Try again." :
-                           "The theme used on the home screen.");
+        native_string_copy(&s->text[0], s->flow.action_failed ? "nestlocal is unavailable. Try again."
+                                                              : "The theme used on the home screen.");
         native_string_copy(&s->text[1], "");
         s->config.text_count = 1;
-        for (int i = 0; i < s->themes.count; i++) native_string_copy(&s->choices[i], s->themes.labels[i]);
+        for (int i = 0; i < s->themes.count; i++)
+            native_string_copy(&s->choices[i], s->themes.labels[i]);
         native_string_copy(&s->choices[s->themes.count], "Back");
     } else if (doom) {
-        native_string_copy(&s->text[1], s->flow.action_failed ? "Doom is unavailable. Try again." :
-                           "Doom runs full screen until you hold the button for three seconds.");
+        native_string_copy(&s->text[1], s->flow.action_failed
+                                            ? "Doom is unavailable. Try again."
+                                            : "Doom runs full screen until you hold the button for three seconds.");
         native_string_copy(&s->choices[0], "Play");
         native_string_copy(&s->choices[1], "Back");
         clear_choices(s, 2);
@@ -944,10 +1051,11 @@ static void show(void *raw, int opening) {
         } else {
             /* Text-only pages start at their first real row. Empty rows still
              * occupy native line height and must not create scroll margins. */
-            native_string_copy(&s->text[0], s->flow.action_failed ? SERVICE_FAILED :
-                               s->flow.page == CUSTOM_MATTER_CONFIRM ? MATTER_CONFIRM_TEXT :
-                               s->flow.page == CUSTOM_ZIGBEE_CONFIRM ? ZIGBEE_CONFIRM_TEXT :
-                               activity && !s->activity_started ? "Starting pairing..." : s->status);
+            native_string_copy(&s->text[0], s->flow.action_failed                   ? SERVICE_FAILED
+                                            : s->flow.page == CUSTOM_MATTER_CONFIRM ? MATTER_CONFIRM_TEXT
+                                            : s->flow.page == CUSTOM_ZIGBEE_CONFIRM ? ZIGBEE_CONFIRM_TEXT
+                                            : activity && !s->activity_started      ? "Starting pairing..."
+                                                                                    : s->status);
             native_string_copy(&s->text[1], activity ? "\n\n" : "");
             s->config.text_count = activity ? 2 : 1;
         }
@@ -958,28 +1066,38 @@ static void show(void *raw, int opening) {
             clear_choices(s, 1);
             load_activity(raw);
         } else {
-            native_string_copy(&s->choices[0], s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget and pair" : "Enable pairing");
+            native_string_copy(&s->choices[0],
+                               s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget and pair" : "Enable pairing");
             native_string_copy(&s->choices[1], "Back");
             clear_choices(s, 2);
         }
     }
-    if (s->image_page != s->flow.page) load_image(raw);
+    if (s->image_page != s->flow.page)
+        load_image(raw);
     s->config.choice_count = choice_count;
     void *base = common(raw);
     /* The choices' ids, as the stock menu names its rows. */
-    for (int i = 0; i < choice_count; i++) s->choice_ids[i] = theme ? (i < s->themes.count ? s->themes.ids[i] : "back") :
-        i == 0 ? "first" : i == 1 ? "second" : i == 2 ? "third" : i == 3 ? "fourth" : "fifth";
+    for (int i = 0; i < choice_count; i++)
+        s->choice_ids[i] = theme    ? (i < s->themes.count ? s->themes.ids[i] : "back")
+                           : i == 0 ? "first"
+                           : i == 1 ? "second"
+                           : i == 2 ? "third"
+                           : i == 3 ? "fourth"
+                                    : "fifth";
     s->choice_ids[choice_count] = 0;
     PTR(base, COMMON_CHOICE_IDS) = s->choice_ids;
     WORD(base, COMMON_CHOICE_FIRST) = 0;
     WORD(base, COMMON_CHOICE_LAST) = choice_count - 1;
     native_config_layout(raw, &s->config, FIXED_ONE, choice_count);
     int selection = opening ? 0 : old_selection;
-    if (selection >= choice_count) selection = choice_count - 1;
-    if (selection < 0) selection = 0;
+    if (selection >= choice_count)
+        selection = choice_count - 1;
+    if (selection < 0)
+        selection = 0;
     native_select(raw, selection);
     WORD(base, COMMON_SELECTION_SHOWN) = selection;
-    if (opening) s->at_top = 1;
+    if (opening)
+        s->at_top = 1;
     /* Select positions the viewport at its button. Retarget the stock
      * scroller to the document top on entry, or preserve its visible offset
      * on a status refresh. These fields are shared by the audited ABIs. */
@@ -987,8 +1105,10 @@ static void show(void *raw, int opening) {
     float factor = FLOAT(raw, LAYER_SCROLL_FACTOR);
     float offset = s->at_top ? 0 : old_y;
     float target = top + (factor > 0 ? offset / factor : 0);
-    if (target < 0) target = 0;
-    if (target > top) target = top;
+    if (target < 0)
+        target = 0;
+    if (target > top)
+        target = top;
     native_scroll_target((u8 *)raw + LAYER_SCROLLER, target);
     FLOAT(raw, LAYER_SCROLL_Y) = offset;
 }
@@ -1001,24 +1121,29 @@ static int click(void *raw) {
     enum custom_page before = s->flow.page;
     int result = custom_choose(&s->flow, selected, request_action, s);
     if (s->flow.page != before && custom_activity(s->flow.page)) {
-        s->activity_ticks = 0; s->activity_started = 0;
-        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING) keep_awake(raw);
+        s->activity_ticks = 0;
+        s->activity_started = 0;
+        if (s->flow.page == CUSTOM_ZIGBEE_PAIRING)
+            keep_awake(raw);
     }
-    if (result != RESULT_EXIT) show(raw, s->flow.page != before);
+    if (result != RESULT_EXIT)
+        show(raw, s->flow.page != before);
     return result;
 }
 /* A status poll: follows nestlocal's status, the pairing's progress and
  * timeout, and lays the page out again when it changed. */
 static void refresh_status(void *raw) {
     struct custom_state *s = state(raw);
-    if (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM ||
-        s->flow.page == CUSTOM_THEMES) return;
+    if (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM ||
+        s->flow.page == CUSTOM_DOOM || s->flow.page == CUSTOM_THEMES)
+        return;
     enum custom_page before = s->flow.page;
     int pending = 0;
     if (s->flow.page == CUSTOM_MATTER_PAIRING) {
         void *request = native_fopen(MATTER_REQUEST, "r");
         pending = request != 0;
-        if (request) native_fclose(request);
+        if (request)
+            native_fclose(request);
     }
     char status[96], code[32];
     read_status(s->flow.page, status, sizeof(status));
@@ -1038,23 +1163,29 @@ static void refresh_status(void *raw) {
             changed |= custom_matter_refresh(&s->flow, status, pending, &s->activity_started, s->activity_ticks);
         } else {
             if (!s->activity_started && (starts_with(status, "Pairing...") || starts_with(status, "Pairing open"))) {
-                s->activity_started = 1; changed = 1;
+                s->activity_started = 1;
+                changed = 1;
             }
             int failed = starts_with(status, "Pairing timed out") || starts_with(status, "Radio unavailable") ||
                          starts_with(status, "Not enabled") || starts_with(status, "Zigbee not enabled");
-            if (failed || (s->activity_started && (starts_with(status, "Paired") || starts_with(status, "Ready to pair")))) {
-                custom_back(&s->flow); changed = 1;
+            if (failed ||
+                (s->activity_started && (starts_with(status, "Paired") || starts_with(status, "Ready to pair")))) {
+                custom_back(&s->flow);
+                changed = 1;
             }
             if (s->flow.page == CUSTOM_ZIGBEE_PAIRING && s->activity_ticks >= PAIRING_TIMEOUT_TICKS) {
-                custom_back(&s->flow); changed = 1;
+                custom_back(&s->flow);
+                changed = 1;
             }
         }
     }
-    if (before == CUSTOM_MATTER_PAIRING && s->flow.page != before) keep_awake(raw);
+    if (before == CUSTOM_MATTER_PAIRING && s->flow.page != before)
+        keep_awake(raw);
     if (changed) {
         show(raw, s->flow.page != before);
     }
-    if (s->flow.page == CUSTOM_MATTER_PAIRING && !PTR(raw, LAYER_IMAGE)) load_image(raw);
+    if (s->flow.page == CUSTOM_MATTER_PAIRING && !PTR(raw, LAYER_IMAGE))
+        load_image(raw);
 }
 
 /* --- The layer's and screen's methods ------------------------------------ */
@@ -1070,7 +1201,8 @@ static void stop_refresh(void *raw) {
 static void schedule_refresh(void *raw) {
     struct custom_state *s = state(raw);
     void *globals = PTR(common(raw), COMMON_GLOBALS);
-    native_send_timeout(&s->refresh_request, (u32)s, custom_activity(s->flow.page) ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS,
+    native_send_timeout(&s->refresh_request, (u32)s,
+                        custom_activity(s->flow.page) ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS,
                         PTR(common(raw), COMMON_EVENT_TARGET), common(raw), PTR(globals, GLOBALS_TIMER_OFFSET));
 }
 static int layer_event(void *raw, void *event, void *target) {
@@ -1080,16 +1212,21 @@ static int layer_event(void *raw, void *event, void *target) {
 #ifdef CUSTOM_TRACE
         trace(raw, type, native_timeout_id(event));
 #endif
-        if (s->active) { refresh_status(raw); schedule_refresh(raw); }
+        if (s->active) {
+            refresh_status(raw);
+            schedule_refresh(raw);
+        }
         return 1;
     }
     int result = native_layer_event(raw, event, target);
     /* Old Legal Info consumes a click by stopping its timer and returning
      * exit, bypassing the click vtable. Keep that native cleanup, then
      * ask the custom flow whether this click actually exits the screen. */
-    if (LEGACY_CLICK && type == EVENT_CLICK && result == RESULT_EXIT) result = click(raw);
+    if (LEGACY_CLICK && type == EVENT_CLICK && result == RESULT_EXIT)
+        result = click(raw);
 #ifdef CUSTOM_TRACE
-    if (type == TIMER_EVENT_FIRST || type == TIMER_EVENT_SECOND) trace(raw, type, result);
+    if (type == TIMER_EVENT_FIRST || type == TIMER_EVENT_SECOND)
+        trace(raw, type, result);
 #else
     (void)type;
 #endif
@@ -1104,20 +1241,21 @@ static void enter_common(void *base) { show((u8 *)base - COMMON_OFFSET, 1); }
 static void no_reload(void *raw) { (void)raw; }
 /* Where the images sit above their text rows, in the gen 3's layout:
  * Matter's code and Doom's title higher than the logo. */
-#define IMAGE_LIFT 24
+#define IMAGE_LIFT        24
 #define MATTER_IMAGE_LIFT 10
-#define DOOM_IMAGE_LIFT 20
+#define DOOM_IMAGE_LIFT   20
 /* The gen 1's and gen 2's text rows reach this much further above their anchor. */
-#define GEN2_TEXT_RISE 12
+#define GEN2_TEXT_RISE    12
 /* The pictured pages' and other pages' inset from the round display's
  * edge, in the gen 3's layout. */
-#define PICTURED_INSET 240
-#define TEXT_INSET 120
+#define PICTURED_INSET    240
+#define TEXT_INSET        120
 static int draw(void *raw, void *context) {
     struct custom_state *s = state(raw);
     /* Settings draws every screen while previewing its carousel tile.
      * The inner menu belongs only to the entered screen. */
-    if (!s->active) return 0;
+    if (!s->active)
+        return 0;
     void *base = common(raw);
     void *globals = PTR(base, COMMON_GLOBALS);
     int style = native_style(globals);
@@ -1144,9 +1282,11 @@ static int draw(void *raw, void *context) {
          * This remains correct when returning with a different selection. */
         int text_y = native_config_y(&s->config, context, WORD(base, COMMON_TEXT_BOX), 1, FIXED_ONE);
         int width = native_image_width(image), height = native_image_height(image);
-        int top = y + text_y - SCALED(s, IMAGE_LIFT + (custom_matter(s->flow.page) ? MATTER_IMAGE_LIFT :
-                                                       s->flow.page == CUSTOM_DOOM ? DOOM_IMAGE_LIFT : 0))
-                  - (s->display >= GEN3_WIDTH ? 0 : GEN2_TEXT_RISE);
+        int top = y + text_y -
+                  SCALED(s, IMAGE_LIFT + (custom_matter(s->flow.page)   ? MATTER_IMAGE_LIFT
+                                          : s->flow.page == CUSTOM_DOOM ? DOOM_IMAGE_LIFT
+                                                                        : 0)) -
+                  (s->display >= GEN3_WIDTH ? 0 : GEN2_TEXT_RISE);
         /* The home and Doom images are the gen 3's size, scaled down here;
          * nestlocal draws the Matter code at the display's own. */
         if (pictured && s->display != GEN3_WIDTH) {
@@ -1167,20 +1307,22 @@ static int draw(void *raw, void *context) {
             draw_image(context, -native_image_width(spinner) / 2, y + activity_y, spinner, style);
         }
     }
-    native_config_draw(base, context, &s->config, 0, y, OPAQUE,
-                       WORD(base, COMMON_SELECTION), style, FIXED_ONE);
+    native_config_draw(base, context, &s->config, 0, y, OPAQUE, WORD(base, COMMON_SELECTION), style, FIXED_ONE);
     native_scroll_draw(raw, context, FIXED_ONE);
-    if (!s->drawn) { s->drawn = 1; attempt_end(); }
+    if (!s->drawn) {
+        s->drawn = 1;
+        attempt_end();
+    }
     return 0;
 }
-static int draw_common(void *base, void *context) {
-    return draw((u8 *)base - COMMON_OFFSET, context);
-}
+static int draw_common(void *base, void *context) { return draw((u8 *)base - COMMON_OFFSET, context); }
 static void title(void *screen) {
     enum custom_page root = state(raw_layer(screen))->flow.root;
-    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE),
-                       root == CUSTOM_ZIGBEE ? "\nZIGBEE" : root == CUSTOM_MATTER ? "\nMATTER" :
-                       root == CUSTOM_THEMES ? "\nTHEMES" : root == CUSTOM_DOOM ? "\nDOOM" : "\nUNFR0ZEN");
+    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE), root == CUSTOM_ZIGBEE   ? "\nZIGBEE"
+                                                                   : root == CUSTOM_MATTER ? "\nMATTER"
+                                                                   : root == CUSTOM_THEMES ? "\nTHEMES"
+                                                                   : root == CUSTOM_DOOM   ? "\nDOOM"
+                                                                                           : "\nUNFR0ZEN");
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE), "");
     native_rebuild_title(screen);
 }
@@ -1191,21 +1333,19 @@ struct title_context {
     void *original;
     int y_offset;
 };
-static void subtitle_text(void *context, int x, int y, void *text,
-                          int count, int scale, int a, int b, int c) {
+static void subtitle_text(void *context, int x, int y, void *text, int count, int scale, int a, int b, int c) {
     struct title_context *view = PTR(context, 0);
-    void (*draw_text)(void *, int, int, void *, int, int, int, int, int) =
-        PTR(view->original, CONTEXT_DRAW_TEXT_SLOT);
+    void (*draw_text)(void *, int, int, void *, int, int, int, int, int) = PTR(view->original, CONTEXT_DRAW_TEXT_SLOT);
     draw_text(context, x, y - view->y_offset, text, count, scale, a, b, c);
 }
 /* How far the title rises over the menu glyph, in the gen 3's layout. */
-#define TITLE_LIFT 40
+#define TITLE_LIFT      40
 /* The menu glyph: 80 px, centred this far above the tile's centre at the
  * menu's resting (half) scale; on the gen 1 and gen 2, 44/80 of it, lower. */
-#define GLYPH_SIZE 80
-#define GLYPH_Y (-120)
+#define GLYPH_SIZE      80
+#define GLYPH_Y         (-120)
 #define GEN2_GLYPH_SIZE 44
-#define GEN2_GLYPH_Y (-71)
+#define GEN2_GLYPH_Y    (-71)
 static int screen_draw(void *screen, void *context) {
     void *globals = PTR(screen, SCREEN_GLOBALS);
     int menu_visible = !native_menu_hidden(globals);
@@ -1219,14 +1359,18 @@ static int screen_draw(void *screen, void *context) {
         PTR(context, 0) = view.vtable;
     }
     int result = native_screen_draw(screen, context);
-    if (menu_visible) PTR(context, 0) = view.original;
+    if (menu_visible)
+        PTR(context, 0) = view.original;
     if (menu_visible) {
         if (!s->menu_glyph) {
             int error = 0;
             enum custom_page root = s->flow.root;
-            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE ? ZIGBEE_GLYPH : root == CUSTOM_MATTER ? MATTER_GLYPH :
-                                              root == CUSTOM_THEMES ? THEMES_GLYPH : root == CUSTOM_DOOM ? DOOM_GLYPH :
-                                              MENU_GLYPH, &error);
+            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE   ? ZIGBEE_GLYPH
+                                              : root == CUSTOM_MATTER ? MATTER_GLYPH
+                                              : root == CUSTOM_THEMES ? THEMES_GLYPH
+                                              : root == CUSTOM_DOOM   ? DOOM_GLYPH
+                                                                      : MENU_GLYPH,
+                                              &error);
         }
         if (s->menu_glyph) {
             /* Native menu titles settle at half scale; glyph coordinates
@@ -1261,14 +1405,18 @@ static void exit_screen(void *screen) {
     state(raw_layer(screen))->active = 0;
     stop_refresh(raw_layer(screen));
     struct custom_state *s = state(raw_layer(screen));
-    for (int i = 0; i < ACTIVITY_FRAMES; i++) { release_image(s->activity_images[i]); s->activity_images[i] = 0; }
+    for (int i = 0; i < ACTIVITY_FRAMES; i++) {
+        release_image(s->activity_images[i]);
+        s->activity_images[i] = 0;
+    }
 }
 static int screen_event(void *screen, void *event, void *target) {
     void *raw = raw_layer(screen);
     u32 type = native_event_type(event);
     WORD(common(raw), COMMON_SELECTION_SHOWN) = WORD(common(raw), COMMON_SELECTION);
 #ifdef CUSTOM_TRACE
-    if (type == EVENT_WHEEL) trace(raw, type, (u32)target);
+    if (type == EVENT_WHEEL)
+        trace(raw, type, (u32)target);
 #endif
     /* Settings' inherited dispatcher sends EVENT_BACK for back navigation.
      * Consume it within a child page; the parent keeps the stock exit path. */
@@ -1286,10 +1434,12 @@ static int screen_event(void *screen, void *event, void *target) {
  * of (custom_root): builds the screen and its layer, their vtables copies of
  * stock ones with our methods in. */
 void *custom_factory(void *globals, void *handler, const char *name) {
-    if (attempt_pending()) return 0;
+    if (attempt_pending())
+        return 0;
     attempt_begin();
     void *screen = native_new(SCREEN_SIZE);
-    if (!screen) return 0;
+    if (!screen)
+        return 0;
     native_screen_ctor(screen);
     /* Reproduce the derived factory's vptr installation after the base
      * constructor. All three pointers come from discovered ELF data. */
@@ -1298,14 +1448,17 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     PTR(screen, 8) = (void *)(native_screen_vtable + SCREEN_THIRD_VPTR - SCREEN_VTABLE_HEAD);
     PTR(screen, SCREEN_LAYER) = 0;
     void *background = native_layer_lookup(globals, "backgroundlayer");
-    if (native_screen_init(screen, globals, handler, name, background)) return 0;
+    if (native_screen_init(screen, globals, handler, name, background))
+        return 0;
     native_attach(screen, background);
     /* Copy only dimensions and the event destination from an initialized
      * stock layer. Allocate a separate object; do not alter that singleton. */
     void *template = native_layer_lookup(globals, "legalinfolayer");
-    if (!template) return 0;
+    if (!template)
+        return 0;
     void *raw = native_new(PRIMARY_SIZE + sizeof(struct custom_state));
-    if (!raw) return 0;
+    if (!raw)
+        return 0;
     bytes_zero(raw, PRIMARY_SIZE + sizeof(struct custom_state));
     native_layer_ctor(raw);
     struct custom_state *s = state(raw);
@@ -1318,7 +1471,8 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     s->flags[0] = 0;
     s->config.choices = s->choices;
     s->config.cache_id = -1;
-    for (int i = 0; i < 3; i++) native_string_ctor(&s->text[i]);
+    for (int i = 0; i < 3; i++)
+        native_string_ctor(&s->text[i]);
     choices_capacity(s, CHOICE_ROWS);
     /* Preserve negative-offset metadata and all adjustment thunks. */
     bytes_copy(s->layer_vtables, (u8 *)PTR(raw, 0) - LAYER_VTABLE_HEAD, LAYER_VTABLE_SIZE);
@@ -1337,7 +1491,8 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     PTR(PTR(raw, 0), LAYER_WHEEL_SLOT) = custom_wheel;
     void *base = common(raw);
     if (native_layer_init(base, globals, PTR(template, COMMON_EVENT_TARGET), "nlcustomlayer",
-                          WORD(template, COMMON_WIDTH), WORD(template, COMMON_HEIGHT))) return 0;
+                          WORD(template, COMMON_WIDTH), WORD(template, COMMON_HEIGHT)))
+        return 0;
     PTR(screen, SCREEN_LAYER) = raw;
     PTR(screen, SCREEN_ACTIVE_LAYER) = base;
     native_attach(screen, base);

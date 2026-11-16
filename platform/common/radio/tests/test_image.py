@@ -6,6 +6,7 @@ images. Each skips when its image has not been built.
 
 Run from the top: python3 -m unittest discover -s platform/common/radio/tests
 """
+
 import os
 import re
 import struct
@@ -37,7 +38,7 @@ class Layout:
         return struct.unpack_from("<I", self.data, address - LOAD)[0]
 
     def test_the_bootloaders_pages_are_left_blank(self):
-        self.assertEqual(self.data[:self.aat - LOAD], bytes(self.aat - LOAD))
+        self.assertEqual(self.data[: self.aat - LOAD], bytes(self.aat - LOAD))
 
     def test_the_address_table_starts_the_application(self):
         self.assertEqual(struct.unpack_from("<H", self.data, self.aat + 0x10 - LOAD)[0], APP_ADDRESS_TABLE_TYPE)
@@ -55,7 +56,7 @@ class Layout:
 
     def test_nestlocal_reads_the_makefiles_version(self):
         with open(os.path.join(TOP, "platform", "common", "radio", "Makefile")) as f:
-            version = int(re.search(r"^VERSION = (\d+)$", f.read(), re.M).group(1))
+            version = int(re.search(r"^VERSION = (\d+)$", f.read(), re.MULTILINE).group(1))
         with open(os.path.join(TOP, "crates", "nestlocal", "src", "device", f"{self.device}.rs")) as f:
             at = int(re.search(r"version_at: (0x[0-9A-Fa-f]+),", f.read()).group(1), 16)
         # customerApplicationVersion, in the address table.

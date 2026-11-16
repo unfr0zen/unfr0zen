@@ -48,8 +48,8 @@
 //! A Thread RCP uses the same interrupt and programs host wake deadlines in
 //! the radio. While thread0 exists, its daemon's idle record gates suspend.
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::logf;
@@ -93,8 +93,12 @@ impl TcpConn {
     /// local port.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn matches(&self, p: &[u8]) -> bool {
-        p.len() >= HEADER_LEN && p[0] == 0x45 && p[9] == 6 && p[12..16] == self.remote_ip
-            && u16::from_be_bytes([p[20], p[21]]) == self.remote && u16::from_be_bytes([p[22], p[23]]) == self.local
+        p.len() >= HEADER_LEN
+            && p[0] == 0x45
+            && p[9] == 6
+            && p[12..16] == self.remote_ip
+            && u16::from_be_bytes([p[20], p[21]]) == self.remote
+            && u16::from_be_bytes([p[22], p[23]]) == self.local
     }
 }
 
@@ -176,8 +180,13 @@ impl Wake {
 /// `iface`, registering UDP wake filters if `matter`, and keeping it awake while
 /// the Zigbee radio has something to say if `zigbee`; `on_wake` runs on each
 /// wake, before the hold.
-pub fn start(broker_port: Option<u16>, matter: bool, zigbee: bool, iface: String,
-             on_wake: impl Fn() + Send + Sync + 'static) {
+pub fn start(
+    broker_port: Option<u16>,
+    matter: bool,
+    zigbee: bool,
+    iface: String,
+    on_wake: impl Fn() + Send + Sync + 'static,
+) {
     if broker_port.is_none() && !matter && !zigbee {
         return;
     }
@@ -236,8 +245,12 @@ async fn run(wake: Option<Arc<Wake>>, matter: bool, zigbee: bool, on_wake: Arc<d
             report(&bus, conn.remote).await;
             if changed || tick.is_multiple_of(12) {
                 match register(&bus, conn.remote).await {
-                    Ok(()) if changed => logf!("wake: registered the broker connection (local port {}, wake on port {}) \
-                                                with nlsleepd", conn.local, conn.remote),
+                    Ok(()) if changed => logf!(
+                        "wake: registered the broker connection (local port {}, wake on port {}) \
+                                                with nlsleepd",
+                        conn.local,
+                        conn.remote
+                    ),
                     Ok(()) => {}
                     Err(e) => logf!("wake: registering port {}: {e}", conn.remote),
                 }
@@ -270,8 +283,15 @@ async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool
     if matter {
         for (name, ipv4) in [("nestlocal_matter_v4", true), ("nestlocal_matter_v6", false)] {
             // No TCP keepalive, any source port, unicast UDP to the Matter socket.
-            match call(bus, WAKEKA_PATH, WAKEKA, "RegisterWakeKa",
-                       &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false)).await {
+            match call(
+                bus,
+                WAKEKA_PATH,
+                WAKEKA,
+                "RegisterWakeKa",
+                &(name, 0u32, ipv4, false, 0u16, rs_matter::MATTER_PORT, false),
+            )
+            .await
+            {
                 Ok(()) => {}
                 // The gen 1's and gen 2's nlsleepd has no such call: its
                 // library sets the port's patterns, once nestlocal has listed them
@@ -283,7 +303,10 @@ async fn try_enroll(bus: &zbus::Connection, matter: bool, ready: &Arc<AtomicBool
                             tokio::time::sleep(Duration::from_secs(2)).await;
                         }
                         ready.store(true, Ordering::SeqCst);
-                        logf!("wake: Matter's UDP port {} wakes the unit through nlsleepd's library", rs_matter::MATTER_PORT);
+                        logf!(
+                            "wake: Matter's UDP port {} wakes the unit through nlsleepd's library",
+                            rs_matter::MATTER_PORT
+                        );
                         release_when_idle(bus, matter, ready);
                     });
                     return true;
@@ -312,9 +335,15 @@ fn sleep_blocked(matter: bool, ready: bool, commissioning: bool) -> bool {
 fn release_when_idle(bus: zbus::Connection, matter: bool, ready: Arc<AtomicBool>) {
     tokio::spawn(async move {
         loop {
-            let hold = if std::path::Path::new("/sys/class/net/thread0").exists() { Duration::from_millis(100) } else { WAKE_HOLD };
+            let hold = if std::path::Path::new("/sys/class/net/thread0").exists() {
+                Duration::from_millis(100)
+            } else {
+                WAKE_HOLD
+            };
             tokio::time::sleep(hold).await;
-            if !ready.load(Ordering::SeqCst) { return; }
+            if !ready.load(Ordering::SeqCst) {
+                return;
+            }
             if !sleep_blocked(matter, true, crate::matter::sleep_blocked()) {
                 release(&bus).await;
                 return;
@@ -356,16 +385,16 @@ async fn register(bus: &zbus::Connection, port: u16) -> Result<(), String> {
 }
 
 async fn call<B>(bus: &zbus::Connection, path: &str, interface: &str, method: &str, body: &B) -> Result<(), String>
-where B: serde::Serialize + zbus::zvariant::DynamicType {
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
     let reply = bus.call_method(Some(SCPM), path, Some(interface), method, body);
     match tokio::time::timeout(CALL_TIMEOUT, reply).await {
-        Ok(Ok(reply)) if method == "RegisterWakeKa" => {
-            match reply.body().deserialize::<bool>() {
-                Ok(true) => Ok(()),
-                Ok(false) => Err("nlsleepd rejected the wake configuration".into()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
+        Ok(Ok(reply)) if method == "RegisterWakeKa" => match reply.body().deserialize::<bool>() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("nlsleepd rejected the wake configuration".into()),
+            Err(e) => Err(e.to_string()),
+        },
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err(NO_ANSWER.into()),
@@ -401,7 +430,10 @@ impl SleepClient {
     /// while holding it awake or while the radio has something to say.
     #[zbus(name = "RequestSleep")]
     async fn request_sleep(&self) -> (String, bool) {
-        if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked()) || (self.zigbee && crate::zigbee::wakeup::pending()) || crate::thread_sleep::blocked() {
+        if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked())
+            || (self.zigbee && crate::zigbee::wakeup::pending())
+            || crate::thread_sleep::blocked()
+        {
             return (ENTITY_PATH.into(), false);
         }
         if self.wake.is_some() {
@@ -513,13 +545,17 @@ mod tests {
     fn only_missing_dbus_interfaces_trigger_the_compatibility_fallback() {
         assert!(unsupported("org.freedesktop.DBus.Error.UnknownObject: no such object"));
         assert!(unsupported("org.freedesktop.DBus.Error.UnknownMethod: no such method"));
-        for error in ["org.freedesktop.DBus.Error.AccessDenied: denied",
-                      "org.freedesktop.DBus.Error.InvalidArgs: wrong signature", "no answer"] {
+        for error in [
+            "org.freedesktop.DBus.Error.AccessDenied: denied",
+            "org.freedesktop.DBus.Error.InvalidArgs: wrong signature",
+            "no answer",
+        ] {
             assert!(!unsupported(error));
         }
     }
 
-    const TABLE: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+    const TABLE: &str =
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
    0: 0100007F:01BB 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 4318 1
    1: 2A00000A:C350 0F00000A:075B 06 00000000:00000000 00:00000000 00000000     0        0 0 1
    2: 2A00000A:D431 0F00000A:075B 01 00000000:00000000 00:00000000 00000000     0        0 5120 1
@@ -563,8 +599,21 @@ mod tests {
         assert!(wake.last_packet().is_empty());
         assert_eq!(wake.update(TABLE).map(|(c, changed)| (c.local, changed)), Some((0xD431, true)));
         assert_eq!(wake.update(TABLE).map(|(_, changed)| changed), Some(false));
-        for other in [packet(1883, 9999), packet(80, 0xD431), { let mut p = packet(1883, 0xD431); p[0] = 0x46; p },
-                      { let mut p = packet(1883, 0xD431); p[9] = 17; p }, packet(1883, 0xD431)[..39].to_vec()] {
+        for other in [
+            packet(1883, 9999),
+            packet(80, 0xD431),
+            {
+                let mut p = packet(1883, 0xD431);
+                p[0] = 0x46;
+                p
+            },
+            {
+                let mut p = packet(1883, 0xD431);
+                p[9] = 17;
+                p
+            },
+            packet(1883, 0xD431)[..39].to_vec(),
+        ] {
             wake.sniffed(&other);
         }
         assert!(wake.last_packet().is_empty());

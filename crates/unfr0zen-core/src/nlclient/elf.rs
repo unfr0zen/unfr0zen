@@ -17,34 +17,19 @@ pub(super) struct Elf<'a> {
     pub sections: Vec<Section>,
 }
 pub(super) fn bytes(data: &[u8], offset: usize, size: usize) -> Result<&[u8]> {
-    data.get(
-        offset
-            ..offset
-                .checked_add(size)
-                .ok_or_else(|| crate::Error::Device("ELF range overflow".into()))?,
-    )
-    .ok_or_else(|| crate::Error::Device("truncated ELF range".into()))
+    data.get(offset..offset.checked_add(size).ok_or_else(|| crate::Error::Device("ELF range overflow".into()))?)
+        .ok_or_else(|| crate::Error::Device("truncated ELF range".into()))
 }
 pub(super) fn word(data: &[u8], offset: usize) -> Result<u32> {
-    Ok(u32::from_le_bytes(
-        bytes(data, offset, 4)?.try_into().unwrap(),
-    ))
+    Ok(u32::from_le_bytes(bytes(data, offset, 4)?.try_into().unwrap()))
 }
 pub(super) fn half(data: &[u8], offset: usize) -> Result<u16> {
-    Ok(u16::from_le_bytes(
-        bytes(data, offset, 2)?.try_into().unwrap(),
-    ))
+    Ok(u16::from_le_bytes(bytes(data, offset, 2)?.try_into().unwrap()))
 }
 pub(super) fn string(data: &[u8], offset: usize) -> Result<String> {
-    let tail = data
-        .get(offset..)
-        .ok_or_else(|| crate::Error::Device("ELF string offset out of range".into()))?;
-    let n = tail
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or_else(|| crate::Error::Device("unterminated ELF string".into()))?;
-    String::from_utf8(tail[..n].to_vec())
-        .map_err(|_| crate::Error::Device("invalid ELF string".into()))
+    let tail = data.get(offset..).ok_or_else(|| crate::Error::Device("ELF string offset out of range".into()))?;
+    let n = tail.iter().position(|&b| b == 0).ok_or_else(|| crate::Error::Device("unterminated ELF string".into()))?;
+    String::from_utf8(tail[..n].to_vec()).map_err(|_| crate::Error::Device("invalid ELF string".into()))
 }
 pub(super) fn align(value: usize, alignment: usize) -> Result<usize> {
     let alignment = alignment.max(1);
@@ -73,11 +58,7 @@ impl<'a> Elf<'a> {
             return device("ELF section-name index out of range");
         }
         let names_header = offset + names_index * stride;
-        let names = bytes(
-            data,
-            word(data, names_header + 16)? as usize,
-            word(data, names_header + 20)? as usize,
-        )?;
+        let names = bytes(data, word(data, names_header + 16)? as usize, word(data, names_header + 20)? as usize)?;
         let mut sections = Vec::new();
         for i in 0..count {
             let o = offset + i * stride;
@@ -96,10 +77,7 @@ impl<'a> Elf<'a> {
                 bytes(data, s.offset, s.size)?;
             }
             if s.address
-                .checked_add(
-                    u32::try_from(s.size)
-                        .map_err(|_| crate::Error::Device("ELF section too large".into()))?,
-                )
+                .checked_add(u32::try_from(s.size).map_err(|_| crate::Error::Device("ELF section too large".into()))?)
                 .is_none()
             {
                 return device("ELF section address overflow");
@@ -118,24 +96,18 @@ impl<'a> Elf<'a> {
         &self.data[section.offset..section.offset + section.size]
     }
     pub fn at(&self, address: u32) -> Option<&Section> {
-        self.sections.iter().find(|s| {
-            s.kind != 8
-                && s.address != 0
-                && address >= s.address
-                && (address - s.address) < s.size as u32
-        })
+        self.sections
+            .iter()
+            .find(|s| s.kind != 8 && s.address != 0 && address >= s.address && (address - s.address) < s.size as u32)
     }
     pub fn offset(&self, address: u32) -> Result<usize> {
         self.at(address)
             .map(|s| s.offset + (address - s.address) as usize)
-            .ok_or_else(|| {
-                crate::Error::Device(format!("ELF address {address:#x} outside sections"))
-            })
+            .ok_or_else(|| crate::Error::Device(format!("ELF address {address:#x} outside sections")))
     }
     pub fn read(&self, address: u32) -> Result<u32> {
-        let section = self.at(address).ok_or_else(|| {
-            crate::Error::Device(format!("ELF word {address:#x} outside sections"))
-        })?;
+        let section =
+            self.at(address).ok_or_else(|| crate::Error::Device(format!("ELF word {address:#x} outside sections")))?;
         let relative = (address - section.address) as usize;
         word(self.contents(section), relative)
     }
@@ -150,11 +122,7 @@ impl<'a> Elf<'a> {
         let o = (address - s.address) as usize;
         let tail = self.contents(s).get(o..)?;
         let n = tail.iter().take(48).position(|&b| b == 0)?;
-        if n < 2
-            || !tail[..n]
-                .iter()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
-        {
+        if n < 2 || !tail[..n].iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_') {
             return None;
         }
         String::from_utf8(tail[..n].to_vec()).ok()

@@ -102,7 +102,9 @@ pub fn read_memory(dev: &mut impl Hid, address: u32, len: usize) -> Result<Vec<u
                 _ => {
                     quiet += 1;
                     if quiet >= 4 {
-                        return Err(Error::Timeout(format!("Memory read at {at:#x} stopped after {got} of {count} bytes")));
+                        return Err(Error::Timeout(format!(
+                            "Memory read at {at:#x} stopped after {got} of {count} bytes"
+                        )));
                     }
                 }
             }
@@ -133,8 +135,7 @@ pub fn write_register(dev: &mut impl Hid, address: u32, value: u32) -> Result<()
         }
         if reply.len() >= 5 && reply[0] == REPORT_STATUS {
             if reply[1..5] != REGISTER_COMPLETE {
-                return Err(Error::Device(format!(
-                    "Register write at {address:#x} failed: {:02x?}", &reply[1..5])));
+                return Err(Error::Device(format!("Register write at {address:#x} failed: {:02x?}", &reply[1..5])));
             }
             return Ok(());
         }
@@ -164,8 +165,7 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
         let reply = dev.read(1000)?;
         if reply.len() >= 5 && reply[0] == REPORT_STATUS {
             if reply[1..5] != WRITE_COMPLETE {
-                return Err(Error::Device(format!(
-                    "Upload to {address:#x} failed: {:02x?}", &reply[1..5])));
+                return Err(Error::Device(format!("Upload to {address:#x} failed: {:02x?}", &reply[1..5])));
             }
             acknowledged = true;
             break;
@@ -178,7 +178,10 @@ pub fn write_checked(dev: &mut impl Hid, address: u32, data: &[u8]) -> Result<()
     if let Some(at) = readback.iter().zip(data).position(|(got, sent)| got != sent) {
         return Err(Error::Device(format!(
             "Upload readback mismatch at {:#x}: {:#04x} != {:#04x}",
-            address + at as u32, readback[at], data[at])));
+            address + at as u32,
+            readback[at],
+            data[at]
+        )));
     }
     Ok(())
 }
@@ -247,8 +250,7 @@ pub fn dcd_write(dev: &mut impl Hid, address: u32, dcd: &[u8]) -> Result<()> {
         }
         if reply.len() >= 5 && reply[0] == REPORT_STATUS {
             if reply[1..5] != REGISTER_COMPLETE {
-                return Err(Error::Device(format!(
-                    "DCD_WRITE at {address:#x} rejected: {:02x?}", &reply[1..5])));
+                return Err(Error::Device(format!("DCD_WRITE at {address:#x} rejected: {:02x?}", &reply[1..5])));
             }
             return Ok(());
         }
@@ -300,11 +302,7 @@ pub fn hab_state(replies: &[Vec<u8>]) -> Option<HabState> {
 /// status report carrying anything else is the ROM's error report and means
 /// it stayed in serial download. The ROM copies these words out as native
 /// little-endian bytes, which only the palindrome words hide.
-const KNOWN_ACKS: [&[u8]; 3] = [
-    &[0x88, 0x88, 0x88, 0x88],
-    &[0x12, 0x8a, 0x8a, 0x12],
-    &[0x09, 0xd0, 0x0d, 0x90],
-];
+const KNOWN_ACKS: [&[u8]; 3] = [&[0x88, 0x88, 0x88, 0x88], &[0x12, 0x8a, 0x8a, 0x12], &[0x09, 0xd0, 0x0d, 0x90]];
 
 /// The error report the ROM sends after refusing a JUMP, if it sent one.
 pub fn jump_refusal(replies: &[Vec<u8>]) -> Option<&[u8]> {
@@ -348,10 +346,13 @@ pub fn hab_word_description(word: [u8; 4]) -> String {
         table.iter().find(|(value, _)| *value == byte).map(|(_, name)| *name).unwrap_or("unknown")
     }
     let [status, reason, context, engine] = word;
-    format!("status {status:#04x} ({}), reason {reason:#04x} ({}), context {context:#04x} ({}), \
+    format!(
+        "status {status:#04x} ({}), reason {reason:#04x} ({}), context {context:#04x} ({}), \
              engine {engine:#04x}",
-            lookup(&HAB_STATUS, status), lookup(&HAB_REASON, reason),
-            lookup(&HAB_CONTEXT, context))
+        lookup(&HAB_STATUS, status),
+        lookup(&HAB_REASON, reason),
+        lookup(&HAB_CONTEXT, context)
+    )
 }
 
 /// Sends JUMP and collects the ROM's answers: the HAB report it sends
@@ -522,10 +523,7 @@ mod tests {
         let refused = vec![vec![3, 0x12, 0x34, 0x34, 0x12], vec![4, 0x33, 0x21, 0xc0, 0x00]];
         assert_eq!(hab_state(&refused), Some(HabState::Enabled));
         assert_eq!(hab_state(&[vec![3, 0x56, 0x78, 0x78, 0x56]]), Some(HabState::Disabled));
-        assert_eq!(
-            hab_state(&[vec![3, 0x11, 0x22, 0x33, 0x44]]),
-            Some(HabState::Unknown([0x11, 0x22, 0x33, 0x44]))
-        );
+        assert_eq!(hab_state(&[vec![3, 0x11, 0x22, 0x33, 0x44]]), Some(HabState::Unknown([0x11, 0x22, 0x33, 0x44])));
         assert_eq!(hab_state(&[vec![4, 0x88, 0x88, 0x88, 0x88]]), None);
         assert_eq!(hab_state(&[vec![3, 0x56, 0x78]]), None);
     }
@@ -555,11 +553,8 @@ mod tests {
         let quiet = jump(&mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12]]), UBOOT_BASE).unwrap();
         assert_eq!(quiet.len(), 1);
         assert_eq!(jump_refusal(&quiet), None);
-        let acked = jump(
-            &mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x09, 0xd0, 0x0d, 0x90]]),
-            UBOOT_BASE,
-        )
-        .unwrap();
+        let acked =
+            jump(&mut scripted(&[&[3, 0x12, 0x34, 0x34, 0x12], &[4, 0x09, 0xd0, 0x0d, 0x90]]), UBOOT_BASE).unwrap();
         assert_eq!(jump_refusal(&acked), None);
     }
 

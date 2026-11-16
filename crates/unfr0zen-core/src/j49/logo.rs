@@ -62,7 +62,9 @@ fn inflate(data: &[u8], hint: usize) -> Option<(Vec<u8>, usize)> {
         let before = (inflater.total_in(), inflater.total_out());
         match inflater.decompress_vec(&data[inflater.total_in() as usize..], &mut out, FlushDecompress::Finish) {
             Ok(Status::StreamEnd) => return Some((out, inflater.total_in() as usize)),
-            Ok(_) if (inflater.total_in(), inflater.total_out()) == before && out.len() < out.capacity() => return None,
+            Ok(_) if (inflater.total_in(), inflater.total_out()) == before && out.len() < out.capacity() => {
+                return None
+            }
             Ok(_) => {}
             Err(_) => return None,
         }
@@ -95,7 +97,9 @@ fn parse(image: &[u8]) -> Result<Option<Kernel<'_>>> {
     let body = &image[..end];
     let mut at = HEADER;
     let (gzip, inflated) = loop {
-        let Some(found) = body[at..].windows(3).position(|w| w == [0x1f, 0x8b, 0x08]) else { return Ok(None) };
+        let Some(found) = body[at..].windows(3).position(|w| w == [0x1f, 0x8b, 0x08]) else {
+            return Ok(None);
+        };
         at += found;
         if let Some(length) = gzip_header(body, at) {
             if let Some((inflated, used)) = inflate(&body[at + length..], 8 << 20) {
@@ -116,7 +120,9 @@ fn parse(image: &[u8]) -> Result<Option<Kernel<'_>>> {
         }
         let clut = word(4).wrapping_sub(KERNEL_BASE) as usize;
         let range = clut..clut + 3 * word(3) as usize;
-        if range.end <= inflated.len() && matches!(sha256_hex(&inflated[range.clone()]).as_str(), STOCK_CLUT | DARK_CLUT) {
+        if range.end <= inflated.len()
+            && matches!(sha256_hex(&inflated[range.clone()]).as_str(), STOCK_CLUT | DARK_CLUT)
+        {
             if found.is_some() {
                 return device("the kernel has two boot logos");
             }

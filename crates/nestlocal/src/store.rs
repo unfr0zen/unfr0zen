@@ -100,7 +100,9 @@ impl Store {
         let (object, subs, watch, changed) = {
             let mut inner = self.inner.lock().unwrap();
             let existed = inner.objects.contains_key(key);
-            let o = inner.objects.entry(key.to_string())
+            let o = inner
+                .objects
+                .entry(key.to_string())
                 .or_insert_with(|| Object { key: key.to_string(), ..Default::default() });
             let mut changed = !existed;
             for (k, v) in fields {
@@ -162,7 +164,8 @@ impl Store {
 
     fn write(&self, objects: &[Object]) -> std::io::Result<()> {
         let mut bytes = Vec::new();
-        let mut ser = serde_json::Serializer::with_formatter(&mut bytes, serde_json::ser::PrettyFormatter::with_indent(b" "));
+        let mut ser =
+            serde_json::Serializer::with_formatter(&mut bytes, serde_json::ser::PrettyFormatter::with_indent(b" "));
         objects.serialize(&mut ser).map_err(std::io::Error::other)?;
         let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
         write_private(&tmp, &bytes)?;
@@ -203,12 +206,12 @@ pub mod tests {
     #[test]
     fn merge_bumps_only_on_change() {
         let s = temp_store();
-        let (o, changed) = s.merge("device.S", &fields!{"t" => 20.0}, 0, 0, true);
+        let (o, changed) = s.merge("device.S", &fields! {"t" => 20.0}, 0, 0, true);
         assert!(changed && o.revision == 1 && o.timestamp > 0);
         // 20 and 20.0 are the same value: nothing changes.
-        let (o, changed) = s.merge("device.S", &fields!{"t" => 20}, 0, 0, true);
+        let (o, changed) = s.merge("device.S", &fields! {"t" => 20}, 0, 0, true);
         assert!(!changed && o.revision == 1);
-        let (o, changed) = s.merge("device.S", &fields!{"t" => 21}, 7, 1234, true);
+        let (o, changed) = s.merge("device.S", &fields! {"t" => 21}, 7, 1234, true);
         assert!(changed && o.revision == 7 && o.timestamp == 1234 && o.value["t"] == json!(21));
     }
 
@@ -216,16 +219,16 @@ pub mod tests {
     fn only_server_side_changes_wake_subscribes() {
         let s = temp_store();
         let (mut rx, _sub) = s.subscribe();
-        s.merge("device.S", &fields!{"a" => 1}, 0, 0, true);
+        s.merge("device.S", &fields! {"a" => 1}, 0, 0, true);
         assert!(rx.try_recv().is_err());
-        s.merge("device.S", &fields!{"a" => 2}, 0, 0, false);
+        s.merge("device.S", &fields! {"a" => 2}, 0, 0, false);
         assert_eq!(rx.try_recv().unwrap()[0].value["a"], json!(2));
     }
 
     #[test]
     fn file_round_trip() {
         let s = temp_store();
-        s.merge("device.S", &fields!{"t" => 19.5, "on" => true}, 3, 99, true);
+        s.merge("device.S", &fields! {"t" => 19.5, "on" => true}, 3, 99, true);
         s.write(&s.all()).unwrap();
         let text = std::fs::read_to_string(&s.path).unwrap();
         assert!(text.starts_with("[\n {\n  \"object_key\": \"device.S\",\n  \"object_revision\": 3,"), "{text}");
@@ -249,8 +252,10 @@ pub mod tests {
             (r#"[{"object_key":"device.S","object_revision":2,"object_timestamp":5,"value":{"t":20}}"#, None), // cut short
             // Missing fields default; a value that is no object reads as empty.
             (r#"[{"object_key":"device.S","value":[1]},{"object_key":"shared.S"}]"#, Some((0, 0, 0))),
-            (r#"[{"object_key":"device.S","object_revision":2,"object_timestamp":5,"value":{"t":20.0,"a":{"b":1.0}}}]"#,
-             Some((2, 5, 2))),
+            (
+                r#"[{"object_key":"device.S","object_revision":2,"object_timestamp":5,"value":{"t":20.0,"a":{"b":1.0}}}]"#,
+                Some((2, 5, 2)),
+            ),
         ] {
             std::fs::write(&path, text).unwrap();
             let s = Store::new(path.clone());
@@ -263,15 +268,15 @@ pub mod tests {
         }
         // Numbers are in canonical form once loaded: 20.0 merges over as 20.
         let s = Store::new(path);
-        assert!(!s.merge("device.S", &fields!{"t" => 20}, 0, 0, true).1);
+        assert!(!s.merge("device.S", &fields! {"t" => 20}, 0, 0, true).1);
         assert_eq!(s.get("device.S").unwrap().value["a"].to_string(), r#"{"b":1}"#);
     }
 
     #[test]
     fn merge_keeps_fields_it_is_not_given() {
         let s = temp_store();
-        s.merge("device.S", &fields!{"a" => 1, "b" => 2}, 0, 0, true);
-        let (o, changed) = s.merge("device.S", &fields!{"b" => 3, "c" => Value::Null}, 0, 0, true);
+        s.merge("device.S", &fields! {"a" => 1, "b" => 2}, 0, 0, true);
+        let (o, changed) = s.merge("device.S", &fields! {"b" => 3, "c" => Value::Null}, 0, 0, true);
         assert!(changed && o.revision == 2);
         assert_eq!(Value::Object(o.value), json!({"a": 1, "b": 3, "c": null}));
         // An empty merge creates a bucket, but changes an existing one not at all.
@@ -288,9 +293,9 @@ pub mod tests {
         s.watch(move |o| record.lock().unwrap().push((o.key.clone(), o.revision)));
         let (_rx, sub) = s.subscribe();
         let (mut rx2, _sub2) = s.subscribe();
-        s.merge("device.S", &fields!{"a" => 1}, 0, 0, true);
-        s.merge("device.S", &fields!{"a" => 1}, 0, 0, false); // no change: nobody hears
-        s.merge("shared.S", &fields!{"b" => 1}, 0, 0, false);
+        s.merge("device.S", &fields! {"a" => 1}, 0, 0, true);
+        s.merge("device.S", &fields! {"a" => 1}, 0, 0, false); // no change: nobody hears
+        s.merge("shared.S", &fields! {"b" => 1}, 0, 0, false);
         assert_eq!(*seen.lock().unwrap(), vec![("device.S".to_string(), 1), ("shared.S".to_string(), 1)]);
         assert_eq!(rx2.try_recv().unwrap()[0].key, "shared.S");
         assert!(rx2.try_recv().is_err());

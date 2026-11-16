@@ -91,7 +91,9 @@ pub fn current() -> &'static Device {
 
 /// Whether the kernel's command line names a gen 1's model.
 fn gen1(cmdline: &str) -> bool {
-    cmdline.split_whitespace().any(|arg| arg.strip_prefix("nlmodel=Diamond-1").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+    cmdline
+        .split_whitespace()
+        .any(|arg| arg.strip_prefix("nlmodel=Diamond-1").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
 }
 
 /// This unit's 802.15.4 radio.
@@ -120,7 +122,9 @@ mod tests {
         let wanted: u16 = makefile.lines().find_map(|l| l.strip_prefix("VERSION = ")).unwrap().trim().parse().unwrap();
         for device in [&diamond3::DEVICE, &j49::DEVICE] {
             let radio = device.radio.as_ref().unwrap();
-            let version = radio.zigbee_image.get(radio.version_at..radio.version_at + 2)
+            let version = radio
+                .zigbee_image
+                .get(radio.version_at..radio.version_at + 2)
                 .map(|b| u16::from_le_bytes([b[0], b[1]]));
             assert_eq!(version, (!radio.zigbee_image.is_empty()).then_some(wanted), "{}", device.name);
         }

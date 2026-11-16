@@ -6,8 +6,8 @@
 #define COEXISTENCE_802154_H
 
 typedef enum {
-  PTA_STACK_EVENT_RX_IDLED,
-  PTA_STACK_EVENT_RX_LISTEN,
+    PTA_STACK_EVENT_RX_IDLED,
+    PTA_STACK_EVENT_RX_LISTEN,
 } halPtaStackEvent_t;
 
 EmberStatus halPtaStackEvent(halPtaStackEvent_t event, uint32_t supplement);

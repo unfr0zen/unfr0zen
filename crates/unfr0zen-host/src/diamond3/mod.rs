@@ -11,11 +11,11 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use unfr0zen_core::bundle::Settings;
 use unfr0zen_core::console::UBoot;
 use unfr0zen_core::diamond3::fastboot::Protocol;
-use unfr0zen_core::initramfs;
 use unfr0zen_core::diamond3::recovery::Recovery;
-use unfr0zen_core::bundle::Settings;
+use unfr0zen_core::initramfs;
 use unfr0zen_core::setup;
 use unfr0zen_core::shell::InitramfsShell;
 use unfr0zen_core::{Error, Result};
@@ -24,8 +24,8 @@ use crate::device::{CancelFlag, Device, Unit, HOLD_BUTTON, WAIT_USB_BOOT_STAGE};
 use crate::flow::{failure, private_dir, seconds, start_log, stored_pki, Config, HandBack};
 use crate::progress::{stage, Phase, Progress};
 use crate::usb::{open_acm, verify_shell, Id, Pipe, Port};
-use usb::Mode;
 pub(crate) use usb::EntryPoint;
+use usb::Mode;
 
 /// The boot wrapper's watchdog while recovery runs.
 pub(crate) const WATCHDOG_SECONDS: u32 = 128;
@@ -33,24 +33,36 @@ pub(crate) const WATCHDOG_SECONDS: u32 = 128;
 pub(crate) type Board = Recovery<Port, Protocol<Pipe>>;
 
 pub(crate) fn connect_recovery(progress: &mut dyn Progress, port: &str) -> Result<Board> {
-    connect_with_retry(progress, || {
-        let console = UBoot::connect(open_acm(usb::RECOVERY, seconds(45))?, seconds(20))?;
-        Ok(Recovery::new(console, usb::open_fastboot(port)?))
-    }, || {
-        let (_, id) = usb::wait_device(&[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs], seconds(10), Some(port), &Default::default())?;
-        if id == usb::SDP {
-            usb::load_recovery(WATCHDOG_SECONDS, EntryPoint::Auto)?;
-            usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default())?;
-        } else if id != usb::RECOVERY {
-            return Err(failure(format!("the unit restarted in {} mode", usb::mode(id).unwrap().name())));
-        }
-        Ok(())
-    })
+    connect_with_retry(
+        progress,
+        || {
+            let console = UBoot::connect(open_acm(usb::RECOVERY, seconds(45))?, seconds(20))?;
+            Ok(Recovery::new(console, usb::open_fastboot(port)?))
+        },
+        || {
+            let (_, id) = usb::wait_device(
+                &[Mode::Recovery, Mode::Sdp, Mode::App, Mode::Initramfs],
+                seconds(10),
+                Some(port),
+                &Default::default(),
+            )?;
+            if id == usb::SDP {
+                usb::load_recovery(WATCHDOG_SECONDS, EntryPoint::Auto)?;
+                usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default())?;
+            } else if id != usb::RECOVERY {
+                return Err(failure(format!("the unit restarted in {} mode", usb::mode(id).unwrap().name())));
+            }
+            Ok(())
+        },
+    )
 }
 
 /// Only establishing the connection is retried; no operation on NAND is replayed.
-fn connect_with_retry<T>(progress: &mut dyn Progress, mut connect: impl FnMut() -> Result<T>,
-                         mut reconnect: impl FnMut() -> Result<()>) -> Result<T> {
+fn connect_with_retry<T>(
+    progress: &mut dyn Progress,
+    mut connect: impl FnMut() -> Result<T>,
+    mut reconnect: impl FnMut() -> Result<()>,
+) -> Result<T> {
     stage(progress, "Connect to recovery console", || {
         for attempt in 1..=3 {
             log::info!("Recovery connection attempt {attempt}/3");
@@ -81,13 +93,20 @@ fn load_recovery(progress: &mut dyn Progress, port: &str, entry_point: EntryPoin
     if let Some(chip) = stage(progress, "Load recovery U-Boot", || usb::load_recovery(WATCHDOG_SECONDS, entry_point))? {
         progress.device(&format!("{}: {chip}", Device::Diamond3.description()));
     }
-    stage(progress, "Wait for recovery USB", || usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default()))
+    stage(progress, "Wait for recovery USB", || {
+        usb::wait_device(&[Mode::Recovery], seconds(45), Some(port), &Default::default())
+    })
 }
 
 /// Brings the unit from whatever mode it is in to SDP or recovery, or leaves
 /// it in the application firmware with `stop_at_app`: (port, identity).
-pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at_app: bool, unit: Unit,
-                        cancel: &CancelFlag) -> Result<(String, Id)> {
+pub(crate) fn find_unit(
+    progress: &mut dyn Progress,
+    wait_usb: Duration,
+    stop_at_app: bool,
+    unit: Unit,
+    cancel: &CancelFlag,
+) -> Result<(String, Id)> {
     let Unit { device, mut port, mut id } = unit;
     if device == Device::Onyx {
         return Err(crate::onyx::unsupported(progress));
@@ -105,13 +124,19 @@ pub(crate) fn find_unit(progress: &mut dyn Progress, wait_usb: Duration, stop_at
     }
     if usb::mode(id) == Some(Mode::App) && !stop_at_app {
         progress.waiting(HOLD_BUTTON);
-        (port, id) = stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device(&[Mode::Sdp], wait_usb, Some(&port), cancel))?;
+        (port, id) =
+            stage(progress, WAIT_USB_BOOT_STAGE, || usb::wait_device(&[Mode::Sdp], wait_usb, Some(&port), cancel))?;
     }
     Ok((port, id))
 }
 
 /// From what find_unit reached to recovery U-Boot: its port.
-pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id, entry_point: EntryPoint) -> Result<String> {
+pub(crate) fn reach_recovery(
+    progress: &mut dyn Progress,
+    port: String,
+    id: Id,
+    entry_point: EntryPoint,
+) -> Result<String> {
     let (port, id) = if id == usb::SDP { load_recovery(progress, &port, entry_point)? } else { (port, id) };
     if id != usb::RECOVERY {
         return Err(failure("recovery U-Boot did not enumerate"));
@@ -123,8 +148,13 @@ pub(crate) fn reach_recovery(progress: &mut dyn Progress, port: String, id: Id, 
 /// shell, writing run records under `work_dir` and the timestamped run log.
 /// With `backup`, the whole NAND is backed up there first, from the same
 /// recovery U-Boot. Returns the final status line.
-pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
-                  cancel: &CancelFlag, backup: Option<&Path>) -> Result<String> {
+pub(crate) fn run(
+    config: &Config,
+    progress: &mut dyn Progress,
+    unit: Unit,
+    cancel: &CancelFlag,
+    backup: Option<&Path>,
+) -> Result<String> {
     let (port, id) = find_unit(progress, config.wait_usb, false, unit, cancel)?;
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let run_dir = config.work_dir.join(&stamp);
@@ -147,8 +177,9 @@ pub(crate) fn run(config: &Config, progress: &mut dyn Progress, unit: Unit,
 /// From recovery U-Boot to the confirmed root shell.
 fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &str, run_dir: &Path) -> Result<String> {
     let options = &setup::Options {
-        thread: config.options.thread.as_ref()
-            .map(|thread| crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)),
+        thread: config.options.thread.as_ref().map(|thread| {
+            crate::assets::with_thread_radio(thread, assets::THREAD_RADIO, assets::THREAD_RADIO_IDENTITY)
+        }),
         ..config.options.clone()
     };
     progress.phase(Phase::Check);
@@ -165,8 +196,12 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     // fastboot; unfr0zen-apply sets up the volume from them on the unit.
     progress.phase(Phase::Prepare);
     let initramfs = stage(progress, "Build the setup bundle and the initramfs", || -> Result<Vec<u8>> {
-        let nestlocal = options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some()
-            || options.theme.is_some() || options.external_temperature;
+        let nestlocal = options.mqtt.is_some()
+            || options.matter.is_some()
+            || options.zigbee
+            || options.doom.is_some()
+            || options.theme.is_some()
+            || options.external_temperature;
         let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
         let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");
         let files = crate::initramfs::files(Device::Diamond3, &options.version, settings)?;
@@ -175,14 +210,19 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         Ok(image)
     })?;
     let (length, _) = stage(progress, "Upload the initramfs to RAM", || board.stage(&initramfs))?;
-    stage(progress, &format!("Boot the {slot} kernel with the initramfs"), || board.boot_initramfs(slot, &environment, length))?;
+    stage(progress, &format!("Boot the {slot} kernel with the initramfs"), || {
+        board.boot_initramfs(slot, &environment, length)
+    })?;
 
     let (port, mut shell) = stage(progress, "Wait for the initramfs USB shell", || {
-        let (port, id) = usb::wait_device(&[Mode::Initramfs, Mode::Sdp, Mode::App], seconds(120), Some(port), &Default::default())?;
+        let (port, id) =
+            usb::wait_device(&[Mode::Initramfs, Mode::Sdp, Mode::App], seconds(120), Some(port), &Default::default())?;
         if id != usb::INITRAMFS {
             let mode = usb::mode(id).map_or("unknown", Mode::name);
-            return Err(failure(format!("the unit came back in {mode} mode, not the initramfs shell; {slot} is \
-                                        unchanged. The kernel UART (ttymxc0) shows why")));
+            return Err(failure(format!(
+                "the unit came back in {mode} mode, not the initramfs shell; {slot} is \
+                                        unchanged. The kernel UART (ttymxc0) shows why"
+            )));
         }
         let shell = InitramfsShell::connect(open_acm(usb::INITRAMFS, seconds(45))?, seconds(30))?;
         Ok((port, shell))
@@ -193,12 +233,16 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
         log::info!("Firmware {firmware} (kernel release {release})");
     }
     progress.phase(Phase::SetUp);
-    let changes = stage(progress, &format!("Set up {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, Device::Diamond3))?;
+    let changes = stage(progress, &format!("Set up {slot} on the unit"), || {
+        crate::initramfs::apply(&mut shell, run_dir, Device::Diamond3)
+    })?;
     fs::write(run_dir.join("initramfs-changes.txt"), changes)?;
     progress.phase(Phase::Restart);
     shell.restart()?;
 
-    let (port, id) = stage(progress, "Wait for the unit to restart", || usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default()))?;
+    let (port, id) = stage(progress, "Wait for the unit to restart", || {
+        usb::wait_device(&[Mode::App, Mode::Sdp], seconds(180), Some(&port), &Default::default())
+    })?;
     if id == usb::SDP {
         let (port, _) = load_recovery(progress, &port, config.entry_point)?;
         let mut board = connect_recovery(progress, &port)?;
@@ -219,8 +263,10 @@ fn route(progress: &mut dyn Progress, config: &Config, mut board: Board, port: &
     }
     Ok(match shell {
         Some(name) => format!("Root shell confirmed on {name} (UID 0)"),
-        None if id == usb::SDP => format!("Set up {slot}; the unit was started from its stock U-Boot. Its boot is not \
-                                           confirmed: the USB root shell is off"),
+        None if id == usb::SDP => format!(
+            "Set up {slot}; the unit was started from its stock U-Boot. Its boot is not \
+                                           confirmed: the USB root shell is off"
+        ),
         None => format!("Set up {slot}; the unit booted back to its app"),
     })
 }
@@ -234,23 +280,37 @@ mod tests {
 
     impl Progress for ProgressLog {
         fn begin(&mut self, _: &str) {}
-        fn end(&mut self, _: &str, _: Duration, ok: bool) { self.0.push(ok); }
-        fn status(&mut self, _: &str) { panic!("connection retries must only be logged"); }
-        fn waiting(&mut self, _: &str) { panic!("connection retries must only be logged"); }
+        fn end(&mut self, _: &str, _: Duration, ok: bool) {
+            self.0.push(ok);
+        }
+        fn status(&mut self, _: &str) {
+            panic!("connection retries must only be logged");
+        }
+        fn waiting(&mut self, _: &str) {
+            panic!("connection retries must only be logged");
+        }
     }
 
     #[test]
     fn a_dropped_connection_can_succeed_on_retry() {
         let mut progress = ProgressLog::default();
         let (mut attempts, mut reconnects) = (0, 0);
-        let board = connect_with_retry(&mut progress, || {
-            attempts += 1;
-            match attempts {
-                1 => Err(Error::Io("Broken pipe".into())),
-                2 => Err(Error::Timeout("no prompt".into())),
-                _ => Ok("connected"),
-            }
-        }, || { reconnects += 1; Ok(()) }).unwrap();
+        let board = connect_with_retry(
+            &mut progress,
+            || {
+                attempts += 1;
+                match attempts {
+                    1 => Err(Error::Io("Broken pipe".into())),
+                    2 => Err(Error::Timeout("no prompt".into())),
+                    _ => Ok("connected"),
+                }
+            },
+            || {
+                reconnects += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
         assert_eq!(board, "connected");
         assert_eq!((attempts, reconnects), (3, 2));
         assert_eq!(progress.0, [true]);
@@ -259,10 +319,17 @@ mod tests {
     #[test]
     fn connection_retries_stop_after_three_attempts() {
         let (mut attempts, mut reconnects) = (0, 0);
-        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
-            attempts += 1;
-            Err(Error::Io("Broken pipe".into()))
-        }, || { reconnects += 1; Ok(()) });
+        let result: Result<()> = connect_with_retry(
+            &mut ProgressLog::default(),
+            || {
+                attempts += 1;
+                Err(Error::Io("Broken pipe".into()))
+            },
+            || {
+                reconnects += 1;
+                Ok(())
+            },
+        );
         assert!(matches!(result, Err(Error::Io(_))));
         assert_eq!((attempts, reconnects), (3, 2));
     }
@@ -270,10 +337,14 @@ mod tests {
     #[test]
     fn an_absent_device_stops_retries_and_keeps_the_original_error() {
         let mut attempts = 0;
-        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
-            attempts += 1;
-            Err(Error::Io("Broken pipe".into()))
-        }, || Err(Error::Timeout("USB device absent".into())));
+        let result: Result<()> = connect_with_retry(
+            &mut ProgressLog::default(),
+            || {
+                attempts += 1;
+                Err(Error::Io("Broken pipe".into()))
+            },
+            || Err(Error::Timeout("USB device absent".into())),
+        );
         let error = result.unwrap_err().to_string();
         assert!(error.contains("Broken pipe") && error.contains("USB device absent"), "{error}");
         assert_eq!(attempts, 1);
@@ -281,9 +352,11 @@ mod tests {
 
     #[test]
     fn device_errors_are_not_retried() {
-        let result: Result<()> = connect_with_retry(&mut ProgressLog::default(), || {
-            Err(Error::Device("invalid interface".into()))
-        }, || panic!("device errors must not reconnect"));
+        let result: Result<()> = connect_with_retry(
+            &mut ProgressLog::default(),
+            || Err(Error::Device("invalid interface".into())),
+            || panic!("device errors must not reconnect"),
+        );
         assert!(matches!(result, Err(Error::Device(_))));
     }
 }

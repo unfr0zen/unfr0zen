@@ -33,8 +33,21 @@ pub fn cpio(entries: &[Entry]) -> Vec<u8> {
     let mut output = Vec::new();
     for (inode, entry) in entries.iter().chain([&trailer]).enumerate() {
         let name_size = entry.name.len() + 1;
-        let fields = [inode as u32 + 1, entry.mode, 0, 0, 1, 0, entry.data.len() as u32, 0, 0,
-                      entry.rdev.0, entry.rdev.1, name_size as u32, 0];
+        let fields = [
+            inode as u32 + 1,
+            entry.mode,
+            0,
+            0,
+            1,
+            0,
+            entry.data.len() as u32,
+            0,
+            0,
+            entry.rdev.0,
+            entry.rdev.1,
+            name_size as u32,
+            0,
+        ];
         output.extend_from_slice(b"070701");
         for field in fields {
             output.extend_from_slice(format!("{field:08x}").as_bytes());
@@ -50,8 +63,10 @@ pub fn cpio(entries: &[Entry]) -> Vec<u8> {
 
 /// The gzipped initramfs. files: {name: contents}, each as /name.
 pub fn build(busybox: &[u8], init: &[u8], files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
-    let mut entries: Vec<Entry> = ["bin", "dev", "lib", "mnt", "proc", "sys"].iter()
-        .map(|name| Entry::new(name, DIRECTORY | 0o755, b"")).collect();
+    let mut entries: Vec<Entry> = ["bin", "dev", "lib", "mnt", "proc", "sys"]
+        .iter()
+        .map(|name| Entry::new(name, DIRECTORY | 0o755, b""))
+        .collect();
     // The kernel opens /dev/console for /init before devtmpfs is mounted.
     entries.push(Entry { rdev: (5, 1), ..Entry::new("dev/console", CHARACTER | 0o600, b"") });
     entries.push(Entry::new("bin/busybox", REGULAR | 0o755, busybox));
@@ -77,10 +92,13 @@ mod tests {
         let mut found = BTreeMap::new();
         let mut offset = 0;
         loop {
-            let field = |i: usize| u32::from_str_radix(
-                std::str::from_utf8(&archive[offset + 6 + i * 8..offset + 14 + i * 8]).unwrap(), 16).unwrap();
+            let field = |i: usize| {
+                u32::from_str_radix(std::str::from_utf8(&archive[offset + 6 + i * 8..offset + 14 + i * 8]).unwrap(), 16)
+                    .unwrap()
+            };
             assert_eq!(&archive[offset..offset + 6], b"070701");
-            let (mode, size, rdev, name_size) = (field(1), field(6) as usize, (field(9), field(10)), field(11) as usize);
+            let (mode, size, rdev, name_size) =
+                (field(1), field(6) as usize, (field(9), field(10)), field(11) as usize);
             let name = String::from_utf8(archive[offset + 110..offset + 110 + name_size - 1].to_vec()).unwrap();
             offset = (offset + 110 + name_size).next_multiple_of(4);
             let data = archive[offset..offset + size].to_vec();

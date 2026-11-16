@@ -112,10 +112,15 @@ impl Map {
     /// A small part shows in any cell that holds a block of it; a large one by
     /// which has most.
     fn shown_block(&self, slots: &[Slot]) -> Option<usize> {
-        let with = |kind: Kind| slots.iter().filter_map(|slot| slot.block)
-            .filter(move |&b| self.blocks[b] == Block::Data && self.kind_of(b) == kind);
+        let with = |kind: Kind| {
+            slots
+                .iter()
+                .filter_map(|slot| slot.block)
+                .filter(move |&b| self.blocks[b] == Block::Data && self.kind_of(b) == kind)
+        };
         [Kind::Env, Kind::SystemConfig, Kind::Uboot].into_iter().find_map(|kind| with(kind).next()).or_else(|| {
-            [Kind::Root0, Kind::Root1, Kind::Other].into_iter()
+            [Kind::Root0, Kind::Root1, Kind::Other]
+                .into_iter()
                 .filter_map(|kind| with(kind).next().map(|block| (with(kind).count(), block)))
                 .reduce(|most, next| if next.0 > most.0 { next } else { most })
                 .map(|(_, block)| block)
@@ -144,21 +149,28 @@ fn diamond3_layout(ubi: Option<(usize, usize)>, total: usize) -> (Vec<Partition>
     let Some((first, last)) = ubi else {
         return laid_out(Vec::new(), total);
     };
-    laid_out(vec![
-        ("U-Boot", Kind::Uboot, 0..first),
-        ("ubipart", Kind::Other, first..last + 1),
-        ("oopsdata", Kind::Other, last + 1..total),
-    ], total)
+    laid_out(
+        vec![
+            ("U-Boot", Kind::Uboot, 0..first),
+            ("ubipart", Kind::Other, first..last + 1),
+            ("oopsdata", Kind::Other, last + 1..total),
+        ],
+        total,
+    )
 }
 
 /// The gen 1 and 2 layout: the table in the image's own kernel. Without one
 /// there is nothing to tell the parts apart by.
 fn omap_layout(table: Option<Vec<j49::mtd::Partition>>, total: usize) -> (Vec<Partition>, Vec<Option<usize>>) {
     let block = j49::nand::BLOCK;
-    let layout: Vec<_> = table.iter().flatten().map(|part| {
-        let end = part.size.map_or(total, |size| (part.offset + size) / block);
-        (part.name.as_str(), part_kind(&part.name), part.offset / block..end)
-    }).collect();
+    let layout: Vec<_> = table
+        .iter()
+        .flatten()
+        .map(|part| {
+            let end = part.size.map_or(total, |size| (part.offset + size) / block);
+            (part.name.as_str(), part_kind(&part.name), part.offset / block..end)
+        })
+        .collect();
     laid_out(layout, total)
 }
 
@@ -199,13 +211,15 @@ fn ubi_volume_table(block: &[u8]) -> Vec<(u32, (String, usize))> {
     let Some(table) = be32(block, 20).and_then(|offset| block.get(offset as usize..)) else {
         return Vec::new();
     };
-    (0..UBI_TABLE_RECORDS).filter_map(|volume| {
-        let record = table.get(volume * UBI_TABLE_RECORD..(volume + 1) * UBI_TABLE_RECORD)?;
-        let len = u16::from_be_bytes([record[14], record[15]]) as usize;
-        let name = record.get(16..16 + len).filter(|_| (1..128).contains(&len))?;
-        let reserved = be32(record, 0)? as usize;
-        Some((volume as u32, (String::from_utf8_lossy(name).into_owned(), reserved)))
-    }).collect()
+    (0..UBI_TABLE_RECORDS)
+        .filter_map(|volume| {
+            let record = table.get(volume * UBI_TABLE_RECORD..(volume + 1) * UBI_TABLE_RECORD)?;
+            let len = u16::from_be_bytes([record[14], record[15]]) as usize;
+            let name = record.get(16..16 + len).filter(|_| (1..128).contains(&len))?;
+            let reserved = be32(record, 0)? as usize;
+            Some((volume as u32, (String::from_utf8_lossy(name).into_owned(), reserved)))
+        })
+        .collect()
 }
 
 /// What a partition or a UBI volume holds, by its name.
@@ -227,11 +241,14 @@ pub fn read(path: &Path, device: Device) -> std::io::Result<Map> {
         _ => j49::nand::BLOCK_RAW,
     };
     let total = std::fs::metadata(path)?.len() as usize / raw_block;
-    let listed = (device == Device::Diamond3).then(|| nand::read_bad_blocks(&nand::bad_blocks_path(path)))
-        .transpose().unwrap_or_else(|e| {
+    let listed = (device == Device::Diamond3)
+        .then(|| nand::read_bad_blocks(&nand::bad_blocks_path(path)))
+        .transpose()
+        .unwrap_or_else(|e| {
             log::warn!("{e}");
             None
-        }).flatten();
+        })
+        .flatten();
     scan(BufReader::with_capacity(raw_block * 8, File::open(path)?), total, device, listed.as_deref())
 }
 
@@ -240,10 +257,17 @@ type BlockTest = fn(&[u8]) -> bool;
 /// `listed`: the offsets of the blocks a gen 3 image's list names as bad.
 fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u32]>) -> std::io::Result<Map> {
     let (raw_block, block_size, bad, erased): (usize, usize, BlockTest, BlockTest) = match device {
-        Device::Diamond3 => (diamond3::nand::BLOCK as usize, diamond3::nand::BLOCK as usize, |_| false, |block| block.iter().all(|&b| b == 0xff)),
+        Device::Diamond3 => (
+            diamond3::nand::BLOCK as usize,
+            diamond3::nand::BLOCK as usize,
+            |_| false,
+            |block| block.iter().all(|&b| b == 0xff),
+        ),
         // A file system marks a block it erased in the spare bytes, which
         // leaves it holding nothing.
-        _ => (j49::nand::BLOCK_RAW, j49::nand::BLOCK, j49::nand::factory_bad, |block| block.chunks(j49::nand::PAGE_RAW).all(j49::nand::erased)),
+        _ => (j49::nand::BLOCK_RAW, j49::nand::BLOCK, j49::nand::factory_bad, |block| {
+            block.chunks(j49::nand::PAGE_RAW).all(j49::nand::erased)
+        }),
     };
     let mut table = j49::mtd::TableFinder::default();
     // Volumes take their blocks from the UBI partition in any order, and their
@@ -305,7 +329,9 @@ fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u3
         Some((first, last)) => {
             let ids: BTreeSet<u32> = table_of_volumes.keys().copied().chain(written.iter().map(|w| w.1)).collect();
             // The partition's own blocks UBI does not know, kept on the grid.
-            let foreign: Vec<usize> = (first..=last).filter(|&block| blocks[block] != Block::Erased && !written.iter().any(|w| w.0 == block)).collect();
+            let foreign: Vec<usize> = (first..=last)
+                .filter(|&block| blocks[block] != Block::Erased && !written.iter().any(|w| w.0 == block))
+                .collect();
             let mut slots = chip_order(0..first, &owners);
             let start = slots.len();
             for id in ids {
@@ -331,13 +357,24 @@ fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u3
             slots.extend(foreign.iter().map(|&block| Slot { block: Some(block), owner: owners[block] }));
             // What no volume reserves, to the partition's size.
             let used = slots.len() - start;
-            slots.extend(std::iter::repeat_n(Slot { block: None, owner: None }, (last + 1 - first).saturating_sub(used)));
+            slots.extend(std::iter::repeat_n(
+                Slot { block: None, owner: None },
+                (last + 1 - first).saturating_sub(used),
+            ));
             slots.extend(chip_order(last + 1..total, &owners));
             slots
         }
     };
     let by_volume = ubi.is_some();
-    Ok(Map { blocks, partitions, owners, slots, by_volume, block_size, shows_bad: device != Device::Diamond3 || listed.is_some() })
+    Ok(Map {
+        blocks,
+        partitions,
+        owners,
+        slots,
+        by_volume,
+        block_size,
+        shows_bad: device != Device::Diamond3 || listed.is_some(),
+    })
 }
 
 /// Maps read so far, and the ones being read.
@@ -360,7 +397,9 @@ impl Maps {
             let (done, path, ctx) = (self.done.clone(), path.to_path_buf(), ctx.clone());
             thread::spawn(move || {
                 match read(&path, device) {
-                    Ok(map) => { done.lock().unwrap().insert(path, Arc::new(map)); }
+                    Ok(map) => {
+                        done.lock().unwrap().insert(path, Arc::new(map));
+                    }
                     Err(e) => log::warn!("{}: {e}", path.display()),
                 }
                 ctx.request_repaint();
@@ -416,7 +455,9 @@ fn cell_color(map: &Map, group: &[Slot], colors: Colors) -> egui::Color32 {
     let share = holds(Block::Data) as f32 / group.len() as f32;
     match map.shown_block(group) {
         Some(block) => colors.of(map.kind_of(block)).gamma_multiply(USED_SHADE + (1.0 - USED_SHADE) * share),
-        None => group.iter().find_map(|slot| map.partitions.get(slot.owner?))
+        None => group
+            .iter()
+            .find_map(|slot| map.partitions.get(slot.owner?))
             .map_or(colors.erased, |partition| colors.of(partition.kind).gamma_multiply(EMPTY_SHADE)),
     }
 }
@@ -430,8 +471,8 @@ pub fn draw(ui: &mut egui::Ui, map: &Map, colors: Colors) {
     let rows = cells.div_ceil(COLUMNS);
     let ppp = ui.pixels_per_point();
     let (side, gap) = geometry(ppp);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(width(ppp), rows as f32 * (side + gap) - gap), egui::Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width(ppp), rows as f32 * (side + gap) - gap), egui::Sense::hover());
     // The grid's origin on a pixel, so every cell edge is.
     let origin = egui::pos2((rect.min.x * ppp).round() / ppp, (rect.min.y * ppp).round() / ppp);
     let painter = ui.painter();
@@ -450,10 +491,19 @@ pub fn draw(ui: &mut egui::Ui, map: &Map, colors: Colors) {
             let text = match map.shown_block(group) {
                 Some(block) => {
                     let name = map.partition_of(block).map_or("", |p| p.name.as_str());
-                    crate::tr!("nand.block_hint", name = name, block = block, offset = format!("{:.1}", (block * map.block_size) as f64 / MIB as f64))
+                    crate::tr!(
+                        "nand.block_hint",
+                        name = name,
+                        block = block,
+                        offset = format!("{:.1}", (block * map.block_size) as f64 / MIB as f64)
+                    )
                 }
-                None => group.iter().find_map(|slot| map.partitions.get(slot.owner?))
-                    .map_or(crate::tr!("nand.free").to_string(), |partition| crate::tr!("nand.empty_partition", name = partition.name)),
+                None => group
+                    .iter()
+                    .find_map(|slot| map.partitions.get(slot.owner?))
+                    .map_or(crate::tr!("nand.free").to_string(), |partition| {
+                        crate::tr!("nand.empty_partition", name = partition.name)
+                    }),
             };
             response.on_hover_text(text);
         }
@@ -493,22 +543,38 @@ const LEGEND_ROW: f32 = 13.0;
 /// What the map's colours mean: in rows of three columns, each item in its
 /// column so the rows line up.
 pub fn legend(ui: &mut egui::Ui, map: &Map, colors: Colors) {
-    let items: Vec<(&str, egui::Color32)> = Kind::ALL.into_iter().map(|kind| (kind.label(), colors.of(kind)))
+    let items: Vec<(&str, egui::Color32)> = Kind::ALL
+        .into_iter()
+        .map(|kind| (kind.label(), colors.of(kind)))
         .chain([(crate::tr!("nand.erased"), colors.erased)])
-        .chain(map.shows_bad.then_some((crate::tr!("nand.bad"), colors.bad))).collect();
+        .chain(map.shows_bad.then_some((crate::tr!("nand.bad"), colors.bad)))
+        .collect();
     let rows = items.len().div_ceil(LEGEND_COLUMNS);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), (rows + usize::from(map.by_volume)) as f32 * LEGEND_ROW), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), (rows + usize::from(map.by_volume)) as f32 * LEGEND_ROW),
+        egui::Sense::hover(),
+    );
     if map.by_volume {
-        ui.painter().text(rect.left_bottom() - egui::vec2(0.0, 0.5 * LEGEND_ROW), egui::Align2::LEFT_CENTER, crate::tr!("nand.volume_order_hint"),
-                          egui::FontId::proportional(10.5), crate::DIM);
+        ui.painter().text(
+            rect.left_bottom() - egui::vec2(0.0, 0.5 * LEGEND_ROW),
+            egui::Align2::LEFT_CENTER,
+            crate::tr!("nand.volume_order_hint"),
+            egui::FontId::proportional(10.5),
+            crate::DIM,
+        );
     }
     for (index, (name, color)) in items.iter().enumerate() {
         let (col, row) = (index % LEGEND_COLUMNS, index / LEGEND_COLUMNS);
         let left = rect.left_top() + egui::vec2(col as f32 * LEGEND_COLUMN, (row as f32 + 0.5) * LEGEND_ROW);
         let swatch = egui::Rect::from_center_size(left + egui::vec2(4.0, 0.0), egui::vec2(8.0, 8.0));
         ui.painter().rect_filled(swatch, 2.0, *color);
-        ui.painter().text(left + egui::vec2(13.0, 0.0), egui::Align2::LEFT_CENTER, *name,
-                          egui::FontId::proportional(10.5), crate::MUTED);
+        ui.painter().text(
+            left + egui::vec2(13.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            *name,
+            egui::FontId::proportional(10.5),
+            crate::MUTED,
+        );
     }
 }
 
@@ -585,7 +651,8 @@ mod tests {
 
     #[test]
     fn only_a_gen2_image_counts_bad_blocks() {
-        let gen3 = scan(std::io::Cursor::new(vec![0xffu8; diamond3::nand::BLOCK as usize]), 1, Device::Diamond3, None).unwrap();
+        let gen3 = scan(std::io::Cursor::new(vec![0xffu8; diamond3::nand::BLOCK as usize]), 1, Device::Diamond3, None)
+            .unwrap();
         assert_eq!(gen3.summary(), format!("{} used", crate::backups::size_label(0)));
         let gen2 = scan(std::io::Cursor::new(vec![0xffu8; j49::nand::BLOCK_RAW]), 1, Device::J49, None).unwrap();
         assert_eq!(gen2.summary(), format!("{} used · 0 bad blocks", crate::backups::size_label(0)));
@@ -637,14 +704,43 @@ mod tests {
     #[test]
     fn a_gen2_kernels_table_names_the_blocks_it_covers() {
         let block = j49::nand::BLOCK;
-        let part = |name: &str, first: usize, blocks: usize| j49::mtd::Partition { name: name.into(), offset: first * block, size: Some(blocks * block) };
+        let part = |name: &str, first: usize, blocks: usize| j49::mtd::Partition {
+            name: name.into(),
+            offset: first * block,
+            size: Some(blocks * block),
+        };
         let whole = j49::mtd::Partition { name: "nand0".into(), offset: 0, size: None };
-        let table = vec![whole, part("ipl", 0, 2), part("spl0", 2, 2), part("env0", 4, 1), part("boot0", 5, 2),
-                         part("root0", 7, 2), part("root1", 9, 2), part("system-config", 11, 2), part("data", 13, 2)];
+        let table = vec![
+            whole,
+            part("ipl", 0, 2),
+            part("spl0", 2, 2),
+            part("env0", 4, 1),
+            part("boot0", 5, 2),
+            part("root0", 7, 2),
+            part("root1", 9, 2),
+            part("system-config", 11, 2),
+            part("data", 13, 2),
+        ];
         let (partitions, owners) = omap_layout(Some(table), 16);
-        let map = Map { blocks: vec![Block::Data; 16], partitions, owners, slots: Vec::new(), by_volume: false, block_size: block, shows_bad: true };
-        for (block, name, kind) in [(0, "ipl", Kind::Uboot), (3, "spl0", Kind::Uboot), (4, "env0", Kind::Env), (5, "boot0", Kind::Other),
-                                    (8, "root0", Kind::Root0), (10, "root1", Kind::Root1), (12, "system-config", Kind::SystemConfig), (14, "data", Kind::Other)] {
+        let map = Map {
+            blocks: vec![Block::Data; 16],
+            partitions,
+            owners,
+            slots: Vec::new(),
+            by_volume: false,
+            block_size: block,
+            shows_bad: true,
+        };
+        for (block, name, kind) in [
+            (0, "ipl", Kind::Uboot),
+            (3, "spl0", Kind::Uboot),
+            (4, "env0", Kind::Env),
+            (5, "boot0", Kind::Other),
+            (8, "root0", Kind::Root0),
+            (10, "root1", Kind::Root1),
+            (12, "system-config", Kind::SystemConfig),
+            (14, "data", Kind::Other),
+        ] {
             let partition = map.partition_of(block).unwrap();
             assert_eq!((partition.name.as_str(), partition.kind), (name, kind), "block {block}");
         }
@@ -668,12 +764,15 @@ mod tests {
 
     /// UBI's volume table, naming each volume by its index.
     fn table(names: &[&str]) -> Vec<u8> {
-        names.iter().flat_map(|name| {
-            let mut record = vec![0u8; UBI_TABLE_RECORD];
-            record[14..16].copy_from_slice(&(name.len() as u16).to_be_bytes());
-            record[16..16 + name.len()].copy_from_slice(name.as_bytes());
-            record
-        }).collect()
+        names
+            .iter()
+            .flat_map(|name| {
+                let mut record = vec![0u8; UBI_TABLE_RECORD];
+                record[14..16].copy_from_slice(&(name.len() as u16).to_be_bytes());
+                record[16..16 + name.len()].copy_from_slice(name.as_bytes());
+                record
+            })
+            .collect()
     }
 
     #[test]
@@ -690,9 +789,15 @@ mod tests {
         put(34, ubi(Some(UBI_LAYOUT_VOLUME), &names));
         put(39, ubi(None, &[]));
         let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3, None).unwrap();
-        for (block, name, kind) in [(0, "U-Boot", Kind::Uboot), (32, "root0", Kind::Root0), (33, "env0", Kind::Env),
-                                    (35, "system-config", Kind::SystemConfig), (36, "root1", Kind::Root1),
-                                    (37, "scratch", Kind::Other), (38, "root0", Kind::Root0)] {
+        for (block, name, kind) in [
+            (0, "U-Boot", Kind::Uboot),
+            (32, "root0", Kind::Root0),
+            (33, "env0", Kind::Env),
+            (35, "system-config", Kind::SystemConfig),
+            (36, "root1", Kind::Root1),
+            (37, "scratch", Kind::Other),
+            (38, "root0", Kind::Root0),
+        ] {
             let partition = map.partition_of(block).unwrap();
             assert_eq!((partition.name.as_str(), partition.kind), (name, kind), "block {block}");
             assert_eq!(map.blocks[block], Block::Data);
@@ -703,8 +808,16 @@ mod tests {
     #[test]
     fn a_cell_is_brighter_the_fuller_it_is_and_red_when_bad() {
         let color = |value: u8| egui::Color32::from_rgb(value, value, value);
-        let colors = Colors { uboot: color(1), env: color(2), system_config: color(4), root0: egui::Color32::WHITE,
-                              root1: color(6), other: color(7), erased: color(8), bad: color(9) };
+        let colors = Colors {
+            uboot: color(1),
+            env: color(2),
+            system_config: color(4),
+            root0: egui::Color32::WHITE,
+            root1: color(6),
+            other: color(7),
+            erased: color(8),
+            bad: color(9),
+        };
         let block = j49::nand::BLOCK;
         let part = j49::mtd::Partition { name: "root0".into(), offset: 0, size: Some(8 * block) };
         let (partitions, owners) = omap_layout(Some(vec![part]), 12);
@@ -716,7 +829,11 @@ mod tests {
         let map = Map { blocks, partitions, owners, slots, by_volume: false, block_size: block, shows_bad: true };
         let cell = |group: Range<usize>| cell_color(&map, &map.slots[group], colors);
         assert_eq!(cell(0..4), egui::Color32::WHITE, "full");
-        assert_eq!(cell(4..8), egui::Color32::WHITE.gamma_multiply(USED_SHADE + (1.0 - USED_SHADE) * 0.25), "one block of four");
+        assert_eq!(
+            cell(4..8),
+            egui::Color32::WHITE.gamma_multiply(USED_SHADE + (1.0 - USED_SHADE) * 0.25),
+            "one block of four"
+        );
         assert_eq!(cell(5..8), egui::Color32::WHITE.gamma_multiply(EMPTY_SHADE), "empty, still its partition's");
         assert_eq!(cell(8..10), colors.erased, "empty and in no partition");
         assert_eq!(cell(8..12), colors.bad);
@@ -756,11 +873,16 @@ mod tests {
         image[19 * block] = 2;
         let map = scan(std::io::Cursor::new(image), 20, Device::Diamond3, None).unwrap();
         assert!(map.by_volume);
-        let names: Vec<(&str, Option<usize>)> = map.slots.iter().map(|slot| {
-            (slot.owner.and_then(|o| map.partitions.get(o)).map_or("-", |p| p.name.as_str()), slot.block)
-        }).collect();
+        let names: Vec<(&str, Option<usize>)> = map
+            .slots
+            .iter()
+            .map(|slot| (slot.owner.and_then(|o| map.partitions.get(o)).map_or("-", |p| p.name.as_str()), slot.block))
+            .collect();
         assert_eq!(names[..4], [("U-Boot", Some(0)), ("U-Boot", Some(1)), ("U-Boot", Some(2)), ("U-Boot", Some(3))]);
-        assert_eq!(names[4..9], [("env0", Some(9)), ("env0", None), ("root0", Some(12)), ("root0", None), ("root0", Some(4))]);
+        assert_eq!(
+            names[4..9],
+            [("env0", Some(9)), ("env0", None), ("root0", Some(12)), ("root0", None), ("root0", Some(4))]
+        );
         assert_eq!(names[9], ("UBI layout", Some(14)), "UBI's own after the volumes");
         assert_eq!(names.last(), Some(&("oopsdata", Some(19))));
         assert_eq!(names.len(), 20, "as many places as the chip has blocks");
@@ -773,11 +895,14 @@ mod tests {
     fn a_second_copy_of_a_logical_block_keeps_a_place() {
         let block = diamond3::nand::BLOCK as usize;
         let mut image = vec![0xffu8; 6 * block];
-        for (index, data) in [(1, leb(0, 0)), (2, leb(0, 0)), (3, ubi(Some(UBI_LAYOUT_VOLUME), &reserving(&[("env0", 1)])))] {
+        for (index, data) in
+            [(1, leb(0, 0)), (2, leb(0, 0)), (3, ubi(Some(UBI_LAYOUT_VOLUME), &reserving(&[("env0", 1)])))]
+        {
             image[index * block..(index + 1) * block].copy_from_slice(&data);
         }
         let map = scan(std::io::Cursor::new(image), 6, Device::Diamond3, None).unwrap();
-        let held: Vec<usize> = map.slots.iter().filter_map(|slot| slot.block).filter(|&b| map.blocks[b] == Block::Data).collect();
+        let held: Vec<usize> =
+            map.slots.iter().filter_map(|slot| slot.block).filter(|&b| map.blocks[b] == Block::Data).collect();
         assert!(held.contains(&1) && held.contains(&2), "{held:?}");
     }
 
@@ -793,14 +918,22 @@ mod tests {
         let block = diamond3::nand::BLOCK as usize;
         let names = table(&["env0", "root0", "root1"]);
         let mut image = vec![0xffu8; 56 * block];
-        let mut put = |index: usize, volume: u32, data: &[u8]| image[index * block..(index + 1) * block].copy_from_slice(&ubi(Some(volume), data));
-        for index in 32..35 { put(index, 2, &[]); }
+        let mut put = |index: usize, volume: u32, data: &[u8]| {
+            image[index * block..(index + 1) * block].copy_from_slice(&ubi(Some(volume), data))
+        };
+        for index in 32..35 {
+            put(index, 2, &[]);
+        }
         put(35, 1, &[]);
-        for index in 36..39 { put(index, 2, &[]); }
+        for index in 36..39 {
+            put(index, 2, &[]);
+        }
         put(39, 0, &[]);
         put(40, UBI_LAYOUT_VOLUME, &names);
         let map = scan(std::io::Cursor::new(image), 56, Device::Diamond3, None).unwrap();
-        let cell = |blocks: Range<usize>| blocks.map(|block| Slot { block: Some(block), owner: map.owners[block] }).collect::<Vec<_>>();
+        let cell = |blocks: Range<usize>| {
+            blocks.map(|block| Slot { block: Some(block), owner: map.owners[block] }).collect::<Vec<_>>()
+        };
         assert_eq!(map.kind_of(map.shown_block(&cell(32..36)).unwrap()), Kind::Root1, "three of root1 to one of root0");
         assert_eq!(map.kind_of(map.shown_block(&cell(36..40)).unwrap()), Kind::Env, "env's one block among root1's");
         assert_eq!(map.shown_block(&cell(48..56)), None, "nothing but erased");
@@ -818,15 +951,35 @@ mod tests {
         image[37 * block..38 * block].copy_from_slice(&ubi(Some(UBI_LAYOUT_VOLUME), &names));
         let map = scan(std::io::Cursor::new(image), 40, Device::Diamond3, None).unwrap();
         let color = egui::Color32::WHITE;
-        let colors = Colors { uboot: color, env: color, system_config: color, root0: color, root1: color, other: color, erased: color, bad: color };
-        let output = egui::Context::default().run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width(1.0), 200.0))),
-            ..Default::default()
-        }, |ui| legend(ui, &map, colors));
-        let text = |want: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == want => Some(t.galley.rect.translate(t.pos.to_vec2())),
-            _ => None,
-        }).unwrap_or_else(|| panic!("{want} is drawn"));
+        let colors = Colors {
+            uboot: color,
+            env: color,
+            system_config: color,
+            root0: color,
+            root1: color,
+            other: color,
+            erased: color,
+            bad: color,
+        };
+        let output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width(1.0), 200.0))),
+                ..Default::default()
+            },
+            |ui| legend(ui, &map, colors),
+        );
+        let text = |want: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if t.galley.job.text == want => {
+                        Some(t.galley.rect.translate(t.pos.to_vec2()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{want} is drawn"))
+        };
         for (upper, lower) in [("u-boot", "root0"), ("root0", "erased")] {
             let rows = text(lower).center().y - text(upper).center().y;
             assert_eq!(rows, LEGEND_ROW, "{upper} to {lower}");
@@ -838,28 +991,56 @@ mod tests {
     #[test]
     fn no_legend_name_runs_into_a_swatch_on_either_generation() {
         let color = egui::Color32::WHITE;
-        let colors = Colors { uboot: color, env: color, system_config: color, root0: color, root1: color, other: color, erased: color, bad: color };
+        let colors = Colors {
+            uboot: color,
+            env: color,
+            system_config: color,
+            root0: color,
+            root1: color,
+            other: color,
+            erased: color,
+            bad: color,
+        };
         let context = egui::Context::default();
         crate::install_fonts(&context);
         for (shows_bad, by_volume) in [(true, false), (false, true)] {
-            let map = Map { blocks: Vec::new(), partitions: Vec::new(), owners: Vec::new(), slots: Vec::new(), by_volume, block_size: 1, shows_bad };
+            let map = Map {
+                blocks: Vec::new(),
+                partitions: Vec::new(),
+                owners: Vec::new(),
+                slots: Vec::new(),
+                by_volume,
+                block_size: 1,
+                shows_bad,
+            };
             let mut output = None;
             for _ in 0..2 {
-                output = Some(context.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width(2.0), 200.0))),
-                    ..Default::default()
-                }, |ui| legend(ui, &map, colors)));
+                output = Some(context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width(2.0), 200.0))),
+                        ..Default::default()
+                    },
+                    |ui| legend(ui, &map, colors),
+                ));
             }
             let output = output.unwrap();
-            let swatches: Vec<egui::Rect> = output.shapes.iter().filter_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Rect(rect) if rect.rect.width() == 8.0 => Some(rect.rect),
-                _ => None,
-            }).collect();
+            let swatches: Vec<egui::Rect> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Rect(rect) if rect.rect.width() == 8.0 => Some(rect.rect),
+                    _ => None,
+                })
+                .collect();
             assert_eq!(swatches.len(), Kind::ALL.len() + 1 + usize::from(shows_bad));
             for shape in &output.shapes {
                 if let egui::epaint::Shape::Text(text) = &shape.shape {
                     let name = text.galley.rect.translate(text.pos.to_vec2());
-                    assert!(swatches.iter().all(|swatch| !name.intersects(*swatch)), "{} at {name:?}", text.galley.job.text);
+                    assert!(
+                        swatches.iter().all(|swatch| !name.intersects(*swatch)),
+                        "{} at {name:?}",
+                        text.galley.job.text
+                    );
                     assert!(name.right() <= width(2.0) + 1.0, "{} leaves the pane: {name:?}", text.galley.job.text);
                 }
             }
@@ -882,7 +1063,9 @@ mod tests {
         let mut map = None;
         for _ in 0..200 {
             map = maps.get(&path, Device::J49, &ctx);
-            if map.is_some() { break }
+            if map.is_some() {
+                break;
+            }
             thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(map.unwrap().blocks.len(), 4);

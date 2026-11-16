@@ -149,7 +149,9 @@ fn query_value(query: Option<&str>, name: &str) -> String {
         let mut i = 0;
         while i < b.len() {
             if b[i] == b'%' && i + 2 < b.len() {
-                if let Some(byte) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                if let Some(byte) =
+                    std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
                     out.push(byte);
                     i += 3;
                     continue;
@@ -160,8 +162,13 @@ fn query_value(query: Option<&str>, name: &str) -> String {
         }
         String::from_utf8_lossy(&out).into_owned()
     };
-    query.unwrap_or("").split('&').filter_map(|pair| pair.split_once('=').or(Some((pair, ""))))
-        .find(|(k, _)| decode(k) == name).map(|(_, v)| decode(v)).unwrap_or_default()
+    query
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|pair| pair.split_once('=').or(Some((pair, ""))))
+        .find(|(k, _)| decode(k) == name)
+        .map(|(_, v)| decode(v))
+        .unwrap_or_default()
 }
 
 /// The objects of a subscribe or put body: an "objects" array, or buckets
@@ -225,12 +232,20 @@ impl Cloud {
 
     pub async fn respond(&self, method: &Method, uri: &Uri, headers: &HeaderMap, body: &[u8]) -> Response<Body> {
         if self.verbose {
-            let shown = if uri.path() == "/upload" { format!("({} bytes)", body.len()) } // compressed logs
-                        else { String::from_utf8_lossy(body).into_owned() };
-            let headers: Vec<String> = headers.iter().map(|(k, v)| {
-                let v = v.to_str().unwrap_or("");
-                format!("{k}: {}", if k == "authorization" { redact_auth(v) } else { v.to_string() })
-            }).collect();
+            let shown = if uri.path() == "/upload" {
+                format!("({} bytes)", body.len())
+            }
+            // compressed logs
+            else {
+                String::from_utf8_lossy(body).into_owned()
+            };
+            let headers: Vec<String> = headers
+                .iter()
+                .map(|(k, v)| {
+                    let v = v.to_str().unwrap_or("");
+                    format!("{k}: {}", if k == "authorization" { redact_auth(v) } else { v.to_string() })
+                })
+                .collect();
             logf!("> {method} {uri}\n  {}\n  {shown}", headers.join("\n  "));
         }
         let path = uri.path();
@@ -385,9 +400,21 @@ impl Cloud {
             let fields = match m.get("value") {
                 Some(Value::Object(v)) => v.clone(),
                 // Bucket-keyed form: the fields sit beside object_key.
-                _ => m.iter().filter(|(k, _)| !matches!(k.as_str(), "object_key" | "object_revision" | "object_timestamp"
-                                                            | "base_object_revision" | "if_object_revision" | "op"))
-                    .map(|(k, v)| (k.clone(), v.clone())).collect(),
+                _ => m
+                    .iter()
+                    .filter(|(k, _)| {
+                        !matches!(
+                            k.as_str(),
+                            "object_key"
+                                | "object_revision"
+                                | "object_timestamp"
+                                | "base_object_revision"
+                                | "if_object_revision"
+                                | "op"
+                        )
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             };
             let (o, _) = self.store.merge(key, &fields, 0, 0, true);
             out.push((o, false));
@@ -421,8 +448,14 @@ mod tests {
     use crate::store::tests::temp_store;
 
     fn cloud() -> Cloud {
-        Cloud { store: temp_store(), outdoor: Arc::new(Outdoor::default()), live: None,
-                origin: "https://127.0.0.1".into(), verbose: false, hold: Duration::from_secs(290) }
+        Cloud {
+            store: temp_store(),
+            outdoor: Arc::new(Outdoor::default()),
+            live: None,
+            origin: "https://127.0.0.1".into(),
+            verbose: false,
+            hold: Duration::from_secs(290),
+        }
     }
 
     async fn call(c: &Cloud, path: &str, body: &str) -> (StatusCode, HeaderMap, String) {
@@ -438,8 +471,10 @@ mod tests {
         c.outdoor.set(Some(-3.4), None);
         assert_eq!(call(&c, "/weather/v1?query=94304%2CUS", "").await.2, "{}");
         c.outdoor.set(None, Some(81.6));
-        assert_eq!(call(&c, "/weather/v1?query=94304%2CUS", "").await.2,
-                   r#"{"94304,US":{"current":{"humidity":82,"temp_c":-3.4}}}"#);
+        assert_eq!(
+            call(&c, "/weather/v1?query=94304%2CUS", "").await.2,
+            r#"{"94304,US":{"current":{"humidity":82,"temp_c":-3.4}}}"#
+        );
         // nlgeoipfetch's query: weather too.
         assert!(call(&c, "/weather/v1?query=ipv4", "").await.2.starts_with(r#"{"ipv4":"#));
     }
@@ -448,20 +483,32 @@ mod tests {
     async fn subscribe_and_put() {
         let c = cloud();
         // A fresh server asks for a bucket it lacks, at revision 0.
-        let (status, headers, body) = call(&c, "/transport/v7/subscribe",
-            r#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":5,"object_timestamp":100}]}"#).await;
+        let (status, headers, body) = call(
+            &c,
+            "/transport/v7/subscribe",
+            r#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":5,"object_timestamp":100}]}"#,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body, r#"{"objects":[{"object_revision":0,"object_timestamp":0,"object_key":"device.S"}]}"#);
         assert_eq!(headers["x-nl-suspend-time-max"], "300");
         // The device puts it; the answer carries the new revision, no value.
-        let (_, _, body) = call(&c, "/transport/v7/put",
-            r#"{"objects":[{"object_key":"device.S","op":"MERGE","value":{"t":20.0}}]}"#).await;
-        assert!(body.starts_with(r#"{"objects":[{"object_revision":1,"object_timestamp":"#) && !body.contains("value"), "{body}");
+        let (_, _, body) =
+            call(&c, "/transport/v7/put", r#"{"objects":[{"object_key":"device.S","op":"MERGE","value":{"t":20.0}}]}"#)
+                .await;
+        assert!(
+            body.starts_with(r#"{"objects":[{"object_revision":1,"object_timestamp":"#) && !body.contains("value"),
+            "{body}"
+        );
         assert_eq!(c.store.get("device.S").unwrap().value["t"], serde_json::json!(20));
         // Nothing to say and not chunked: null objects.
         let ts = c.store.get("device.S").unwrap().timestamp;
-        let (_, _, body) = call(&c, "/transport/v7/subscribe",
-            &format!(r#"{{"objects":[{{"object_key":"device.S","object_revision":1,"object_timestamp":{ts}}}]}}"#)).await;
+        let (_, _, body) = call(
+            &c,
+            "/transport/v7/subscribe",
+            &format!(r#"{{"objects":[{{"object_key":"device.S","object_revision":1,"object_timestamp":{ts}}}]}}"#),
+        )
+        .await;
         assert_eq!(body, r#"{"objects":null}"#);
         assert_eq!(call(&c, "/transport/v7/put", "nope").await.0, StatusCode::BAD_REQUEST);
     }
@@ -469,14 +516,20 @@ mod tests {
     #[tokio::test]
     async fn held_subscribe_gets_a_server_change() {
         let c = cloud();
-        c.store.merge("device.S", &fields!{"t" => 20}, 1, 100, true);
-        let r = c.respond(&Method::POST, &"/transport/v7/subscribe".parse().unwrap(), &HeaderMap::new(),
-            br#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":1,"object_timestamp":100}]}"#).await;
+        c.store.merge("device.S", &fields! {"t" => 20}, 1, 100, true);
+        let r = c
+            .respond(
+                &Method::POST,
+                &"/transport/v7/subscribe".parse().unwrap(),
+                &HeaderMap::new(),
+                br#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":1,"object_timestamp":100}]}"#,
+            )
+            .await;
         let store = c.store.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(50)).await;
-            store.merge("shared.S", &fields!{"x" => 1}, 0, 0, false); // not watched: ignored
-            store.merge("device.S", &fields!{"t" => 21}, 0, 0, false);
+            store.merge("shared.S", &fields! {"x" => 1}, 0, 0, false); // not watched: ignored
+            store.merge("device.S", &fields! {"t" => 21}, 0, 0, false);
         });
         let body = r.into_body().collect().await.unwrap().to_bytes();
         let body = String::from_utf8(body.to_vec()).unwrap();
@@ -500,45 +553,71 @@ mod tests {
     async fn subscribe_answers_by_whose_copy_is_newer() {
         let c = cloud();
         for key in ["device.S", "shared.S", "schedule.S", "link.S"] {
-            c.store.merge(key, &fields!{"k" => key}, 2, 500, true);
+            c.store.merge(key, &fields! {"k" => key}, 2, 500, true);
         }
-        let (status, _, body) = call(&c, "/transport/v7/subscribe", r#"{"objects":[
+        let (status, _, body) = call(
+            &c,
+            "/transport/v7/subscribe",
+            r#"{"objects":[
             {"object_key":"device.S","object_revision":1,"object_timestamp":400},
             {"object_key":"shared.S","object_revision":3,"object_timestamp":900},
             {"object_key":"schedule.S","object_revision":2,"object_timestamp":500},
             {"object_key":"link.S"},
             {"object_key":"","object_timestamp":1},
             {"object_revision":1},
-            "not an object"]}"#).await;
+            "not an object"]}"#,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         // Ours newer: sent with its value. The device's newer: ours without
         // a value, which asks for its copy. Equal: nothing. No timestamp from
         // the device: ours.
-        assert_eq!(body, concat!(r#"{"objects":["#,
-            r#"{"object_revision":2,"object_timestamp":500,"object_key":"device.S","value":{"k":"device.S"}},"#,
-            r#"{"object_revision":2,"object_timestamp":500,"object_key":"shared.S"},"#,
-            r#"{"object_revision":2,"object_timestamp":500,"object_key":"link.S","value":{"k":"link.S"}}]}"#));
+        assert_eq!(
+            body,
+            concat!(
+                r#"{"objects":["#,
+                r#"{"object_revision":2,"object_timestamp":500,"object_key":"device.S","value":{"k":"device.S"}},"#,
+                r#"{"object_revision":2,"object_timestamp":500,"object_key":"shared.S"},"#,
+                r#"{"object_revision":2,"object_timestamp":500,"object_key":"link.S","value":{"k":"link.S"}}]}"#
+            )
+        );
     }
 
     #[tokio::test]
     async fn subscribe_keeps_a_newer_server_change_over_the_devices_copy() {
         let c = cloud();
-        c.store.merge("shared.S", &fields!{"target_temperature" => 20}, 3, 1000, true);
-        c.store.merge("shared.S", &fields!{"target_temperature" => 22}, 0, 0, false); // Home Assistant
+        c.store.merge("shared.S", &fields! {"target_temperature" => 20}, 3, 1000, true);
+        c.store.merge("shared.S", &fields! {"target_temperature" => 22}, 0, 0, false); // Home Assistant
         let ours = c.store.get("shared.S").unwrap();
         assert_eq!(ours.revision, 4);
-        let (_, _, body) = call(&c, "/transport/v7/subscribe",
+        let (_, _, body) = call(
+            &c,
+            "/transport/v7/subscribe",
             r#"{"objects":[{"object_key":"shared.S","object_revision":3,"object_timestamp":1000,
-                "value":{"target_temperature":20}}]}"#).await;
+                "value":{"target_temperature":20}}]}"#,
+        )
+        .await;
         let o = c.store.get("shared.S").unwrap();
         assert_eq!((o.revision, o.timestamp, o.value["target_temperature"].clone()), (4, ours.timestamp, json!(22)));
-        assert_eq!(body, format!(r#"{{"objects":[{{"object_revision":4,"object_timestamp":{},"object_key":"shared.S","value":{{"target_temperature":22}}}}]}}"#,
-                                 ours.timestamp));
+        assert_eq!(
+            body,
+            format!(
+                r#"{{"objects":[{{"object_revision":4,"object_timestamp":{},"object_key":"shared.S","value":{{"target_temperature":22}}}}]}}"#,
+                ours.timestamp
+            )
+        );
         // A newer copy from the device with an older revision: taken, and the
         // revision still moves on.
         let ts = ours.timestamp + 1;
-        call(&c, "/transport/v7/subscribe", &format!(r#"{{"objects":[{{"object_key":"shared.S","object_revision":2,
-            "object_timestamp":{ts},"value":{{"target_temperature":23}}}}]}}"#)).await;
+        call(
+            &c,
+            "/transport/v7/subscribe",
+            &format!(
+                r#"{{"objects":[{{"object_key":"shared.S","object_revision":2,
+            "object_timestamp":{ts},"value":{{"target_temperature":23}}}}]}}"#
+            ),
+        )
+        .await;
         let o = c.store.get("shared.S").unwrap();
         assert_eq!((o.revision, o.timestamp, o.value["target_temperature"].clone()), (5, ts, json!(23)));
     }
@@ -547,15 +626,23 @@ mod tests {
     async fn subscribe_takes_a_bucket_the_device_sends_whole() {
         let c = cloud();
         // Bucket-keyed form, with the device's own revision and timestamp.
-        let (_, _, body) = call(&c, "/transport/v7/subscribe",
+        let (_, _, body) = call(
+            &c,
+            "/transport/v7/subscribe",
             r#"{"device.S":{"object_key":"device.S","object_revision":9,"object_timestamp":777,"value":{"t":20.0}},
-                "session":"x"}"#).await;
+                "session":"x"}"#,
+        )
+        .await;
         assert_eq!(body, r#"{"objects":null}"#, "the device's copy is the server's now: nothing to send back");
         let o = c.store.get("device.S").unwrap();
         assert_eq!((o.revision, o.timestamp, o.value["t"].clone()), (9, 777, json!(20)));
         // An empty value is not a bucket sent whole: a fresh server asks.
-        let (_, _, body) = call(&c, "/transport/v7/subscribe",
-            r#"{"objects":[{"object_key":"shared.S","object_revision":1,"object_timestamp":5,"value":{}}]}"#).await;
+        let (_, _, body) = call(
+            &c,
+            "/transport/v7/subscribe",
+            r#"{"objects":[{"object_key":"shared.S","object_revision":1,"object_timestamp":5,"value":{}}]}"#,
+        )
+        .await;
         assert_eq!(body, r#"{"objects":[{"object_revision":0,"object_timestamp":0,"object_key":"shared.S"}]}"#);
         assert!(c.store.get("shared.S").is_none());
     }
@@ -564,12 +651,18 @@ mod tests {
     async fn held_subscribe_ends_empty_when_the_hold_runs_out() {
         let mut c = cloud();
         c.hold = Duration::from_millis(50);
-        c.store.merge("device.S", &fields!{"t" => 20}, 1, 100, true);
-        let r = c.respond(&Method::POST, &"/transport/v7/subscribe".parse().unwrap(), &HeaderMap::new(),
-            br#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":1,"object_timestamp":100}]}"#).await;
+        c.store.merge("device.S", &fields! {"t" => 20}, 1, 100, true);
+        let r = c
+            .respond(
+                &Method::POST,
+                &"/transport/v7/subscribe".parse().unwrap(),
+                &HeaderMap::new(),
+                br#"{"chunked":true,"objects":[{"object_key":"device.S","object_revision":1,"object_timestamp":100}]}"#,
+            )
+            .await;
         assert_eq!(r.headers()["x-nl-suspend-time-max"], "10");
         // The device's own change is not pushed back to it.
-        c.store.merge("device.S", &fields!{"t" => 21}, 0, 0, true);
+        c.store.merge("device.S", &fields! {"t" => 21}, 0, 0, true);
         let started = std::time::Instant::now();
         let body = r.into_body().collect().await.unwrap().to_bytes();
         assert!(body.is_empty(), "{body:?}");
@@ -579,19 +672,38 @@ mod tests {
     #[tokio::test]
     async fn put_in_bucket_keyed_form_keeps_only_the_fields() {
         let c = cloud();
-        let (_, _, body) = call(&c, "/transport/v7/put",
+        let (_, _, body) = call(
+            &c,
+            "/transport/v7/put",
             r#"{"shared.S":{"object_key":"shared.S","op":"MERGE","base_object_revision":4,"if_object_revision":4,
-                "target_temperature":21.5}}"#).await;
+                "target_temperature":21.5}}"#,
+        )
+        .await;
         assert!(body.starts_with(r#"{"objects":[{"object_revision":1,"#), "{body}");
         let o = c.store.get("shared.S").unwrap();
         assert_eq!(Value::Object(o.value.clone()), json!({"target_temperature": 21.5}));
         // The same put again changes nothing: same revision and timestamp.
-        let (_, _, again) = call(&c, "/transport/v7/put",
-            r#"{"objects":[{"object_key":"shared.S","value":{"target_temperature":21.5}}]}"#).await;
-        assert_eq!(again, format!(r#"{{"objects":[{{"object_revision":1,"object_timestamp":{},"object_key":"shared.S"}}]}}"#, o.timestamp));
+        let (_, _, again) = call(
+            &c,
+            "/transport/v7/put",
+            r#"{"objects":[{"object_key":"shared.S","value":{"target_temperature":21.5}}]}"#,
+        )
+        .await;
+        assert_eq!(
+            again,
+            format!(
+                r#"{{"objects":[{{"object_revision":1,"object_timestamp":{},"object_key":"shared.S"}}]}}"#,
+                o.timestamp
+            )
+        );
         // The bucket's revision and timestamp are no fields of it.
-        call(&c, "/transport/v7/put", r#"{"shared.S":{"object_key":"shared.S","object_revision":7,"object_timestamp":1234,
-            "target_temperature":22}}"#).await;
+        call(
+            &c,
+            "/transport/v7/put",
+            r#"{"shared.S":{"object_key":"shared.S","object_revision":7,"object_timestamp":1234,
+            "target_temperature":22}}"#,
+        )
+        .await;
         assert_eq!(Value::Object(c.store.get("shared.S").unwrap().value), json!({"target_temperature": 22}));
         // A put naming no bucket answers with none.
         assert_eq!(call(&c, "/transport/v7/put", r#"{"objects":[{"value":{"a":1}}]}"#).await.2, r#"{"objects":null}"#);
@@ -624,7 +736,7 @@ mod tests {
         assert_eq!(call(&c, "/pro_info/x", "").await.0, StatusCode::NOT_FOUND);
         assert_eq!(call(&c, "/elsewhere", "").await.0, StatusCode::NOT_FOUND);
         // GET transport/device/<serial>: every bucket, without values.
-        c.store.merge("device.S", &fields!{"t" => 20}, 1, 100, true);
+        c.store.merge("device.S", &fields! {"t" => 20}, 1, 100, true);
         let (_, _, body) = call(&c, "/transport/device/S", "").await;
         assert_eq!(body, r#"{"objects":[{"object_revision":1,"object_timestamp":100,"object_key":"device.S"}]}"#);
     }

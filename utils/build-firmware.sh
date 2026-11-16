@@ -16,13 +16,16 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 mkdir -p .work build
 nestlocal_target=armv7-unknown-linux-gnueabihf
-export NESTLOCAL_TARGET_DIR=${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}
+export NESTLOCAL_TARGET_DIR="${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}"
 
 if [ "$(uname -s)" = Darwin ]; then
-    command -v docker > /dev/null || { echo "Missing build tool: docker. See README.md." >&2; exit 1; }
+    command -v docker >/dev/null || {
+        echo "Missing build tool: docker. See README.md." >&2
+        exit 1
+    }
     image=unfr0zen-build
     echo "Building Docker image $image"
-    docker build -q -t "$image" - < utils/ci/Dockerfile > /dev/null
+    docker build -q -t "$image" - <utils/ci/Dockerfile >/dev/null
     # The repository at the same path inside, so the submodule's and .work's
     # paths stay valid on both sides; cargo keeps its downloads in .work.
     run() {
@@ -32,24 +35,33 @@ if [ "$(uname -s)" = Darwin ]; then
 else
     missing=
     for tool in git make gcc bc bison flex python3 clang cmake ninja arm-none-eabi-gcc arm-none-eabi-as arm-none-eabi-ld \
-                arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump arm-linux-gnueabihf-gcc arm-linux-gnueabihf-ar \
-                arm-linux-gnueabihf-strip cargo cargo-zigbuild; do
-        command -v "$tool" > /dev/null || missing="$missing $tool"
+        arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump arm-linux-gnueabihf-gcc arm-linux-gnueabihf-ar \
+        arm-linux-gnueabihf-strip cargo cargo-zigbuild; do
+        command -v "$tool" >/dev/null || missing="$missing $tool"
     done
-    [ -z "$missing" ] || { echo "Missing build tools:$missing. See README.md." >&2; exit 1; }
-    python3 -c 'import PIL' 2> /dev/null || { echo "The boot logo needs Pillow (python3-pil). See README.md." >&2; exit 1; }
-    if command -v rustup > /dev/null; then
-        rustup target add "$nestlocal_target" armv7-unknown-linux-musleabihf > /dev/null 2>&1 || true
+    [ -z "$missing" ] || {
+        echo "Missing build tools:$missing. See README.md." >&2
+        exit 1
+    }
+    python3 -c 'import PIL' 2>/dev/null || {
+        echo "The boot logo needs Pillow (python3-pil). See README.md." >&2
+        exit 1
+    }
+    if command -v rustup >/dev/null; then
+        rustup target add "$nestlocal_target" armv7-unknown-linux-musleabihf >/dev/null 2>&1 || true
     fi
     run() { "$@"; }
 fi
 
-step() {  # step NAME COMMAND...: a build step, its output in .work/build-NAME.log
+step() { # step NAME COMMAND...: a build step, its output in .work/build-NAME.log
     name=$1
     shift
     log=.work/build-$name.log
     echo "Building $name; log: $log"
-    run "$@" > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
+    run "$@" >"$log" 2>&1 || {
+        tail -n 40 "$log" >&2
+        exit 1
+    }
 }
 
 # `utils/build-firmware.sh apply` rebuilds unfr0zen-apply alone.
@@ -75,34 +87,46 @@ step j49-busybox sh platform/j49/busybox.sh build/j49
 # build in Docker containers of their own, from the host. Without Docker
 # (and no build of them already) the app is built without them: it reaches
 # no OMAP unit of a generation without its x-loader and kernel.
-if command -v docker > /dev/null || [ -f build/j49/x-load.bin ]; then
+if command -v docker >/dev/null || [ -f build/j49/x-load.bin ]; then
     echo "Building j49-xloader; log: .work/build-j49-xloader.log"
-    sh platform/j49/xloader.sh build/j49 > .work/build-j49-xloader.log 2>&1 || { tail -n 40 .work/build-j49-xloader.log >&2; exit 1; }
+    sh platform/j49/xloader.sh build/j49 >.work/build-j49-xloader.log 2>&1 || {
+        tail -n 40 .work/build-j49-xloader.log >&2
+        exit 1
+    }
 else
     echo "Skipping the OMAP x-loader: it needs Docker; the app will reach no gen 2" >&2
 fi
-if command -v docker > /dev/null || [ -f build/diamond/x-load.bin ]; then
+if command -v docker >/dev/null || [ -f build/diamond/x-load.bin ]; then
     echo "Building diamond-xloader; log: .work/build-diamond-xloader.log"
-    sh platform/diamond/xloader.sh build/diamond > .work/build-diamond-xloader.log 2>&1 || { tail -n 40 .work/build-diamond-xloader.log >&2; exit 1; }
+    sh platform/diamond/xloader.sh build/diamond >.work/build-diamond-xloader.log 2>&1 || {
+        tail -n 40 .work/build-diamond-xloader.log >&2
+        exit 1
+    }
 else
     echo "Skipping the gen 1's x-loader: it needs Docker; the app will reach no gen 1" >&2
 fi
-if command -v docker > /dev/null || [ -f build/j49/uImage ]; then
+if command -v docker >/dev/null || [ -f build/j49/uImage ]; then
     echo "Building j49-kernel; log: .work/build-j49-kernel.log"
-    sh platform/j49/kernel.sh build/j49 > .work/build-j49-kernel.log 2>&1 || { tail -n 40 .work/build-j49-kernel.log >&2; exit 1; }
+    sh platform/j49/kernel.sh build/j49 >.work/build-j49-kernel.log 2>&1 || {
+        tail -n 40 .work/build-j49-kernel.log >&2
+        exit 1
+    }
 else
     echo "Skipping the j49 kernel: it needs Docker; the app will set up no gen 2" >&2
 fi
-if command -v docker > /dev/null || [ -f build/diamond/uImage ]; then
+if command -v docker >/dev/null || [ -f build/diamond/uImage ]; then
     echo "Building diamond-kernel; log: .work/build-diamond-kernel.log"
-    sh platform/j49/kernel.sh build/diamond diamond > .work/build-diamond-kernel.log 2>&1 || { tail -n 40 .work/build-diamond-kernel.log >&2; exit 1; }
+    sh platform/j49/kernel.sh build/diamond diamond >.work/build-diamond-kernel.log 2>&1 || {
+        tail -n 40 .work/build-diamond-kernel.log >&2
+        exit 1
+    }
 else
     echo "Skipping the gen 1's kernel: it needs Docker; the app will set up no gen 1" >&2
 fi
 # The radio's firmware, from Silicon Labs' SDK and OpenThread at pinned
 # commits, is built by the Thread step below; nestlocal carries it.
 echo "Fetching the radio's SDK into .work/zigbee-sdk"
-run sh platform/common/radio/fetch-sdk.sh .work/zigbee-sdk > /dev/null
+run sh platform/common/radio/fetch-sdk.sh .work/zigbee-sdk >/dev/null
 export NESTLOCAL_RADIO="$root/build/radio/radio.bin"
 export NESTLOCAL_RADIO_EM357="$root/build/radio-em357-zigbee/radio.bin"
 # zbwake.ko for each gen3 release: those missing or older than their sources.

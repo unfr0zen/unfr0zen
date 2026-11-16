@@ -6,9 +6,13 @@
 #include "stack/include/ember.h"
 
 EmberPacketAction emberPacketHandoffIncoming(EmberZigbeePacketType packetType, EmberMessageBuffer packetBuffer,
-                                             uint8_t index, void *data) { return EMBER_ACCEPT_PACKET; }
+                                             uint8_t index, void *data) {
+    return EMBER_ACCEPT_PACKET;
+}
 EmberPacketAction emberPacketHandoffOutgoing(EmberZigbeePacketType packetType, EmberMessageBuffer packetBuffer,
-                                             uint8_t index, void *data) { return EMBER_ACCEPT_PACKET; }
+                                             uint8_t index, void *data) {
+    return EMBER_ACCEPT_PACKET;
+}
 uint8_t emberAppendSourceRouteHandler(EmberNodeId destination, EmberMessageBuffer header) { return 0; }
 void emberRtosStackWakeupIsrHandler(void) {}
 bool emberRtosIdleHandler(uint32_t *idleTimeMs) { return false; }
@@ -16,7 +20,9 @@ void emberMessageSentHandler(EmberOutgoingMessageType type, uint16_t indexOrDest
                              EmberMessageBuffer message, EmberStatus status) {}
 void emberChangeSourceRouteHandler(EmberNodeId newChildId, EmberNodeId newParentId, bool ourChild, bool deviceLeft) {}
 EmberJoinDecision emberTrustCenterJoinHandler(EmberNodeId newNodeId, EmberEUI64 newNodeEui64, EmberDeviceUpdate status,
-                                              EmberNodeId parentOfNewNode) { return EMBER_DENY_JOIN; }
+                                              EmberNodeId parentOfNewNode) {
+    return EMBER_DENY_JOIN;
+}
 EmberZdoStatus emberRemoteDeleteBindingHandler(uint8_t index) { return EMBER_ZDP_NOT_SUPPORTED; }
 EmberZdoStatus emberRemoteSetBindingHandler(EmberBindingTableEntry *entry) { return EMBER_ZDP_NOT_SUPPORTED; }
 void emberIncomingRouteRecordHandler(EmberNodeId source, EmberEUI64 sourceEui, uint8_t relayCount,

@@ -13,8 +13,8 @@ use unfr0zen_core::setup::{self, Options};
 use unfr0zen_core::{Error, Result};
 
 use crate::device::{self, Device};
-use crate::progress::{self, Phase, Progress};
 use crate::diamond3::usb::EntryPoint;
+use crate::progress::{self, Phase, Progress};
 use crate::{assets, diamond3, j49};
 
 pub(crate) fn seconds(n: u64) -> Duration {
@@ -96,8 +96,9 @@ impl SetupInputs {
     pub fn describe(&self) -> String {
         let secret = |value: &Option<String>| value.as_ref().map(|_| "***".to_string());
         let on = |set: bool| set.then(String::new);
-        let file = |path: &Option<PathBuf>| path.as_ref()
-            .map(|path| path.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        let file = |path: &Option<PathBuf>| {
+            path.as_ref().map(|path| path.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        };
         let flags = [
             ("ntp-server", self.ntp_server.clone()),
             ("root-password", secret(&self.root_password)),
@@ -126,9 +127,17 @@ impl SetupInputs {
             ("allow-unsigned-updates", on(self.allow_unsigned_updates)),
             ("block-cloud", on(self.block_cloud)),
         ];
-        let set: Vec<String> = flags.into_iter().filter_map(|(name, value)| value.map(|value|
-            if value.is_empty() { format!("--{name}") } else { format!("--{name} {value}") })).collect();
-        if set.is_empty() { "no options".into() } else { set.join(" ") }
+        let set: Vec<String> = flags
+            .into_iter()
+            .filter_map(|(name, value)| {
+                value.map(|value| if value.is_empty() { format!("--{name}") } else { format!("--{name} {value}") })
+            })
+            .collect();
+        if set.is_empty() {
+            "no options".into()
+        } else {
+            set.join(" ")
+        }
     }
 
     /// Checks the options against each other and the filesystem, and builds the
@@ -140,9 +149,16 @@ impl SetupInputs {
         if self.ssh_key_only && self.ssh_public_key.is_none() {
             return Err(failure("--ssh-key-only needs --ssh-public-key: without a key nothing could log in"));
         }
-        if (self.mqtt_user.is_some() || self.mqtt_password.is_some() || self.mqtt_tls || self.mqtt_ca.is_some()
-            || self.ha_entity_root.is_some()) && self.mqtt.is_none() {
-            return Err(failure("--mqtt-user, --mqtt-password, --mqtt-tls, --mqtt-ca and --ha-entity-root need --mqtt"));
+        if (self.mqtt_user.is_some()
+            || self.mqtt_password.is_some()
+            || self.mqtt_tls
+            || self.mqtt_ca.is_some()
+            || self.ha_entity_root.is_some())
+            && self.mqtt.is_none()
+        {
+            return Err(failure(
+                "--mqtt-user, --mqtt-password, --mqtt-tls, --mqtt-ca and --ha-entity-root need --mqtt",
+            ));
         }
         let code = self.matter_code.as_deref().map(str::trim).filter(|c| !c.is_empty());
         let matter = self.matter || code.is_some();
@@ -158,15 +174,18 @@ impl SetupInputs {
         if self.external_temperature && self.mqtt.is_none() && !matter && !self.zigbee {
             return Err(failure("--external-temperature takes its readings over --mqtt, --matter or --zigbee"));
         }
-        let read = |flag: &str, path: &Path| fs::read(path)
-            .map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
+        let read =
+            |flag: &str, path: &Path| fs::read(path).map_err(|e| failure(format!("{flag}: {}: {e}", path.display())));
         if let Some(server) = self.ntp_server.as_deref().filter(|s| !s.is_empty()) {
             setup::check_ntp_server(server)?;
         }
         let mqtt = match &self.mqtt {
             Some(url) => Some(Mqtt {
-                url: url.clone(), user: self.mqtt_user.clone(), password: self.mqtt_password.clone(),
-                tls: self.mqtt_tls, ca: self.mqtt_ca.as_deref().map(|p| read("--mqtt-ca", p)).transpose()?,
+                url: url.clone(),
+                user: self.mqtt_user.clone(),
+                password: self.mqtt_password.clone(),
+                tls: self.mqtt_tls,
+                ca: self.mqtt_ca.as_deref().map(|p| read("--mqtt-ca", p)).transpose()?,
                 entity_root: self.ha_entity_root.clone(),
             }),
             None => None,
@@ -177,11 +196,19 @@ impl SetupInputs {
         if let Some(name) = &self.device_name {
             nestlocal::check_device_name(name)?;
         }
-        let ssh_public_key = self.ssh_public_key.as_deref().map(|path| {
-            let data = fs::read(path).map_err(|e| failure(format!("--ssh-public-key: {}: {e}",
-                path.file_name().unwrap_or_default().to_string_lossy())))?;
-            setup::ssh_public_key(&data)
-        }).transpose()?;
+        let ssh_public_key = self
+            .ssh_public_key
+            .as_deref()
+            .map(|path| {
+                let data = fs::read(path).map_err(|e| {
+                    failure(format!(
+                        "--ssh-public-key: {}: {e}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ))
+                })?;
+                setup::ssh_public_key(&data)
+            })
+            .transpose()?;
         Ok(Options {
             root_hash: setup::root_hash(self.root_password.as_deref().unwrap_or(setup::DEFAULT_ROOT_PASSWORD))?,
             version: progress::app_version().to_string(),
@@ -190,7 +217,9 @@ impl SetupInputs {
             unsigned_updates: self.allow_unsigned_updates,
             block_cloud: self.block_cloud,
             mqtt,
-            matter: matter.then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE))).transpose()?,
+            matter: matter
+                .then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE)))
+                .transpose()?,
             device_name: self.device_name.clone(),
             wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
             local_cloud: assets::LOCAL_CLOUD.to_vec(),
@@ -203,7 +232,11 @@ impl SetupInputs {
             doom: self.doom.then(assets::doom),
             theme: self.themes.then(assets::theme),
             external_temperature: self.external_temperature,
-            external_temperature_screen: if self.external_temperature { assets::J49_RCS_SCREEN.to_vec() } else { Vec::new() },
+            external_temperature_screen: if self.external_temperature {
+                assets::J49_RCS_SCREEN.to_vec()
+            } else {
+                Vec::new()
+            },
             dark_theme: self.dark_theme,
             ssh: self.ssh,
             ssh_public_key,
@@ -239,7 +272,10 @@ pub fn default_data_dir() -> PathBuf {
     } else if cfg!(target_os = "macos") {
         home().join("Library/Application Support/unfr0zen")
     } else {
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("unfr0zen")
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home().join(".local/share"))
+            .join("unfr0zen")
     }
 }
 
@@ -263,8 +299,10 @@ impl Drop for HandBack {
         #[cfg(not(unix))]
         let _ = &self.0; // nothing to give back without sudo
         #[cfg(unix)]
-        if let (Some(uid), Some(gid)) = (std::env::var("SUDO_UID").ok().and_then(|v| v.parse().ok()),
-                                         std::env::var("SUDO_GID").ok().and_then(|v| v.parse().ok())) {
+        if let (Some(uid), Some(gid)) = (
+            std::env::var("SUDO_UID").ok().and_then(|v| v.parse().ok()),
+            std::env::var("SUDO_GID").ok().and_then(|v| v.parse().ok()),
+        ) {
             fn walk(path: &Path, uid: u32, gid: u32) {
                 let _ = std::os::unix::fs::lchown(path, Some(uid), Some(gid));
                 if let Ok(entries) = fs::read_dir(path) {
@@ -321,10 +359,13 @@ pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8], &[nlclient::menu:
                 Ok(built.journal)
             }
             Err(error) => Err(match fs::write(&path, source) {
-                Ok(()) => failure(format!("{error}. The unit's stock nlclient is saved as {}: attach it to a bug report",
-                                          path.display())),
-                Err(write) => failure(format!("{error} (saving the unit's stock nlclient as {} failed: {write})",
-                                              path.display())),
+                Ok(()) => failure(format!(
+                    "{error}. The unit's stock nlclient is saved as {}: attach it to a bug report",
+                    path.display()
+                )),
+                Err(write) => {
+                    failure(format!("{error} (saving the unit's stock nlclient as {} failed: {write})", path.display()))
+                }
             }),
         }
     }
@@ -343,25 +384,30 @@ pub(crate) fn start_log(progress: &mut dyn Progress, stamp: &str) -> Result<Path
 /// Runs the recovery from whatever mode the unit is in to a confirmed root
 /// shell, writing run records under `work_dir` and the timestamped run log.
 /// Returns the final status line.
-pub fn run(config: &Config, progress: &mut dyn Progress,
-           cancel: &device::CancelFlag) -> Result<String> {
+pub fn run(config: &Config, progress: &mut dyn Progress, cancel: &device::CancelFlag) -> Result<String> {
     run_after_backup(config, None, progress, cancel)
 }
 
 /// [`run`], with the whole NAND backed up to `backup` first, while the unit
 /// is in recovery for the setup: one entry into USB download mode for both.
-pub fn run_after_backup(config: &Config, backup: Option<&Path>, progress: &mut dyn Progress,
-                        cancel: &device::CancelFlag) -> Result<String> {
+pub fn run_after_backup(
+    config: &Config,
+    backup: Option<&Path>,
+    progress: &mut dyn Progress,
+    cancel: &device::CancelFlag,
+) -> Result<String> {
     if let Some(out) = backup.filter(|out| out.exists()) {
         return Err(failure(format!("{} exists", out.display())));
     }
     progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
-        Device::Diamond3 if config.options.dark_theme =>
-            Err(failure("--dark-theme is only for the 1st and 2nd generation")),
-        Device::Diamond | Device::J49 if config.options.theme.is_some() =>
-            Err(failure("--themes is only for the 3rd generation")),
+        Device::Diamond3 if config.options.dark_theme => {
+            Err(failure("--dark-theme is only for the 1st and 2nd generation"))
+        }
+        Device::Diamond | Device::J49 if config.options.theme.is_some() => {
+            Err(failure("--themes is only for the 3rd generation"))
+        }
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
         Device::Onyx => Err(crate::onyx::unsupported(progress)),
@@ -386,13 +432,12 @@ mod describe_tests {
     #[test]
     fn the_entry_point_names_its_choice() {
         assert_eq!(SetupInputs::default().entry_point, EntryPoint::Auto);
-        let forced = SetupInputs {
-            entry_point: "cve-2017-7936".parse().unwrap(),
-            ..SetupInputs::default()
-        };
+        let forced = SetupInputs { entry_point: "cve-2017-7936".parse().unwrap(), ..SetupInputs::default() };
         assert_eq!(forced.describe(), "--entry-point cve-2017-7936");
-        assert_eq!(SetupInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..SetupInputs::default() }
-            .describe(), "--entry-point cve-2017-7932");
+        assert_eq!(
+            SetupInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..SetupInputs::default() }.describe(),
+            "--entry-point cve-2017-7932"
+        );
         let error = "nope".parse::<EntryPoint>().err().unwrap();
         assert!(error.contains("auto, cve-2017-7932, cve-2017-7936 or official-loader"), "{error}");
     }
@@ -419,7 +464,10 @@ mod describe_tests {
         assert_eq!(zigbee.describe(), "--zigbee --wwn-boiler");
         let thread = SetupInputs { matter: true, matter_thread: true, ..alone };
         assert!(thread.build().unwrap().wwn_boiler);
-        assert!(!SetupInputs { zigbee: true, ..SetupInputs::default() }.build().unwrap().wwn_boiler, "off unless asked");
+        assert!(
+            !SetupInputs { zigbee: true, ..SetupInputs::default() }.build().unwrap().wwn_boiler,
+            "off unless asked"
+        );
     }
 
     #[test]
@@ -445,7 +493,11 @@ mod describe_tests {
         fs::write(&path, b"-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-material").unwrap();
         let error = inputs.build().unwrap_err().to_string();
         assert!(!error.contains("private-material"));
-        fs::write(&path, b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB user@host\n").unwrap();
+        fs::write(
+            &path,
+            b"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB user@host\n",
+        )
+        .unwrap();
         let options = inputs.build().unwrap();
         assert!(options.ssh_public_key.unwrap().starts_with("ssh-ed25519 "));
         assert_eq!(inputs.describe(), "--ssh --ssh-public-key id_ed25519.pub");
@@ -464,11 +516,20 @@ mod describe_tests {
 
     #[test]
     fn options_read_as_cli_flags_with_secrets_masked() {
-        let inputs = SetupInputs { zigbee: true, block_cloud: true, ntp_server: Some("time.lan".into()),
-            root_password: Some("hunter2".into()), mqtt: Some("tcp://bob:pw@broker.lan".into()),
-            mqtt_ca: Some(PathBuf::from("/home/bob/ca.pem")), ..SetupInputs::default() };
-        assert_eq!(inputs.describe(), "--ntp-server time.lan --root-password *** --mqtt tcp://***@broker.lan \
-                                       --mqtt-ca ca.pem --zigbee --block-cloud");
+        let inputs = SetupInputs {
+            zigbee: true,
+            block_cloud: true,
+            ntp_server: Some("time.lan".into()),
+            root_password: Some("hunter2".into()),
+            mqtt: Some("tcp://bob:pw@broker.lan".into()),
+            mqtt_ca: Some(PathBuf::from("/home/bob/ca.pem")),
+            ..SetupInputs::default()
+        };
+        assert_eq!(
+            inputs.describe(),
+            "--ntp-server time.lan --root-password *** --mqtt tcp://***@broker.lan \
+                                       --mqtt-ca ca.pem --zigbee --block-cloud"
+        );
         assert_eq!(SetupInputs::default().describe(), "no options");
         assert_eq!(mask_url("broker.lan:1883"), "broker.lan:1883");
         assert_eq!(mask_url("mqtt://u@host/path@x"), "mqtt://***@host/path@x");

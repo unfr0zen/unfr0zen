@@ -63,7 +63,11 @@ pub fn stock_ble_off() -> io::Result<bool> {
 }
 
 fn check(result: libc::c_int) -> io::Result<libc::c_int> {
-    if result < 0 { Err(io::Error::last_os_error()) } else { Ok(result) }
+    if result < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(result)
+    }
 }
 
 fn c_path(path: &Path) -> io::Result<CString> {
@@ -105,7 +109,11 @@ fn cover_reset(ble: &Ble) -> io::Result<(OwnedFd, PathBuf)> {
 /// A new PTY's master and its other end, raw, with `link` pointing at it.
 fn open_pty(link: &Path) -> io::Result<(OwnedFd, OwnedFd)> {
     // SAFETY: posix_openpt takes only flags; the descriptor is owned at once.
-    let master = unsafe { OwnedFd::from_raw_fd(check(libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC))?) };
+    let master = unsafe {
+        OwnedFd::from_raw_fd(check(libc::posix_openpt(
+            libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        ))?)
+    };
     // SAFETY: master is a PTY master.
     check(unsafe { libc::grantpt(master.as_raw_fd()) })?;
     check(unsafe { libc::unlockpt(master.as_raw_fd()) })?;
@@ -118,7 +126,9 @@ fn open_pty(link: &Path) -> io::Result<(OwnedFd, OwnedFd)> {
     // SAFETY: ptsname_r wrote a terminated string.
     let name = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_owned();
     // SAFETY: name is the slave's path; the descriptor is owned at once.
-    let slave = unsafe { OwnedFd::from_raw_fd(check(libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC))?) };
+    let slave = unsafe {
+        OwnedFd::from_raw_fd(check(libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC))?)
+    };
     // SAFETY: termios is plain data for tcgetattr to fill.
     let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
     check(unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut termios) })?;
@@ -257,7 +267,9 @@ fn sleep_real_chip(ble: &'static Ble) {
     let reset = reset_dir(ble);
     let status = std::process::Command::new("/nestlabs/sbin/da-loader")
         .args([ble.node, SLEEP_FIRMWARE, "57600", "no-rtscts", &reset])
-        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
     match status {
         Ok(status) if status.success() => logf!("external temperature: the BLE chip sleeps"),
         Ok(status) => logf!("external temperature: BLE chip's sleep firmware: {status}"),
@@ -320,7 +332,10 @@ fn run(sensor: Option<Arc<Sensor>>, master: OwnedFd, inotify: OwnedFd, value: Pa
         let Some(sensor) = &sensor else { continue };
         let listening = chip.listening(sensor.id());
         if listening != was_listening {
-            logf!("external temperature: nlclient {} for the sensor", if listening { "is listening" } else { "stopped listening" });
+            logf!(
+                "external temperature: nlclient {} for the sensor",
+                if listening { "is listening" } else { "stopped listening" }
+            );
             was_listening = listening;
         }
         if listening {
@@ -354,8 +369,7 @@ pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool) -> io
             unsafe { libc::write(signal, b"x".as_ptr().cast(), 1) };
         });
     }
-    std::thread::Builder::new().name("ble-stand-in".into())
-        .spawn(move || run(sensor, master, inotify, value, wake))?;
+    std::thread::Builder::new().name("ble-stand-in".into()).spawn(move || run(sensor, master, inotify, value, wake))?;
     if !matter {
         std::thread::spawn(move || sleep_real_chip(ble));
     }

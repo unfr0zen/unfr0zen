@@ -22,14 +22,18 @@ pub fn installed(paths: &[&'static str]) -> &'static str {
 
 /// The manifest's files that are missing or differ under `dir`.
 fn damaged(dir: &Path, manifest: &str) -> Vec<String> {
-    manifest.lines().filter_map(|line| {
-        let (sha, name) = line.split_once("  ")?;
-        // Hashed as it is read: the largest files are megabytes.
-        let mut hash = Sha256::new();
-        let ok = std::fs::File::open(dir.join(name)).and_then(|mut file| std::io::copy(&mut file, &mut hash)).is_ok()
-            && hash.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>() == sha;
-        (!ok).then(|| name.to_string())
-    }).collect()
+    manifest
+        .lines()
+        .filter_map(|line| {
+            let (sha, name) = line.split_once("  ")?;
+            // Hashed as it is read: the largest files are megabytes.
+            let mut hash = Sha256::new();
+            let ok =
+                std::fs::File::open(dir.join(name)).and_then(|mut file| std::io::copy(&mut file, &mut hash)).is_ok()
+                    && hash.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>() == sha;
+            (!ok).then(|| name.to_string())
+        })
+        .collect()
 }
 
 /// Checks the scratch files in the background, logging the outcome.
@@ -38,13 +42,18 @@ pub fn check() {
         let dir = Path::new(DIR);
         let manifest = match std::fs::read_to_string(dir.join("manifest")) {
             Ok(manifest) => manifest,
-            Err(e) => return logf!("scratch: {DIR}/manifest: {e}; set the unit up again to restore the files kept there"),
+            Err(e) => {
+                return logf!("scratch: {DIR}/manifest: {e}; set the unit up again to restore the files kept there")
+            }
         };
         let damaged = damaged(dir, &manifest);
         if damaged.is_empty() {
             logf!("scratch: {} files verified", manifest.lines().count());
         } else {
-            logf!("scratch: missing or changed in {DIR}: {}; set the unit up again to restore them", damaged.join(", "));
+            logf!(
+                "scratch: missing or changed in {DIR}: {}; set the unit up again to restore them",
+                damaged.join(", ")
+            );
         }
     });
     if let Err(e) = spawned {
@@ -71,8 +80,12 @@ mod tests {
         std::fs::write(dir.join("doom/doom"), b"DOOM").unwrap();
         std::fs::write(dir.join("doom/doom1.wad"), b"changed").unwrap();
         let sha = |data: &[u8]| Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect::<String>();
-        let manifest = format!("{}  doom/doom\n{}  doom/doom1.wad\n{}  lib/libnestlocal_theme.so\n",
-                               sha(b"DOOM"), sha(b"WAD"), sha(b"ELF"));
+        let manifest = format!(
+            "{}  doom/doom\n{}  doom/doom1.wad\n{}  lib/libnestlocal_theme.so\n",
+            sha(b"DOOM"),
+            sha(b"WAD"),
+            sha(b"ELF")
+        );
         assert_eq!(damaged(&dir, &manifest), ["doom/doom1.wad", "lib/libnestlocal_theme.so"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }

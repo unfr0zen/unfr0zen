@@ -52,8 +52,15 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
         String::new()
     };
     // No input: the shell's own (the host's nudges among it) stays out of the hook scripts.
-    let run = shell.run_with(&format!("tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT}{omap} < /dev/null 2>&1",
-                                      bundle::APPLY, bundle::APPLY), seconds(900), false);
+    let run = shell.run_with(
+        &format!(
+            "tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT}{omap} < /dev/null 2>&1",
+            bundle::APPLY,
+            bundle::APPLY
+        ),
+        seconds(900),
+        false,
+    );
     match &run {
         Ok(output) => output.lines().for_each(|line| log::info!("unit: {line}")),
         Err(error) => log::error!("unfr0zen-apply failed: {error}"),
@@ -62,24 +69,32 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
     if let Some(data) = &stock {
         fs::write(run_dir.join("nlclient.stock"), data)?;
     }
-    let saved = || format!("The unit's stock nlclient is saved as {}: attach it to a bug report",
-                           run_dir.join("nlclient.stock").display());
+    let saved = || {
+        format!(
+            "The unit's stock nlclient is saved as {}: attach it to a bug report",
+            run_dir.join("nlclient.stock").display()
+        )
+    };
     if let Err(error) = run {
         return Err(if stock.is_some() { failure(format!("{error}. {}", saved())) } else { error });
     }
-    let (_, _, result) = shell.read_file(&format!("{OUT}/result.json"))?
-        .ok_or_else(|| failure("unfr0zen-apply left no result.json"))?;
-    let result: serde_json::Value = serde_json::from_slice(&result)
-        .map_err(|e| failure(format!("unfr0zen-apply's result.json: {e}")))?;
+    let (_, _, result) =
+        shell.read_file(&format!("{OUT}/result.json"))?.ok_or_else(|| failure("unfr0zen-apply left no result.json"))?;
+    let result: serde_json::Value =
+        serde_json::from_slice(&result).map_err(|e| failure(format!("unfr0zen-apply's result.json: {e}")))?;
     if !result["nlclient"].is_null() {
         fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", result["nlclient"]))?;
     }
     if stock.is_some() {
         log::info!("{}", saved());
     }
-    let changes = result["changes"].as_array().ok_or_else(|| failure("unfr0zen-apply's result.json lists no changes"))?;
-    Ok(changes.iter().map(|change| {
-        let field = |key: &str| change[key].as_str().unwrap_or("-").to_string();
-        format!("{} {}: {} -> {}\n", field("action"), field("name"), field("old"), field("new"))
-    }).collect())
+    let changes =
+        result["changes"].as_array().ok_or_else(|| failure("unfr0zen-apply's result.json lists no changes"))?;
+    Ok(changes
+        .iter()
+        .map(|change| {
+            let field = |key: &str| change[key].as_str().unwrap_or("-").to_string();
+            format!("{} {}: {} -> {}\n", field("action"), field("name"), field("old"), field("new"))
+        })
+        .collect())
 }

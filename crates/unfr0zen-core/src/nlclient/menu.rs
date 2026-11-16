@@ -10,7 +10,10 @@
 //! after the list's address is loaded, shortened to match. The slots past the
 //! bound keep valid names, since nlclient's lookup of a screen by name walks
 //! the whole list.
-use super::{discovery, elf::{word, Elf}};
+use super::{
+    discovery,
+    elf::{word, Elf},
+};
 use crate::{device, Result};
 
 /// The stock screens the entries take the place of, in the order of
@@ -39,7 +42,9 @@ impl Section {
 /// screens the entries replace, the sections in order after its first
 /// entry, and Legal Info's name (UNFR0ZEN) where it was.
 pub fn arranged(stock: &[String], sections: &[Section]) -> Result<Vec<String>> {
-    if stock.first().map(String::as_str) != Some("temperature") || stock.last().map(String::as_str) != Some("temperature") {
+    if stock.first().map(String::as_str) != Some("temperature")
+        || stock.last().map(String::as_str) != Some("temperature")
+    {
         return device("settings menu does not run between temperature entries");
     }
     for host in HOSTS {
@@ -109,7 +114,9 @@ fn bound(elf: &Elf, list: u32, count: usize) -> Result<u32> {
                     continue;
                 }
                 // ADD Rd, Rn, #imm8 (no rotation)
-                if x & 0xfff0_0f00 == 0xe280_0000 && (x >> 16) & 0xf == register && x & 0xff == count as u32 * 4
+                if x & 0xfff0_0f00 == 0xe280_0000
+                    && (x >> 16) & 0xf == register
+                    && x & 0xff == count as u32 * 4
                     && (base == list || base == list.wrapping_sub(4))
                 {
                     found.push(address);
@@ -138,15 +145,41 @@ mod tests {
 
     #[test]
     fn the_sections_follow_the_first_entry_and_unfr0zen_takes_legal_infos_place() {
-        let stock = names(&["temperature", "schedule", "account", "wifi", "templock", "proinfoscreen", "update",
-                            "systeminfo", "legalinfo", "reset", "temperature"]);
-        assert_eq!(arranged(&stock, &[Section::Doom, Section::Zigbee]).unwrap(),
-                   names(&["temperature", "account", "templock", "schedule", "wifi", "systeminfo", "legalinfo",
-                           "reset", "temperature"]));
-        assert_eq!(arranged(&stock, &[]).unwrap(),
-                   names(&["temperature", "schedule", "wifi", "systeminfo", "legalinfo", "reset", "temperature"]));
-        assert_eq!(arranged(&stock, &[Section::Matter, Section::Themes, Section::Doom, Section::Zigbee]).unwrap()[1..5],
-                   names(&["account", "update", "proinfoscreen", "templock"]));
+        let stock = names(&[
+            "temperature",
+            "schedule",
+            "account",
+            "wifi",
+            "templock",
+            "proinfoscreen",
+            "update",
+            "systeminfo",
+            "legalinfo",
+            "reset",
+            "temperature",
+        ]);
+        assert_eq!(
+            arranged(&stock, &[Section::Doom, Section::Zigbee]).unwrap(),
+            names(&[
+                "temperature",
+                "account",
+                "templock",
+                "schedule",
+                "wifi",
+                "systeminfo",
+                "legalinfo",
+                "reset",
+                "temperature"
+            ])
+        );
+        assert_eq!(
+            arranged(&stock, &[]).unwrap(),
+            names(&["temperature", "schedule", "wifi", "systeminfo", "legalinfo", "reset", "temperature"])
+        );
+        assert_eq!(
+            arranged(&stock, &[Section::Matter, Section::Themes, Section::Doom, Section::Zigbee]).unwrap()[1..5],
+            names(&["account", "update", "proinfoscreen", "templock"])
+        );
         let mut missing = stock.clone();
         missing.retain(|n| n != "templock");
         assert!(arranged(&missing, &[]).is_err());

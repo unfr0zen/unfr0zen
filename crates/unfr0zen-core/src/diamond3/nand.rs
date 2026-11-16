@@ -83,7 +83,11 @@ pub fn bad_blocks(response: &str) -> Result<Vec<u32>> {
         return device(format!("nand bad printed no bad block list: {}", response.trim()));
     };
     let list = list.trim_end();
-    list.strip_suffix("=>").unwrap_or(list).lines().map(str::trim).filter(|line| !line.is_empty())
+    list.strip_suffix("=>")
+        .unwrap_or(list)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
         .map(|line| match u32::from_str_radix(line, 16) {
             Ok(offset) if line.bytes().all(|b| b.is_ascii_hexdigit()) => Ok(offset),
             _ => device(format!("nand bad printed {line:?}, not a block offset")),
@@ -151,8 +155,9 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     /// blocks are not BCH18, so ECC errors do not count there; they are read on
     /// their own, as U-Boot names only the start of a read that fails.
     fn nand_to_address(&mut self, address: u32, offset: u32, size: u32) -> Result<bool> {
-        let response = self.console.command_allow_failure(&format!("nand read {address:#x} {offset:#x} {size:#x}"),
-                                                          seconds(120))?;
+        let response = self
+            .console
+            .command_allow_failure(&format!("nand read {address:#x} {offset:#x} {size:#x}"), seconds(120))?;
         if response.contains(&format!("NAND read from offset {offset:x} failed -74")) {
             return Ok(offset + size <= BOOT_CONTROL);
         }
@@ -203,16 +208,18 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
                 return device(format!("nand erase at {at:#x} failed: {}", response.trim()));
             }
             let address = RAM_BASE + (at - offset);
-            let response = self.console.command(&format!("nand write.trimffs {address:#x} {at:#x} {size:#x}"),
-                                                seconds(300))?;
+            let response =
+                self.console.command(&format!("nand write.trimffs {address:#x} {at:#x} {size:#x}"), seconds(300))?;
             if !response.contains(&format!("{size} bytes written: OK")) {
                 return device(format!("nand write at {at:#x} failed: {}", response.trim()));
             }
         }
         let actual = self.nand_crc(offset, size as u32, bad)?;
         if actual != expected {
-            return device(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
-                                   the image has {expected:08x}"));
+            return device(format!(
+                "NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
+                                   the image has {expected:08x}"
+            ));
         }
         Ok(())
     }
@@ -236,7 +243,9 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
             return device(format!("boot control erase failed: {}", response.trim()));
         }
         let response = self.console.command_allow_failure(
-            &format!("nandbcb bcbonly 0 {fw1:#x} {size1:#x} {fw2:#x} {size2:#x}"), seconds(60))?;
+            &format!("nandbcb bcbonly 0 {fw1:#x} {size1:#x} {fw2:#x} {size2:#x}"),
+            seconds(60),
+        )?;
         if response.contains("ERROR") {
             return device(format!("nandbcb bcbonly failed: {}", response.trim()));
         }
@@ -305,7 +314,10 @@ mod tests {
         assert!(!unit.borrow().lines.iter().any(|l| l.starts_with("nand")));
         board.write_boot_control(&[(0x10_0000, 0x66800), (0x20_0000, 0x66800)]).unwrap();
         let lines = &unit.borrow().lines;
-        assert_eq!(&lines[lines.len() - 2..], ["nand erase 0 0x100000", "nandbcb bcbonly 0 0x100000 0x66800 0x200000 0x66800"]);
+        assert_eq!(
+            &lines[lines.len() - 2..],
+            ["nand erase 0 0x100000", "nandbcb bcbonly 0 0x100000 0x66800 0x200000 0x66800"]
+        );
     }
 
     #[test]
@@ -429,14 +441,20 @@ mod tests {
     #[test]
     fn pieces_split_around_bad_blocks_and_the_boot_control_blocks() {
         assert_eq!(pieces(BOOT_SIZE, 0x10_0000, &[]), [(BOOT_SIZE, 0x10_0000, false)]);
-        assert_eq!(pieces(0, BOOT_SIZE, &[]), [(0, BOOT_CONTROL, false), (BOOT_CONTROL, BOOT_SIZE - BOOT_CONTROL, false)]);
+        assert_eq!(
+            pieces(0, BOOT_SIZE, &[]),
+            [(0, BOOT_CONTROL, false), (BOOT_CONTROL, BOOT_SIZE - BOOT_CONTROL, false)]
+        );
         let bad = [BOOT_SIZE + BLOCK, BOOT_SIZE + 2 * BLOCK, 0x1000_0000];
-        assert_eq!(pieces(BOOT_SIZE, 8 * BLOCK, &bad), [
-            (BOOT_SIZE, BLOCK, false),
-            (BOOT_SIZE + BLOCK, BLOCK, true),
-            (BOOT_SIZE + 2 * BLOCK, BLOCK, true),
-            (BOOT_SIZE + 3 * BLOCK, 5 * BLOCK, false),
-        ]);
+        assert_eq!(
+            pieces(BOOT_SIZE, 8 * BLOCK, &bad),
+            [
+                (BOOT_SIZE, BLOCK, false),
+                (BOOT_SIZE + BLOCK, BLOCK, true),
+                (BOOT_SIZE + 2 * BLOCK, BLOCK, true),
+                (BOOT_SIZE + 3 * BLOCK, 5 * BLOCK, false),
+            ]
+        );
         assert_eq!(pieces(BOOT_SIZE + BLOCK, BLOCK, &bad), [(BOOT_SIZE + BLOCK, BLOCK, true)]);
     }
 
@@ -469,6 +487,10 @@ mod tests {
         assert_eq!(unit.borrow().nand[&(BOOT_SIZE + 2 * BLOCK)], vec![3u8; block]);
         assert!(!unit.borrow().lines.iter().any(|l| l.starts_with("nand") && l.contains("0x420000")));
         data[block] = 0;
-        assert!(board.write_nand(BOOT_SIZE, &data, &[BOOT_SIZE + BLOCK]).unwrap_err().to_string().contains("reads back"));
+        assert!(board
+            .write_nand(BOOT_SIZE, &data, &[BOOT_SIZE + BLOCK])
+            .unwrap_err()
+            .to_string()
+            .contains("reads back"));
     }
 }

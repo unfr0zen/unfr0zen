@@ -19,22 +19,22 @@ else
 fi
 mkdir -p "$data"
 play() {
-    cd "$data" && HOME="$data" exec "$doom" -iwad "$wad" > "$data/doom.log" 2>&1
+    cd "$data" && HOME="$data" exec "$doom" -iwad "$wad" >"$data/doom.log" 2>&1
 }
-read -r keeper _ < "$run/keeper.pid" 2> /dev/null
+read -r keeper _ <"$run/keeper.pid" 2>/dev/null
 if [ -n "$keeper" ] && [ "$keeper" = "$(pidof nlclient)" ]; then
     # This shell owns the display while it waits for Doom.
-    echo $$ > "$run/screen.owner"
+    echo $$ >"$run/screen.owner"
     (play)
     rm -f "$run/screen.owner"
     exit 0
 fi
-monit unmonitor nlclient > /dev/null 2>&1
+monit unmonitor nlclient >/dev/null 2>&1
 for i in 1 2 3 4 5 6 7 8 9 10; do
     pid=$(pidof nlclient) || break
-    if [ "$i" -lt 6 ]; then kill $pid; else kill -9 $pid; fi
+    if [ "$i" -lt 6 ]; then kill "$pid"; else kill -9 "$pid"; fi
     sleep 1
 done
 (play)
-monit monitor nlclient > /dev/null 2>&1
-monit start nlclient > /dev/null 2>&1
+monit monitor nlclient >/dev/null 2>&1
+monit start nlclient >/dev/null 2>&1

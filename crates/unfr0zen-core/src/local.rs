@@ -61,7 +61,9 @@ impl LocalVolume {
 }
 
 fn owner_ids(owner: &str) -> Result<(u32, u32)> {
-    owner.split_once(':').and_then(|(uid, gid)| Some((uid.parse().ok()?, gid.parse().ok()?)))
+    owner
+        .split_once(':')
+        .and_then(|(uid, gid)| Some((uid.parse().ok()?, gid.parse().ok()?)))
         .map_or_else(|| device(format!("not an owner: {owner:?}")), Ok)
 }
 
@@ -88,12 +90,16 @@ fn sync() {
 
 impl Volume for LocalVolume {
     fn read(&mut self, name: &str) -> Result<Option<File<Vec<u8>>>> {
-        let Some((owner, mode, path)) = self.header(name)? else { return Ok(None) };
+        let Some((owner, mode, path)) = self.header(name)? else {
+            return Ok(None);
+        };
         Ok(Some((owner, mode, fs::read(path)?)))
     }
 
     fn inspect(&mut self, name: &str) -> Result<Option<File<String>>> {
-        let Some((owner, mode, path)) = self.header(name)? else { return Ok(None) };
+        let Some((owner, mode, path)) = self.header(name)? else {
+            return Ok(None);
+        };
         Ok(Some((owner, mode, sha256_hex(&fs::read(path)?))))
     }
 
@@ -188,18 +194,26 @@ impl Volume for LocalVolume {
         // Read back from flash, not the page cache, where the kernel lets
         // root drop it; a container's /proc refuses, and reads cached.
         match fs::write(DROP_CACHES, "3") {
-            Err(e) if !matches!(e.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem) => {
+            Err(e)
+                if !matches!(
+                    e.kind(),
+                    ErrorKind::NotFound | ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+                ) =>
+            {
                 return Err(e.into());
             }
             _ => {}
         }
-        names.iter().map(|name| {
-            let path = self.path(name);
-            let sha = fs::read(&path).ok().map(|data| sha256_hex(&data));
-            let owner_mode = fs::metadata(&path).ok()
-                .map(|m| format!("{}:{} {:o}", m.uid(), m.gid(), m.mode() & 0o7777));
-            Ok((name.clone(), (sha, owner_mode)))
-        }).collect()
+        names
+            .iter()
+            .map(|name| {
+                let path = self.path(name);
+                let sha = fs::read(&path).ok().map(|data| sha256_hex(&data));
+                let owner_mode =
+                    fs::metadata(&path).ok().map(|m| format!("{}:{} {:o}", m.uid(), m.gid(), m.mode() & 0o7777));
+                Ok((name.clone(), (sha, owner_mode)))
+            })
+            .collect()
     }
 }
 

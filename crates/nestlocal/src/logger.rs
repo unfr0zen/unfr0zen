@@ -149,7 +149,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "abcdefghijklmnopq\n");
         super::keep(&mut kept, "rstuvwxyz\n");
         super::keep(&mut kept, "0123456789abcdef\n");
-        assert_eq!(std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(), "abcdefghijklmnopq\nrstuvwxyz\n", "the older one replaced");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(),
+            "abcdefghijklmnopq\nrstuvwxyz\n",
+            "the older one replaced"
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "0123456789abcdef\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -29,9 +29,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let mut journal = Vec::new();
         flate2::read::GzDecoder::new(found.journal.as_slice()).read_to_end(&mut journal)?;
         let patch: serde_json::Map<String, serde_json::Value> = [
-            "factories", "image", "original_program_headers", "payload_address", "payload_offset",
-            "program_header_offset", "runtime_directory", "settings_menu", "source_size",
-        ].into_iter().map(|key| (key.to_owned(), manifest[key].clone())).collect();
+            "factories",
+            "image",
+            "original_program_headers",
+            "payload_address",
+            "payload_offset",
+            "program_header_offset",
+            "runtime_directory",
+            "settings_menu",
+            "source_size",
+        ]
+        .into_iter()
+        .map(|key| (key.to_owned(), manifest[key].clone()))
+        .collect();
         let golden = serde_json::json!({
             "discovery": manifest["discovery"],
             "native_api": manifest["native_api"],
@@ -42,7 +52,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "size": size, "symbols": manifest["symbols"]},
             "toolchain": args[3].to_string_lossy(),
         });
-        let path = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("platform/common/nlclient/tests/golden")
+        let path = PathBuf::from(env!("UNFR0ZEN_ROOT"))
+            .join("platform/common/nlclient/tests/golden")
             .join(format!("{}.json", unfr0zen_core::shell::sha256_hex(&source)));
         std::fs::write(&path, serde_json::to_vec_pretty(&golden)?)?;
         println!("{}", path.display());
@@ -56,10 +67,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let found = builder::build(&source, &object, &unfr0zen_core::nlclient::menu::Section::ALL)?;
     let out = PathBuf::from(&args[2]);
     std::fs::write(&out, &found.output)?;
-    std::fs::write(
-        out.with_extension("json"),
-        serde_json::to_vec_pretty(&found.manifest)?,
-    )?;
+    std::fs::write(out.with_extension("json"), serde_json::to_vec_pretty(&found.manifest)?)?;
     std::fs::write(out.with_extension("undo.gz"), &found.journal)?;
     let patch = Patch::parse(&found.journal)?;
     let mut journal = Vec::new();

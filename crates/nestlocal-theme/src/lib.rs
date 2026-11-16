@@ -17,22 +17,27 @@
 mod engine {
     pub mod display;
     pub mod ft;
+    pub mod gpu;
     pub mod guard;
     pub mod paint;
-    pub mod theme;
     #[cfg(test)]
     pub mod soft;
+    pub mod theme;
     pub mod typeset;
-    pub mod gpu;
 }
+use engine::{
+    display::Geometry,
+    gpu::{quads::Quads, render::Renderer},
+    guard,
+    theme::{diagnostic, Clock, Nest, Theme, ThermostatView, Ui},
+};
+use serde_json::Value;
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CString};
 use std::path::Path;
-use std::time::Instant;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::rc::Rc;
-use engine::{display::Geometry, guard, gpu::{quads::Quads, render::Renderer}, theme::{diagnostic, Theme, Ui, Clock, Nest, ThermostatView}};
-use serde_json::Value;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
 
 /// Where the setup installs the themes, one folder each.
 const THEMES: &str = "/media/scratch/.unfr0zen/themes";
@@ -77,20 +82,34 @@ unsafe extern "C" fn enable(cap: u32) {
         if get != 0 {
             std::mem::transmute::<usize, unsafe extern "C" fn(u32, *mut i32)>(get)(GL_FRAMEBUFFER_BINDING, &mut bound);
         }
-        if get == 0 || bound as u32 == SCREEN.load(Ordering::Relaxed) { STENCIL_USED.store(true, Ordering::Relaxed); }
+        if get == 0 || bound as u32 == SCREEN.load(Ordering::Relaxed) {
+            STENCIL_USED.store(true, Ordering::Relaxed);
+        }
     }
     let real = std::mem::transmute::<usize, unsafe extern "C" fn(u32)>(GL_ENABLE.load(Ordering::Relaxed));
     real(cap);
 }
 
 #[derive(Default)]
-struct Motion { screen: f64, target: f64, turned: Option<f64>, input: u64, home: u64 }
+struct Motion {
+    screen: f64,
+    target: f64,
+    turned: Option<f64>,
+    input: u64,
+    home: u64,
+}
 impl Motion {
     fn update(&mut self, now: f64, input: u64, home: u64, theme: bool, target: bool) -> bool {
         let notified = input != self.input || home != self.home || theme;
-        if home != self.home || theme { self.screen = now; }
-        if target { self.target = now; }
-        if input != self.input { self.turned = Some(now); }
+        if home != self.home || theme {
+            self.screen = now;
+        }
+        if target {
+            self.target = now;
+        }
+        if input != self.input {
+            self.turned = Some(now);
+        }
         self.input = input;
         self.home = home;
         notified
@@ -99,7 +118,18 @@ impl Motion {
 
 #[repr(C)]
 #[derive(Default)]
-struct NativeState { target: f32, current: f32, low: f32, high: f32, humidity: f32, unit: u32, mode: u32, hvac: u32, leaf: u32, range: u32 }
+struct NativeState {
+    target: f32,
+    current: f32,
+    low: f32,
+    high: f32,
+    humidity: f32,
+    unit: u32,
+    mode: u32,
+    hvac: u32,
+    leaf: u32,
+    range: u32,
+}
 impl NativeState {
     fn apply(&self, ui: &mut Ui) -> f32 {
         let shown = |v: f32| if self.unit != 0 { v * 1.8 + 32.0 } else { v };
@@ -108,11 +138,24 @@ impl NativeState {
         t.current = shown(self.current);
         t.low = shown(self.low);
         t.high = shown(self.high);
-        t.mode = match self.mode { 0 => "heat", 1 => "cool", 2 => "heat-cool", 4 => "eco", _ => "off" }.into();
-        t.hvac = match self.hvac { 1 => "heating", 2 => "cooling", _ => "idle" };
+        t.mode = match self.mode {
+            0 => "heat",
+            1 => "cool",
+            2 => "heat-cool",
+            4 => "eco",
+            _ => "off",
+        }
+        .into();
+        t.hvac = match self.hvac {
+            1 => "heating",
+            2 => "cooling",
+            _ => "idle",
+        };
         // nestlocal's reading, as the stock screens show it; the native
         // one reads 0 on builds whose bound getter does not give it.
-        if t.humidity.is_none() && self.humidity > 0.0 { t.humidity = Some(self.humidity); }
+        if t.humidity.is_none() && self.humidity > 0.0 {
+            t.humidity = Some(self.humidity);
+        }
         t.leaf_on = self.leaf != 0;
         t.eco = self.mode == 4;
         // The heat-cool end being edited (1, 2) or picked (3, 4) on the dial.
@@ -130,7 +173,27 @@ impl NativeState {
 }
 type NativeReader = unsafe extern "C" fn(*mut NativeState);
 type Loader = unsafe extern "C" fn(*const c_char) -> *const c_void;
-struct Engine { native: Option<NativeReader>, renderer: Renderer, theme: Option<Theme>, name: String, picked: u64, broken: Option<Broken>, guarded: Option<Instant>, started: Instant, motion: Motion, target: f32, frames: u32, timing: [f64; 4], data: Rc<Value>, revision: Option<std::time::SystemTime>, previous: Option<Ui>, animating: bool, wake: Option<f64>, retained: bool, stencil: bool }
+struct Engine {
+    native: Option<NativeReader>,
+    renderer: Renderer,
+    theme: Option<Theme>,
+    name: String,
+    picked: u64,
+    broken: Option<Broken>,
+    guarded: Option<Instant>,
+    started: Instant,
+    motion: Motion,
+    target: f32,
+    frames: u32,
+    timing: [f64; 4],
+    data: Rc<Value>,
+    revision: Option<std::time::SystemTime>,
+    previous: Option<Ui>,
+    animating: bool,
+    wake: Option<f64>,
+    retained: bool,
+    stencil: bool,
+}
 thread_local! { static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) }; }
 /// The stock picture for the weather (`unit:Weather_*.png`), from
 /// nestlocal's condition names (weather.rs's nest_icon), by day between
@@ -154,53 +217,119 @@ fn weather_image(weather: &Value, now: i64) -> Option<&'static str> {
 }
 
 fn view(value: &Rc<Value>, now: f64, changed: f64, design: f32) -> Ui {
-    let dev = &value["dev"]; let sh = &value["shared"]; let weather = &value["weather"];
+    let dev = &value["dev"];
+    let sh = &value["shared"];
+    let weather = &value["weather"];
     let epoch = chrono::Utc::now().timestamp();
     let fahrenheit = dev["temperature_scale"] == "F";
     let shown = |v: f64| if fahrenheit { (v * 1.8 + 32.0) as f32 } else { v as f32 };
     let temperature = |key: &str| sh[key].as_f64().map(shown).unwrap_or(0.0);
     let mode = sh["target_temperature_type"].as_str().unwrap_or("off");
-    let heat = ["hvac_heater_state", "hvac_heat_x2_state", "hvac_heat_x3_state", "hvac_aux_heater_state", "hvac_alt_heat_state", "hvac_alt_heat_x2_state", "hvac_emer_heat_state"].iter().any(|k| sh[k] == true);
+    let heat = [
+        "hvac_heater_state",
+        "hvac_heat_x2_state",
+        "hvac_heat_x3_state",
+        "hvac_aux_heater_state",
+        "hvac_alt_heat_state",
+        "hvac_alt_heat_x2_state",
+        "hvac_emer_heat_state",
+    ]
+    .iter()
+    .any(|k| sh[k] == true);
     let cool = ["hvac_ac_state", "hvac_cool_x2_state", "hvac_cool_x3_state"].iter().any(|k| sh[k] == true);
     let on = |key: &str| sh[key] == true;
-    let stage = if on("hvac_heat_x3_state") || on("hvac_cool_x3_state") { 3 }
-        else if on("hvac_heat_x2_state") || on("hvac_cool_x2_state") { 2 } else { 1 };
-    let alt = if on("hvac_alt_heat_x2_state") { 2 } else if on("hvac_alt_heat_state") { 1 } else { 0 };
-    let preconditioning = (dev["preconditioning_active"] == true).then_some(if cool || (!heat && mode == "cool") { "cool" } else { "heat" });
-    let time_to_target = dev["time_to_target"].as_f64().filter(|&t| t > epoch as f64)
-        .map(|t| ((t - epoch as f64) / 60.0).ceil() as u32);
+    let stage = if on("hvac_heat_x3_state") || on("hvac_cool_x3_state") {
+        3
+    } else if on("hvac_heat_x2_state") || on("hvac_cool_x2_state") {
+        2
+    } else {
+        1
+    };
+    let alt = if on("hvac_alt_heat_x2_state") {
+        2
+    } else if on("hvac_alt_heat_state") {
+        1
+    } else {
+        0
+    };
+    let preconditioning = (dev["preconditioning_active"] == true).then_some(if cool || (!heat && mode == "cool") {
+        "cool"
+    } else {
+        "heat"
+    });
+    let time_to_target =
+        dev["time_to_target"].as_f64().filter(|&t| t > epoch as f64).map(|t| ((t - epoch as f64) / 60.0).ceil() as u32);
     let local = chrono::Local::now();
     use chrono::{Datelike, Timelike};
-    Ui { now, screen: "home", design, dial_px: 480.0, changed_target: changed, changed_screen: 0.0,
+    Ui {
+        now,
+        screen: "home",
+        design,
+        dial_px: 480.0,
+        changed_target: changed,
+        changed_screen: 0.0,
         thermostat: ThermostatView {
-            target: temperature("target_temperature"), current: temperature("current_temperature"),
-            min: shown(9.0), max: shown(32.0), unit: if fahrenheit { "F" } else { "C" },
+            target: temperature("target_temperature"),
+            current: temperature("current_temperature"),
+            min: shown(9.0),
+            max: shown(32.0),
+            unit: if fahrenheit { "F" } else { "C" },
             mode: if mode == "range" { "heat-cool" } else { mode }.into(),
-            hvac: if mode == "off" { "idle" } else if heat { "heating" } else if cool { "cooling" } else { "idle" },
-            stage, aux: on("hvac_aux_heater_state"), emergency: on("hvac_emer_heat_state"), alt,
-            preconditioning, safety: dev["hvac_safety_shutoff_active"] == true,
-            sunblock: dev["sunlight_correction_active"] == true, time_to_target,
-            outdoor: weather["temp_c"].as_f64().map(shown), weather_image: weather_image(weather, epoch),
-            low: temperature("target_temperature_low"), high: temperature("target_temperature_high"),
+            hvac: if mode == "off" {
+                "idle"
+            } else if heat {
+                "heating"
+            } else if cool {
+                "cooling"
+            } else {
+                "idle"
+            },
+            stage,
+            aux: on("hvac_aux_heater_state"),
+            emergency: on("hvac_emer_heat_state"),
+            alt,
+            preconditioning,
+            safety: dev["hvac_safety_shutoff_active"] == true,
+            sunblock: dev["sunlight_correction_active"] == true,
+            time_to_target,
+            outdoor: weather["temp_c"].as_f64().map(shown),
+            weather_image: weather_image(weather, epoch),
+            low: temperature("target_temperature_low"),
+            high: temperature("target_temperature_high"),
             humidity: dev["current_humidity"].as_f64().map(|n| n as f32),
-            can_heat: sh["can_heat"].as_bool().unwrap_or(true), can_cool: sh["can_cool"].as_bool().unwrap_or(false),
-            leaf_on: dev["leaf"].as_bool().unwrap_or(false), online: true,
-            eco: matches!(dev["eco"]["mode"].as_str(), Some("manual-eco" | "auto-eco")), farsight: "target_temp",
+            can_heat: sh["can_heat"].as_bool().unwrap_or(true),
+            can_cool: sh["can_cool"].as_bool().unwrap_or(false),
+            leaf_on: dev["leaf"].as_bool().unwrap_or(false),
+            online: true,
+            eco: matches!(dev["eco"]["mode"].as_str(), Some("manual-eco" | "auto-eco")),
+            farsight: "target_temp",
             ..Default::default()
-        }, fan_on: sh["hvac_fan_state"] == true,
-        clock: Clock { weekday: local.weekday().num_days_from_sunday() as u8, hour: local.hour() as u8,
-            minute: local.minute() as u8, second: local.second() as u8, epoch: local.timestamp(),
-            utc_offset: local.offset().local_minus_utc(), ..Default::default() },
+        },
+        fan_on: sh["hvac_fan_state"] == true,
+        clock: Clock {
+            weekday: local.weekday().num_days_from_sunday() as u8,
+            hour: local.hour() as u8,
+            minute: local.minute() as u8,
+            second: local.second() as u8,
+            epoch: local.timestamp(),
+            utc_offset: local.offset().local_minus_utc(),
+            ..Default::default()
+        },
         nest: Nest(value.clone()),
         ..Default::default()
     }
 }
 impl Engine {
     unsafe fn new(loader: Loader, _framebuffer: u32) -> Result<Self, String> {
-        let address = |name: &str| { let name = CString::new(name).unwrap(); loader(name.as_ptr()) };
+        let address = |name: &str| {
+            let name = CString::new(name).unwrap();
+            loader(name.as_ptr())
+        };
         let femtovg_address = |name: &str| {
             let real = address(name);
-            if name != "glEnable" || real.is_null() { return real; }
+            if name != "glEnable" || real.is_null() {
+                return real;
+            }
             GL_GET_INTEGERV.store(address("glGetIntegerv") as usize, Ordering::Relaxed);
             GL_ENABLE.store(real as usize, Ordering::Relaxed);
             enable as *const c_void
@@ -210,8 +339,29 @@ impl Engine {
         let quads = Quads::new(glow::Context::from_loader_function(address))?;
         let renderer = Renderer::new(canvas, Some(quads), (0.0, 0.0, 480, 480))?;
         let native = address("nestlocal_native_theme_v1");
-        let native = if native.is_null() { None } else { Some(std::mem::transmute::<*const c_void, NativeReader>(native)) };
-        Ok(Self { native, renderer, theme: None, name: String::new(), picked: 0, broken: None, guarded: None, started: Instant::now(), motion: Motion::default(), target: f32::NAN, frames: 0, timing: [0.0; 4], data: Rc::new(Value::Null), revision: None, previous: None, animating: true, wake: None, retained: false, stencil: false })
+        let native =
+            if native.is_null() { None } else { Some(std::mem::transmute::<*const c_void, NativeReader>(native)) };
+        Ok(Self {
+            native,
+            renderer,
+            theme: None,
+            name: String::new(),
+            picked: 0,
+            broken: None,
+            guarded: None,
+            started: Instant::now(),
+            motion: Motion::default(),
+            target: f32::NAN,
+            frames: 0,
+            timing: [0.0; 4],
+            data: Rc::new(Value::Null),
+            revision: None,
+            previous: None,
+            animating: true,
+            wake: None,
+            retained: false,
+            stencil: false,
+        })
     }
     /// Loads the theme `name` and its fonts, counted by the crash-loop guard
     /// until it has run for GUARD_WINDOW (draw) or failed here.
@@ -247,7 +397,9 @@ impl Engine {
         let path = "/var/run/unfr0zen/theme.native.json";
         let revision = std::fs::metadata(path).and_then(|m| m.modified()).map_err(|e| e.to_string())?;
         if self.revision != Some(revision) {
-            self.data = Rc::new(serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?);
+            self.data = Rc::new(
+                serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?,
+            );
             self.revision = Some(revision);
             if self.broken.as_ref().is_some_and(|broken| broken.frame) {
                 self.broken = None;
@@ -257,15 +409,22 @@ impl Engine {
         let value = self.data.clone();
         let value = &value;
         let name = value["theme"].as_str().ok_or("no theme chosen")?;
-        if !theme_id(name) { return Err("unknown theme".into()); }
+        if !theme_id(name) {
+            return Err("unknown theme".into());
+        }
         let picked = value["picked"].as_u64().unwrap_or(0);
         let theme_changed = name != self.name || picked != self.picked;
         if theme_changed {
             // Picked while this runs, not found chosen as it starts: the
             // guard's count starts again.
-            if !self.name.is_empty() { guard::leave(Path::new(GUARD)); }
+            if !self.name.is_empty() {
+                guard::leave(Path::new(GUARD));
+            }
             (self.theme, self.broken, self.guarded) = (None, None, None);
-            self.name = name.into(); self.picked = picked; self.previous = None; self.stencil = false;
+            self.name = name.into();
+            self.picked = picked;
+            self.previous = None;
+            self.stencil = false;
             match self.load(name) {
                 Ok(theme) => {
                     self.theme = Some(theme);
@@ -288,15 +447,25 @@ impl Engine {
         let mut ui = view(value, now, self.motion.target, design);
         let target = if let Some(read) = self.native {
             let mut state = NativeState::default();
-            unsafe { read(&mut state); }
+            unsafe {
+                read(&mut state);
+            }
             state.apply(&mut ui)
-        } else { target };
+        } else {
+            target
+        };
         if target.is_finite() {
             let step = if ui.thermostat.unit == "F" { 1.0 } else { 0.5 };
             ui.thermostat.target = (target / step).round() * step;
             ui.thermostat.nudge = target - ui.thermostat.target;
         }
-        if self.motion.update(now, INPUT_REVISION.load(Ordering::Acquire), HOME_REVISION.load(Ordering::Acquire), theme_changed, ui.thermostat.target != self.target) {
+        if self.motion.update(
+            now,
+            INPUT_REVISION.load(Ordering::Acquire),
+            HOME_REVISION.load(Ordering::Acquire),
+            theme_changed,
+            ui.thermostat.target != self.target,
+        ) {
             self.previous = None;
             self.animating = true;
         }
@@ -309,9 +478,15 @@ impl Engine {
         state.clock.second = 0;
         state.clock.epoch -= state.clock.epoch.rem_euclid(60);
         let decoded = self.renderer.take_decoded();
-        if self.retained && !self.animating && !decoded && self.previous.as_ref() == Some(&state)
-            && self.wake.is_none_or(|wake| now < wake) {
-            if image { return self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into()); }
+        if self.retained
+            && !self.animating
+            && !decoded
+            && self.previous.as_ref() == Some(&state)
+            && self.wake.is_none_or(|wake| now < wake)
+        {
+            if image {
+                return self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into());
+            }
             self.renderer.present_retained();
             return Ok(1);
         }
@@ -351,20 +526,37 @@ impl Engine {
             self.renderer.finish_texture();
         }
         self.retained = !direct;
-        if !direct && !image { self.renderer.present_retained(); }
+        if !direct && !image {
+            self.renderer.present_retained();
+        }
         self.frames += 1;
-        for (total, duration) in self.timing.iter_mut().zip([prepared-start, begun-prepared, drawn-begun, drawn.elapsed()]) { *total += duration.as_secs_f64(); }
+        for (total, duration) in
+            self.timing.iter_mut().zip([prepared - start, begun - prepared, drawn - begun, drawn.elapsed()])
+        {
+            *total += duration.as_secs_f64();
+        }
         if self.frames == 120 {
             eprintln!("THEME painter state_ms={:.3} begin_ms={:.3} lua_ms={:.3} finish_ms={:.3} shapes={} flushes={} layers={} painting_ms={:.3}", self.timing[0]*1000.0/120.0, self.timing[1]*1000.0/120.0, self.timing[2]*1000.0/120.0, self.timing[3]*1000.0/120.0, self.renderer.shapes/120, self.renderer.flushes/120, self.renderer.layers_drawn, self.renderer.painting.as_secs_f64()*1000.0/120.0);
-            self.frames=0; self.timing=[0.0; 4]; self.renderer.shapes=0; self.renderer.flushes=0; self.renderer.layers_drawn=0; self.renderer.painting=std::time::Duration::ZERO;
+            self.frames = 0;
+            self.timing = [0.0; 4];
+            self.renderer.shapes = 0;
+            self.renderer.flushes = 0;
+            self.renderer.layers_drawn = 0;
+            self.renderer.painting = std::time::Duration::ZERO;
         }
-        if image { self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into()) } else { Ok(1) }
+        if image {
+            self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into())
+        } else {
+            Ok(1)
+        }
     }
 
     /// Seconds until the theme needs another frame: 0 while it moves, the
     /// time it woke for, or infinite while it stands still.
     fn next(&self) -> f32 {
-        if self.animating { return 0.0; }
+        if self.animating {
+            return 0.0;
+        }
         self.wake.map_or(f32::INFINITY, |wake| (wake - self.started.elapsed().as_secs_f64()).max(0.0) as f32)
     }
 }
@@ -394,15 +586,25 @@ pub extern "C" fn nestlocal_theme_next() -> f32 {
 #[no_mangle]
 pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, image: u32, target: f32) -> u32 {
     SCREEN.store(framebuffer, Ordering::Relaxed);
-    let result = std::panic::catch_unwind(|| ENGINE.with(|slot| {
-        let mut engine = slot.borrow_mut();
-        if engine.is_none() { *engine = Some(Engine::new(loader, framebuffer)?); }
-        engine.as_mut().unwrap().draw(image != 0, target)
-    }));
+    let result = std::panic::catch_unwind(|| {
+        ENGINE.with(|slot| {
+            let mut engine = slot.borrow_mut();
+            if engine.is_none() {
+                *engine = Some(Engine::new(loader, framebuffer)?);
+            }
+            engine.as_mut().unwrap().draw(image != 0, target)
+        })
+    });
     match result {
         Ok(Ok(texture)) => texture,
-        Ok(Err(error)) => { eprintln!("THEME Lua: {error}"); 0 },
-        Err(_) => { eprintln!("THEME Lua renderer panicked"); 0 },
+        Ok(Err(error)) => {
+            eprintln!("THEME Lua: {error}");
+            0
+        }
+        Err(_) => {
+            eprintln!("THEME Lua renderer panicked");
+            0
+        }
     }
 }
 
@@ -413,14 +615,26 @@ mod tests {
     fn native_state_overrides_stale_telemetry() {
         let data = serde_json::json!({"dev":{"temperature_scale":"F"},"shared":{"target_temperature_type":"off","current_temperature":0}});
         let mut ui = view(&Rc::new(data), 1.0, 0.0, 480.0);
-        let mut state = NativeState { target: 21.5, current: 19.25, low: 18.0, high: 24.0, humidity: 47.0, unit: 0, mode: 2, hvac: 1, leaf: 1, range: 5 };
+        let mut state = NativeState {
+            target: 21.5,
+            current: 19.25,
+            low: 18.0,
+            high: 24.0,
+            humidity: 47.0,
+            unit: 0,
+            mode: 2,
+            hvac: 1,
+            leaf: 1,
+            range: 5,
+        };
         assert_eq!(state.apply(&mut ui), 21.5);
         assert_eq!(ui.thermostat.unit, "C");
         assert_eq!(ui.thermostat.current, 19.25);
         assert_eq!(ui.thermostat.mode, "heat-cool");
         assert_eq!(ui.thermostat.hvac, "heating");
         assert_eq!(ui.thermostat.humidity, Some(47.0));
-        let mut reported = view(&Rc::new(serde_json::json!({"dev":{"current_humidity":45},"shared":{}})), 1.0, 0.0, 480.0);
+        let mut reported =
+            view(&Rc::new(serde_json::json!({"dev":{"current_humidity":45},"shared":{}})), 1.0, 0.0, 480.0);
         NativeState { humidity: 0.0, ..Default::default() }.apply(&mut reported);
         assert_eq!(reported.thermostat.humidity, Some(45.0), "nestlocal's humidity, not a native 0");
         let mut unknown = view(&Rc::new(serde_json::json!({"dev":{},"shared":{}})), 1.0, 0.0, 480.0);
@@ -428,7 +642,9 @@ mod tests {
         assert_eq!(unknown.thermostat.humidity, None);
         assert!(ui.thermostat.leaf_on);
         assert_eq!((ui.thermostat.range, ui.thermostat.range_editing), (None, false));
-        for (range, expected) in [(1, (Some("low"), true)), (2, (Some("high"), true)), (3, (Some("low"), false)), (4, (Some("high"), false))] {
+        for (range, expected) in
+            [(1, (Some("low"), true)), (2, (Some("high"), true)), (3, (Some("low"), false)), (4, (Some("high"), false))]
+        {
             state.range = range;
             state.apply(&mut ui);
             assert_eq!((ui.thermostat.range, ui.thermostat.range_editing), expected);
@@ -467,9 +683,12 @@ mod tests {
     #[test]
     fn existing_lua_themes_load() {
         let themes = Path::new(env!("UNFR0ZEN_ROOT")).join("crates/nestlocal/themes");
-        let mut names: Vec<String> = std::fs::read_dir(&themes).unwrap().map(|e| e.unwrap().path())
+        let mut names: Vec<String> = std::fs::read_dir(&themes)
+            .unwrap()
+            .map(|e| e.unwrap().path())
             .filter(|p| p.join("theme.lua").is_file())
-            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string()).collect();
+            .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+            .collect();
         names.sort();
         assert!(names.len() >= 5, "{names:?}");
         for name in names {
@@ -484,8 +703,14 @@ mod tests {
                     "weather":{"temp_c":-3.5,"condition":"rainy","forecast":{"hourly":[{"hour":1,"time":4_000_000_000_i64,"temp_c":-2}]}}});
                 for now in [1.0, 1.1] {
                     renderer.begin(240.0, theme.design);
-                    theme.draw(&mut renderer.painter(&theme.dir), &view(&Rc::new(state.clone()), now, 0.0, theme.design)).unwrap_or_else(|e| panic!("{name} in {mode} ({scale}): {e}"));
-                    assert!(renderer.pixmap.pixels().iter().filter(|p| p.red().max(p.green()).max(p.blue()) > 200).count() > 50, "{name} in {mode} ({scale}) must draw its readout");
+                    theme
+                        .draw(&mut renderer.painter(&theme.dir), &view(&Rc::new(state.clone()), now, 0.0, theme.design))
+                        .unwrap_or_else(|e| panic!("{name} in {mode} ({scale}): {e}"));
+                    assert!(
+                        renderer.pixmap.pixels().iter().filter(|p| p.red().max(p.green()).max(p.blue()) > 200).count()
+                            > 50,
+                        "{name} in {mode} ({scale}) must draw its readout"
+                    );
                 }
             }
         }
@@ -509,7 +734,10 @@ mod tests {
         assert_eq!(t.preconditioning, Some("heat"));
         assert!(t.sunblock && !t.safety);
         let bare = view(&Rc::new(serde_json::json!({"dev": {}, "shared": {}})), 1.0, 0.0, 480.0);
-        assert_eq!((bare.thermostat.outdoor, bare.thermostat.weather_image, bare.thermostat.time_to_target), (None, None, None));
+        assert_eq!(
+            (bare.thermostat.outdoor, bare.thermostat.weather_image, bare.thermostat.time_to_target),
+            (None, None, None)
+        );
         assert_eq!(weather_image(&serde_json::json!({"icon": "clear"}), now), Some("unit:Weather_ClearNight.png"));
         assert_eq!(weather_image(&serde_json::json!({"icon": "windy"}), now), Some("unit:Weather_Default.png"));
     }
@@ -517,11 +745,15 @@ mod tests {
     fn themes_read_what_nestlocal_gives_as_ui_nest() {
         let dir = std::env::temp_dir().join(format!("nestlocal-theme-nest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("theme.lua"), r#"return { name = "t", api = 1, draw = function(gfx, ui)
+        std::fs::write(
+            dir.join("theme.lua"),
+            r#"return { name = "t", api = 1, draw = function(gfx, ui)
             local n = ui.nest
             return n.weather.temp_c == 4.5 and n.weather.forecast.hourly[1].temp_c == 5 and n.state.mode == "heat"
               and n.device.temperature_scale == "C" and n.shared.can_cool == false and n.state.missing == nil
-          end }"#).unwrap();
+          end }"#,
+        )
+        .unwrap();
         let theme = Theme::load(&dir).unwrap();
         let data = serde_json::json!({"dev": {"temperature_scale": "C"}, "shared": {"can_cool": false},
             "state": {"mode": "heat", "missing": null}, "weather": {"temp_c": 4.5, "forecast": {"hourly": [{"temp_c": 5}]}}});
@@ -541,10 +773,12 @@ mod tests {
         let themes = Path::new(env!("UNFR0ZEN_ROOT")).join("crates/nestlocal/themes");
         let names = std::env::var("THEME_PREVIEW_THEMES").unwrap_or("analog,lcd,weather".into());
         let day = 1_794_660_000_i64; // 2026-11-14 12:40 UTC
-        let weather = |condition: &str, temp: f64| serde_json::json!({"temp_c": temp, "humidity": 70, "condition": condition,
+        let weather = |condition: &str, temp: f64| {
+            serde_json::json!({"temp_c": temp, "humidity": 70, "condition": condition,
             "sunrise": day - 5 * 3600, "sunset": day + 4 * 3600,
             "forecast": {"hourly": (1..=6).map(|h| serde_json::json!({"hour": h, "time": day + h * 3600 - 2400,
-                "temp_c": temp + h as f64 * 0.7})).collect::<Vec<_>>()}});
+                "temp_c": temp + h as f64 * 0.7})).collect::<Vec<_>>()}})
+        };
         let scenes = [
             ("heat-idle", "heat", false, false, 12.0, weather("sunny", 14.0)),
             ("heating", "heat", true, false, 12.0, weather("partlycloudy", 9.5)),
@@ -566,7 +800,9 @@ mod tests {
             renderer.use_fonts(&theme.fonts).unwrap();
             // One unit's scenes, then the other's: what glides goes on from
             // the scene before.
-            for (scale, &(label, mode, heating, cooling, hour, ref weather)) in ["C", "F"].into_iter().flat_map(|u| scenes.iter().map(move |s| (u, s))) {
+            for (scale, &(label, mode, heating, cooling, hour, ref weather)) in
+                ["C", "F"].into_iter().flat_map(|u| scenes.iter().map(move |s| (u, s)))
+            {
                 let data = serde_json::json!({"dev": {"temperature_scale": scale, "current_humidity": 41},
                     "shared": {"target_temperature_type": mode, "target_temperature": 21.5, "target_temperature_low": 19.5,
                         "target_temperature_high": 24.0, "current_temperature": 20.0, "hvac_heater_state": heating,
@@ -583,7 +819,9 @@ mod tests {
                     ui.clock.epoch = epoch;
                     ui.clock.utc_offset = 0;
                     renderer.begin(480.0, theme.design);
-                    theme.draw(&mut renderer.painter(&theme.dir), &ui).unwrap_or_else(|e| panic!("{name} {label}: {e}"));
+                    theme
+                        .draw(&mut renderer.painter(&theme.dir), &ui)
+                        .unwrap_or_else(|e| panic!("{name} {label}: {e}"));
                 }
                 let mut png = Vec::new();
                 let mut encoder = png::Encoder::new(&mut png, 480, 480);

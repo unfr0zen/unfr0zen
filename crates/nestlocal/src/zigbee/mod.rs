@@ -67,14 +67,22 @@ const ZIGBEE_EPOCH: u64 = 946_684_800;
 const NO_TIME: u32 = 0xFFFF_FFFF;
 
 #[derive(Default)]
-struct PairingAttempt { deadline: Option<Instant>, stopped: bool }
+struct PairingAttempt {
+    deadline: Option<Instant>,
+    stopped: bool,
+}
 impl PairingAttempt {
     fn begin(&mut self, now: Instant, request_age: Duration) {
         self.deadline = Some(now + Duration::from_secs(30).saturating_sub(request_age));
         self.stopped = false;
     }
-    fn expired(&self, now: Instant) -> bool { self.deadline.is_some_and(|end| now >= end) }
-    fn timeout(&mut self) { self.deadline = None; self.stopped = true; }
+    fn expired(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|end| now >= end)
+    }
+    fn timeout(&mut self) {
+        self.deadline = None;
+        self.stopped = true;
+    }
 }
 
 /// Runs the unit on Zigbee, on a thread of its own, once it has reported
@@ -117,16 +125,23 @@ fn reported(bridge: &Bridge) -> bool {
     buckets.contains_key("device") && buckets.contains_key("shared")
 }
 
-fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Option<Instant>, attempt: &mut PairingAttempt)
-       -> Result<(), String> {
+fn run(
+    nest: &Nest,
+    store: &Path,
+    changed: &AtomicBool,
+    failed_install: &mut Option<Instant>,
+    attempt: &mut PairingAttempt,
+) -> Result<(), String> {
     let (mut ezsp, stack) = open(failed_install)?;
     logf!("zigbee: radio up, EmberZNet {}.{}.{}.{}", stack >> 12, (stack >> 8) & 0xF, (stack >> 4) & 0xF, stack & 0xF);
     configure(&mut ezsp, nest)?;
     let mut up = match ezsp.command(id::NETWORK_INIT, &0u16.to_le_bytes())?.first() {
-        Some(&status::SUCCESS) => wait_for_network(&mut ezsp)? || {
-            logf!("zigbee: leaving the network the radio could not resume");
-            leave(&mut ezsp)?
-        },
+        Some(&status::SUCCESS) => {
+            wait_for_network(&mut ezsp)? || {
+                logf!("zigbee: leaving the network the radio could not resume");
+                leave(&mut ezsp)?
+            }
+        }
         Some(&status::NOT_JOINED) => false,
         other => return Err(format!("networkInit: {other:02x?}")),
     };
@@ -137,11 +152,18 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
         keep(&mut ezsp, store);
     }
     let mut server = Server {
-        sequence: 0, reported: BTreeMap::new(), next_full: Instant::now() + FIRST_REPORT, pending: false,
-        time_asked: None, next_time: Instant::now() + FIRST_REPORT,
+        sequence: 0,
+        reported: BTreeMap::new(),
+        next_full: Instant::now() + FIRST_REPORT,
+        pending: false,
+        time_asked: None,
+        next_time: Instant::now() + FIRST_REPORT,
     };
     let mut asked = false;
-    crate::settings_ui::status("zigbee", if up { "Paired" } else { "Not paired. Permit joining, then enable pairing." });
+    crate::settings_ui::status(
+        "zigbee",
+        if up { "Paired" } else { "Not paired. Permit joining, then enable pairing." },
+    );
     loop {
         let request_age = crate::settings_ui::take_request_age("zigbee");
         if let Some(age) = request_age {
@@ -180,9 +202,13 @@ fn run(nest: &Nest, store: &Path, changed: &AtomicBool, failed_install: &mut Opt
             }
             up = join(&mut ezsp, attempt.deadline)?;
             if !up {
-                let retry = attempt.deadline.map_or(Instant::now() + JOIN_RETRY, |end| end.min(Instant::now() + Duration::from_secs(1)));
+                let retry = attempt
+                    .deadline
+                    .map_or(Instant::now() + JOIN_RETRY, |end| end.min(Instant::now() + Duration::from_secs(1)));
                 while Instant::now() < retry {
-                    if std::path::Path::new(crate::settings_ui::DIR).join("zigbee.request").exists() { break; }
+                    if std::path::Path::new(crate::settings_ui::DIR).join("zigbee.request").exists() {
+                        break;
+                    }
                     std::thread::sleep(Duration::from_millis(200));
                 }
                 continue;
@@ -299,8 +325,13 @@ fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
     // The coordinator binds each of the unit's clusters to itself, and a full
     // report is a message for each.
     let tx_power_mode = crate::device::radio()?.tx_power_mode;
-    let configuration = [(STACK_PROFILE, 2), (SECURITY_LEVEL, 5), (TX_POWER_MODE, tx_power_mode),
-                         (BINDING_TABLE_SIZE, 16), (APS_UNICAST_MESSAGE_COUNT, 20)];
+    let configuration = [
+        (STACK_PROFILE, 2),
+        (SECURITY_LEVEL, 5),
+        (TX_POWER_MODE, tx_power_mode),
+        (BINDING_TABLE_SIZE, 16),
+        (APS_UNICAST_MESSAGE_COUNT, 20),
+    ];
     for (config, value) in configuration {
         let mut params = vec![config];
         params.extend(value.to_le_bytes());
@@ -331,9 +362,10 @@ fn join(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Result<bool, String> {
     const REQUIRE_ENCRYPTED_KEY: u16 = 0x0800;
     const GET_LINK_KEY_WHEN_JOINING: u16 = 0x0400;
     const TRUST_CENTER_GLOBAL_LINK_KEY: u16 = 0x0004;
-    let mut security = (HAVE_PRECONFIGURED_KEY | REQUIRE_ENCRYPTED_KEY | GET_LINK_KEY_WHEN_JOINING
-        | TRUST_CENTER_GLOBAL_LINK_KEY)
-        .to_le_bytes().to_vec();
+    let mut security =
+        (HAVE_PRECONFIGURED_KEY | REQUIRE_ENCRYPTED_KEY | GET_LINK_KEY_WHEN_JOINING | TRUST_CENTER_GLOBAL_LINK_KEY)
+            .to_le_bytes()
+            .to_vec();
     security.extend(GLOBAL_LINK_KEY);
     security.extend([0; 16]); // no network key yet
     security.push(0); // its sequence number
@@ -352,7 +384,8 @@ fn join(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Result<bool, String> {
     scan.push(3); // about 120 ms a channel
     ezsp.expect(id::START_SCAN, &scan)?;
     let mut found: Option<(Network, u8)> = None;
-    let deadline = ui_deadline.map_or(Instant::now() + Duration::from_secs(15), |end| end.min(Instant::now() + Duration::from_secs(15)));
+    let deadline = ui_deadline
+        .map_or(Instant::now() + Duration::from_secs(15), |end| end.min(Instant::now() + Duration::from_secs(15)));
     'scan: while Instant::now() < deadline {
         pairing_progress(ui_deadline);
         if !ezsp.wait(Duration::from_secs(1)) {
@@ -364,8 +397,10 @@ fn join(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Result<bool, String> {
                     let mut r = Reader(&callback.params);
                     let network = Network::read(&mut r)?;
                     let lqi = r.u8()?;
-                    if network.allowing_join && network.stack_profile == 2
-                        && found.as_ref().is_none_or(|(_, best)| lqi > *best) {
+                    if network.allowing_join
+                        && network.stack_profile == 2
+                        && found.as_ref().is_none_or(|(_, best)| lqi > *best)
+                    {
                         found = Some((network, lqi));
                     }
                 }
@@ -495,7 +530,8 @@ impl Server {
         }
         self.pending = false;
         for (endpoint, cluster, attributes) in nest.reported() {
-            let changed: Vec<(u16, Value)> = attributes.iter()
+            let changed: Vec<(u16, Value)> = attributes
+                .iter()
                 .filter_map(|&a| nest.read(endpoint, cluster, a).map(|v| (a, v)))
                 .filter(|(a, v)| self.reported.get(&(endpoint, cluster, *a)) != Some(v))
                 .collect();
@@ -538,7 +574,13 @@ impl Server {
         let Some(Value::Utc(t)) = values.iter().find(|(id, _)| *id == 0x0000).map(|(_, v)| v) else {
             return false;
         };
-        if *t == NO_TIME || !clock::answer(asked, UNIX_EPOCH + Duration::from_secs(ZIGBEE_EPOCH + u64::from(*t)), "the Zigbee coordinator") {
+        if *t == NO_TIME
+            || !clock::answer(
+                asked,
+                UNIX_EPOCH + Duration::from_secs(ZIGBEE_EPOCH + u64::from(*t)),
+                "the Zigbee coordinator",
+            )
+        {
             return false;
         }
         self.next_time = Instant::now() + clock::RECHECK;
@@ -642,8 +684,12 @@ mod tests {
     #[test]
     fn the_coordinators_time_sets_the_clock_when_it_is_the_answer_to_the_last_ask() {
         let mut server = Server {
-            sequence: 0, reported: BTreeMap::new(), next_full: Instant::now(), pending: false,
-            time_asked: Some((SystemTime::now(), 9)), next_time: Instant::now(),
+            sequence: 0,
+            reported: BTreeMap::new(),
+            next_full: Instant::now(),
+            pending: false,
+            time_asked: Some((SystemTime::now(), 9)),
+            next_time: Instant::now(),
         };
         // Now, as the coordinator would have it: the clock is not off, and
         // the answer counts.
@@ -674,8 +720,13 @@ mod tests {
         let nest = Nest::new(crate::bridge::tests::test_bridge());
         let message = |kind: u8, payload: &[u8]| Incoming {
             kind,
-            aps: Aps { profile: PROFILE_HA, cluster: clusters::THERMOSTAT, source_endpoint: 1, destination_endpoint: 0xFF,
-                       ..Aps::default() },
+            aps: Aps {
+                profile: PROFILE_HA,
+                cluster: clusters::THERMOSTAT,
+                source_endpoint: 1,
+                destination_endpoint: 0xFF,
+                ..Aps::default()
+            },
             sender: COORDINATOR,
             payload: payload.to_vec(),
         };
@@ -686,8 +737,11 @@ mod tests {
         }
         for kind in 0x02..=0x05 {
             assert_eq!(answer(&nest, &message(kind, &unknown)), None, "{kind}");
-            assert_eq!(answer(&nest, &message(kind, &read)), Some((1, vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03])),
-                       "{kind}");
+            assert_eq!(
+                answer(&nest, &message(kind, &read)),
+                Some((1, vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03])),
+                "{kind}"
+            );
         }
     }
 }

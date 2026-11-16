@@ -37,8 +37,12 @@ pub fn page(ui: &mut egui::Ui) {
     let frame = egui::Frame::new().fill(super::CARD).corner_radius(14).inner_margin(egui::Margin::same(16));
     // The cards end short of the panel, which has their colour.
     let room = (ui.available_width() - LIBRARIES - 24.0).max(200.0);
-    egui::Panel::right("about_libraries").exact_size(LIBRARIES).resizable(false)
-        .show_separator_line(false).frame(frame).show(ui, libraries);
+    egui::Panel::right("about_libraries")
+        .exact_size(LIBRARIES)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(frame)
+        .show(ui, libraries);
     ui.allocate_ui(egui::vec2(room, ui.available_height()), |ui| {
         ui.set_max_width(room);
         details(ui);
@@ -86,8 +90,7 @@ fn details(ui: &mut egui::Ui) {
 /// list: the crate name on the left, its license on the right, one per row.
 fn libraries(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new(crate::tr!("about.libraries", count = THIRD_PARTY.len())).font(crate::medium(15.0)));
-    ui.label(egui::RichText::new(crate::tr!("about.libraries_hint"))
-        .size(11.0).color(super::MUTED));
+    ui.label(egui::RichText::new(crate::tr!("about.libraries_hint")).size(11.0).color(super::MUTED));
     ui.add_space(8.0);
     let row = 22.0;
     let name_font = egui::FontId::proportional(12.5);
@@ -100,10 +103,12 @@ fn libraries(ui: &mut egui::Ui) {
             let y = rect.center().y;
             // A long expression is cut to the right half, so it never runs
             // past the pane or over the name.
-            let license_galley = super::truncated(ui, license.to_string(), license_font.clone(), super::MUTED, width * 0.55);
+            let license_galley =
+                super::truncated(ui, license.to_string(), license_font.clone(), super::MUTED, width * 0.55);
             let license_x = rect.right() - license_galley.size().x;
             ui.painter().galley(egui::pos2(license_x, y - license_galley.size().y / 2.0), license_galley, super::MUTED);
-            let name_galley = super::truncated(ui, name.to_string(), name_font.clone(), text_color, license_x - rect.left() - 8.0);
+            let name_galley =
+                super::truncated(ui, name.to_string(), name_font.clone(), text_color, license_x - rect.left() - 8.0);
             ui.painter().galley(egui::pos2(rect.left(), y - name_galley.size().y / 2.0), name_galley, text_color);
         }
     });

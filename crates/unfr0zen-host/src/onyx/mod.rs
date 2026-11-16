@@ -19,9 +19,9 @@ pub(crate) fn unsupported(progress: &mut dyn Progress) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use unfr0zen_core::diamond3::sdp::Hid;
     use unfr0zen_core::Result;
-    use std::collections::VecDeque;
 
     struct Rom {
         replies: VecDeque<Vec<u8>>,
@@ -43,16 +43,21 @@ mod tests {
     fn silicon_revision_is_separate_from_the_rom_version() {
         let mut rom = Rom {
             replies: VecDeque::from([
-                vec![3, 0x12, 0x34, 0x34, 0x12], vec![4, 1, 0, 0x64, 0],
-                vec![3, 0x12, 0x34, 0x34, 0x12], vec![4, 0x12, 0, 0, 0],
+                vec![3, 0x12, 0x34, 0x34, 0x12],
+                vec![4, 1, 0, 0x64, 0],
+                vec![3, 0x12, 0x34, 0x34, 0x12],
+                vec![4, 0x12, 0, 0, 0],
             ]),
             writes: Vec::new(),
         };
         assert_eq!(rom_silicon(&mut rom).unwrap().silicon, "i.MX6UL rev 1.1");
-        assert_eq!(rom.writes, vec![
-            vec![1, 1, 1, 2, 0x0c, 0x82, 0x60, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
-            vec![1, 1, 1, 0, 0, 0, 0x80, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
-        ]);
+        assert_eq!(
+            rom.writes,
+            vec![
+                vec![1, 1, 1, 2, 0x0c, 0x82, 0x60, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
+                vec![1, 1, 1, 0, 0, 0, 0x80, 0x20, 0, 0, 0, 4, 0, 0, 0, 0, 0],
+            ]
+        );
     }
 
     #[test]

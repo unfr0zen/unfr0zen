@@ -12,7 +12,6 @@ use unfr0zen_core::{Device, Result};
 use crate::assets;
 use crate::flow::failure;
 
-
 /// The bundle for a device: nestlocal, the libraries and objects the setup
 /// installs or links, Thread's and Doom's overlays, and unfr0zen-apply and
 /// the hook scripts, which run on the unit. The gen 3's also has the
@@ -46,8 +45,11 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     ]);
     files.insert(bundle::RCS_SCREEN.into(), (0o644, assets::J49_RCS_SCREEN.to_vec()));
     let mut directories = BTreeMap::new();
-    let thread = assets::with_thread_radio(&assets::thread(), crate::j49::assets::THREAD_RADIO,
-                                           crate::j49::assets::THREAD_RADIO_IDENTITY);
+    let thread = assets::with_thread_radio(
+        &assets::thread(),
+        crate::j49::assets::THREAD_RADIO,
+        crate::j49::assets::THREAD_RADIO_IDENTITY,
+    );
     bundle::add_overlay(&mut files, &mut directories, bundle::THREAD, &thread);
     bundle::add_overlay(&mut files, &mut directories, bundle::DOOM, &assets::doom());
     bundle::add_overlay(&mut files, &mut directories, bundle::SSH, &crate::j49::assets::ssh_server());
@@ -62,8 +64,11 @@ fn diamond3() -> (Files, BTreeMap<String, u32>) {
         (bundle::POST_SETUP.to_string(), (0o755, crate::diamond3::assets::POST_SETUP.to_vec())),
     ]);
     let mut directories = BTreeMap::new();
-    let thread = assets::with_thread_radio(&assets::thread(), crate::diamond3::assets::THREAD_RADIO,
-                                           crate::diamond3::assets::THREAD_RADIO_IDENTITY);
+    let thread = assets::with_thread_radio(
+        &assets::thread(),
+        crate::diamond3::assets::THREAD_RADIO,
+        crate::diamond3::assets::THREAD_RADIO_IDENTITY,
+    );
     bundle::add_overlay(&mut files, &mut directories, bundle::THREAD, &thread);
     bundle::add_overlay(&mut files, &mut directories, bundle::DOOM, &assets::doom());
     bundle::add_overlay(&mut files, &mut directories, bundle::THEME, &assets::theme());
@@ -93,8 +98,13 @@ mod tests {
         let bundle = Bundle::unpack(&data).unwrap();
         assert_eq!(bundle.manifest.device, "diamond3");
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
-        let settings = Settings { thread: true, doom: true, theme: true, matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
-                                  ..Settings::default() };
+        let settings = Settings {
+            thread: true,
+            doom: true,
+            theme: true,
+            matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
+            ..Settings::default()
+        };
         let options = settings.options(&bundle).unwrap();
         assert_eq!(options.wake_filter, assets::WAKE_FILTER);
         assert_eq!(options.local_cloud, assets::LOCAL_CLOUD);
@@ -110,8 +120,10 @@ mod tests {
 
     #[test]
     fn the_gen_1_bundle_is_the_gen_2s_named_for_the_gen_1() {
-        let (gen1, gen2) = (Bundle::unpack(&pack(Device::Diamond, "1.0.0", None).unwrap()).unwrap(),
-                            Bundle::unpack(&pack(Device::J49, "1.0.0", None).unwrap()).unwrap());
+        let (gen1, gen2) = (
+            Bundle::unpack(&pack(Device::Diamond, "1.0.0", None).unwrap()).unwrap(),
+            Bundle::unpack(&pack(Device::J49, "1.0.0", None).unwrap()).unwrap(),
+        );
         assert_eq!((gen1.manifest.device.as_str(), gen2.manifest.device.as_str()), ("diamond", "j49"));
         assert_eq!(gen1.files, gen2.files);
     }
@@ -121,15 +133,27 @@ mod tests {
         let bundle = assemble(Device::J49, "1.0.0").unwrap();
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
         assert_eq!(bundle.file(bundle::PRE_SETUP).unwrap(), crate::j49::assets::PRE_SETUP);
-        let settings = Settings { thread: true, ssh: true, external_temperature: true, matter: Some(bundle::MatterSettings {
-            passcode: 20202021, discriminator: 3840 }), ..Settings::default() };
+        let settings = Settings {
+            thread: true,
+            ssh: true,
+            external_temperature: true,
+            matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
+            ..Settings::default()
+        };
         let options = settings.options(&bundle).unwrap();
         assert_eq!(options.external_temperature_screen, assets::J49_RCS_SCREEN);
         assert!(options.ssh_server.unwrap().files.iter().any(|(name, _, _)| name == "usr/sbin/dropbearmulti"));
         let thread = options.thread.unwrap();
-        let (_, _, image) = thread.files.iter().find(|(name, _, _)| name == "usr/share/nestlocal/thread-rcp.bin").unwrap();
-        let em357 = assets::with_thread_radio(&assets::thread(), crate::j49::assets::THREAD_RADIO,
-                                              crate::j49::assets::THREAD_RADIO_IDENTITY);
-        assert!(em357.files.iter().any(|(name, _, data)| name == "usr/share/nestlocal/thread-rcp.bin" && data == image));
+        let (_, _, image) =
+            thread.files.iter().find(|(name, _, _)| name == "usr/share/nestlocal/thread-rcp.bin").unwrap();
+        let em357 = assets::with_thread_radio(
+            &assets::thread(),
+            crate::j49::assets::THREAD_RADIO,
+            crate::j49::assets::THREAD_RADIO_IDENTITY,
+        );
+        assert!(em357
+            .files
+            .iter()
+            .any(|(name, _, data)| name == "usr/share/nestlocal/thread-rcp.bin" && data == image));
     }
 }

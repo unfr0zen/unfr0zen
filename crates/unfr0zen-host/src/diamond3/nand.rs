@@ -26,16 +26,21 @@ use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 
-use unfr0zen_core::diamond3::nand::{all_chunks, fcb_matches, image_firmware, restore_chunks, BLOCK, BOOT_CONTROL, BOOT_SIZE};
 pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
+use unfr0zen_core::diamond3::nand::{
+    all_chunks, fcb_matches, image_firmware, restore_chunks, BLOCK, BOOT_CONTROL, BOOT_SIZE,
+};
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
 
 use super::usb;
-use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon, Board};
+use super::{connect_recovery, find_unit, reach_recovery, report_silicon, Board, EntryPoint};
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
-use crate::nand::{bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks, Job};
+use crate::nand::{
+    bad_blocks_path, checksum_path, file, read_at, read_bad_blocks, read_checked, recorded_sha256, write_bad_blocks,
+    Job,
+};
 use crate::progress::{stage, stage_with, Progress};
 
 /// Whether a whole-NAND image of `len` bytes is a diamond3's: its
@@ -54,8 +59,13 @@ struct Unit {
 /// Runs `step` on each chunk but those `kept` from an earlier run, as one
 /// stage with its progress in bytes. A failed chunk ends the stage; verified
 /// backup parts remain available for the next run.
-fn each_chunk(progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
-              kept: impl Fn(u32) -> bool, mut step: impl FnMut(u32, u32) -> Result<()>) -> Result<()> {
+fn each_chunk(
+    progress: &mut dyn Progress,
+    verb: &str,
+    chunks: &[(u32, u32)],
+    kept: impl Fn(u32) -> bool,
+    mut step: impl FnMut(u32, u32) -> Result<()>,
+) -> Result<()> {
     let total: u64 = chunks.iter().map(|c| u64::from(c.1)).sum();
     stage_with(progress, &format!("{verb} NAND"), |progress| {
         let mut done = 0;
@@ -77,9 +87,15 @@ fn each_chunk(progress: &mut dyn Progress, verb: &str, chunks: &[(u32, u32)],
 /// Runs the job from whatever mode the unit is in and boots it normally after.
 /// `confirm` is asked before a restore writes anything. Returns the final
 /// status line.
-pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, entry_point: EntryPoint,
-                  progress: &mut dyn Progress, confirm: &mut dyn FnMut(&str) -> bool,
-                  cancel: &device::CancelFlag) -> Result<String> {
+pub(crate) fn run(
+    job: &Job,
+    unit: device::Unit,
+    wait_usb: std::time::Duration,
+    entry_point: EntryPoint,
+    progress: &mut dyn Progress,
+    confirm: &mut dyn FnMut(&str) -> bool,
+    cancel: &device::CancelFlag,
+) -> Result<String> {
     let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
     let (port, id) = find_unit(progress, wait_usb, false, unit, cancel)?;
     // Checked while the boot ROM waits, before anything is loaded into it.
@@ -104,7 +120,9 @@ pub(crate) fn run(job: &Job, unit: device::Unit, wait_usb: std::time::Duration, 
         Job::Verify(image) => {
             let left_out = match verify(&mut unit, progress, image)?.len() {
                 0 => String::new(),
-                count => format!("; {count} blocks not listed beside it read uncorrectable and were left out of the check"),
+                count => {
+                    format!("; {count} blocks not listed beside it read uncorrectable and were left out of the check")
+                }
             };
             format!("NAND matches {}{left_out}", image.display())
         }
@@ -153,8 +171,13 @@ fn back_up_whole(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, kept:
 
 /// Backs the whole NAND up to `out` from recovery U-Boot on `port`, which
 /// stays at its prompt for what follows. Returns the board and the status line.
-pub(crate) fn back_up_then(board: Board, port: &str, progress: &mut dyn Progress, out: &Path, kept: &mut HandBack)
-                           -> Result<(Board, String)> {
+pub(crate) fn back_up_then(
+    board: Board,
+    port: &str,
+    progress: &mut dyn Progress,
+    out: &Path,
+    kept: &mut HandBack,
+) -> Result<(Board, String)> {
     let mut board = board;
     let bad = bad_blocks(progress, &mut board)?;
     let mut unit = Unit { board, port: port.to_string(), bad };
@@ -168,17 +191,23 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     file(parts, fs::create_dir_all(parts))?;
     let part = |offset: u32| parts.join(format!("{offset:08x}.bin"));
     // Parts are renamed into place only once read and checked, each after its list.
-    each_chunk(progress, "Back up", &all_chunks(), |offset| part(offset).exists(), |offset, size| {
-        let part = part(offset);
-        let (data, uncorrectable) = unit.board.read_nand(offset, size, &unit.bad)?;
-        if !uncorrectable.is_empty() {
-            log::warn!("NAND blocks {uncorrectable:#x?} have uncorrectable pages; kept as read");
-        }
-        write_bad_blocks(&part.with_extension("bad"), &uncorrectable)?;
-        let partial = part.with_extension("tmp");
-        file(&partial, fs::write(&partial, &data))?;
-        file(&part, fs::rename(&partial, &part))
-    })?;
+    each_chunk(
+        progress,
+        "Back up",
+        &all_chunks(),
+        |offset| part(offset).exists(),
+        |offset, size| {
+            let part = part(offset);
+            let (data, uncorrectable) = unit.board.read_nand(offset, size, &unit.bad)?;
+            if !uncorrectable.is_empty() {
+                log::warn!("NAND blocks {uncorrectable:#x?} have uncorrectable pages; kept as read");
+            }
+            write_bad_blocks(&part.with_extension("bad"), &uncorrectable)?;
+            let partial = part.with_extension("tmp");
+            file(&partial, fs::write(&partial, &data))?;
+            file(&part, fs::rename(&partial, &part))
+        },
+    )?;
     let mut listed = unit.bad.clone();
     for (offset, _) in all_chunks() {
         listed.extend(read_bad_blocks(&part(offset).with_extension("bad"))?.unwrap_or_default());
@@ -187,12 +216,15 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     listed.sort_unstable();
     write_bad_blocks(&bad_blocks_path(out), &listed)?;
     let partial = out.with_extension("tmp");
-    file(&partial, File::create(&partial).and_then(|mut image| {
-        for (offset, _) in all_chunks() {
-            io::copy(&mut File::open(parts.join(format!("{offset:08x}.bin")))?, &mut image)?;
-        }
-        Ok(())
-    }))?;
+    file(
+        &partial,
+        File::create(&partial).and_then(|mut image| {
+            for (offset, _) in all_chunks() {
+                io::copy(&mut File::open(parts.join(format!("{offset:08x}.bin")))?, &mut image)?;
+            }
+            Ok(())
+        }),
+    )?;
     file(out, fs::rename(&partial, out))?;
     Ok(uncorrectable)
 }
@@ -215,47 +247,65 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
     let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
     let skipped = [unit.bad.as_slice(), listed.as_slice()].concat();
     let mut found = Vec::new();
-    each_chunk(progress, "Verify", &all_chunks(), |_| false, |offset, size| {
-        let mut expected = read_at(image, offset.into(), size as usize)?;
-        erase_blocks(&mut expected, offset, &listed);
-        if offset < BOOT_SIZE {
-            let (mut actual, uncorrectable) = unit.board.read_nand(offset, size, &skipped)?;
-            erase_blocks(&mut actual, offset, &uncorrectable);
+    each_chunk(
+        progress,
+        "Verify",
+        &all_chunks(),
+        |_| false,
+        |offset, size| {
+            let mut expected = read_at(image, offset.into(), size as usize)?;
+            erase_blocks(&mut expected, offset, &listed);
+            if offset < BOOT_SIZE {
+                let (mut actual, uncorrectable) = unit.board.read_nand(offset, size, &skipped)?;
+                erase_blocks(&mut actual, offset, &uncorrectable);
+                erase_blocks(&mut expected, offset, &uncorrectable);
+                found.extend(uncorrectable);
+                let control = BOOT_CONTROL as usize;
+                if actual[control..] != expected[control..] {
+                    return Err(failure(
+                        "the boot partition reads differently a second time outside the boot-control blocks",
+                    ));
+                }
+                let flips: u32 =
+                    actual[..control].iter().zip(&expected[..control]).map(|(a, b)| (a ^ b).count_ones()).sum();
+                log::info!("Boot-control blocks: {flips} bits differ between reads");
+                return Ok(());
+            }
+            let (actual, uncorrectable) = unit.board.tolerant_nand_crc(offset, size, &skipped)?;
             erase_blocks(&mut expected, offset, &uncorrectable);
             found.extend(uncorrectable);
-            let control = BOOT_CONTROL as usize;
-            if actual[control..] != expected[control..] {
-                return Err(failure("the boot partition reads differently a second time outside the boot-control blocks"));
+            let expected = crc32fast::hash(&expected);
+            if actual != expected {
+                return Err(failure(format!(
+                    "NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
+                                        the image has {expected:08x}"
+                )));
             }
-            let flips: u32 = actual[..control].iter().zip(&expected[..control]).map(|(a, b)| (a ^ b).count_ones()).sum();
-            log::info!("Boot-control blocks: {flips} bits differ between reads");
-            return Ok(());
-        }
-        let (actual, uncorrectable) = unit.board.tolerant_nand_crc(offset, size, &skipped)?;
-        erase_blocks(&mut expected, offset, &uncorrectable);
-        found.extend(uncorrectable);
-        let expected = crc32fast::hash(&expected);
-        if actual != expected {
-            return Err(failure(format!("NAND {offset:#x}+{size:#x} reads back as CRC32 {actual:08x}, \
-                                        the image has {expected:08x}")));
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     if !found.is_empty() {
         log::warn!("NAND blocks {found:#x?} read uncorrectable in the verify; left out of it");
     }
     Ok(found)
 }
 
-fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &[(u32, u32)],
-           confirm: &mut dyn FnMut(&str) -> bool) -> Result<()> {
+fn restore(
+    unit: &mut Unit,
+    progress: &mut dyn Progress,
+    image: &Path,
+    copies: &[(u32, u32)],
+    confirm: &mut dyn FnMut(&str) -> bool,
+) -> Result<()> {
     let fcb = stage(progress, "Read the FCB", || unit.board.fcb_firmware())?;
     let keep = fcb.as_deref().is_some_and(|fcb| fcb_matches(fcb, copies));
     if keep {
         progress.status("The FCB in NAND points at the image's U-Boot copies; keeping it");
     } else if copies.len() != 2 {
-        return Err(failure(format!("the FCB must be regenerated, but the image has {} U-Boot copies (need 2)",
-                                   copies.len())));
+        return Err(failure(format!(
+            "the FCB must be regenerated, but the image has {} U-Boot copies (need 2)",
+            copies.len()
+        )));
     } else {
         progress.waiting("The FCB is missing or points elsewhere; it will be regenerated from the image");
     }
@@ -268,8 +318,11 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
         }
     }
     if !lost.is_empty() {
-        return Err(failure(format!("NAND blocks {lost:#x?} are bad on this chip but hold data in {}: \
-                                    it is another unit's backup, or they went bad since", image.display())));
+        return Err(failure(format!(
+            "NAND blocks {lost:#x?} are bad on this chip but hold data in {}: \
+                                    it is another unit's backup, or they went bad since",
+            image.display()
+        )));
     }
     let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
     let damage = match listed.iter().filter(|block| (start..end).contains(*block) && !unit.bad.contains(*block)).count() {
@@ -279,9 +332,13 @@ fn restore(unit: &mut Unit, progress: &mut dyn Progress, image: &Path, copies: &
     if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}{damage}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
-    each_chunk(progress, "Restore", &chunks, |_| false, |offset, size| {
-        unit.board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, &unit.bad)
-    })?;
+    each_chunk(
+        progress,
+        "Restore",
+        &chunks,
+        |_| false,
+        |offset, size| unit.board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, &unit.bad),
+    )?;
     if !keep {
         stage(progress, "Regenerate the FCB and DBBT", || unit.board.write_boot_control(copies))?;
     }
@@ -303,11 +360,18 @@ mod tests {
     #[test]
     fn a_restore_whose_image_fails_its_check_opens_no_log() {
         #[derive(Default)]
-        struct Seen { steps: Vec<String>, notes: Vec<String> }
+        struct Seen {
+            steps: Vec<String>,
+            notes: Vec<String>,
+        }
         impl Progress for Seen {
-            fn begin(&mut self, label: &str) { self.steps.push(label.to_string()); }
+            fn begin(&mut self, label: &str) {
+                self.steps.push(label.to_string());
+            }
             fn end(&mut self, _: &str, _: Duration, _: bool) {}
-            fn status(&mut self, message: &str) { self.notes.push(message.to_string()); }
+            fn status(&mut self, message: &str) {
+                self.notes.push(message.to_string());
+            }
             fn waiting(&mut self, _: &str) {}
         }
         let dir = std::env::temp_dir().join(format!("unfr0zen-restore-log-{}", std::process::id()));
@@ -317,7 +381,16 @@ mod tests {
         fs::write(checksum_path(&image), "sum  nand.bin\n").unwrap();
         let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::SDP };
         let mut seen = Seen::default();
-        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut seen, &mut |_| false, &Default::default()).is_err());
+        assert!(run(
+            &Job::Restore(image),
+            unit,
+            Duration::ZERO,
+            EntryPoint::Auto,
+            &mut seen,
+            &mut |_| false,
+            &Default::default()
+        )
+        .is_err());
         assert_eq!(seen.steps, ["Check the image's SHA-256"]);
         assert!(!seen.notes.iter().any(|note| note.starts_with("Detailed log")), "{:?}", seen.notes);
         fs::remove_dir_all(dir).unwrap();
@@ -327,7 +400,9 @@ mod tests {
     fn a_restore_asks_for_download_mode_before_it_hashes_the_image() {
         struct Steps(Vec<String>);
         impl Progress for Steps {
-            fn begin(&mut self, label: &str) { self.0.push(label.to_string()); }
+            fn begin(&mut self, label: &str) {
+                self.0.push(label.to_string());
+            }
             fn end(&mut self, _: &str, _: Duration, _: bool) {}
             fn status(&mut self, _: &str) {}
             fn waiting(&mut self, _: &str) {}
@@ -340,7 +415,8 @@ mod tests {
         let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::APP_ACM };
         let cancel = device::CancelFlag::new(true.into());
         let mut steps = Steps(Vec::new());
-        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut steps, &mut |_| false, &cancel).is_err());
+        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut steps, &mut |_| false, &cancel)
+            .is_err());
         assert_eq!(steps.0, [device::WAIT_USB_BOOT_STAGE]);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -353,7 +429,9 @@ mod tests {
 
     impl Progress for ProgressLog {
         fn begin(&mut self, _: &str) {}
-        fn end(&mut self, _: &str, _: Duration, ok: bool) { self.outcomes.push(ok); }
+        fn end(&mut self, _: &str, _: Duration, ok: bool) {
+            self.outcomes.push(ok);
+        }
         fn status(&mut self, _: &str) {}
         fn waiting(&mut self, _: &str) {}
         fn transfer(&mut self, done: u64, next: u64, total: u64) {
@@ -376,10 +454,21 @@ mod tests {
         for verb in ["Back up", "Verify", "Restore"] {
             let mut progress = ProgressLog::default();
             let mut attempted = Vec::new();
-            let error = each_chunk(&mut progress, verb, &[(0, 4), (4, 4), (8, 4)], |_| false, |offset, _| {
-                attempted.push(offset);
-                if offset == 4 { Err(Error::Io("USB disconnected".into())) } else { Ok(()) }
-            }).unwrap_err();
+            let error = each_chunk(
+                &mut progress,
+                verb,
+                &[(0, 4), (4, 4), (8, 4)],
+                |_| false,
+                |offset, _| {
+                    attempted.push(offset);
+                    if offset == 4 {
+                        Err(Error::Io("USB disconnected".into()))
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
             assert!(matches!(error, Error::Io(ref message) if message == "USB disconnected"));
             assert_eq!(attempted, [0, 4]);
             assert_eq!(progress.transfers, [(0, 4, 12), (4, 4, 12)]);
@@ -391,10 +480,17 @@ mod tests {
     fn a_resumed_backup_skips_saved_chunks_and_reports_completion() {
         let mut progress = ProgressLog::default();
         let mut attempted = Vec::new();
-        each_chunk(&mut progress, "Back up", &[(0, 4), (4, 4)], |offset| offset == 0, |offset, _| {
-            attempted.push(offset);
-            Ok(())
-        }).unwrap();
+        each_chunk(
+            &mut progress,
+            "Back up",
+            &[(0, 4), (4, 4)],
+            |offset| offset == 0,
+            |offset, _| {
+                attempted.push(offset);
+                Ok(())
+            },
+        )
+        .unwrap();
         assert_eq!(attempted, [4]);
         assert_eq!(progress.transfers, [(4, 4, 8), (8, 0, 8)]);
         assert_eq!(progress.outcomes, [true]);

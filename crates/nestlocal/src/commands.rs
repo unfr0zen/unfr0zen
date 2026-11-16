@@ -6,8 +6,8 @@ use serde_json::Value;
 use crate::bridge::Bridge;
 use crate::fields;
 use crate::json::{num, unmarshal_object, Fields};
-use crate::weather::HAWeather;
 use crate::logf;
+use crate::weather::HAWeather;
 
 /// Marks a change as made by the unit's own owner, as the Nest app's
 /// changes were (eco.touched_by and friends).
@@ -84,7 +84,7 @@ impl Bridge {
         let mut changes = vec![(format!("{bucket}.{}", self.serial), fields)];
         if name == "clear_schedule" {
             // Learning off too, or the unit would build a new schedule.
-            changes.push((format!("device.{}", self.serial), fields!{"learning_mode" => false}));
+            changes.push((format!("device.{}", self.serial), fields! {"learning_mode" => false}));
         }
         if let Some((key, _)) = changes.iter().find(|(key, _)| self.store.get(key).is_none()) {
             logf!("{from}: {name}: no {key} bucket yet");
@@ -93,7 +93,9 @@ impl Bridge {
         // nlclient takes the screen timeout and brightness from their files
         // when the change makes it commit: the files come first.
         let screen = &changes[0].1;
-        if bucket == "device" && (screen.contains_key(crate::screen::TIMEOUT) || screen.contains_key(crate::screen::ALWAYS_ON)) {
+        if bucket == "device"
+            && (screen.contains_key(crate::screen::TIMEOUT) || screen.contains_key(crate::screen::ALWAYS_ON))
+        {
             crate::screen::publish_with(&self.store, &self.serial, screen);
         }
         if bucket == "device" && crate::brightness::changes(screen) {
@@ -118,12 +120,15 @@ impl Bridge {
         if !["device.", "shared.", "schedule."].iter().any(|prefix| key.starts_with(prefix)) {
             return false;
         }
-        let Some(current) = self.store.get(key) else { return false };
+        let Some(current) = self.store.get(key) else {
+            return false;
+        };
         fields.iter().any(|(name, value)| {
             if name == "eco" {
                 current.value.get(name).and_then(|v| v.get("mode")) != value.get("mode")
             } else {
-                name != "target_change_pending" && current.value.get(name) != Some(&crate::json::canonical(value.clone()))
+                name != "target_change_pending"
+                    && current.value.get(name) != Some(&crate::json::canonical(value.clone()))
             }
         })
     }
@@ -147,7 +152,7 @@ impl Bridge {
                     "heat_cool" => "range",
                     _ => return Err("unknown mode".into()),
                 };
-                shared(fields!{"target_temperature_type" => t, "target_change_pending" => true})
+                shared(fields! {"target_temperature_type" => t, "target_change_pending" => true})
             }
 
             "target" | "target_low" | "target_high" => {
@@ -157,40 +162,42 @@ impl Bridge {
                     "target_low" => "target_temperature_low",
                     _ => "target_temperature_high",
                 };
-                shared(fields!{field => num(t), "target_change_pending" => true})
+                shared(fields! {field => num(t), "target_change_pending" => true})
             }
 
             "fan_mode" => match arg {
                 "on" => {
-                    let duration = self.store.get(&format!("device.{}", self.serial))
+                    let duration = self
+                        .store
+                        .get(&format!("device.{}", self.serial))
                         .and_then(|d| d.value.get("fan_timer_duration").and_then(Value::as_f64))
                         .filter(|d| *d > 0.0)
                         .unwrap_or(900.0);
-                    device(fields!{"fan_timer_timeout" => num(now as f64 + duration)})
+                    device(fields! {"fan_timer_timeout" => num(now as f64 + duration)})
                 }
-                "auto" => device(fields!{"fan_timer_timeout" => num(0.0)}),
+                "auto" => device(fields! {"fan_timer_timeout" => num(0.0)}),
                 _ => Err("expected on or auto".into()),
             },
 
             "fan_timer_duration" => match arg.parse::<i64>() {
-                Ok(m) if (15..=1440).contains(&m) => device(fields!{"fan_timer_duration" => num((m * 60) as f64)}),
+                Ok(m) if (15..=1440).contains(&m) => device(fields! {"fan_timer_duration" => num((m * 60) as f64)}),
                 _ => Err("expected minutes, 15-1440".into()),
             },
 
             // The fan's daily schedule: it runs fan_duty_cycle seconds of
             // each hour from its start to its end (the same: all day).
-            "fan_schedule" => device(fields!{"fan_mode" => if on_off(arg)? { "duty-cycle" } else { "auto" }}),
+            "fan_schedule" => device(fields! {"fan_mode" => if on_off(arg)? { "duty-cycle" } else { "auto" }}),
 
             "fan_schedule_minutes" => match arg.parse::<i64>() {
                 Ok(m) if crate::bridge::FAN_SCHEDULE_MINUTES.contains(&m) => {
-                    device(fields!{"fan_duty_cycle" => num((m * 60) as f64)})
+                    device(fields! {"fan_duty_cycle" => num((m * 60) as f64)})
                 }
                 _ => Err("expected 15, 30, 45 or 60".into()),
             },
 
             "fan_schedule_start" | "fan_schedule_end" => {
                 let field = if name == "fan_schedule_start" { "fan_duty_start_time" } else { "fan_duty_end_time" };
-                device(fields!{field => num((hour(arg)? * 3600) as f64)})
+                device(fields! {field => num((hour(arg)? * 3600) as f64)})
             }
 
             // ON is the shortest boost, for On/Off endpoints; the rest are minutes.
@@ -204,12 +211,10 @@ impl Bridge {
                     },
                 };
                 let end = if minutes == 0 { 0 } else { now + minutes * 60 };
-                device(fields!{"hot_water_boost_time_to_end" => num(end as f64)})
+                device(fields! {"hot_water_boost_time_to_end" => num(end as f64)})
             }
 
-            "hot_water_schedule" => {
-                device(fields!{"hot_water_mode" => if on_off(arg)? { "schedule" } else { "off" }})
-            }
+            "hot_water_schedule" => device(fields! {"hot_water_mode" => if on_off(arg)? { "schedule" } else { "off" }}),
 
             "preset" => {
                 let mode = match arg {
@@ -217,30 +222,33 @@ impl Bridge {
                     "none" | "" => "schedule",
                     _ => return Err("expected eco or none".into()),
                 };
-                let eco = fields!{
+                let eco = fields! {
                     "mode" => mode,
                     "mode_update_timestamp" => num(now as f64),
                     "touched_by" => num(TOUCHED_BY_LOCAL as f64),
                 };
-                device(fields!{"eco" => Value::Object(eco)})
+                device(fields! {"eco" => Value::Object(eco)})
             }
 
-            "learning_mode" | "auto_away_enable" | "sunlight_correction_enabled" | "preconditioning_enabled"
-            | "away_temperature_low_enabled" | "away_temperature_high_enabled" | "target_humidity_enabled"
-            | "filter_reminder_enabled" => {
-                device(fields!{name => on_off(arg)?})
-            }
+            "learning_mode"
+            | "auto_away_enable"
+            | "sunlight_correction_enabled"
+            | "preconditioning_enabled"
+            | "away_temperature_low_enabled"
+            | "away_temperature_high_enabled"
+            | "target_humidity_enabled"
+            | "filter_reminder_enabled" => device(fields! {name => on_off(arg)?}),
 
-            "away_temperature_low" => device(fields!{name => num(temperature(arg, ECO_LOW)?)}),
-            "away_temperature_high" => device(fields!{name => num(temperature(arg, ECO_HIGH)?)}),
+            "away_temperature_low" => device(fields! {name => num(temperature(arg, ECO_LOW)?)}),
+            "away_temperature_high" => device(fields! {name => num(temperature(arg, ECO_HIGH)?)}),
 
             "target_humidity" => match float(arg) {
-                Some(h) if (10.0..=60.0).contains(&h) => device(fields!{"target_humidity" => num(h)}),
+                Some(h) if (10.0..=60.0).contains(&h) => device(fields! {"target_humidity" => num(h)}),
                 _ => Err("expected 10-60 %".into()),
             },
 
-            "screen_timeout" => device(fields!{crate::screen::TIMEOUT => crate::screen::parse_seconds(arg)?}),
-            "screen_always_on" => device(fields!{crate::screen::ALWAYS_ON => on_off(arg)?}),
+            "screen_timeout" => device(fields! {crate::screen::TIMEOUT => crate::screen::parse_seconds(arg)?}),
+            "screen_always_on" => device(fields! {crate::screen::ALWAYS_ON => on_off(arg)?}),
             "screen_brightness" => device(crate::brightness::percent_change(crate::brightness::parse_percent(arg)?)),
             "screen_brightness_auto" => {
                 let dev = self.store.get(&format!("device.{}", self.serial)).map(|o| o.value).unwrap_or_default();
@@ -248,7 +256,7 @@ impl Bridge {
             }
 
             "temperature_scale" => match arg {
-                "C" | "F" => device(fields!{"temperature_scale" => arg}),
+                "C" | "F" => device(fields! {"temperature_scale" => arg}),
                 _ => Err("expected C or F".into()),
             },
 
@@ -291,8 +299,12 @@ impl Bridge {
             "weather" => match serde_json::from_str::<HAWeather>(arg) {
                 Ok(w) => {
                     self.outdoor.set_weather(&w);
-                    logf!("mqtt: weather {:?}, {} hourly, {} daily", w.condition,
-                        w.hourly.as_ref().map_or(0, Vec::len), w.daily.as_ref().map_or(0, Vec::len));
+                    logf!(
+                        "mqtt: weather {:?}, {} hourly, {} daily",
+                        w.condition,
+                        w.hourly.as_ref().map_or(0, Vec::len),
+                        w.daily.as_ref().map_or(0, Vec::len)
+                    );
                     Ok(None)
                 }
                 Err(e) => Err(format!("expected Home Assistant's weather as JSON: {e}")),
@@ -307,7 +319,7 @@ impl Bridge {
                 if arg.eq_ignore_ascii_case("OFF") {
                     return Ok(None);
                 }
-                device(fields!{"filter_changed_date" => num(now as f64)})
+                device(fields! {"filter_changed_date" => num(now as f64)})
             }
 
             "clear_schedule" => {
@@ -318,7 +330,7 @@ impl Bridge {
                 for d in 0..7 {
                     days.insert(d.to_string(), Value::Object(Fields::new()));
                 }
-                Ok(Some(("schedule".into(), fields!{"days" => Value::Object(days)})))
+                Ok(Some(("schedule".into(), fields! {"days" => Value::Object(days)})))
             }
 
             _ => Err("unknown command".into()),
@@ -339,8 +351,13 @@ mod tests {
         assert!(b.fields("external_temperature", "21.5").is_err(), "no -external-temperature");
         let dir = std::env::temp_dir().join(format!("nestlocal-commands-sensor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let sensor = crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"),
-                                                 std::time::Duration::from_secs(1800)).unwrap();
+        let sensor = crate::sensor::Sensor::open(
+            &dir.join("sensor.json"),
+            "S",
+            &dir.join("none"),
+            std::time::Duration::from_secs(1800),
+        )
+        .unwrap();
         b.attach_sensor(sensor.clone());
         assert!(!crate::sensor::selected(&b.store, "S", &sensor.bucket));
         assert_eq!(b.fields("external_temperature", "21.5"), Ok(None));
@@ -365,22 +382,38 @@ mod tests {
     #[test]
     fn display_wake_requires_a_changed_setting() {
         let b = test_bridge();
-        b.store.merge("shared.S", &fields!{"target_temperature" => 21.0,
-            "target_temperature_type" => "heat", "target_change_pending" => false}, 0, 0, true);
-        b.store.merge("device.S", &fields!{"fan_timer_timeout" => 0.0,
-            "eco" => json!({"mode":"schedule","mode_update_timestamp":0,"touched_by":4})}, 0, 0, true);
+        b.store.merge(
+            "shared.S",
+            &fields! {"target_temperature" => 21.0,
+            "target_temperature_type" => "heat", "target_change_pending" => false},
+            0,
+            0,
+            true,
+        );
+        b.store.merge(
+            "device.S",
+            &fields! {"fan_timer_timeout" => 0.0,
+            "eco" => json!({"mode":"schedule","mode_update_timestamp":0,"touched_by":4})},
+            0,
+            0,
+            true,
+        );
         for (name, arg, expected) in [
-            ("target", "22", true), ("target", "21", false),
-            ("mode", "cool", true), ("mode", "heat", false),
-            ("fan_mode", "on", true), ("fan_mode", "auto", false),
-            ("preset", "eco", true), ("preset", "none", false),
+            ("target", "22", true),
+            ("target", "21", false),
+            ("mode", "cool", true),
+            ("mode", "heat", false),
+            ("fan_mode", "on", true),
+            ("fan_mode", "auto", false),
+            ("preset", "eco", true),
+            ("preset", "none", false),
         ] {
             let (bucket, fields) = b.fields(name, arg).unwrap().unwrap();
             assert_eq!(b.display_change(&format!("{bucket}.S"), &fields), expected, "{name} {arg}");
         }
-        assert!(!b.display_change("shared.missing", &fields!{"target_temperature" => 22.0}));
-        b.store.merge("structure.S", &fields!{"away" => false}, 0, 0, true);
-        assert!(!b.display_change("structure.S", &fields!{"away" => true}));
+        assert!(!b.display_change("shared.missing", &fields! {"target_temperature" => 22.0}));
+        b.store.merge("structure.S", &fields! {"away" => false}, 0, 0, true);
+        assert!(!b.display_change("structure.S", &fields! {"away" => true}));
         assert!(b.fields("target", "99").is_err());
         assert!(b.fields("outdoor_temperature", "10").unwrap().is_none());
     }
@@ -388,13 +421,24 @@ mod tests {
     #[test]
     fn remote_protocols_share_the_display_change_path() {
         for source in ["mqtt", "matter", "zigbee"] {
-            for (name, arg) in [("target", "22"), ("mode", "cool"),
-                                ("preset", "eco"), ("fan_mode", "on")] {
+            for (name, arg) in [("target", "22"), ("mode", "cool"), ("preset", "eco"), ("fan_mode", "on")] {
                 let b = test_bridge();
-                b.store.merge("device.S", &fields!{"fan_timer_timeout" => 0.0,
-                    "eco" => json!({"mode":"schedule"})}, 0, 0, true);
-                b.store.merge("shared.S", &fields!{"target_temperature" => 21.0,
-                    "target_temperature_type" => "heat"}, 0, 0, true);
+                b.store.merge(
+                    "device.S",
+                    &fields! {"fan_timer_timeout" => 0.0,
+                    "eco" => json!({"mode":"schedule"})},
+                    0,
+                    0,
+                    true,
+                );
+                b.store.merge(
+                    "shared.S",
+                    &fields! {"target_temperature" => 21.0,
+                    "target_temperature_type" => "heat"},
+                    0,
+                    0,
+                    true,
+                );
                 let (bucket, fields) = b.fields(name, arg).unwrap().unwrap();
                 let key = format!("{bucket}.S");
                 assert!(b.display_change(&key, &fields), "{source} {name}");
@@ -411,7 +455,7 @@ mod tests {
     #[test]
     fn commands() {
         let b = test_bridge();
-        b.store.merge("device.S", &fields!{"fan_timer_duration" => 1800.0}, 0, 0, true);
+        b.store.merge("device.S", &fields! {"fan_timer_duration" => 1800.0}, 0, 0, true);
         for (name, arg, bucket, want) in [
             ("mode", "heat_cool", "shared", json!({"target_temperature_type": "range", "target_change_pending": true})),
             ("target", "20.3", "shared", json!({"target_temperature": 20.5, "target_change_pending": true})),
@@ -425,8 +469,14 @@ mod tests {
         let (_, f) = b.fields("fan_mode", "on").unwrap().unwrap();
         let ahead = f["fan_timer_timeout"].as_f64().unwrap() - chrono::Utc::now().timestamp() as f64;
         assert!((1795.0..=1801.0).contains(&ahead), "fan on: timeout {ahead} s from now, want the unit's 1800");
-        for (name, arg) in [("mode", "auto"), ("target", "99"), ("preset", "away"), ("nope", ""),
-                            ("outdoor_temperature", "unavailable"), ("outdoor_humidity", "101")] {
+        for (name, arg) in [
+            ("mode", "auto"),
+            ("target", "99"),
+            ("preset", "away"),
+            ("nope", ""),
+            ("outdoor_temperature", "unavailable"),
+            ("outdoor_humidity", "101"),
+        ] {
             assert!(b.fields(name, arg).is_err(), "{name} {arg} accepted");
         }
     }
@@ -473,11 +523,19 @@ mod tests {
 
         // By night both are ahead, and pass as they are; an unknown condition
         // leaves the icon out (the unit's default image).
-        b.fields("weather", r#"{"condition": "windy", "next_rising": "2026-09-30T11:02:03+00:00",
-            "next_setting": "2026-09-30T22:53:00+00:00"}"#).unwrap();
+        b.fields(
+            "weather",
+            r#"{"condition": "windy", "next_rising": "2026-09-30T11:02:03+00:00",
+            "next_setting": "2026-09-30T22:53:00+00:00"}"#,
+        )
+        .unwrap();
         let current = b.outdoor.answer().unwrap()["current"].clone();
-        assert!(current.get("icon").is_none() && current["sunrise"] == num(1790766123.0)
-            && current["sunset"] == num(1790808780.0), "night: {current}");
+        assert!(
+            current.get("icon").is_none()
+                && current["sunrise"] == num(1790766123.0)
+                && current["sunset"] == num(1790808780.0),
+            "night: {current}"
+        );
         assert!(b.fields("weather", "unavailable").is_err(), "non-JSON weather accepted");
     }
 
@@ -485,28 +543,68 @@ mod tests {
     fn arguments_at_and_past_their_limits() {
         let b = test_bridge();
         let field = |name: &str, arg: &str, key: &str| b.fields(name, arg).map(|c| c.unwrap().1[key].clone());
-        for (arg, want) in [("4.5", Some(4.5)), ("35", Some(35.0)), ("4.74", Some(4.5)), ("4.75", Some(5.0)), ("21.25", Some(21.5)),
-                            ("4.4", None), ("35.1", None), ("NaN", None), ("inf", None), ("20,5", None), ("", None), ("20°C", None)] {
+        for (arg, want) in [
+            ("4.5", Some(4.5)),
+            ("35", Some(35.0)),
+            ("4.74", Some(4.5)),
+            ("4.75", Some(5.0)),
+            ("21.25", Some(21.5)),
+            ("4.4", None),
+            ("35.1", None),
+            ("NaN", None),
+            ("inf", None),
+            ("20,5", None),
+            ("", None),
+            ("20°C", None),
+        ] {
             assert_eq!(field("target_high", arg, "target_temperature_high").ok(), want.map(num), "target_high {arg:?}");
         }
-        for (name, arg, want) in [("away_temperature_low", "4.5", Some(4.5)), ("away_temperature_low", "21", Some(21.0)),
-                                  ("away_temperature_low", "4.4", None), ("away_temperature_low", "21.1", None),
-                                  ("away_temperature_high", "24", Some(24.0)), ("away_temperature_high", "32", Some(32.0)),
-                                  ("away_temperature_high", "23.9", None), ("away_temperature_high", "32.1", None)] {
+        for (name, arg, want) in [
+            ("away_temperature_low", "4.5", Some(4.5)),
+            ("away_temperature_low", "21", Some(21.0)),
+            ("away_temperature_low", "4.4", None),
+            ("away_temperature_low", "21.1", None),
+            ("away_temperature_high", "24", Some(24.0)),
+            ("away_temperature_high", "32", Some(32.0)),
+            ("away_temperature_high", "23.9", None),
+            ("away_temperature_high", "32.1", None),
+        ] {
             assert_eq!(field(name, arg, name).ok(), want.map(num), "{name} {arg:?}");
         }
-        for (arg, want) in [("15", Some(900)), ("1440", Some(86_400)), ("14", None), ("1441", None), ("30.0", None), ("-15", None)] {
-            assert_eq!(field("fan_timer_duration", arg, "fan_timer_duration").ok(), want.map(Value::from), "fan_timer_duration {arg:?}");
+        for (arg, want) in
+            [("15", Some(900)), ("1440", Some(86_400)), ("14", None), ("1441", None), ("30.0", None), ("-15", None)]
+        {
+            assert_eq!(
+                field("fan_timer_duration", arg, "fan_timer_duration").ok(),
+                want.map(Value::from),
+                "fan_timer_duration {arg:?}"
+            );
         }
         for (arg, want) in [("ON", Some("duty-cycle")), ("OFF", Some("auto")), ("duty-cycle", None)] {
             assert_eq!(field("fan_schedule", arg, "fan_mode").ok(), want.map(Value::from), "fan_schedule {arg:?}");
         }
         for (arg, want) in [("15", Some(900)), ("60", Some(3600)), ("20", None), ("0", None), ("90", None)] {
-            assert_eq!(field("fan_schedule_minutes", arg, "fan_duty_cycle").ok(), want.map(Value::from), "fan_schedule_minutes {arg:?}");
+            assert_eq!(
+                field("fan_schedule_minutes", arg, "fan_duty_cycle").ok(),
+                want.map(Value::from),
+                "fan_schedule_minutes {arg:?}"
+            );
         }
-        for (arg, want) in [("00:00", Some(0)), ("23:00", Some(82_800)), ("7", Some(25_200)), ("07", Some(25_200)),
-                            ("24:00", None), ("07:30", None), ("-1", None), ("", None)] {
-            assert_eq!(field("fan_schedule_start", arg, "fan_duty_start_time").ok(), want.map(Value::from), "start {arg:?}");
+        for (arg, want) in [
+            ("00:00", Some(0)),
+            ("23:00", Some(82_800)),
+            ("7", Some(25_200)),
+            ("07", Some(25_200)),
+            ("24:00", None),
+            ("07:30", None),
+            ("-1", None),
+            ("", None),
+        ] {
+            assert_eq!(
+                field("fan_schedule_start", arg, "fan_duty_start_time").ok(),
+                want.map(Value::from),
+                "start {arg:?}"
+            );
             assert_eq!(field("fan_schedule_end", arg, "fan_duty_end_time").ok(), want.map(Value::from), "end {arg:?}");
         }
         for (arg, want) in [("10", true), ("60", true), ("42.5", true), ("9.9", false), ("60.5", false)] {
@@ -515,14 +613,25 @@ mod tests {
         for (arg, want) in [("-60", true), ("60", true), ("-60.1", false), ("60.1", false)] {
             assert_eq!(b.fields("outdoor_temperature", arg).is_ok(), want, "outdoor_temperature {arg:?}");
         }
-        for (arg, want) in [("on", Some(true)), ("True", Some(true)), ("1", Some(true)), ("off", Some(false)), ("0", Some(false)),
-                            ("yes", None), ("", None)] {
-            assert_eq!(field("sunlight_correction_enabled", arg, "sunlight_correction_enabled").ok(), want.map(Value::from), "{arg:?}");
+        for (arg, want) in [
+            ("on", Some(true)),
+            ("True", Some(true)),
+            ("1", Some(true)),
+            ("off", Some(false)),
+            ("0", Some(false)),
+            ("yes", None),
+            ("", None),
+        ] {
+            assert_eq!(
+                field("sunlight_correction_enabled", arg, "sunlight_correction_enabled").ok(),
+                want.map(Value::from),
+                "{arg:?}"
+            );
         }
         assert!(b.fields("temperature_scale", "f").is_err() && b.fields("mode", "HEAT").is_err());
         // raw/: a JSON object; null is no change; anything else is refused.
         assert_eq!(b.fields("raw/schedule", "null"), Ok(None));
-        assert_eq!(b.fields("raw/schedule", "{}"), Ok(Some(("schedule".into(), fields!{}))));
+        assert_eq!(b.fields("raw/schedule", "{}"), Ok(Some(("schedule".into(), fields! {}))));
         assert!(b.fields("raw/schedule", "[1]").is_err() && b.fields("raw/schedule", "{").is_err());
     }
 
@@ -542,8 +651,10 @@ mod tests {
     fn hot_water_commands_set_the_fields_nlclient_takes() {
         let b = test_bridge();
         let field = |name: &str, arg: &str, key: &str| b.fields(name, arg).unwrap().unwrap().1[key].clone();
-        let left = |arg: &str| field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
-            - chrono::Utc::now().timestamp() as f64;
+        let left = |arg: &str| {
+            field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
+                - chrono::Utc::now().timestamp() as f64
+        };
         for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("60", 3600.0), ("120", 7200.0)] {
             assert!((seconds - 2.0..=seconds).contains(&left(arg)), "{arg}");
         }
@@ -563,7 +674,7 @@ mod tests {
         let b = test_bridge();
         assert_eq!(b.apply("mqtt", "target", "21"), Err("no shared.S bucket yet".into()));
         assert!(b.store.get("shared.S").is_none(), "a command made the bucket");
-        b.store.merge("shared.S", &fields!{"target_temperature" => 19}, 3, 100, true);
+        b.store.merge("shared.S", &fields! {"target_temperature" => 19}, 3, 100, true);
         let (mut changes, _sub) = b.store.subscribe();
         b.apply("mqtt", "target", "21").unwrap();
         // A server-side change: it goes to the held subscribe.
@@ -580,8 +691,8 @@ mod tests {
     #[test]
     fn clear_schedule_empties_every_day_and_stops_learning() {
         let b = test_bridge();
-        b.store.merge("device.S", &fields!{"learning_mode" => true}, 0, 0, true);
-        b.store.merge("schedule.S", &fields!{"days" => json!({"0": {"0": {"temp": 20}}}), "ver" => 2}, 0, 0, true);
+        b.store.merge("device.S", &fields! {"learning_mode" => true}, 0, 0, true);
+        b.store.merge("schedule.S", &fields! {"days" => json!({"0": {"0": {"temp": 20}}}), "ver" => 2}, 0, 0, true);
         b.apply("mqtt", "clear_schedule", "PRESS").unwrap();
         let schedule = b.store.get("schedule.S").unwrap().value;
         assert_eq!(schedule["days"], json!({"0": {}, "1": {}, "2": {}, "3": {}, "4": {}, "5": {}, "6": {}}));
@@ -596,13 +707,13 @@ mod tests {
         assert!(b.apply("mqtt", "clear_schedule", "PRESS").is_err());
         assert!(b.store.get("device.S").is_none() && b.store.get("schedule.S").is_none());
         // No schedule: learning stays on.
-        b.store.merge("device.S", &fields!{"learning_mode" => true}, 0, 0, true);
+        b.store.merge("device.S", &fields! {"learning_mode" => true}, 0, 0, true);
         assert!(b.apply("mqtt", "clear_schedule", "PRESS").is_err());
         let d = b.store.get("device.S").unwrap();
         assert_eq!((d.revision, &d.value["learning_mode"]), (1, &json!(true)));
         // No device bucket: the schedule stays.
         let b = test_bridge();
-        b.store.merge("schedule.S", &fields!{"days" => json!({"0": {"0": {"temp": 20}}})}, 0, 0, true);
+        b.store.merge("schedule.S", &fields! {"days" => json!({"0": {"0": {"temp": 20}}})}, 0, 0, true);
         assert!(b.apply("mqtt", "clear_schedule", "PRESS").is_err());
         assert_eq!(b.store.get("schedule.S").unwrap().revision, 1);
         assert!(b.store.get("device.S").is_none());

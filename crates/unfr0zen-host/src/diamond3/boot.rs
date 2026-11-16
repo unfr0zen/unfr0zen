@@ -6,7 +6,7 @@ use std::time::Duration;
 use unfr0zen_core::Result;
 
 use super::usb::{self, Mode};
-use super::{EntryPoint, connect_recovery, find_unit, reach_recovery, report_silicon};
+use super::{connect_recovery, find_unit, reach_recovery, report_silicon, EntryPoint};
 use crate::device::{self, CancelFlag, Unit};
 use crate::flow::{seconds, start_log};
 use crate::progress::{stage, Progress};
@@ -47,8 +47,13 @@ pub fn boot(wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Prog
 
 /// [`boot`] for the unit found. One already running its application firmware
 /// is left alone, with no run log.
-pub(crate) fn boot_unit(unit: Unit, wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Progress,
-             cancel: &CancelFlag) -> Result<String> {
+pub(crate) fn boot_unit(
+    unit: Unit,
+    wait_usb: Duration,
+    entry_point: EntryPoint,
+    progress: &mut dyn Progress,
+    cancel: &CancelFlag,
+) -> Result<String> {
     let (port, id) = find_unit(progress, wait_usb, true, unit, cancel)?;
     if usb::mode(id) == Some(Mode::App) {
         return Ok("The application firmware is running".into());
@@ -58,7 +63,9 @@ pub(crate) fn boot_unit(unit: Unit, wait_usb: Duration, entry_point: EntryPoint,
     let mut board = connect_recovery(progress, &port)?;
     report_silicon(progress, &mut board);
     stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    stage(progress, "Wait for the application firmware", || usb::wait_device(&[Mode::App], seconds(120), Some(&port), &Default::default()))?;
+    stage(progress, "Wait for the application firmware", || {
+        usb::wait_device(&[Mode::App], seconds(120), Some(&port), &Default::default())
+    })?;
     Ok("The application firmware is running".into())
 }
 
@@ -71,7 +78,9 @@ mod tests {
     impl Progress for Notes {
         fn begin(&mut self, _: &str) {}
         fn end(&mut self, _: &str, _: Duration, _: bool) {}
-        fn status(&mut self, message: &str) { self.0.push(message.to_string()); }
+        fn status(&mut self, message: &str) {
+            self.0.push(message.to_string());
+        }
         fn waiting(&mut self, _: &str) {}
     }
 

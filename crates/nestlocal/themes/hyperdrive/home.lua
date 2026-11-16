@@ -48,9 +48,15 @@ local function status(t)
     local accent = t.range == "low" and colors.orange or colors.cyan
     return accent, (t.range_editing and "SET " or "SELECT ") .. side
   end
-  if t.mode == "off" then return colors.comment, "SYSTEM OFF" end
-  if t.hvac == "heating" then return colors.orange, "HEATING" end
-  if t.hvac == "cooling" then return colors.cyan, "COOLING" end
+  if t.mode == "off" then
+    return colors.comment, "SYSTEM OFF"
+  end
+  if t.hvac == "heating" then
+    return colors.orange, "HEATING"
+  end
+  if t.hvac == "cooling" then
+    return colors.cyan, "COOLING"
+  end
   return colors.green, "STANDBY"
 end
 
@@ -60,11 +66,15 @@ end
 
 -- A temperature as shown: whole degrees in Fahrenheit, halves in Celsius.
 local function format_temperature(value, unit)
-  if unit == "F" then return string.format("%d", math.floor(value + 0.5)) end
+  if unit == "F" then
+    return string.format("%d", math.floor(value + 0.5))
+  end
   return string.format("%.1f", math.floor(value * 2 + 0.5) / 2)
 end
 
-local function two_digits(n) return string.format("%02d", n) end
+local function two_digits(n)
+  return string.format("%02d", n)
+end
 
 -- Draws a temperature in whole digits, a Celsius half after them smaller
 -- and top-aligned. `align` is "left" (default), "center" or "right" about
@@ -78,7 +88,11 @@ local function draw_temperature(g, value, unit, x, base, size, color, align)
   local small = { font = big.font, size = size * HALF.scale, color = color }
   local whole_w = g:measure(whole, big)
   local width = whole_w + (half and g:measure(half, small) + HALF.gap or 0)
-  if align == "right" then x = x - width elseif align == "center" then x = x - width / 2 end
+  if align == "right" then
+    x = x - width
+  elseif align == "center" then
+    x = x - width / 2
+  end
   g:text(whole, x, base, big)
   if half then
     g:text(half, x + whole_w + HALF.gap, base - (size - small.size) * HALF.rise, small)
@@ -92,7 +106,9 @@ local function paint_segments(gfx, c, a0, a1, color)
   local half = gauge.step / 2
   local first = math.ceil((a0 - gauge.from - half) / gauge.step - 1e-6)
   local last = math.floor((a1 - gauge.from - half) / gauge.step + 1e-6)
-  if last < first then return end
+  if last < first then
+    return
+  end
   local from, to = gauge.from + first * gauge.step, gauge.from + (last + 1) * gauge.step
   local clips = geom.ring_clips(c, gauge.inner - CLIP_MARGIN, gauge.outer + CLIP_MARGIN, from, to, GAUGE_CLIP_SPAN)
   for _, clip in ipairs(clips) do
@@ -104,7 +120,9 @@ end
 -- the transparent rest of its dial-sized layer.
 local spinner_clips
 local function get_spinner_clips(c)
-  if spinner_clips then return spinner_clips end
+  if spinner_clips then
+    return spinner_clips
+  end
   spinner_clips = {}
   local inner = spinner.radius - spinner.inner_gap - 2 * SPINNER_CLIP_PAD
   local outer = spinner.radius + spinner.width / 2 + SPINNER_CLIP_PAD
@@ -144,7 +162,9 @@ end
 -- The layers drawn once: the bezel, the gauge's segments and the spinner's
 -- dashes in white, and the scan lines.
 local function define_layers(gfx, c, size)
-  gfx:layer("bezel", "1", function(g) draw_bezel(g, c) end)
+  gfx:layer("bezel", "1", function(g)
+    draw_bezel(g, c)
+  end)
   gfx:layer("segments", "1", function(g)
     local n = math.floor((gauge.to - gauge.from) / gauge.step + 0.5)
     for i = 0, n - 1 do
@@ -162,7 +182,9 @@ local function define_layers(gfx, c, size)
   end)
   gfx:layer("scan", tostring(scan.spacing), function(g)
     local segs = {}
-    for y = 0, size, scan.spacing do geom.push_line(segs, 0, y, size, y) end
+    for y = 0, size, scan.spacing do
+      geom.push_line(segs, 0, y, size, y)
+    end
     g:lines(segs, 1, WHITE)
   end)
 end
@@ -179,7 +201,9 @@ local function draw_label_values(g, x, y, items, size)
   end
   local at = x - total / 2
   for i, item in ipairs(items) do
-    if i > 1 then at = at + spacing end
+    if i > 1 then
+      at = at + spacing
+    end
     at = at + g:text(item[1] .. " ", at, y, label)
     value.color = item[3]
     at = at + g:text(item[2], at, y, value)
@@ -191,25 +215,47 @@ end
 local function draw_readout(g, c, t, clock)
   local accent, word = status(t)
   local hour = clock.hour
-  if clock.twelve_hour then hour = (hour + 11) % 12 + 1 end
-  g:text(two_digits(hour) .. ":" .. two_digits(clock.minute), c, readout.clock.y,
-    { font = "mono", size = readout.clock.size, color = colors.comment, align = "center" })
-  g:text("▸ " .. tr(word), c, readout.status.y,
-    { font = "mono_medium", size = readout.status.size, spacing = 2, color = accent, align = "center" })
+  if clock.twelve_hour then
+    hour = (hour + 11) % 12 + 1
+  end
+  g:text(
+    two_digits(hour) .. ":" .. two_digits(clock.minute),
+    c,
+    readout.clock.y,
+    { font = "mono", size = readout.clock.size, color = colors.comment, align = "center" }
+  )
+  g:text(
+    "▸ " .. tr(word),
+    c,
+    readout.status.y,
+    { font = "mono_medium", size = readout.status.size, spacing = 2, color = accent, align = "center" }
+  )
 
   if t.mode == "off" then
-    g:text("OFF", c, readout.off.y, { font = "mono_light", size = readout.off.size, color = colors.comment, align = "center" })
+    g:text(
+      "OFF",
+      c,
+      readout.off.y,
+      { font = "mono_light", size = readout.off.size, color = colors.comment, align = "center" }
+    )
   elseif t.mode == "heat-cool" then
     local range = readout.range
     -- The end not picked dims while one is.
-    local function tone(color, side) return (t.range and t.range ~= side) and colors.rule or color end
+    local function tone(color, side)
+      return (t.range and t.range ~= side) and colors.rule or color
+    end
     draw_temperature(g, t.low, t.unit, c - range.gap, range.y, range.size, tone(colors.orange, "low"), "right")
     g:text("/", c, range.y, { font = "mono_light", size = range.slash_size, color = colors.comment, align = "center" })
     draw_temperature(g, t.high, t.unit, c + range.gap, range.y, range.size, tone(colors.cyan, "high"))
   else
     local target = readout.target
     local w, x = draw_temperature(g, t.target, t.unit, c - target.shift, target.y, target.size, colors.bright, "center")
-    g:text("°" .. t.unit, x + w + target.unit_gap, target.unit_y, { font = "mono", size = target.unit_size, color = colors.blue })
+    g:text(
+      "°" .. t.unit,
+      x + w + target.unit_gap,
+      target.unit_y,
+      { font = "mono", size = target.unit_size, color = colors.blue }
+    )
   end
 
   local items = { { "AMB", format_temperature(t.current, t.unit) .. "°", colors.green } }
@@ -219,9 +265,18 @@ local function draw_readout(g, c, t, clock)
   draw_label_values(g, c, readout.ambient.y, items, readout.ambient.size)
 
   local mode = readout.mode
-  g:text("[ ", c - mode.bracket_gap, mode.y, { font = "mono", size = mode.size, color = colors.comment, align = "right" })
-  g:text(MODE_NAMES[t.mode] or string.upper(t.mode), c, mode.y,
-    { font = "mono_medium", size = mode.size, spacing = 2, color = colors.purple, align = "center" })
+  g:text(
+    "[ ",
+    c - mode.bracket_gap,
+    mode.y,
+    { font = "mono", size = mode.size, color = colors.comment, align = "right" }
+  )
+  g:text(
+    MODE_NAMES[t.mode] or string.upper(t.mode),
+    c,
+    mode.y,
+    { font = "mono_medium", size = mode.size, spacing = 2, color = colors.purple, align = "center" }
+  )
   g:text(" ]", c + mode.bracket_gap, mode.y, { font = "mono", size = mode.size, color = colors.comment })
 end
 
@@ -278,9 +333,22 @@ local function dial(gfx, ui, c)
   local accent = status(t)
   define_layers(gfx, c, ui.dial.size)
 
-  local gauge_key = table.concat({ t.mode, t.hvac, t.target, t.current, t.unit, t.low, t.high, t.min, t.max,
-                                   t.range or "", tostring(t.range_editing) }, "|")
-  gfx:layer("base", gauge_key, function(g) draw_gauge(g, c, t, accent) end)
+  local gauge_key = table.concat({
+    t.mode,
+    t.hvac,
+    t.target,
+    t.current,
+    t.unit,
+    t.low,
+    t.high,
+    t.min,
+    t.max,
+    t.range or "",
+    tostring(t.range_editing),
+  }, "|")
+  gfx:layer("base", gauge_key, function(g)
+    draw_gauge(g, c, t, accent)
+  end)
   gfx:paint_layer("base", WHITE)
 
   if running(t) then
@@ -288,12 +356,14 @@ local function dial(gfx, ui, c)
     gfx:translate(c, c)
     gfx:rotate((ui.now * spinner.speed) % 360)
     gfx:translate(-c, -c)
-    for _, clip in ipairs(get_spinner_clips(c)) do gfx:paint_layer("spinner", accent, clip) end
+    for _, clip in ipairs(get_spinner_clips(c)) do
+      gfx:paint_layer("spinner", accent, clip)
+    end
     gfx:restore()
   end
 
-  local readout_key = table.concat({ gauge_key, tostring(t.humidity), clock.hour, clock.minute,
-                                     tostring(clock.twelve_hour) }, "|")
+  local readout_key =
+    table.concat({ gauge_key, tostring(t.humidity), clock.hour, clock.minute, tostring(clock.twelve_hour) }, "|")
   gfx:layer("overlay", readout_key, function(g)
     draw_readout(g, c, t, clock)
     g:paint_layer("scan", scan.shade)

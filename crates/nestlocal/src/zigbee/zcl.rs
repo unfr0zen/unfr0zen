@@ -157,11 +157,18 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
     let (&sequence, rest) = rest.split_first()?;
     let (&cmd, payload) = rest.split_first()?;
     let quiet = control & NO_DEFAULT_RESPONSE != 0;
-    let answer = |cmd, payload: &[u8]| Some(frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, cmd, payload));
-    let default = |status: u8| (!quiet || status != status::SUCCESS).then(|| answer(command::DEFAULT_RESPONSE, &[cmd, status])).flatten();
+    let answer =
+        |cmd, payload: &[u8]| Some(frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, cmd, payload));
+    let default = |status: u8| {
+        (!quiet || status != status::SUCCESS).then(|| answer(command::DEFAULT_RESPONSE, &[cmd, status])).flatten()
+    };
     let specific = control & CLUSTER_SPECIFIC != 0;
     if manufacturer.is_some_and(|code| code != MANUFACTURER_CODE || cluster < MANUFACTURER_CLUSTERS) {
-        return default(if specific { status::UNSUP_MANUF_CLUSTER_COMMAND } else { status::UNSUP_MANUF_GENERAL_COMMAND });
+        return default(if specific {
+            status::UNSUP_MANUF_CLUSTER_COMMAND
+        } else {
+            status::UNSUP_MANUF_GENERAL_COMMAND
+        });
     }
     let Some(ids) = clusters.attributes(endpoint, cluster) else {
         return default(status::UNSUPPORTED_CLUSTER);
@@ -216,8 +223,11 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
         command::DISCOVER if payload.len() >= 3 => {
             let start = u16::from_le_bytes([payload[0], payload[1]]);
             let max = payload[2] as usize;
-            let found: Vec<(u16, Value)> = ids.iter().filter(|&&id| id >= start)
-                .filter_map(|&id| clusters.read(endpoint, cluster, id).map(|v| (id, v))).collect();
+            let found: Vec<(u16, Value)> = ids
+                .iter()
+                .filter(|&&id| id >= start)
+                .filter_map(|&id| clusters.read(endpoint, cluster, id).map(|v| (id, v)))
+                .collect();
             let mut out = vec![u8::from(found.len() <= max)];
             for (id, value) in found.iter().take(max) {
                 out.extend(id.to_le_bytes());
@@ -327,7 +337,11 @@ mod tests {
             }
         }
         fn command(&self, _endpoint: u8, _cluster: u16, command: u8, _payload: &[u8]) -> u8 {
-            if command == 0 { status::SUCCESS } else { status::UNSUP_CLUSTER_COMMAND }
+            if command == 0 {
+                status::SUCCESS
+            } else {
+                status::UNSUP_CLUSTER_COMMAND
+            }
         }
     }
 
@@ -349,7 +363,8 @@ mod tests {
         assert_eq!(out, [0x18, 9, 0x04, 0x00]);
         assert_eq!(*f.0.borrow(), 2100);
         // Read-only, and the wrong type.
-        let out = serve(&f, 1, 0x0201, &[0x00, 10, 0x02, 0x00, 0x00, 0x30, 0x01, 0x12, 0x00, 0x21, 0x00, 0x00]).unwrap();
+        let out =
+            serve(&f, 1, 0x0201, &[0x00, 10, 0x02, 0x00, 0x00, 0x30, 0x01, 0x12, 0x00, 0x21, 0x00, 0x00]).unwrap();
         assert_eq!(out, [0x18, 10, 0x04, 0x88, 0x00, 0x00, 0x8D, 0x12, 0x00]);
         // No response asked.
         assert!(serve(&f, 1, 0x0201, &[0x00, 11, 0x05, 0x12, 0x00, 0x29, 0x00, 0x08]).is_none());
@@ -365,9 +380,15 @@ mod tests {
         assert_eq!(serve(&f, 1, 0x0201, &[0x11, 5, 0x07]).unwrap(), [0x18, 5, 0x0B, 0x07, 0x81]);
         // Configure reporting, discover.
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 6, 0x06, 0x00, 0x12, 0x00, 0x29]).unwrap(), [0x18, 6, 0x07, 0x00]);
-        assert_eq!(serve(&f, 1, 0x0201, &[0x00, 7, 0x0C, 0x00, 0x00, 0x01]).unwrap(), [0x18, 7, 0x0D, 0x00, 0x00, 0x00, 0x30]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x00, 7, 0x0C, 0x00, 0x00, 0x01]).unwrap(),
+            [0x18, 7, 0x0D, 0x00, 0x00, 0x00, 0x30]
+        );
         // Another manufacturer's, responses to us.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x04, 0x34, 0x12, 8, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 8, 0x0B, 0x00, 0x84]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x04, 0x34, 0x12, 8, 0x00]).unwrap(),
+            [0x1C, 0x34, 0x12, 8, 0x0B, 0x00, 0x84]
+        );
         assert!(serve(&f, 1, 0x0201, &[0x18, 9, 0x0B, 0x00, 0x00]).is_none());
     }
 
@@ -382,8 +403,14 @@ mod tests {
         assert_eq!(*f.0.borrow(), 2100);
         assert!(is_default_response(&serve(&f, 1, 0xFC00, &[0x05, 0xD6, 0x10, 9, 0x07]).unwrap()));
         // The same read of a standard cluster, and with another code.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap(), [0x1C, 0xD6, 0x10, 7, 0x0B, 0x00, 0x84]);
-        assert_eq!(serve(&f, 1, 0xFC00, &[0x04, 0x34, 0x12, 7, 0x00, 0x12, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 7, 0x0B, 0x00, 0x84]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap(),
+            [0x1C, 0xD6, 0x10, 7, 0x0B, 0x00, 0x84]
+        );
+        assert_eq!(
+            serve(&f, 1, 0xFC00, &[0x04, 0x34, 0x12, 7, 0x00, 0x12, 0x00]).unwrap(),
+            [0x1C, 0x34, 0x12, 7, 0x0B, 0x00, 0x84]
+        );
         // A code cut short.
         assert!(serve(&f, 1, 0xFC00, &[0x04, 0xD6]).is_none());
     }
@@ -395,12 +422,17 @@ mod tests {
         let response = [0x18, 5, 0x01, 0x00, 0x00, 0x00, 0xE2, 0x80, 0x33, 0x74, 0x31, 0x02, 0x00, 0x86];
         assert_eq!(read_response(&response), Some((5, vec![(0x0000, Value::Utc(0x31743380))])));
         // Not a read response: a report, a request, a manufacturer-specific one.
-        for frame in [&[0x18, 5, 0x0A, 0x00, 0x00, 0xE2, 0, 0, 0, 0][..], &[0x00, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1],
-                      &[0x1C, 0xD6, 0x10, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1], &[0x18, 5]] {
+        for frame in [
+            &[0x18, 5, 0x0A, 0x00, 0x00, 0xE2, 0, 0, 0, 0][..],
+            &[0x00, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1],
+            &[0x1C, 0xD6, 0x10, 5, 0x01, 0x00, 0x00, 0x00, 0x20, 1],
+            &[0x18, 5],
+        ] {
             assert_eq!(read_response(frame), None, "{frame:02x?}");
         }
         // A value of an unknown type ends the list; what came before stays.
-        let response = [0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x23, 1, 2, 3, 4, 0x02, 0x00, 0x00, 0x20, 9];
+        let response =
+            [0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x23, 1, 2, 3, 4, 0x02, 0x00, 0x00, 0x20, 9];
         assert_eq!(read_response(&response), Some((6, vec![(0x0001, Value::U8(7))])));
         assert_eq!(read_response(&[0x18, 7, 0x01]), Some((7, vec![])));
     }
@@ -408,9 +440,19 @@ mod tests {
     #[test]
     fn values_both_ways() {
         let values = [
-            Value::Bool(true), Value::Bitmap8(0xA5), Value::Bitmap16(0xBEEF), Value::U8(0xFE), Value::U16(0xFFFE),
-            Value::I8(-128), Value::I16(-32768), Value::Enum8(4), Value::Enum16(98), Value::F32(-0.5),
-            Value::Str(String::new()), Value::Str("Nest".into()), Value::Utc(0xFFFF_FFFE),
+            Value::Bool(true),
+            Value::Bitmap8(0xA5),
+            Value::Bitmap16(0xBEEF),
+            Value::U8(0xFE),
+            Value::U16(0xFFFE),
+            Value::I8(-128),
+            Value::I16(-32768),
+            Value::Enum8(4),
+            Value::Enum16(98),
+            Value::F32(-0.5),
+            Value::Str(String::new()),
+            Value::Str("Nest".into()),
+            Value::Utc(0xFFFF_FFFE),
         ];
         for value in values {
             let mut out = Vec::new();
@@ -426,9 +468,17 @@ mod tests {
 
     #[test]
     fn values_cut_short_or_of_unknown_types_are_not_read() {
-        for (type_id, data) in [(0x10, &[][..]), (0x21, &[0x01]), (0x29, &[0x01]), (0x31, &[0x01]),
-                                (0x39, &[0x00, 0x00, 0x80]), (0x42, &[]), (0x42, &[5, b'N', b'e', b's', b't']),
-                                (0xE2, &[0x00, 0x00, 0x00]), (0x23, &[0x00, 0x00, 0x00, 0x00])] {
+        for (type_id, data) in [
+            (0x10, &[][..]),
+            (0x21, &[0x01]),
+            (0x29, &[0x01]),
+            (0x31, &[0x01]),
+            (0x39, &[0x00, 0x00, 0x80]),
+            (0x42, &[]),
+            (0x42, &[5, b'N', b'e', b's', b't']),
+            (0xE2, &[0x00, 0x00, 0x00]),
+            (0x23, &[0x00, 0x00, 0x00, 0x00]),
+        ] {
             assert_eq!(Value::read(type_id, &mut &data[..]), None, "type {type_id:#04x}, {data:02x?}");
         }
     }
@@ -477,9 +527,15 @@ mod tests {
     fn discovery_says_whether_it_listed_everything() {
         let f = Fake(RefCell::new(0));
         // From 0x0000, one at most: there is more.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x00, 1, 0x0C, 0x00, 0x00, 1]).unwrap(), [0x18, 1, 0x0D, 0x00, 0x00, 0x00, 0x30]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x00, 1, 0x0C, 0x00, 0x00, 1]).unwrap(),
+            [0x18, 1, 0x0D, 0x00, 0x00, 0x00, 0x30]
+        );
         // From 0x0001, both fit: the rest of the list, complete.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x00, 2, 0x0C, 0x01, 0x00, 5]).unwrap(), [0x18, 2, 0x0D, 0x01, 0x12, 0x00, 0x29]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x00, 2, 0x0C, 0x01, 0x00, 5]).unwrap(),
+            [0x18, 2, 0x0D, 0x01, 0x12, 0x00, 0x29]
+        );
         // Past the last attribute: complete and empty.
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 3, 0x0C, 0x13, 0x00, 5]).unwrap(), [0x18, 3, 0x0D, 0x01]);
     }
@@ -497,7 +553,10 @@ mod tests {
         let f = Fake(RefCell::new(0));
         assert_eq!(serve(&f, 1, 0x0201, &[0x10, 4, 0x40]).unwrap(), [0x18, 4, 0x0B, 0x40, 0x82]);
         // A manufacturer-specific cluster command on a standard cluster.
-        assert_eq!(serve(&f, 1, 0x0201, &[0x05, 0x34, 0x12, 5, 0x00]).unwrap(), [0x1C, 0x34, 0x12, 5, 0x0B, 0x00, 0x83]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x05, 0x34, 0x12, 5, 0x00]).unwrap(),
+            [0x1C, 0x34, 0x12, 5, 0x0B, 0x00, 0x83]
+        );
         // Reports and default responses sent to the server get none.
         assert!(serve(&f, 1, 0x0201, &[0x00, 6, 0x0A, 0x00, 0x00, 0x30, 0x04]).is_none());
         assert!(serve(&f, 1, 0x0201, &[0x00, 7, 0x0B, 0x00, 0x00]).is_none());
@@ -505,11 +564,17 @@ mod tests {
 
     #[test]
     fn reports() {
-        assert_eq!(report(1, &[(0x0000, Value::I16(1800)), (0x001C, Value::Enum8(4))]),
-                   [0x18, 1, 0x0A, 0x00, 0x00, 0x29, 0x08, 0x07, 0x1C, 0x00, 0x30, 0x04]);
-        assert_eq!(report(2, &[(0x0005, Value::Str("Nest".into()))]),
-                   [0x18, 2, 0x0A, 0x05, 0x00, 0x42, 4, b'N', b'e', b's', b't']);
-        assert_eq!(report(3, &[(0x0055, Value::F32(30.0)), (0x0000, Value::Bool(true))]),
-                   [0x18, 3, 0x0A, 0x55, 0x00, 0x39, 0x00, 0x00, 0xF0, 0x41, 0x00, 0x00, 0x10, 0x01]);
+        assert_eq!(
+            report(1, &[(0x0000, Value::I16(1800)), (0x001C, Value::Enum8(4))]),
+            [0x18, 1, 0x0A, 0x00, 0x00, 0x29, 0x08, 0x07, 0x1C, 0x00, 0x30, 0x04]
+        );
+        assert_eq!(
+            report(2, &[(0x0005, Value::Str("Nest".into()))]),
+            [0x18, 2, 0x0A, 0x05, 0x00, 0x42, 4, b'N', b'e', b's', b't']
+        );
+        assert_eq!(
+            report(3, &[(0x0055, Value::F32(30.0)), (0x0000, Value::Bool(true))]),
+            [0x18, 3, 0x0A, 0x55, 0x00, 0x39, 0x00, 0x00, 0xF0, 0x41, 0x00, 0x00, 0x10, 0x01]
+        );
     }
 }

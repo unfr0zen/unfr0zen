@@ -56,12 +56,20 @@ impl Run {
 /// line ends; status lines look the same when they begin and are left out.
 pub fn parse(stamp: &str, dir: &Path, text: &str) -> Run {
     let mut run = Run {
-        stamp: stamp.into(), when: crate::when::stamp(stamp), dir: dir.into(), started: None, version: String::new(),
-        task: String::new(), steps: Vec::new(), failure: None,
+        stamp: stamp.into(),
+        when: crate::when::stamp(stamp),
+        dir: dir.into(),
+        started: None,
+        version: String::new(),
+        task: String::new(),
+        steps: Vec::new(),
+        failure: None,
     };
     for line in text.lines() {
         // "[  12.345] message": the seconds are the process's, not the run's.
-        let Some(message) = line.split_once("] ").map(|(_, m)| m).filter(|_| line.starts_with('[')) else { continue };
+        let Some(message) = line.split_once("] ").map(|(_, m)| m).filter(|_| line.starts_with('[')) else {
+            continue;
+        };
         if run.version.is_empty() && message.starts_with("unfr0zen ") {
             run.version = message.trim_start_matches("unfr0zen ").split(',').next().unwrap_or("").to_string();
         } else if let Some(task) = message.strip_prefix("Selected: ") {
@@ -84,15 +92,20 @@ fn seconds(text: &str) -> f32 {
 
 /// Every run in the logs folder, newest first.
 pub fn scan(logs: &Path) -> Vec<Run> {
-    let Ok(read) = std::fs::read_dir(logs) else { return Vec::new() };
-    let mut runs: Vec<Run> = read.flatten().filter_map(|entry| {
-        let dir = entry.path();
-        let text = std::fs::read_to_string(dir.join("unfr0zen.log")).ok()?;
-        let stamp = entry.file_name().to_string_lossy().into_owned();
-        let mut run = parse(&stamp, &dir, &text);
-        run.started = entry.metadata().and_then(|m| m.modified()).ok();
-        Some(run)
-    }).collect();
+    let Ok(read) = std::fs::read_dir(logs) else {
+        return Vec::new();
+    };
+    let mut runs: Vec<Run> = read
+        .flatten()
+        .filter_map(|entry| {
+            let dir = entry.path();
+            let text = std::fs::read_to_string(dir.join("unfr0zen.log")).ok()?;
+            let stamp = entry.file_name().to_string_lossy().into_owned();
+            let mut run = parse(&stamp, &dir, &text);
+            run.started = entry.metadata().and_then(|m| m.modified()).ok();
+            Some(run)
+        })
+        .collect();
     runs.sort_by(|a, b| b.stamp.cmp(&a.stamp));
     runs
 }
@@ -100,9 +113,11 @@ pub fn scan(logs: &Path) -> Vec<Run> {
 /// Removes the runs older than `age`, except `keep`'s; how many went.
 pub fn delete_older(runs: &[Run], age: Duration, keep: Option<&str>) -> usize {
     let cutoff = SystemTime::now().checked_sub(age);
-    runs.iter().filter(|run| Some(run.stamp.as_str()) != keep)
+    runs.iter()
+        .filter(|run| Some(run.stamp.as_str()) != keep)
         .filter(|run| matches!((run.started, cutoff), (Some(started), Some(cutoff)) if started < cutoff))
-        .filter(|run| std::fs::remove_dir_all(&run.dir).is_ok()).count()
+        .filter(|run| std::fs::remove_dir_all(&run.dir).is_ok())
+        .count()
 }
 
 #[cfg(test)]
@@ -141,7 +156,11 @@ mod tests {
         let run = parse("s", Path::new("d"), &LOG.lines().take(6).collect::<Vec<_>>().join("\n"));
         assert!(run.steps.is_empty(), "{:?}", run.steps);
         assert!(run.ok(), "nothing failed");
-        let done = parse("s", Path::new("d"), "[ 1.0] Selected: Boot the application\n[ 2.0] Chainload stock U-Boot from NAND: done (1.2s)\n");
+        let done = parse(
+            "s",
+            Path::new("d"),
+            "[ 1.0] Selected: Boot the application\n[ 2.0] Chainload stock U-Boot from NAND: done (1.2s)\n",
+        );
         assert!(done.ok() && done.steps.len() == 1);
     }
 

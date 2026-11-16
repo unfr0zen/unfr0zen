@@ -30,10 +30,10 @@ use crate::commands::{ECO_HIGH, ECO_LOW};
 use crate::fields;
 use crate::json::{num, number, sprint, truthy, Fields};
 use crate::liveness::Liveness;
-use crate::occupancy::Occupancy;
 use crate::logf;
 use crate::mqtt;
 use crate::naming::{Names, Naming};
+use crate::occupancy::Occupancy;
 use crate::store::{Object, Store};
 use crate::weather::Outdoor;
 
@@ -72,8 +72,16 @@ pub struct Bridge {
 
 impl Bridge {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(prefix: &str, discovery: &str, serial: &str, store: Arc<Store>, outdoor: Arc<Outdoor>,
-               live: Option<Arc<Liveness>>, wwn_boiler: bool, naming: Naming) -> Arc<Bridge> {
+    pub fn new(
+        prefix: &str,
+        discovery: &str,
+        serial: &str,
+        store: Arc<Store>,
+        outdoor: Arc<Outdoor>,
+        live: Option<Arc<Liveness>>,
+        wwn_boiler: bool,
+        naming: Naming,
+    ) -> Arc<Bridge> {
         let (time_ok, time_ok_rx) = mpsc::channel(1);
         Arc::new_cyclic(|me| Bridge {
             me: me.clone(),
@@ -149,8 +157,13 @@ impl Bridge {
 
     /// Connects to the broker, and from then on publishes every change and
     /// takes Home Assistant's commands.
-    pub fn run(self: &Arc<Self>, broker: &mqtt::Broker, user: &str, password: &str,
-               tls: Option<Arc<rustls::ClientConfig>>) {
+    pub fn run(
+        self: &Arc<Self>,
+        broker: &mqtt::Broker,
+        user: &str,
+        password: &str,
+        tls: Option<Arc<rustls::ClientConfig>>,
+    ) {
         let options = mqtt::Options {
             client_id: format!("nestlocal-{}", self.serial),
             user: (!user.is_empty()).then(|| user.to_string()),
@@ -197,8 +210,8 @@ impl Bridge {
 
     /// Takes Home Assistant's answer, seconds since 1970, if it is prompt.
     pub fn time_answer(&self, arg: &str) -> Result<(), String> {
-        let seconds = arg.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 1e9)
-            .ok_or("expected seconds since 1970")?;
+        let seconds =
+            arg.parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 1e9).ok_or("expected seconds since 1970")?;
         let Some(asked) = self.time_asked.lock().unwrap().take() else {
             return Ok(()); // not asked
         };
@@ -268,7 +281,12 @@ impl Bridge {
 
     fn publish_availability(&self, alive: bool) {
         if let Some(c) = self.mqtt.get() {
-            c.publish(&format!("{}/availability", self.base), if alive { "online" } else { "offline" }.as_bytes(), 1, true);
+            c.publish(
+                &format!("{}/availability", self.base),
+                if alive { "online" } else { "offline" }.as_bytes(),
+                1,
+                true,
+            );
         }
     }
 
@@ -291,16 +309,20 @@ impl Bridge {
     /// Buckets of this unit, by type: device, shared, ... With
     /// using_wwn_boiler, shared has can_heat true, as the unit heats.
     pub fn buckets(&self) -> BTreeMap<String, Fields> {
-        self.store.all().into_iter().filter_map(|o| {
-            let (typ, id) = o.key.split_once('.').unwrap_or((o.key.as_str(), ""));
-            (id == self.serial).then(|| {
-                let mut value = o.value.clone();
-                if self.wwn_boiler && typ == "shared" {
-                    value.insert("can_heat".into(), true.into());
-                }
-                (typ.to_string(), value)
+        self.store
+            .all()
+            .into_iter()
+            .filter_map(|o| {
+                let (typ, id) = o.key.split_once('.').unwrap_or((o.key.as_str(), ""));
+                (id == self.serial).then(|| {
+                    let mut value = o.value.clone();
+                    if self.wwn_boiler && typ == "shared" {
+                        value.insert("can_heat".into(), true.into());
+                    }
+                    (typ.to_string(), value)
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// What nlclient runs with since heatlink.rs restarted it.
@@ -342,7 +364,7 @@ impl Bridge {
         }
         let Names { device: name, root } = names;
         let id = Names::default_for(&self.serial).root;
-        let device = fields!{
+        let device = fields! {
             "identifiers" => vec![id.clone()],
             "name" => name,
             "manufacturer" => "Google Nest",
@@ -354,7 +376,7 @@ impl Bridge {
         let set = format!("{}/set/", self.base);
         let mut configs = BTreeMap::new(); // discovery topic -> config
         let mut add = |component: &str, key: &str, name: &str, extra: Fields| {
-            let mut c = fields!{
+            let mut c = fields! {
                 "name" => if name.is_empty() { Value::Null } else { name.into() }, // null: the device's own name
                 "unique_id" => format!("{id}_{key}"),
                 "default_entity_id" => format!("{component}.{root}_{key}"),
@@ -387,7 +409,7 @@ impl Bridge {
         }
         // What the unit's screen shows.
         let precision = if sprint(dev.get("temperature_scale")) == "F" { 1.0 } else { 0.5 };
-        let mut climate = fields!{
+        let mut climate = fields! {
             "state_topic" => Value::Null,
             "modes" => modes,
             "temperature_unit" => "C",
@@ -426,7 +448,7 @@ impl Bridge {
         }
         let has_fan = truthy(dev.get("has_fan"));
         if has_fan {
-            climate.extend(fields!{
+            climate.extend(fields! {
                 "fan_modes" => vec!["auto", "on"],
                 "fan_mode_state_topic" => st.clone(),
                 "fan_mode_state_template" => tmpl("fan_mode"),
@@ -435,8 +457,13 @@ impl Bridge {
         }
         add("climate", "thermostat", "", climate);
 
-        let sensor = |add: &mut dyn FnMut(&str, &str, &str, Fields), key: &str, name: &str, unit: &str, class: &str, extra: Fields| {
-            let mut c = fields!{"value_template" => tmpl(key), "state_class" => "measurement"};
+        let sensor = |add: &mut dyn FnMut(&str, &str, &str, Fields),
+                      key: &str,
+                      name: &str,
+                      unit: &str,
+                      class: &str,
+                      extra: Fields| {
+            let mut c = fields! {"value_template" => tmpl(key), "state_class" => "measurement"};
             if !unit.is_empty() {
                 c.insert("unit_of_measurement".into(), unit.into());
             }
@@ -446,29 +473,54 @@ impl Bridge {
             c.extend(extra);
             add("sensor", key, name, c);
         };
-        let diag = || fields!{"entity_category" => "diagnostic"};
+        let diag = || fields! {"entity_category" => "diagnostic"};
         sensor(&mut add, "current_temperature", "Temperature", "°C", "temperature", Fields::new());
         sensor(&mut add, "current_humidity", "Humidity", "%", "humidity", Fields::new());
         sensor(&mut add, "backplate_temperature", "Backplate temperature", "°C", "temperature", diag());
         if self.sensor.get().is_some() {
             sensor(&mut add, "external_temperature", "External temperature", "°C", "temperature", diag());
-            add("sensor", "temperature_source", "Temperature source",
-                fields!{"value_template" => tmpl("temperature_source"), "entity_category" => "diagnostic", "icon" => "mdi:thermometer-lines"});
+            add(
+                "sensor",
+                "temperature_source",
+                "Temperature source",
+                fields! {"value_template" => tmpl("temperature_source"), "entity_category" => "diagnostic", "icon" => "mdi:thermometer-lines"},
+            );
         }
         sensor(&mut add, "battery_level", "Battery voltage", "V", "voltage", diag());
-        sensor(&mut add, "rssi", "WiFi signal", "", "", fields!{"entity_category" => "diagnostic", "icon" => "mdi:wifi"});
-        add("sensor", "time_to_target", "Time to temperature",
-            fields!{"value_template" => tmpl("time_to_target"), "device_class" => "timestamp"});
-        add("sensor", "hvac_action", "HVAC action", fields!{"value_template" => tmpl("action"), "icon" => "mdi:hvac"});
-        add("sensor", "local_ip", "IP address",
-            fields!{"value_template" => tmpl("local_ip"), "entity_category" => "diagnostic", "icon" => "mdi:ip-network"});
+        sensor(
+            &mut add,
+            "rssi",
+            "WiFi signal",
+            "",
+            "",
+            fields! {"entity_category" => "diagnostic", "icon" => "mdi:wifi"},
+        );
+        add(
+            "sensor",
+            "time_to_target",
+            "Time to temperature",
+            fields! {"value_template" => tmpl("time_to_target"), "device_class" => "timestamp"},
+        );
+        add("sensor", "hvac_action", "HVAC action", fields! {"value_template" => tmpl("action"), "icon" => "mdi:hvac"});
+        add(
+            "sensor",
+            "local_ip",
+            "IP address",
+            fields! {"value_template" => tmpl("local_ip"), "entity_category" => "diagnostic", "icon" => "mdi:ip-network"},
+        );
         if truthy(dev.get("has_air_filter")) {
-            sensor(&mut add, "filter_runtime_h", "Filter runtime", "h", "duration",
-                fields!{"state_class" => "total_increasing", "entity_category" => "diagnostic"});
+            sensor(
+                &mut add,
+                "filter_runtime_h",
+                "Filter runtime",
+                "h",
+                "duration",
+                fields! {"state_class" => "total_increasing", "entity_category" => "diagnostic"},
+            );
         }
 
         let mut binary = |key: &str, name: &str, class: &str, extra: Fields| {
-            let mut c = fields!{"value_template" => on_off(key)};
+            let mut c = fields! {"value_template" => on_off(key)};
             if !class.is_empty() {
                 c.insert("device_class".into(), class.into());
             }
@@ -487,11 +539,11 @@ impl Bridge {
         for (key, name) in wired_stages(dev) {
             binary(key, name, "running", Fields::new());
         }
-        binary("leaf", "Leaf", "", fields!{"icon" => "mdi:leaf"});
+        binary("leaf", "Leaf", "", fields! {"icon" => "mdi:leaf"});
         binary("occupancy", "Occupancy", "occupancy", Fields::new());
-        binary("preconditioning_active", "Early-On active", "", fields!{"icon" => "mdi:clock-fast"});
-        binary("sunlight_correction_active", "Sunblock active", "", fields!{"icon" => "mdi:weather-sunny"});
-        binary("hvac_safety_shutoff_active", "Safety shutoff", "problem", fields!{"entity_category" => "diagnostic"});
+        binary("preconditioning_active", "Early-On active", "", fields! {"icon" => "mdi:clock-fast"});
+        binary("sunlight_correction_active", "Sunblock active", "", fields! {"icon" => "mdi:weather-sunny"});
+        binary("hvac_safety_shutoff_active", "Safety shutoff", "problem", fields! {"entity_category" => "diagnostic"});
         if truthy(dev.get("has_air_filter")) {
             binary("filter_replacement_needed", "Filter replacement", "problem", Fields::new());
         }
@@ -506,30 +558,45 @@ impl Bridge {
         }
 
         let sw = |add: &mut dyn FnMut(&str, &str, &str, Fields), key: &str, name: &str, icon: &str| {
-            add("switch", key, name, fields!{
-                "value_template" => on_off(key),
-                "command_topic" => format!("{set}{key}"),
-                "entity_category" => "config",
-                "icon" => icon,
-            });
+            add(
+                "switch",
+                key,
+                name,
+                fields! {
+                    "value_template" => on_off(key),
+                    "command_topic" => format!("{set}{key}"),
+                    "entity_category" => "config",
+                    "icon" => icon,
+                },
+            );
         };
         sw(&mut add, "learning_mode", "Auto-Schedule", "mdi:school");
         sw(&mut add, "auto_away_enable", "Home/Away Assist", "mdi:home-account");
         sw(&mut add, "sunlight_correction_enabled", "Sunblock", "mdi:weather-sunny");
         sw(&mut add, "preconditioning_enabled", "Early-On", "mdi:clock-fast");
         if truthy(dev.get("has_hot_water_control")) {
-            add("switch", "hot_water_schedule", "Hot water schedule", fields!{
-                "value_template" => on_off("hot_water_schedule"),
-                "command_topic" => format!("{set}hot_water_schedule"),
-                "icon" => "mdi:water-boiler",
-            });
-            add("select", "hot_water_boost", "Hot water boost", fields!{
-                "value_template" => tmpl("hot_water_boost"),
-                "command_topic" => format!("{set}hot_water_boost"),
-                "options" => vec!["off", "30", "60", "120"],
-                "unit_of_measurement" => "min",
-                "icon" => "mdi:water-boiler-alert",
-            });
+            add(
+                "switch",
+                "hot_water_schedule",
+                "Hot water schedule",
+                fields! {
+                    "value_template" => on_off("hot_water_schedule"),
+                    "command_topic" => format!("{set}hot_water_schedule"),
+                    "icon" => "mdi:water-boiler",
+                },
+            );
+            add(
+                "select",
+                "hot_water_boost",
+                "Hot water boost",
+                fields! {
+                    "value_template" => tmpl("hot_water_boost"),
+                    "command_topic" => format!("{set}hot_water_boost"),
+                    "options" => vec!["off", "30", "60", "120"],
+                    "unit_of_measurement" => "min",
+                    "icon" => "mdi:water-boiler-alert",
+                },
+            );
         }
         if can_heat {
             sw(&mut add, "away_temperature_low_enabled", "Eco heat limit", "mdi:leaf");
@@ -538,9 +605,15 @@ impl Bridge {
             sw(&mut add, "away_temperature_high_enabled", "Eco cool limit", "mdi:leaf");
         }
 
-        let number_entity = |add: &mut dyn FnMut(&str, &str, &str, Fields), key: &str, name: &str,
-                             min: f64, max: f64, step: f64, unit: &str, class: &str| {
-            let mut c = fields!{
+        let number_entity = |add: &mut dyn FnMut(&str, &str, &str, Fields),
+                             key: &str,
+                             name: &str,
+                             min: f64,
+                             max: f64,
+                             step: f64,
+                             unit: &str,
+                             class: &str| {
+            let mut c = fields! {
                 "value_template" => tmpl(key),
                 "command_topic" => format!("{set}{key}"),
                 "min" => num(min),
@@ -557,10 +630,28 @@ impl Bridge {
             add("number", key, name, c);
         };
         if can_heat {
-            number_entity(&mut add, "away_temperature_low", "Eco heat temperature", ECO_LOW.0, ECO_LOW.1, 0.5, "°C", "temperature");
+            number_entity(
+                &mut add,
+                "away_temperature_low",
+                "Eco heat temperature",
+                ECO_LOW.0,
+                ECO_LOW.1,
+                0.5,
+                "°C",
+                "temperature",
+            );
         }
         if can_cool {
-            number_entity(&mut add, "away_temperature_high", "Eco cool temperature", ECO_HIGH.0, ECO_HIGH.1, 0.5, "°C", "temperature");
+            number_entity(
+                &mut add,
+                "away_temperature_high",
+                "Eco cool temperature",
+                ECO_HIGH.0,
+                ECO_HIGH.1,
+                0.5,
+                "°C",
+                "temperature",
+            );
         }
         if truthy(dev.get("has_humidifier")) || truthy(dev.get("has_dehumidifier")) {
             number_entity(&mut add, "target_humidity", "Target humidity", 10.0, 60.0, 5.0, "%", "");
@@ -568,76 +659,125 @@ impl Bridge {
         }
         if truthy(dev.get("has_air_filter")) {
             sw(&mut add, "filter_reminder_enabled", "Filter reminder", "mdi:air-filter");
-            add("button", "filter_reset", "Reset filter", fields!{
-                "command_topic" => format!("{set}filter_reset"),
-                "entity_category" => "config",
-                "icon" => "mdi:air-filter",
-            });
+            add(
+                "button",
+                "filter_reset",
+                "Reset filter",
+                fields! {
+                    "command_topic" => format!("{set}filter_reset"),
+                    "entity_category" => "config",
+                    "icon" => "mdi:air-filter",
+                },
+            );
         }
         if has_fan {
-            add("select", "fan_timer_duration", "Fan timer duration", fields!{
-                "value_template" => tmpl("fan_timer_duration"),
-                "command_topic" => format!("{set}fan_timer_duration"),
-                "options" => vec!["15", "30", "45", "60", "120", "240", "480", "720"],
-                "unit_of_measurement" => "min",
-                "entity_category" => "config",
-                "icon" => "mdi:fan-clock",
-            });
-            sw(&mut add, "fan_schedule", "Fan schedule", "mdi:fan-auto");
-            add("select", "fan_schedule_minutes", "Fan schedule run time", fields!{
-                "value_template" => tmpl("fan_schedule_minutes"),
-                "command_topic" => format!("{set}fan_schedule_minutes"),
-                "options" => FAN_SCHEDULE_MINUTES.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
-                "unit_of_measurement" => "min/h",
-                "entity_category" => "config",
-                "icon" => "mdi:fan-clock",
-            });
-            let hours: Vec<String> = (0..24).map(|h| format!("{h:02}:00")).collect();
-            for (key, name) in [("fan_schedule_start", "Fan schedule start"), ("fan_schedule_end", "Fan schedule end")] {
-                add("select", key, name, fields!{
-                    "value_template" => tmpl(key),
-                    "command_topic" => format!("{set}{key}"),
-                    "options" => hours.clone(),
+            add(
+                "select",
+                "fan_timer_duration",
+                "Fan timer duration",
+                fields! {
+                    "value_template" => tmpl("fan_timer_duration"),
+                    "command_topic" => format!("{set}fan_timer_duration"),
+                    "options" => vec!["15", "30", "45", "60", "120", "240", "480", "720"],
+                    "unit_of_measurement" => "min",
                     "entity_category" => "config",
-                    "icon" => "mdi:clock-outline",
-                });
+                    "icon" => "mdi:fan-clock",
+                },
+            );
+            sw(&mut add, "fan_schedule", "Fan schedule", "mdi:fan-auto");
+            add(
+                "select",
+                "fan_schedule_minutes",
+                "Fan schedule run time",
+                fields! {
+                    "value_template" => tmpl("fan_schedule_minutes"),
+                    "command_topic" => format!("{set}fan_schedule_minutes"),
+                    "options" => FAN_SCHEDULE_MINUTES.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+                    "unit_of_measurement" => "min/h",
+                    "entity_category" => "config",
+                    "icon" => "mdi:fan-clock",
+                },
+            );
+            let hours: Vec<String> = (0..24).map(|h| format!("{h:02}:00")).collect();
+            for (key, name) in [("fan_schedule_start", "Fan schedule start"), ("fan_schedule_end", "Fan schedule end")]
+            {
+                add(
+                    "select",
+                    key,
+                    name,
+                    fields! {
+                        "value_template" => tmpl(key),
+                        "command_topic" => format!("{set}{key}"),
+                        "options" => hours.clone(),
+                        "entity_category" => "config",
+                        "icon" => "mdi:clock-outline",
+                    },
+                );
             }
         }
-        add("select", "temperature_scale", "Temperature scale", fields!{
-            "value_template" => tmpl("temperature_scale"),
-            "command_topic" => format!("{set}temperature_scale"),
-            "options" => vec!["C", "F"],
-            "entity_category" => "config",
-        });
-        number_entity(&mut add, "screen_timeout", "Screen timeout", *crate::screen::SECONDS.start() as f64,
-                      *crate::screen::SECONDS.end() as f64, 5.0, "s", "");
+        add(
+            "select",
+            "temperature_scale",
+            "Temperature scale",
+            fields! {
+                "value_template" => tmpl("temperature_scale"),
+                "command_topic" => format!("{set}temperature_scale"),
+                "options" => vec!["C", "F"],
+                "entity_category" => "config",
+            },
+        );
+        number_entity(
+            &mut add,
+            "screen_timeout",
+            "Screen timeout",
+            *crate::screen::SECONDS.start() as f64,
+            *crate::screen::SECONDS.end() as f64,
+            5.0,
+            "s",
+            "",
+        );
         sw(&mut add, "screen_always_on", "Screen always on", "mdi:monitor-shimmer");
-        add("number", "screen_brightness", "Screen brightness", fields!{
-            "value_template" => tmpl("screen_brightness"),
-            "command_topic" => format!("{set}screen_brightness"),
-            "min" => num(*crate::brightness::PERCENTS.start() as f64),
-            "max" => num(*crate::brightness::PERCENTS.end() as f64),
-            "step" => num(1.0),
-            "unit_of_measurement" => "%",
-            "entity_category" => "config",
-            "icon" => "mdi:brightness-6",
-        });
+        add(
+            "number",
+            "screen_brightness",
+            "Screen brightness",
+            fields! {
+                "value_template" => tmpl("screen_brightness"),
+                "command_topic" => format!("{set}screen_brightness"),
+                "min" => num(*crate::brightness::PERCENTS.start() as f64),
+                "max" => num(*crate::brightness::PERCENTS.end() as f64),
+                "step" => num(1.0),
+                "unit_of_measurement" => "%",
+                "entity_category" => "config",
+                "icon" => "mdi:brightness-6",
+            },
+        );
         sw(&mut add, "screen_brightness_auto", "Screen brightness auto", "mdi:brightness-auto");
-        add("button", "clear_schedule", "Clear Nest schedule", fields!{
-            "command_topic" => format!("{set}clear_schedule"),
-            "entity_category" => "config",
-            "icon" => "mdi:calendar-remove",
-        });
+        add(
+            "button",
+            "clear_schedule",
+            "Clear Nest schedule",
+            fields! {
+                "command_topic" => format!("{set}clear_schedule"),
+                "entity_category" => "config",
+                "icon" => "mdi:calendar-remove",
+            },
+        );
         if let Some(updates) = self.updates.get() {
             // Install only on a unit that installs updates itself.
-            add("update", "unfr0zen", "unfr0zen", fields!{
-                "state_topic" => format!("{}/update", self.base),
-                "device_class" => "firmware",
-                "entity_category" => "config",
-                "title" => "unfr0zen",
-                "command_topic" => if updates.can_install() { format!("{set}update").into() } else { Value::Null },
-                "payload_install" => "install",
-            });
+            add(
+                "update",
+                "unfr0zen",
+                "unfr0zen",
+                fields! {
+                    "state_topic" => format!("{}/update", self.base),
+                    "device_class" => "firmware",
+                    "entity_category" => "config",
+                    "title" => "unfr0zen",
+                    "command_topic" => if updates.can_install() { format!("{set}update").into() } else { Value::Null },
+                    "payload_install" => "install",
+                },
+            );
         }
 
         if rename {
@@ -799,7 +939,8 @@ fn shown_eco(v: Option<&Value>, scale: &str, (low, high): (f64, f64)) -> Value {
 }
 
 fn rfc3339(t: f64) -> Value {
-    chrono::DateTime::from_timestamp(t as i64, 0).map_or(Value::Null, |t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string().into())
+    chrono::DateTime::from_timestamp(t as i64, 0)
+        .map_or(Value::Null, |t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string().into())
 }
 
 /// What the entities show, from the device and shared buckets.
@@ -872,17 +1013,41 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     s.insert("eco_mode".into(), eco_mode.into());
     s.insert("preset".into(), preset.into());
 
-    for k in ["current_humidity", "backplate_temperature", "battery_level", "rssi", "local_ip",
-              "current_version", "filter_runtime_sec", "target_humidity", "temperature_scale"] {
+    for k in [
+        "current_humidity",
+        "backplate_temperature",
+        "battery_level",
+        "rssi",
+        "local_ip",
+        "current_version",
+        "filter_runtime_sec",
+        "target_humidity",
+        "temperature_scale",
+    ] {
         s.insert(k.into(), dev.get(k).cloned().unwrap_or(Value::Null));
     }
     s.insert("away_temperature_low".into(), shown_eco(dev.get("away_temperature_low"), &scale, ECO_LOW));
     s.insert("away_temperature_high".into(), shown_eco(dev.get("away_temperature_high"), &scale, ECO_HIGH));
-    for k in ["leaf", "hot_water_active", "preconditioning_active", "sunlight_correction_active",
-              "filter_replacement_needed", "hvac_safety_shutoff_active", "humidifier_state",
-              "dehumidifier_state", "learning_mode", "auto_away_enable", "sunlight_correction_enabled",
-              "preconditioning_enabled", "away_temperature_low_enabled", "away_temperature_high_enabled",
-              "target_humidity_enabled", "filter_reminder_enabled", "hot_water_boiling_state", "heatpump_ready"] {
+    for k in [
+        "leaf",
+        "hot_water_active",
+        "preconditioning_active",
+        "sunlight_correction_active",
+        "filter_replacement_needed",
+        "hvac_safety_shutoff_active",
+        "humidifier_state",
+        "dehumidifier_state",
+        "learning_mode",
+        "auto_away_enable",
+        "sunlight_correction_enabled",
+        "preconditioning_enabled",
+        "away_temperature_low_enabled",
+        "away_temperature_high_enabled",
+        "target_humidity_enabled",
+        "filter_reminder_enabled",
+        "hot_water_boiling_state",
+        "heatpump_ready",
+    ] {
         s.insert(k.into(), truthy(dev.get(k)).into());
     }
     s.insert("screen_timeout".into(), crate::screen::seconds(dev).into());
@@ -910,7 +1075,16 @@ pub mod tests {
     }
 
     pub fn test_bridge() -> Arc<Bridge> {
-        Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, defaults())
+        Bridge::new(
+            "nestlocal",
+            "homeassistant",
+            "S",
+            temp_store(),
+            Arc::new(Outdoor::default()),
+            None,
+            false,
+            defaults(),
+        )
     }
 
     fn obj(v: Value) -> Fields {
@@ -926,8 +1100,14 @@ pub mod tests {
         let dev = obj(json!({"fan_timer_timeout": future, "fan_timer_duration": 900.0, "eco": {"mode": "manual-eco"}}));
         let sh = obj(json!({"target_temperature_type": "range", "hvac_heater_state": true}));
         let s = state(&dev, &sh);
-        for (k, want) in [("mode", json!("heat_cool")), ("action", json!("heating")), ("heating", json!(true)),
-                          ("fan_mode", json!("on")), ("fan_timer_duration", json!("15")), ("preset", json!("eco"))] {
+        for (k, want) in [
+            ("mode", json!("heat_cool")),
+            ("action", json!("heating")),
+            ("heating", json!(true)),
+            ("fan_mode", json!("on")),
+            ("fan_timer_duration", json!("15")),
+            ("preset", json!("eco")),
+        ] {
             assert_eq!(s[k], want, "{k}");
         }
         let off = state(&Fields::new(), &obj(json!({"target_temperature_type": "off", "hvac_heater_state": true})));
@@ -936,14 +1116,23 @@ pub mod tests {
 
     #[test]
     fn stages_show_what_runs_and_what_is_wired() {
-        let s = state(&Fields::new(), &obj(json!({"target_temperature_type": "heat", "hvac_heat_x2_state": true,
-                                                   "hvac_alt_heat_x2_state": true})));
+        let s = state(
+            &Fields::new(),
+            &obj(json!({"target_temperature_type": "heat", "hvac_heat_x2_state": true,
+                                                   "hvac_alt_heat_x2_state": true})),
+        );
         assert_eq!(s["action"], json!("heating"));
-        for (k, want) in [("heat_stage_1", false), ("heat_stage_2", true), ("alt_heat_stage_2", true), ("aux_heat", false),
-                          ("cool_stage_1", false)] {
+        for (k, want) in [
+            ("heat_stage_1", false),
+            ("heat_stage_2", true),
+            ("alt_heat_stage_2", true),
+            ("aux_heat", false),
+            ("cool_stage_1", false),
+        ] {
             assert_eq!(s[k], json!(want), "{k}");
         }
-        let alt = state(&Fields::new(), &obj(json!({"target_temperature_type": "heat", "hvac_alt_heat_x2_state": true})));
+        let alt =
+            state(&Fields::new(), &obj(json!({"target_temperature_type": "heat", "hvac_alt_heat_x2_state": true})));
         assert_eq!(alt["action"], json!("heating"), "a second alt heat stage alone heats");
         let off = state(&Fields::new(), &obj(json!({"target_temperature_type": "off", "hvac_heat_x2_state": true})));
         assert_eq!(off["heat_stage_2"], json!(false), "nothing runs while off");
@@ -958,17 +1147,24 @@ pub mod tests {
     #[test]
     fn shown_temperatures() {
         for (input, scale, want) in [
-            (19.87, "C", 20.0), (19.74, "C", 19.5), (19.76, "C", 20.0), (18.59038, "C", 18.5),
-            (22.70377, "C", 22.5), (19.98209, "C", 20.0), (20.0, "C", 20.0),
-            (20.0, "F", 20.0),                         // 68 °F
+            (19.87, "C", 20.0),
+            (19.74, "C", 19.5),
+            (19.76, "C", 20.0),
+            (18.59038, "C", 18.5),
+            (22.70377, "C", 22.5),
+            (19.98209, "C", 20.0),
+            (20.0, "C", 20.0),
+            (20.0, "F", 20.0),                          // 68 °F
             (19.5, "F", (67.0 - 32.0) * 5.0 / 9.0),     // 67.1 °F shows 67
             (24.44444, "F", (76.0 - 32.0) * 5.0 / 9.0), // an away high set as 76 °F
         ] {
             assert_eq!(shown(Some(&json!(input)), scale), num(want), "shown({input}, {scale})");
         }
         assert_eq!(shown(None, "C"), Value::Null);
-        let s = state(&obj(json!({"temperature_scale": "C", "away_temperature_low": 19.98209})),
-                      &obj(json!({"current_temperature": 19.87, "target_temperature": 18.59038})));
+        let s = state(
+            &obj(json!({"temperature_scale": "C", "away_temperature_low": 19.98209})),
+            &obj(json!({"current_temperature": 19.87, "target_temperature": 18.59038})),
+        );
         for (k, want) in [("current_temperature", 20.0), ("target", 18.5), ("away_temperature_low", 20.0)] {
             assert_eq!(s[k], num(want), "state {k}");
         }
@@ -1014,7 +1210,8 @@ pub mod tests {
         let sh = obj(json!({"can_heat": true, "can_cool": false}));
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
-        let climate: Value = serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
+        let climate: Value =
+            serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
         assert_eq!(climate["modes"], json!(["off", "heat"]));
         assert_eq!(climate["precision"], json!(1));
         assert_eq!(climate["name"], Value::Null);
@@ -1022,19 +1219,45 @@ pub mod tests {
         assert!(configs.contains_key("homeassistant/binary_sensor/nestlocal_s/heating/config"));
         assert!(!configs.contains_key("homeassistant/binary_sensor/nestlocal_s/cooling/config"));
         assert!(configs.contains_key("homeassistant/select/nestlocal_s/fan_timer_duration/config"));
-        let eco: Value = serde_json::from_str(&configs["homeassistant/number/nestlocal_s/away_temperature_low/config"]).unwrap();
-        assert_eq!((&eco["unit_of_measurement"], &eco["device_class"]), (&json!("°C"), &json!("temperature")),
-                   "Home Assistant shows it in its own unit");
+        let eco: Value =
+            serde_json::from_str(&configs["homeassistant/number/nestlocal_s/away_temperature_low/config"]).unwrap();
+        assert_eq!(
+            (&eco["unit_of_measurement"], &eco["device_class"]),
+            (&json!("°C"), &json!("temperature")),
+            "Home Assistant shows it in its own unit"
+        );
     }
 
     #[test]
     fn a_wwn_boiler_unit_heats_without_can_heat() {
-        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, true, defaults());
+        let b = Bridge::new(
+            "nestlocal",
+            "homeassistant",
+            "S",
+            temp_store(),
+            Arc::new(Outdoor::default()),
+            None,
+            true,
+            defaults(),
+        );
         b.store.merge("shared.S", &obj(json!({"can_heat": false, "can_cool": false})), 0, 0, true);
         let shared = &b.buckets()["shared"];
         assert_eq!((shared["can_heat"].clone(), shared["can_cool"].clone()), (json!(true), json!(false)));
-        assert_eq!(b.store.get("shared.S").unwrap().value["can_heat"], json!(false), "the store keeps what the unit said");
-        let plain = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, defaults());
+        assert_eq!(
+            b.store.get("shared.S").unwrap().value["can_heat"],
+            json!(false),
+            "the store keeps what the unit said"
+        );
+        let plain = Bridge::new(
+            "nestlocal",
+            "homeassistant",
+            "S",
+            temp_store(),
+            Arc::new(Outdoor::default()),
+            None,
+            false,
+            defaults(),
+        );
         plain.store.merge("shared.S", &obj(json!({"can_heat": false})), 0, 0, true);
         assert_eq!(plain.buckets()["shared"]["can_heat"], json!(false));
         assert_eq!(test_bridge().buckets().len(), 0);
@@ -1058,7 +1281,10 @@ pub mod tests {
             (s["hot_water_boost"].as_str().unwrap().to_string(), s["hot_water_schedule"].as_bool().unwrap())
         };
         assert_eq!(read(json!({})), ("off".to_string(), true), "a unit that has said nothing follows its schedule");
-        assert_eq!(read(json!({"hot_water_mode": "off", "hot_water_boost_time_to_end": 0})), ("off".to_string(), false));
+        assert_eq!(
+            read(json!({"hot_water_mode": "off", "hot_water_boost_time_to_end": 0})),
+            ("off".to_string(), false)
+        );
         for (left, shown) in [(60, "30"), (1800, "30"), (1801, "60"), (3700, "120"), (90000, "120")] {
             assert_eq!(read(json!({"hot_water_boost_time_to_end": now + left})).0, shown, "{left} s left");
         }
@@ -1070,10 +1296,15 @@ pub mod tests {
 
     #[test]
     fn fan_schedule_reads_the_units_duty_cycle_fields() {
-        let s = state(&obj(json!({"fan_mode": "duty-cycle", "fan_duty_cycle": 1800, "fan_duty_start_time": 0,
-                                  "fan_duty_end_time": 82800})), &Fields::new());
-        assert_eq!((&s["fan_schedule"], &s["fan_schedule_minutes"], &s["fan_schedule_start"], &s["fan_schedule_end"]),
-                   (&json!(true), &json!("30"), &json!("00:00"), &json!("23:00")));
+        let s = state(
+            &obj(json!({"fan_mode": "duty-cycle", "fan_duty_cycle": 1800, "fan_duty_start_time": 0,
+                                  "fan_duty_end_time": 82800})),
+            &Fields::new(),
+        );
+        assert_eq!(
+            (&s["fan_schedule"], &s["fan_schedule_minutes"], &s["fan_schedule_start"], &s["fan_schedule_end"]),
+            (&json!(true), &json!("30"), &json!("00:00"), &json!("23:00"))
+        );
         assert!(switch_on(&obj(json!({"fan_mode": "duty-cycle"})), "fan_schedule"));
         // A timer runs with fan_mode auto: no schedule.
         let s = state(&obj(json!({"fan_mode": "auto"})), &Fields::new());
@@ -1084,13 +1315,15 @@ pub mod tests {
 
     /// Equipment with everything discovery can announce.
     fn everything() -> (Fields, Fields) {
-        (obj(json!({"has_fan": true, "has_air_filter": true, "has_hot_water_control": true, "has_humidifier": true,
+        (
+            obj(json!({"has_fan": true, "has_air_filter": true, "has_hot_water_control": true, "has_humidifier": true,
                     "has_dehumidifier": true, "has_x2_heat": true, "has_x3_heat": true, "has_aux_heat": true,
                     "has_alt_heat": true, "has_x2_alt_heat": true, "has_emer_heat": true, "has_x2_cool": true,
                     "has_x3_cool": true, "fan_timer_duration": 900, "filter_runtime_sec": 7200,
                     "fan_mode": "duty-cycle", "fan_duty_cycle": 1800, "fan_duty_start_time": 0,
                     "fan_duty_end_time": 82800, "temperature_scale": "C"})),
-         obj(json!({"can_heat": true, "can_cool": true, "target_temperature_type": "range"})))
+            obj(json!({"can_heat": true, "can_cool": true, "target_temperature_type": "range"})),
+        )
     }
 
     #[test]
@@ -1164,7 +1397,10 @@ pub mod tests {
     fn the_state_shows_the_brightness_the_unit_shows_else_the_fields() {
         let b = test_bridge();
         let dev = obj(json!({crate::brightness::PERCENT: 30, crate::brightness::AUTO: false}));
-        let shown = |b: &Bridge| { let s = b.shown(&dev, &Fields::new()); (s["screen_brightness"].clone(), s["screen_brightness_auto"].clone()) };
+        let shown = |b: &Bridge| {
+            let s = b.shown(&dev, &Fields::new());
+            (s["screen_brightness"].clone(), s["screen_brightness_auto"].clone())
+        };
         assert_eq!(shown(&b), (json!(30), json!(false)));
         b.brightness.set_shown(Some(crate::brightness::Shown::Auto));
         assert_eq!(shown(&b), (json!(30), json!(true)));
@@ -1181,8 +1417,11 @@ pub mod tests {
         let (dev, sh) = everything();
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
-        let numbers: Vec<Value> = configs.iter().filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
-            .map(|(_, c)| serde_json::from_str(c).unwrap()).collect();
+        let numbers: Vec<Value> = configs
+            .iter()
+            .filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
+            .map(|(_, c)| serde_json::from_str(c).unwrap())
+            .collect();
         assert_eq!(numbers.len(), 5);
         for c in numbers {
             let name = c["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
@@ -1196,29 +1435,46 @@ pub mod tests {
     #[test]
     fn state_with_nothing_reported() {
         let s = state(&Fields::new(), &Fields::new());
-        for (k, want) in [("mode", json!("off")), ("action", json!("off")), ("target", Value::Null), ("fan_mode", json!("auto")),
-                          ("fan_timer_end", Value::Null), ("preset", json!("none")), ("eco_mode", json!("<nil>")),
-                          ("time_to_target", Value::Null), ("leaf", json!(false))] {
+        for (k, want) in [
+            ("mode", json!("off")),
+            ("action", json!("off")),
+            ("target", Value::Null),
+            ("fan_mode", json!("auto")),
+            ("fan_timer_end", Value::Null),
+            ("preset", json!("none")),
+            ("eco_mode", json!("<nil>")),
+            ("time_to_target", Value::Null),
+            ("leaf", json!(false)),
+        ] {
             assert_eq!(s[k], want, "{k}");
         }
         assert!(s.get("fan_timer_duration").is_none() && s.get("filter_runtime_h").is_none());
         // A fan timer or time to temperature already past reads as none.
         let past = chrono::Utc::now().timestamp() - 1;
-        let s = state(&obj(json!({"fan_timer_timeout": past, "time_to_target": past})), &obj(json!({"target_temperature_type": "cool",
-            "hvac_fan_state": true, "current_temperature": "n/a"})));
+        let s = state(
+            &obj(json!({"fan_timer_timeout": past, "time_to_target": past})),
+            &obj(json!({"target_temperature_type": "cool",
+            "hvac_fan_state": true, "current_temperature": "n/a"})),
+        );
         assert_eq!((&s["fan_mode"], &s["time_to_target"], &s["action"]), (&json!("auto"), &Value::Null, &json!("fan")));
         assert_eq!(s["current_temperature"], json!("n/a"), "a value that is no number passes as it is");
         let future = chrono::Utc::now().timestamp() + 3600;
-        let s = state(&obj(json!({"time_to_target": future, "eco": {"mode": "auto-eco"}})), &obj(json!({"target_temperature_type": "cool",
-            "hvac_ac_state": true, "hvac_fan_state": true})));
+        let s = state(
+            &obj(json!({"time_to_target": future, "eco": {"mode": "auto-eco"}})),
+            &obj(json!({"target_temperature_type": "cool",
+            "hvac_ac_state": true, "hvac_fan_state": true})),
+        );
         assert_eq!((&s["action"], &s["cooling"], &s["preset"]), (&json!("cooling"), &json!(true), &json!("eco")));
         assert_eq!(s["time_to_target"], rfc3339(future as f64));
     }
 
     /// The next PUBLISH the loopback broker gets that matches: its topic,
     /// payload and retain flag.
-    async fn published(broker: &mut tokio::net::TcpStream, buf: &mut bytes::BytesMut,
-                       want: impl Fn(&str, &[u8]) -> bool) -> (String, Vec<u8>, bool) {
+    async fn published(
+        broker: &mut tokio::net::TcpStream,
+        buf: &mut bytes::BytesMut,
+        want: impl Fn(&str, &[u8]) -> bool,
+    ) -> (String, Vec<u8>, bool) {
         let read = async {
             loop {
                 let (header, body) = crate::mqtt::tests::read_packet(broker, buf).await;
@@ -1236,8 +1492,18 @@ pub mod tests {
 
     #[test]
     fn discovery_takes_the_names_given() {
-        let named = Naming::load("/nonexistent/nestlocal-ha.json", "S", Some("Nest FamRm".into()), Some("nest_famrm".into()));
-        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, named);
+        let named =
+            Naming::load("/nonexistent/nestlocal-ha.json", "S", Some("Nest FamRm".into()), Some("nest_famrm".into()));
+        let b = Bridge::new(
+            "nestlocal",
+            "homeassistant",
+            "S",
+            temp_store(),
+            Arc::new(Outdoor::default()),
+            None,
+            false,
+            named,
+        );
         let (dev, sh) = everything();
         // Not connected: nothing to remove the old entities from, so nothing is announced.
         b.announce(&dev, &sh);
@@ -1246,7 +1512,8 @@ pub mod tests {
         b.naming.lock().unwrap().announced = wanted;
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
-        let climate: Value = serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
+        let climate: Value =
+            serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
         assert_eq!(climate["default_entity_id"], json!("climate.nest_famrm_thermostat"));
         assert_eq!(climate["unique_id"], json!("nestlocal_s_thermostat"), "Home Assistant's entity stays the same one");
         assert_eq!(climate["device"]["name"], json!("Nest FamRm"));
@@ -1261,7 +1528,16 @@ pub mod tests {
         let _ = std::fs::remove_file(&store);
         let named = Naming::load(&store, "S", None, Some("nest_famrm".into()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let b = Bridge::new("nestlocal", "homeassistant", "S", temp_store(), Arc::new(Outdoor::default()), None, false, named);
+        let b = Bridge::new(
+            "nestlocal",
+            "homeassistant",
+            "S",
+            temp_store(),
+            Arc::new(Outdoor::default()),
+            None,
+            false,
+            named,
+        );
         let (dev, sh) = everything();
         b.store.merge("device.S", &dev, 0, 0, true);
         b.store.merge("shared.S", &sh, 0, 0, true);
@@ -1278,9 +1554,15 @@ pub mod tests {
         assert!(std::fs::read(&store).is_err(), "the new root is saved before Home Assistant has it");
         let (_, payload, retain) = published(&mut conn, &mut buf, |t, _| t == climate).await;
         assert!(retain);
-        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"], json!("climate.nest_famrm_thermostat"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"],
+            json!("climate.nest_famrm_thermostat")
+        );
         let saved: Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
-        assert_eq!(saved, json!({"device": "Nest Thermostat", "root": "nest_famrm", "unconfirmed": true, "matter_label": null}));
+        assert_eq!(
+            saved,
+            json!({"device": "Nest Thermostat", "root": "nest_famrm", "unconfirmed": true, "matter_label": null})
+        );
 
         // Home Assistant starts: it may have missed that, so it is done again.
         let set = |topic: &str, payload: &[u8]| crate::mqtt::tests::publish_packet(topic, payload);
@@ -1288,7 +1570,10 @@ pub mod tests {
         let (_, payload, _) = published(&mut conn, &mut buf, |t, _| t == climate).await;
         assert!(payload.is_empty(), "not removed again for a Home Assistant that may have missed it");
         let (_, payload, _) = published(&mut conn, &mut buf, |t, _| t == climate).await;
-        assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"], json!("climate.nest_famrm_thermostat"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&payload).unwrap()["default_entity_id"],
+            json!("climate.nest_famrm_thermostat")
+        );
         let saved: Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
         assert_eq!(saved["unconfirmed"], json!(false));
 
@@ -1332,13 +1617,15 @@ pub mod tests {
         assert_eq!((&raw["target_temperature_low"], &raw["target_change_pending"]), (&json!(18.5), &json!(true)));
 
         // Equipment that can no longer cool: its entities are removed.
-        tokio::io::AsyncWriteExt::write_all(&mut conn, &set("nestlocal/S/set/raw/shared", br#"{"can_cool": false}"#)).await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut conn, &set("nestlocal/S/set/raw/shared", br#"{"can_cool": false}"#))
+            .await
+            .unwrap();
         let (_, payload, retain) = published(&mut conn, &mut buf, |t, _| t == cooling).await;
         assert!(payload.is_empty() && retain, "cooling entity not removed");
         // Home Assistant back: everything announced again, the unchanged too.
         tokio::io::AsyncWriteExt::write_all(&mut conn, &set("homeassistant/status", b"online")).await.unwrap();
-        let (_, payload, _) = published(&mut conn, &mut buf,
-            |t, _| t == "homeassistant/binary_sensor/nestlocal_s/leaf/config").await;
+        let (_, payload, _) =
+            published(&mut conn, &mut buf, |t, _| t == "homeassistant/binary_sensor/nestlocal_s/leaf/config").await;
         assert_eq!(serde_json::from_slice::<Value>(&payload).unwrap()["unique_id"], json!("nestlocal_s_leaf"));
     }
 }

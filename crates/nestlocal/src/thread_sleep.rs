@@ -8,19 +8,30 @@ fn deadline_ready(state: &[u8], now_us: u64) -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn ready() -> bool {
-    let Ok(state) = std::fs::read("/run/nestlocal-thread-sleep") else { return false; };
-    if state.len() != 16 { return false; }
+    let Ok(state) = std::fs::read("/run/nestlocal-thread-sleep") else {
+        return false;
+    };
+    if state.len() != 16 {
+        return false;
+    }
     let pid = u32::from_le_bytes(state[..4].try_into().unwrap());
     let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // The record and OpenThread use CLOCK_BOOTTIME, which includes suspend.
-    if pid == 0 || pid > i32::MAX as u32 || unsafe { libc::kill(pid as i32, 0) } != 0
-        || unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0 { return false; }
+    if pid == 0
+        || pid > i32::MAX as u32
+        || unsafe { libc::kill(pid as i32, 0) } != 0
+        || unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut now) } != 0
+    {
+        return false;
+    }
     deadline_ready(&state, now.tv_sec as u64 * 1_000_000 + now.tv_nsec as u64 / 1000)
         && !crate::zigbee::wakeup::pending()
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn ready() -> bool { false }
+pub fn ready() -> bool {
+    false
+}
 
 pub fn blocked() -> bool {
     std::path::Path::new("/sys/class/net/thread0").exists() && !ready()

@@ -32,22 +32,14 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
         }
         headers.push(header);
     }
-    let notes: Vec<_> = headers
-        .iter()
-        .enumerate()
-        .filter(|(_, h)| h[0] == 4)
-        .map(|(i, _)| i)
-        .collect();
+    let notes: Vec<_> = headers.iter().enumerate().filter(|(_, h)| h[0] == 4).map(|(i, _)| i).collect();
     if notes.len() != 1 {
         return device("expected one PT_NOTE program header");
     }
     let end = headers
         .iter()
         .filter(|h| h[0] == 1)
-        .map(|h| {
-            h[2].checked_add(h[5])
-                .ok_or_else(|| crate::Error::Device("ELF load address overflow".into()))
-        })
+        .map(|h| h[2].checked_add(h[5]).ok_or_else(|| crate::Error::Device("ELF load address overflow".into())))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .max()
@@ -60,19 +52,14 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
     let handover = discovery::handover(&discovery);
     externals.extend(discovery::handover_externals(&discovery));
     let fb = discovery.framebuffer.as_ref().filter(|_| handover == 2);
-    externals.extend(
-        discovery
-            .layout
-            .iter()
-            .map(|(k, &v)| (format!("layout_{k}"), v)),
-    );
+    externals.extend(discovery.layout.iter().map(|(k, &v)| (format!("layout_{k}"), v)));
     let linked = linker::link(object, address, &externals)?;
     // Each entry's stock screen builds unfr0zen's instead (custom_root).
     let factories = discovery::screen_factories(&elf)?;
     let mut branches = Vec::new();
     for name in super::menu::HOSTS {
-        let factory = *factories.get(name)
-            .ok_or_else(|| crate::Error::Device(format!("no {name} screen registration")))?;
+        let factory =
+            *factories.get(name).ok_or_else(|| crate::Error::Device(format!("no {name} screen registration")))?;
         let factory_offset = elf.offset(factory)?;
         let old = bytes(source, factory_offset, 4)?;
         if word(old, 0)? >> 24 == 0xea {
@@ -151,9 +138,5 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
     if Patch::parse(&journal)?.apply(source, false)? != output {
         return device("nlclient build and journal disagree");
     }
-    Ok(Built {
-        output,
-        journal,
-        manifest,
-    })
+    Ok(Built { output, journal, manifest })
 }

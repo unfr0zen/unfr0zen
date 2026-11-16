@@ -16,7 +16,9 @@ impl Color {
 
     /// `#rgb`, `#rrggbb` or `#rrggbbaa`.
     pub fn parse(text: &str) -> Result<Color, String> {
-        let hex = text.strip_prefix('#').filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
+        let hex = text
+            .strip_prefix('#')
+            .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or_else(|| format!("colour {text:?} is not #rgb, #rrggbb or #rrggbbaa"))?;
         let digit = |i: usize, n: usize| u8::from_str_radix(&hex[i..i + n], 16).unwrap() as f32;
         let (r, g, b, a) = match hex.len() {
@@ -76,7 +78,12 @@ pub trait Painter {
         for i in 0..n {
             let a = (i as f32 + 0.5) / n as f32;
             let mix = |v: f32, w: f32| v + (w - v) * a;
-            let color = Color { r: mix(start.r, end.r), g: mix(start.g, end.g), b: mix(start.b, end.b), a: mix(start.a, end.a) };
+            let color = Color {
+                r: mix(start.r, end.r),
+                g: mix(start.g, end.g),
+                b: mix(start.b, end.b),
+                a: mix(start.a, end.a),
+            };
             let b0 = from + (to - from) * i as f32 / n as f32;
             let b1 = from + (to - from) * (i + 1) as f32 / n as f32;
             self.arc(x, y, r, b0.min(b1) - 0.3_f32.to_radians(), b0.max(b1) + 0.3_f32.to_radians(), color, width);
@@ -122,7 +129,13 @@ pub trait Painter {
     /// Draws `draw` into the offscreen layer `name`, `size` design units
     /// from the origin (the theme when none), unless the layer already holds
     /// what `key` names.
-    fn layer(&mut self, name: &str, key: &str, size: Option<(f32, f32)>, draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>) -> Result<(), String>;
+    fn layer(
+        &mut self,
+        name: &str,
+        key: &str,
+        size: Option<(f32, f32)>,
+        draw: &mut dyn FnMut(&mut dyn Painter) -> Result<(), String>,
+    ) -> Result<(), String>;
     /// Draws layer `name` from the origin, its colours multiplied by
     /// `tint`, only inside `clip` when one is given.
     fn paint_layer(&mut self, name: &str, tint: Color, clip: Option<&[(f32, f32)]>) -> Result<(), String>;
@@ -161,9 +174,7 @@ pub fn square_to_quad(corners: &[(f32, f32); 4]) -> [f32; 9] {
     let (dx1, dx2, dy1, dy2) = (x1 - x2, x3 - x2, y1 - y2, y3 - y2);
     let den = dx1 * dy2 - dx2 * dy1;
     let (g, h) = if den.abs() < 1e-9 { (0.0, 0.0) } else { ((sx * dy2 - dx2 * sy) / den, (dx1 * sy - sx * dy1) / den) };
-    [x1 - x0 + g * x1, x3 - x0 + h * x3, x0,
-     y1 - y0 + g * y1, y3 - y0 + h * y3, y0,
-     g, h, 1.0]
+    [x1 - x0 + g * x1, x3 - x0 + h * x3, x0, y1 - y0 + g * y1, y3 - y0 + h * y3, y0, g, h, 1.0]
 }
 
 #[cfg(test)]

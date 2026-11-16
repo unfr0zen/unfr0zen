@@ -31,8 +31,18 @@ return {
   -- at `to`: ticks from `outer` inwards, every `minor`,
   -- longer every `major` with a number centred `label` units out; in each
   -- unit.
-  scale = { from = -150, to = 150, outer = 226, minor_length = 9, major_length = 18, minor_width = 2, major_width = 3.5,
-            label = 182, label_size = 28, steps = { C = { 1, 5 }, F = { 2, 10 } } },
+  scale = {
+    from = -150,
+    to = 150,
+    outer = 226,
+    minor_length = 9,
+    major_length = 18,
+    minor_width = 2,
+    major_width = 3.5,
+    label = 182,
+    label_size = 28,
+    steps = { C = { 1, 5 }, F = { 2, 10 } },
+  },
   -- The index at the setpoint, round the cover's edge: a notch from `tip`
   -- to `base` radius, `spread` degrees wide, and a hairline across the
   -- ticks to `line`; heat-cool's end not picked shows at `dim` opacity.
@@ -41,8 +51,16 @@ return {
   -- either side of its top), ticks and numbers; the needle's length, tail,
   -- width and hub; the bimetal coil at its pivot.
   window = { radius = 152, rim = 4 },
-  thermometer = { from = -62, to = 62, outer = 128, minor_length = 6, major_length = 12, label = 105,
-                  label_size = 15, steps = { C = { 1, 10 }, F = { 2, 10 } } },
+  thermometer = {
+    from = -62,
+    to = 62,
+    outer = 128,
+    minor_length = 6,
+    major_length = 12,
+    label = 105,
+    label_size = 15,
+    steps = { C = { 1, 10 }, F = { 2, 10 } },
+  },
   needle = { length = 126, tail = 24, width = 3, hub = 7 },
   coil = { turns = 3.2, inner = 5, outer = 24, width = 3, steps = 90 },
   -- The mode switch below the pivot: its words' baseline and size and the

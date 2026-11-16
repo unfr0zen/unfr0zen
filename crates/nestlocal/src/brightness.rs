@@ -77,20 +77,20 @@ pub fn parse_percent(arg: &str) -> Result<i64, String> {
 
 /// The fields a percentage sets: automatic goes off.
 pub fn percent_change(percent: i64) -> Fields {
-    crate::fields!{PERCENT => percent, AUTO => false}
+    crate::fields! {PERCENT => percent, AUTO => false}
 }
 
 /// The fields turning automatic on or off sets. Off takes the stored
 /// percentage, else the one the unit shows, else full.
 pub fn auto_change(on: bool, dev: &Fields, shown: Option<Shown>) -> Fields {
     if on {
-        return crate::fields!{AUTO => true};
+        return crate::fields! {AUTO => true};
     }
     let shown = match shown {
         Some(Shown::Percent(p)) => Some(p),
         _ => None,
     };
-    crate::fields!{AUTO => false, PERCENT => stored(dev).or(shown).unwrap_or(FULL)}
+    crate::fields! {AUTO => false, PERCENT => stored(dev).or(shown).unwrap_or(FULL)}
 }
 
 /// Whether `change` touches the brightness.
@@ -176,12 +176,12 @@ mod tests {
 
     #[test]
     fn nlclient_gets_auto_or_the_percentage_and_nothing_while_unset() {
-        assert_eq!(request(&fields!{}), None);
-        assert_eq!(request(&fields!{PERCENT => json!(40)}).as_deref(), Some("40"));
-        assert_eq!(request(&fields!{PERCENT => json!(40.0), AUTO => json!(false)}).as_deref(), Some("40"));
-        assert_eq!(request(&fields!{PERCENT => json!(0)}).as_deref(), Some("0"));
-        assert_eq!(request(&fields!{PERCENT => json!(40), AUTO => json!(true)}).as_deref(), Some("auto"));
-        assert_eq!(request(&fields!{AUTO => json!(false)}).as_deref(), Some("100"));
+        assert_eq!(request(&fields! {}), None);
+        assert_eq!(request(&fields! {PERCENT => json!(40)}).as_deref(), Some("40"));
+        assert_eq!(request(&fields! {PERCENT => json!(40.0), AUTO => json!(false)}).as_deref(), Some("40"));
+        assert_eq!(request(&fields! {PERCENT => json!(0)}).as_deref(), Some("0"));
+        assert_eq!(request(&fields! {PERCENT => json!(40), AUTO => json!(true)}).as_deref(), Some("auto"));
+        assert_eq!(request(&fields! {AUTO => json!(false)}).as_deref(), Some("100"));
     }
 
     #[test]
@@ -205,23 +205,27 @@ mod tests {
 
     #[test]
     fn a_percentage_turns_auto_off_and_off_takes_the_stored_then_the_shown_then_full() {
-        assert_eq!(percent_change(30), fields!{PERCENT => 30, AUTO => false});
-        assert_eq!(auto_change(true, &fields!{PERCENT => json!(30)}, None), fields!{AUTO => true}, "keeps the percentage");
+        assert_eq!(percent_change(30), fields! {PERCENT => 30, AUTO => false});
+        assert_eq!(
+            auto_change(true, &fields! {PERCENT => json!(30)}, None),
+            fields! {AUTO => true},
+            "keeps the percentage"
+        );
         let off = |dev: Fields, shown| auto_change(false, &dev, shown)[PERCENT].clone();
-        assert_eq!(off(fields!{PERCENT => json!(30)}, Some(Shown::Percent(60))), json!(30));
-        assert_eq!(off(fields!{}, Some(Shown::Percent(60))), json!(60));
-        assert_eq!(off(fields!{}, Some(Shown::Auto)), json!(100));
-        assert_eq!(off(fields!{}, None), json!(100));
+        assert_eq!(off(fields! {PERCENT => json!(30)}, Some(Shown::Percent(60))), json!(30));
+        assert_eq!(off(fields! {}, Some(Shown::Percent(60))), json!(60));
+        assert_eq!(off(fields! {}, Some(Shown::Auto)), json!(100));
+        assert_eq!(off(fields! {}, None), json!(100));
     }
 
     #[test]
     fn what_the_unit_shows_wins_over_the_fields() {
-        let dev = fields!{PERCENT => json!(30), AUTO => json!(false)};
+        let dev = fields! {PERCENT => json!(30), AUTO => json!(false)};
         assert_eq!(reported(&dev, None), (Some(30), false));
         assert_eq!(reported(&dev, Some(Shown::Auto)), (Some(30), true));
         assert_eq!(reported(&dev, Some(Shown::Percent(90))), (Some(90), false));
-        assert_eq!(reported(&fields!{}, None), (None, false));
-        assert_eq!(reported(&fields!{AUTO => json!(true)}, None), (None, true));
+        assert_eq!(reported(&fields! {}, None), (None, false));
+        assert_eq!(reported(&fields! {AUTO => json!(true)}, None), (None, true));
     }
 
     #[test]
@@ -229,7 +233,9 @@ mod tests {
         let watch = Watch::default();
         let told = Arc::new(AtomicUsize::new(0));
         let count = told.clone();
-        watch.on_change(move || { count.fetch_add(1, Ordering::Relaxed); });
+        watch.on_change(move || {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
         watch.update(Some("auto"));
         watch.update(Some("auto"));
         watch.update(Some("55"));

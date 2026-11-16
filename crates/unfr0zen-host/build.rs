@@ -37,11 +37,30 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
 const REQUIRED: [&str; 24] = [
-    "rom-stage.imx", "boot-wrapper.bin", "u-boot-recovery.bin", "u-boot-recovery.json", "u-boot-sdp-official.hab",
-    "j49/nand-flasher.bin", "j49/dropbearmulti", "j49/busybox", "nestlocal-armv7", "doom-armv7", "custom-screen.o", "j49-rcs-screen.o",
-    "radio/radio.bin", "radio/radio.identity", "radio-em357-thread/radio.bin", "radio-em357-thread/radio.identity",
-    "thread/thread-rcp", "thread/ot-daemon", "thread/ot-ctl", "wakefilter/libwakefilter.so", "unfr0zen-apply-armv7",
-    "localcloud/liblocalcloud.so", "theme/libunfr0zen-theme.so", "theme/libnestlocal_theme.so",
+    "rom-stage.imx",
+    "boot-wrapper.bin",
+    "u-boot-recovery.bin",
+    "u-boot-recovery.json",
+    "u-boot-sdp-official.hab",
+    "j49/nand-flasher.bin",
+    "j49/dropbearmulti",
+    "j49/busybox",
+    "nestlocal-armv7",
+    "doom-armv7",
+    "custom-screen.o",
+    "j49-rcs-screen.o",
+    "radio/radio.bin",
+    "radio/radio.identity",
+    "radio-em357-thread/radio.bin",
+    "radio-em357-thread/radio.identity",
+    "thread/thread-rcp",
+    "thread/ot-daemon",
+    "thread/ot-ctl",
+    "wakefilter/libwakefilter.so",
+    "unfr0zen-apply-armv7",
+    "localcloud/liblocalcloud.so",
+    "theme/libunfr0zen-theme.so",
+    "theme/libnestlocal_theme.so",
 ];
 
 fn firmware_missing(root: &Path) -> Vec<&'static str> {
@@ -53,20 +72,28 @@ fn firmware_missing(root: &Path) -> Vec<&'static str> {
 /// several times at once, for several targets, so one builds and the others
 /// wait for it. CI brings build/ along, and Windows cannot build it.
 fn build_firmware(root: &Path) {
-    let nestlocal = [root.join("crates/nestlocal"), root.join("crates/nestlocal-theme"), root.join("platform/common/theme"),
-                     root.join("Cargo.lock")];
+    let nestlocal = [
+        root.join("crates/nestlocal"),
+        root.join("crates/nestlocal-theme"),
+        root.join("platform/common/theme"),
+        root.join("Cargo.lock"),
+    ];
     let apply = [root.join("crates/unfr0zen-apply"), root.join("crates/unfr0zen-core"), root.join("Cargo.lock")];
     for path in nestlocal.iter().chain(&apply) {
         println!("cargo:rerun-if-changed={}", path.display());
     }
     let nestlocal_stale = || stale(root, "build/nestlocal-armv7", &nestlocal);
     let apply_stale = || stale(root, "build/unfr0zen-apply-armv7", &apply);
-    if firmware_missing(root).is_empty() && (cfg!(windows) || env::var_os("CI").is_some() || !(nestlocal_stale() || apply_stale())) {
+    if firmware_missing(root).is_empty()
+        && (cfg!(windows) || env::var_os("CI").is_some() || !(nestlocal_stale() || apply_stale()))
+    {
         return;
     }
     let missing = firmware_missing(root);
-    assert!(!cfg!(windows) && env::var_os("CI").is_none(),
-            "build/ lacks {missing:?}: build it first with utils/build-firmware.sh, on macOS or Linux");
+    assert!(
+        !cfg!(windows) && env::var_os("CI").is_none(),
+        "build/ lacks {missing:?}: build it first with utils/build-firmware.sh, on macOS or Linux"
+    );
     let work = root.join(".work");
     fs::create_dir_all(&work).unwrap();
     let lock = fs::File::create(work.join("firmware.lock")).unwrap();
@@ -78,23 +105,36 @@ fn build_firmware(root: &Path) {
     } else {
         if nestlocal_stale() {
             run_firmware_build(root, Some("nestlocal"));
-            assert!(!nestlocal_stale(), "utils/build-firmware.sh nestlocal left build/nestlocal-armv7 older than its sources");
+            assert!(
+                !nestlocal_stale(),
+                "utils/build-firmware.sh nestlocal left build/nestlocal-armv7 older than its sources"
+            );
         }
         if apply_stale() {
             run_firmware_build(root, Some("apply"));
-            assert!(!apply_stale(), "utils/build-firmware.sh apply left build/unfr0zen-apply-armv7 older than its sources");
+            assert!(
+                !apply_stale(),
+                "utils/build-firmware.sh apply left build/unfr0zen-apply-armv7 older than its sources"
+            );
         }
     }
 }
 
 fn run_firmware_build(root: &Path, only: Option<&str>) {
     let mut script = Command::new("sh");
-    script.arg(root.join("utils/build-firmware.sh")).args(only).current_dir(root).stdout(Stdio::from(std::io::stderr()));
+    script
+        .arg(root.join("utils/build-firmware.sh"))
+        .args(only)
+        .current_dir(root)
+        .stdout(Stdio::from(std::io::stderr()));
     // What cargo sets for this script is not for the cargo the firmware runs.
     for (name, _) in env::vars_os() {
         let name = name.to_string_lossy();
-        if (name.starts_with("CARGO") && name != "CARGO_HOME") || name.starts_with("RUSTC") || name.starts_with("RUSTDOC")
-            || ["TARGET", "HOST", "PROFILE", "OPT_LEVEL", "DEBUG", "NUM_JOBS", "OUT_DIR"].contains(&&*name) {
+        if (name.starts_with("CARGO") && name != "CARGO_HOME")
+            || name.starts_with("RUSTC")
+            || name.starts_with("RUSTDOC")
+            || ["TARGET", "HOST", "PROFILE", "OPT_LEVEL", "DEBUG", "NUM_JOBS", "OUT_DIR"].contains(&&*name)
+        {
             script.env_remove(&*name);
         }
     }
@@ -140,17 +180,28 @@ fn firmware(root: &Path, out: &Path) {
     let recovery = read("u-boot-recovery.bin");
     let record = String::from_utf8(read("u-boot-recovery.json")).unwrap();
     let recorded: serde_json::Value = serde_json::from_str(&record).unwrap();
-    assert_eq!(recorded["image_sha256"].as_str(), Some(sha256(&recovery).as_str()),
-               "build/u-boot-recovery.bin does not match its build record");
-    assert!(recovery.windows(25).any(|w| w == b"usb_recovery_acm_fastboot"),
-            "build/u-boot-recovery.bin is not the ACM+fastboot recovery build");
-    for (name, data) in [("rom-stage.imx", rom_stage), ("boot-wrapper.bin", read("boot-wrapper.bin")),
-                         ("u-boot-recovery.bin", recovery)] {
+    assert_eq!(
+        recorded["image_sha256"].as_str(),
+        Some(sha256(&recovery).as_str()),
+        "build/u-boot-recovery.bin does not match its build record"
+    );
+    assert!(
+        recovery.windows(25).any(|w| w == b"usb_recovery_acm_fastboot"),
+        "build/u-boot-recovery.bin is not the ACM+fastboot recovery build"
+    );
+    for (name, data) in [
+        ("rom-stage.imx", rom_stage),
+        ("boot-wrapper.bin", read("boot-wrapper.bin")),
+        ("u-boot-recovery.bin", recovery),
+    ] {
         fs::write(out.join(name), data).unwrap();
     }
     let official = read("u-boot-sdp-official.hab");
-    assert_eq!(sha256(&official), OFFICIAL_LOADER_SHA256,
-               "build/u-boot-sdp-official.hab is not the pinned official SDP loader");
+    assert_eq!(
+        sha256(&official),
+        OFFICIAL_LOADER_SHA256,
+        "build/u-boot-sdp-official.hab is not the pinned official SDP loader"
+    );
     fs::write(out.join("u-boot-sdp-official.hab"), official).unwrap();
 }
 
@@ -176,21 +227,33 @@ fn deb(root: &Path, out: &Path, name: &str, url: &str, sha: &str) -> Vec<u8> {
 
 /// A pinned download: from the cache directory, else fetched with curl.
 fn pinned(cache: &Path, out: &Path, name: &str, url: &str, sha: &str) -> Vec<u8> {
-    let path = [cache.join(name), out.join(name)].into_iter().find(|path| path.is_file())
-        .unwrap_or_else(|| {
-            // A read-only checkout keeps the download in OUT_DIR.
-            let target = if fs::create_dir_all(cache).is_ok() { cache.join(name) } else { out.join(name) };
-            // Per process: building several targets at once runs this concurrently.
-            let partial = target.with_extension(format!("part.{}", std::process::id()));
-            let status = Command::new("curl").args([
-                "-fsSL", "--retry", "3", "--retry-all-errors", "--connect-timeout", "20",
-                "--max-time", "120", "--retry-max-time", "300", "-o",
-            ]).arg(&partial).arg(url).status()
-                .unwrap_or_else(|_| panic!("curl is needed once to fetch {name}"));
-            assert!(status.success(), "downloading {url} failed");
-            fs::rename(&partial, &target).unwrap();
-            target
-        });
+    let path = [cache.join(name), out.join(name)].into_iter().find(|path| path.is_file()).unwrap_or_else(|| {
+        // A read-only checkout keeps the download in OUT_DIR.
+        let target = if fs::create_dir_all(cache).is_ok() { cache.join(name) } else { out.join(name) };
+        // Per process: building several targets at once runs this concurrently.
+        let partial = target.with_extension(format!("part.{}", std::process::id()));
+        let status = Command::new("curl")
+            .args([
+                "-fsSL",
+                "--retry",
+                "3",
+                "--retry-all-errors",
+                "--connect-timeout",
+                "20",
+                "--max-time",
+                "120",
+                "--retry-max-time",
+                "300",
+                "-o",
+            ])
+            .arg(&partial)
+            .arg(url)
+            .status()
+            .unwrap_or_else(|_| panic!("curl is needed once to fetch {name}"));
+        assert!(status.success(), "downloading {url} failed");
+        fs::rename(&partial, &target).unwrap();
+        target
+    });
     let data = fs::read(&path).unwrap();
     assert_eq!(sha256(&data), sha, "{} is not the pinned {name}", path.display());
     data
@@ -238,7 +301,9 @@ fn doom_logo(wad: &[u8]) -> Vec<u8> {
     let i32_at = |at: usize| i32::from_le_bytes(wad[at..at + 4].try_into().unwrap()) as usize;
     let (count, directory) = (i32_at(4), i32_at(8));
     let lump = |name: &str| {
-        (0..count).map(|i| directory + i * 16).find(|&e| wad[e + 8..e + 16].split(|&b| b == 0).next() == Some(name.as_bytes()))
+        (0..count)
+            .map(|i| directory + i * 16)
+            .find(|&e| wad[e + 8..e + 16].split(|&b| b == 0).next() == Some(name.as_bytes()))
             .map(|e| &wad[i32_at(e)..i32_at(e) + i32_at(e + 4)])
             .unwrap_or_else(|| panic!("the WAD has no {name}"))
     };
@@ -360,15 +425,25 @@ fn nestlocal(root: &Path, out: &Path) {
 fn preloads(root: &Path, out: &Path) {
     let library = root.join("build/wakefilter/libwakefilter.so");
     println!("cargo:rerun-if-changed={}", library.display());
-    let data = fs::read(&library)
-        .unwrap_or_else(|_| panic!("build/wakefilter/libwakefilter.so is missing: build it first (utils/build-firmware.sh)"));
-    assert_eq!((&data[..6], data[16], data[18]), (&b"\x7fELF\x01\x01"[..], 3, 40), "libwakefilter.so is not an ARM shared library");
+    let data = fs::read(&library).unwrap_or_else(|_| {
+        panic!("build/wakefilter/libwakefilter.so is missing: build it first (utils/build-firmware.sh)")
+    });
+    assert_eq!(
+        (&data[..6], data[16], data[18]),
+        (&b"\x7fELF\x01\x01"[..], 3, 40),
+        "libwakefilter.so is not an ARM shared library"
+    );
     fs::write(out.join("libwakefilter.so"), data).unwrap();
     let library = root.join("build/localcloud/liblocalcloud.so");
     println!("cargo:rerun-if-changed={}", library.display());
-    let data = fs::read(&library)
-        .unwrap_or_else(|_| panic!("build/localcloud/liblocalcloud.so is missing: build it first (utils/build-firmware.sh)"));
-    assert_eq!((&data[..6], data[16], data[18]), (&b"\x7fELF\x01\x01"[..], 3, 40), "liblocalcloud.so is not an ARM shared library");
+    let data = fs::read(&library).unwrap_or_else(|_| {
+        panic!("build/localcloud/liblocalcloud.so is missing: build it first (utils/build-firmware.sh)")
+    });
+    assert_eq!(
+        (&data[..6], data[16], data[18]),
+        (&b"\x7fELF\x01\x01"[..], 3, 40),
+        "liblocalcloud.so is not an ARM shared library"
+    );
     fs::write(out.join("liblocalcloud.so"), data).unwrap();
 }
 
@@ -383,23 +458,39 @@ fn theme(root: &Path, out: &Path) {
         for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
             let path = entry.unwrap().path();
             println!("cargo:rerun-if-changed={}", path.display());
-            if path.is_dir() { dirs.push(path) } else { files.push(path) }
+            if path.is_dir() {
+                dirs.push(path)
+            } else {
+                files.push(path)
+            }
         }
     }
     files.sort();
-    let list: String = files.iter().map(|path| {
-        // The name on the unit, whatever the build host's separator.
-        let name = path.strip_prefix(&themes).unwrap().components()
-            .map(|part| part.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join("/");
-        format!("({name:?}, include_bytes!({:?}).as_slice()),", path.display().to_string())
-    }).collect();
+    let list: String = files
+        .iter()
+        .map(|path| {
+            // The name on the unit, whatever the build host's separator.
+            let name = path
+                .strip_prefix(&themes)
+                .unwrap()
+                .components()
+                .map(|part| part.as_os_str().to_str().unwrap())
+                .collect::<Vec<_>>()
+                .join("/");
+            format!("({name:?}, include_bytes!({:?}).as_slice()),", path.display().to_string())
+        })
+        .collect();
     fs::write(out.join("themes.rs"), format!("&[{list}]")).unwrap();
     for name in ["libunfr0zen-theme.so", "libnestlocal_theme.so"] {
         let library = root.join("build/theme").join(name);
         println!("cargo:rerun-if-changed={}", library.display());
         let data = fs::read(&library)
             .unwrap_or_else(|_| panic!("build/theme/{name} is missing: build it first (utils/build-firmware.sh)"));
-        assert_eq!((&data[..6], data[16], data[18]), (&b"\x7fELF\x01\x01"[..], 3, 40), "{name} is not an ARM shared library");
+        assert_eq!(
+            (&data[..6], data[16], data[18]),
+            (&b"\x7fELF\x01\x01"[..], 3, 40),
+            "{name} is not an ARM shared library"
+        );
         gzip(&data, &out.join(format!("{name}.gz")));
     }
 }
@@ -431,14 +522,19 @@ fn main() {
     theme(&root, &out);
     // The gen3's radio image serves Thread and Zigbee alike, the gen2's
     // Thread image Thread alone; the Thread host tools beside them.
-    for (dir, name, embedded) in [("build/radio", "radio.bin", "radio.bin"), ("build/radio", "radio.identity", "radio.identity"),
-                                  ("build/radio-em357-thread", "radio.bin", "radio-em357.bin"),
-                                  ("build/radio-em357-thread", "radio.identity", "radio-em357.identity"),
-                                  ("build/thread", "thread-rcp", "thread-rcp"), ("build/thread", "ot-daemon", "ot-daemon"),
-                                  ("build/thread", "ot-ctl", "ot-ctl")] {
+    for (dir, name, embedded) in [
+        ("build/radio", "radio.bin", "radio.bin"),
+        ("build/radio", "radio.identity", "radio.identity"),
+        ("build/radio-em357-thread", "radio.bin", "radio-em357.bin"),
+        ("build/radio-em357-thread", "radio.identity", "radio-em357.identity"),
+        ("build/thread", "thread-rcp", "thread-rcp"),
+        ("build/thread", "ot-daemon", "ot-daemon"),
+        ("build/thread", "ot-ctl", "ot-ctl"),
+    ] {
         let source = root.join(dir).join(name);
         println!("cargo:rerun-if-changed={}", source.display());
-        let data = fs::read(&source).unwrap_or_else(|e| panic!("{}: {e}; run platform/common/radio/thread/build.sh", source.display()));
+        let data = fs::read(&source)
+            .unwrap_or_else(|e| panic!("{}: {e}; run platform/common/radio/thread/build.sh", source.display()));
         gzip(&data, &out.join(format!("thread-{embedded}.gz")));
     }
     println!("cargo:rerun-if-changed=build.rs");

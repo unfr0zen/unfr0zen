@@ -15,8 +15,16 @@ fn at_prompt(data: &[u8]) -> bool {
 }
 
 /// What U-Boot prints when a command did not do what was asked.
-const REJECTED: &[&str] = &["unknown command", "## error", "ubifs error", "error reading",
-                            "command failed", "fdt_err", "no fdt memory address", "libfdt"];
+const REJECTED: &[&str] = &[
+    "unknown command",
+    "## error",
+    "ubifs error",
+    "error reading",
+    "command failed",
+    "fdt_err",
+    "no fdt memory address",
+    "libfdt",
+];
 
 /// A serial port whose reads time out instead of blocking forever.
 pub trait Serial: Read + Write {
@@ -57,8 +65,11 @@ impl<S: Serial> UBoot<S> {
                 return Ok(UBoot { port });
             }
         }
-        Err(Error::Timeout(format!("ACM appeared but U-Boot prompt did not respond within \
-                                    {timeout:?}: {}", tail(&data, 300))))
+        Err(Error::Timeout(format!(
+            "ACM appeared but U-Boot prompt did not respond within \
+                                    {timeout:?}: {}",
+            tail(&data, 300)
+        )))
     }
 
     /// Runs one command and returns its output up to the prompt; output that
@@ -178,10 +189,12 @@ mod tests {
 
     #[test]
     fn a_read_ending_inside_crc_output_is_not_the_prompt() {
-        let mut port = FakeSerial::new(|line| if line.starts_with("crc32") {
-            format!("{line}\r\ncrc32 for 88000000 ... 8800ffff ==> 1a2b3c4d\r\n")
-        } else {
-            String::new()
+        let mut port = FakeSerial::new(|line| {
+            if line.starts_with("crc32") {
+                format!("{line}\r\ncrc32 for 88000000 ... 8800ffff ==> 1a2b3c4d\r\n")
+            } else {
+                String::new()
+            }
         });
         port.max_read = 1;
         let mut board = UBoot::connect(port, Duration::from_secs(1)).unwrap();
@@ -191,7 +204,13 @@ mod tests {
 
     #[test]
     fn rejected_commands_fail_unless_allowed() {
-        let port = FakeSerial::new(|line| if line.starts_with("ubifsmount") { "UBIFS error (ubi0:0)\n".into() } else { String::new() });
+        let port = FakeSerial::new(|line| {
+            if line.starts_with("ubifsmount") {
+                "UBIFS error (ubi0:0)\n".into()
+            } else {
+                String::new()
+            }
+        });
         let mut board = UBoot::connect(port, Duration::from_secs(1)).unwrap();
         assert!(board.command("ubifsmount ubi0:root0", Duration::from_secs(1)).is_err());
         assert!(board.command_allow_failure("ubifsmount ubi0:root0", Duration::from_secs(1)).is_ok());

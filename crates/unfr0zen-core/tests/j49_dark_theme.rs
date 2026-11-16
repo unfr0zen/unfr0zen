@@ -27,15 +27,18 @@ fn hex(value: &serde_json::Value) -> u32 {
 #[test]
 fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
     let root = Path::new(env!("UNFR0ZEN_ROOT"));
-    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from)
-        .unwrap_or_else(|| root.join(".work/firmware"));
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root.join(".work/firmware"));
     let Ok(stock) = std::fs::read(firmware.join("nlclient-gen2-2019")) else {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the j49 sample");
         eprintln!("No private j49 sample; skipping dark theme check");
         return;
     };
-    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-        "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"))).unwrap();
+    let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("UNFR0ZEN_ROOT"),
+        "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"
+    )))
+    .unwrap();
     assert_eq!(sha256_hex(&stock), golden["stock_sha256"]);
 
     let mut output = stock.clone();
@@ -66,9 +69,10 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
 
     // Over the ordinary settings screen and the external temperature patch,
     // as set_up_on_device composes them, and reversible through the journal.
-    let object = std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from)
-        .unwrap_or_else(|| root.join("build/custom-screen.o"));
-    let rcs_object = std::env::var_os("NLCLIENT_RCS_OBJECT").map(PathBuf::from)
+    let object =
+        std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from).unwrap_or_else(|| root.join("build/custom-screen.o"));
+    let rcs_object = std::env::var_os("NLCLIENT_RCS_OBJECT")
+        .map(PathBuf::from)
         .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"));
     let (Ok(object), Ok(rcs_object)) = (std::fs::read(object), std::fs::read(rcs_object)) else {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need both screen objects");

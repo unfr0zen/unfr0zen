@@ -33,7 +33,8 @@ fn main() {
     if let Ok(dir) = std::env::var("NESTLOCAL_ZBWAKE").map(std::path::PathBuf::from) {
         println!("cargo:rerun-if-changed={}", dir.display());
         let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("NESTLOCAL_ZBWAKE {}: {e}", dir.display()));
-        let mut paths: Vec<_> = entries.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "ko")).collect();
+        let mut paths: Vec<_> =
+            entries.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "ko")).collect();
         paths.sort();
         for path in paths {
             println!("cargo:rerun-if-changed={}", path.display());

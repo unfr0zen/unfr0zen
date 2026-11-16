@@ -32,7 +32,12 @@ impl<B: Bulk> Protocol<B> {
                 b"INFO" => log::debug!("fastboot {command}: {rest}"),
                 b"OKAY" | b"DATA" => return Ok((String::from_utf8_lossy(kind).into_owned(), rest)),
                 b"FAIL" => return device(format!("fastboot {command} failed: {rest}")),
-                _ => return device(format!("fastboot {command}: unexpected response {:?}", String::from_utf8_lossy(&reply))),
+                _ => {
+                    return device(format!(
+                        "fastboot {command}: unexpected response {:?}",
+                        String::from_utf8_lossy(&reply)
+                    ))
+                }
             }
         }
     }

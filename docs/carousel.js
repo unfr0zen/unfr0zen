@@ -13,49 +13,49 @@ let focused = false;
 let timer;
 
 function show(index) {
-    shots[current].classList.remove("is-shown");
-    shots[current].setAttribute("aria-hidden", "true");
-    tabs[current].removeAttribute("aria-current");
-    current = index % shots.length;
-    shots[current].classList.add("is-shown");
-    shots[current].removeAttribute("aria-hidden");
-    tabs[current].setAttribute("aria-current", "true");
+  shots[current].classList.remove("is-shown");
+  shots[current].setAttribute("aria-hidden", "true");
+  tabs[current].removeAttribute("aria-current");
+  current = index % shots.length;
+  shots[current].classList.add("is-shown");
+  shots[current].removeAttribute("aria-hidden");
+  tabs[current].setAttribute("aria-current", "true");
 }
 
 // A full interval from now, so a shot stepped to by hand stays its whole time.
 function schedule() {
-    clearInterval(timer);
-    if (!hovered && !focused && !still.matches) {
-        timer = setInterval(() => show(current + 1), INTERVAL);
-    }
+  clearInterval(timer);
+  if (!hovered && !focused && !still.matches) {
+    timer = setInterval(() => show(current + 1), INTERVAL);
+  }
 }
 
 root.querySelector(".shot-tabs").hidden = false;
 tabs.forEach((tab, index) => {
-    tab.addEventListener("click", () => {
-        show(index);
-        schedule();
-    });
+  tab.addEventListener("click", () => {
+    show(index);
+    schedule();
+  });
 });
 
 // A touch has no leaving to end its hover, so only a mouse counts.
 root.addEventListener("pointerenter", (event) => {
-    hovered = event.pointerType === "mouse";
-    schedule();
+  hovered = event.pointerType === "mouse";
+  schedule();
 });
 root.addEventListener("pointerleave", () => {
-    hovered = false;
-    schedule();
+  hovered = false;
+  schedule();
 });
 // A click leaves focus on its tab, which must not hold the rotation after
 // the mouse has gone: only focus the keyboard moved counts.
 root.addEventListener("focusin", (event) => {
-    focused = event.target.matches(":focus-visible");
-    schedule();
+  focused = event.target.matches(":focus-visible");
+  schedule();
 });
 root.addEventListener("focusout", () => {
-    focused = false;
-    schedule();
+  focused = false;
+  schedule();
 });
 still.addEventListener("change", schedule);
 

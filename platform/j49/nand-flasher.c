@@ -13,10 +13,9 @@
  * kernels and the unit's configuration cannot be written by any request,
  * and no root slot can be erased, until UNLOCK (with its magic word) lifts
  * those limits for the rest of the session: a whole-NAND restore sends it,
- * and a setup that erases the blocks of the nestlocal it replaces. A page is only programmed if it is still erased (data and ECC bytes
- * all 0xff), so nothing already written can be changed. The GPMC write-protect
- * output is held low (protected) except while a page is programmed or a
- * block erased.
+ * and a setup that erases the blocks of the nestlocal it replaces. A page is only programmed if it is still erased
+ * (data and ECC bytes all 0xff), so nothing already written can be changed. The GPMC write-protect output is held low
+ * (protected) except while a page is programmed or a block erased.
  *
  * Protocol (little-endian 32-bit words, EP1 bulk):
  *   device -> 'USBh' GPMC_CONFIG1_0 GPMC_CONFIG7_0 id[8] CONTROL_IDCODE
@@ -44,132 +43,128 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 
-#define REG8(a)		(*(volatile u8 *)(a))
-#define REG16(a)	(*(volatile u16 *)(a))
-#define REG32(a)	(*(volatile u32 *)(a))
+#define REG8(a)  (*(volatile u8 *)(a))
+#define REG16(a) (*(volatile u16 *)(a))
+#define REG32(a) (*(volatile u32 *)(a))
 
-#define GPMC_CONFIG		0x6E000050
-#define GPMC_WRITEPROTECT_HIGH	(1 << 4)
-#define GPMC_CONFIG1_0		0x6E000060
-#define GPMC_CONFIG7_0		0x6E000078
-#define GPMC_NAND_COMMAND_0	0x6E00007C
-#define GPMC_NAND_ADDRESS_0	0x6E000080
-#define GPMC_NAND_DATA_0	0x6E000084
+#define GPMC_CONFIG            0x6E000050
+#define GPMC_WRITEPROTECT_HIGH (1 << 4)
+#define GPMC_CONFIG1_0         0x6E000060
+#define GPMC_CONFIG7_0         0x6E000078
+#define GPMC_NAND_COMMAND_0    0x6E00007C
+#define GPMC_NAND_ADDRESS_0    0x6E000080
+#define GPMC_NAND_DATA_0       0x6E000084
 
-#define CONTROL_IDCODE		0x4830A204	/* silicon version in bits 31-28 */
-#define PRM_RSTCTRL		0x48307250
-#define PRM_RSTCTRL_RESET	0x04
+#define CONTROL_IDCODE    0x4830A204 /* silicon version in bits 31-28 */
+#define PRM_RSTCTRL       0x48307250
+#define PRM_RSTCTRL_RESET 0x04
 
-#define USB_BASE	0x480AB000
-#define USB_POWER	(USB_BASE + 0x01)
-#define USB_SOFTCONN	(1 << 6)
-#define USB_INTRTXE	(USB_BASE + 0x06)
-#define USB_INTRRXE	(USB_BASE + 0x08)
-#define USB_INTRUSBE	(USB_BASE + 0x0B)
-#define OTG_SYSCONFIG	(USB_BASE + 0x404)
-#define OTG_SOFTRESET	(1 << 1)
-#define OTG_SYSSTATUS	(USB_BASE + 0x408)
-#define OTG_RESETDONE	(1 << 0)
-#define EP1_FIFO	(USB_BASE + 0x24)
-#define EP1_TXCSR	(USB_BASE + 0x112)
-#define EP1_RXCSR	(USB_BASE + 0x116)
-#define EP1_RXCOUNT	(USB_BASE + 0x118)
-#define PKTRDY		0x0001
-#define PACKET		512
+#define USB_BASE      0x480AB000
+#define USB_POWER     (USB_BASE + 0x01)
+#define USB_SOFTCONN  (1 << 6)
+#define USB_INTRTXE   (USB_BASE + 0x06)
+#define USB_INTRRXE   (USB_BASE + 0x08)
+#define USB_INTRUSBE  (USB_BASE + 0x0B)
+#define OTG_SYSCONFIG (USB_BASE + 0x404)
+#define OTG_SOFTRESET (1 << 1)
+#define OTG_SYSSTATUS (USB_BASE + 0x408)
+#define OTG_RESETDONE (1 << 0)
+#define EP1_FIFO      (USB_BASE + 0x24)
+#define EP1_TXCSR     (USB_BASE + 0x112)
+#define EP1_RXCSR     (USB_BASE + 0x116)
+#define EP1_RXCOUNT   (USB_BASE + 0x118)
+#define PKTRDY        0x0001
+#define PACKET        512
 
-#define PAGE_RAW	(2048 + 64)
-#define PAGES_PER_MIB	512
-#define PAGES_PER_BLOCK	64
-#define SLOTS_FIRST	(4 * PAGES_PER_MIB)	/* boot0, root0, boot1, root1 */
-#define SLOTS_END	(112 * PAGES_PER_MIB)
-#define ENV0_BLOCK	(0x340000 / 2048 / PAGES_PER_BLOCK)
-#define ENV1_BLOCK	(0x3a0000 / 2048 / PAGES_PER_BLOCK)
-#define BLOCKS_PER_MIB	(PAGES_PER_MIB / PAGES_PER_BLOCK)
-#define BOOT0_TAIL	(8 * BLOCKS_PER_MIB)	/* 4 MiB each */
-#define BOOT1_TAIL	(62 * BLOCKS_PER_MIB)
-#define TAIL_BLOCKS	(4 * BLOCKS_PER_MIB)
+#define PAGE_RAW        (2048 + 64)
+#define PAGES_PER_MIB   512
+#define PAGES_PER_BLOCK 64
+#define SLOTS_FIRST     (4 * PAGES_PER_MIB) /* boot0, root0, boot1, root1 */
+#define SLOTS_END       (112 * PAGES_PER_MIB)
+#define ENV0_BLOCK      (0x340000 / 2048 / PAGES_PER_BLOCK)
+#define ENV1_BLOCK      (0x3a0000 / 2048 / PAGES_PER_BLOCK)
+#define BLOCKS_PER_MIB  (PAGES_PER_MIB / PAGES_PER_BLOCK)
+#define BOOT0_TAIL      (8 * BLOCKS_PER_MIB) /* 4 MiB each */
+#define BOOT1_TAIL      (62 * BLOCKS_PER_MIB)
+#define TAIL_BLOCKS     (4 * BLOCKS_PER_MIB)
 
-#define PACK4(a, b, c, d)	(((d) << 24) | ((c) << 16) | ((b) << 8) | (a))
-#define CMD_HELLO	PACK4('U', 'S', 'B', 'h')
-#define CMD_READ	PACK4('U', 'S', 'B', 'r')
-#define CMD_PROGRAM	PACK4('U', 'S', 'B', 'p')
-#define CMD_STATUS	PACK4('U', 'S', 'B', 's')
-#define CMD_RESET	PACK4('U', 'S', 'B', 'x')
-#define CMD_ERASE	PACK4('U', 'S', 'B', 'E')
-#define CMD_ERROR	PACK4('U', 'S', 'B', 'e')
-#define CMD_UNLOCK	PACK4('U', 'S', 'B', 'U')
-#define CMD_BOOT	PACK4('U', 'S', 'B', 'b')
-#define ATAGS		0x80000100
-#define ATAGS_LIMIT	1024
-#define UNLOCK_MAGIC	PACK4('A', 'L', 'L', '!')
+#define PACK4(a, b, c, d) (((d) << 24) | ((c) << 16) | ((b) << 8) | (a))
+#define CMD_HELLO         PACK4('U', 'S', 'B', 'h')
+#define CMD_READ          PACK4('U', 'S', 'B', 'r')
+#define CMD_PROGRAM       PACK4('U', 'S', 'B', 'p')
+#define CMD_STATUS        PACK4('U', 'S', 'B', 's')
+#define CMD_RESET         PACK4('U', 'S', 'B', 'x')
+#define CMD_ERASE         PACK4('U', 'S', 'B', 'E')
+#define CMD_ERROR         PACK4('U', 'S', 'B', 'e')
+#define CMD_UNLOCK        PACK4('U', 'S', 'B', 'U')
+#define CMD_BOOT          PACK4('U', 'S', 'B', 'b')
+#define ATAGS             0x80000100
+#define ATAGS_LIMIT       1024
+#define UNLOCK_MAGIC      PACK4('A', 'L', 'L', '!')
 
-#define STATUS_OK	0
-#define STATUS_REFUSED	1
-#define STATUS_FAILED	2
-#define STATUS_BUSY	3
-#define STATUS_WRITTEN	4
+#define STATUS_OK      0
+#define STATUS_REFUSED 1
+#define STATUS_FAILED  2
+#define STATUS_BUSY    3
+#define STATUS_WRITTEN 4
 
-#define ECC_OFFSET	36	/* OOB: BCH codes from here to the end */
+#define ECC_OFFSET 36 /* OOB: BCH codes from here to the end */
 
 void enter_kernel(u32 entry, u32 machine, u32 atags) __attribute__((noreturn));
 
 /* x-loader leaves the caches off, so every instruction would be fetched
  * from SDRAM: the I-cache and branch prediction go on first (the MMU stays
  * off, and the code never changes). */
-__asm__(
-	".text\n"
-	".global _start\n"
-	"_start:\n"
-	"	ldr sp, =0x80800000\n"
-	"	mov r0, #0\n"
-	"	mcr p15, 0, r0, c7, c5, 0\n"	/* invalidate the I-cache */
-	"	mcr p15, 0, r0, c7, c5, 6\n"	/* and the branch predictor */
-	"	mrc p15, 0, r0, c1, c0, 0\n"
-	"	orr r0, r0, #0x1800\n"		/* SCTLR.I, SCTLR.Z */
-	"	mcr p15, 0, r0, c1, c0, 0\n"
-	"	isb\n"
-	"	bl flasher_main\n"
-	"1:	b 1b\n"
-	/* enter_kernel(entry, machine, atags): the CPU as U-Boot leaves it for
-	 * Linux (cleanup_before_linux), which x-loader does not: L2 invalidated
-	 * by the ROM (a GP device's service 1, as U-Boot's
-	 * omap3_gp_romcode_call; reset leaves it on and holding garbage, which
-	 * the kernel's cache cleaning would write to SDRAM), the MMU, caches,
-	 * branch prediction and alignment faults off (x-loader turns those on,
-	 * and the kernel's decompressor reads unaligned), the I-cache
-	 * invalidated. The ROM call may change r0-r5 and r12. */
-	"	.global enter_kernel\n"
-	"enter_kernel:\n"
-	"	push {r0, r1, r2}\n"
-	"	mov r12, #1\n"
-	"	mov r0, #0\n"
-	"	mcr p15, 0, r0, c7, c10, 4\n"	/* DSB */
-	"	mcr p15, 0, r0, c7, c10, 5\n"	/* DMB */
-	"	.word 0xe1600070\n"		/* SMC #0 */
-	"	ldmfd sp!, {r4, r5, r6}\n"
-	"	mrc p15, 0, r0, c1, c0, 0\n"
-	"	bic r0, r0, #0x1800\n"		/* SCTLR.I, SCTLR.Z */
-	"	bic r0, r0, #0x0007\n"		/* SCTLR.C, SCTLR.A, SCTLR.M */
-	"	mcr p15, 0, r0, c1, c0, 0\n"
-	"	isb\n"
-	"	mov r0, #0\n"
-	"	mcr p15, 0, r0, c7, c5, 0\n"	/* invalidate the I-cache */
-	"	mcr p15, 0, r0, c7, c5, 6\n"	/* and the branch predictor */
-	"	dsb\n"
-	"	isb\n"
-	"	mov r1, r5\n"
-	"	mov r2, r6\n"
-	"	bx r4\n"
-	".ltorg\n");
+__asm__(".text\n"
+        ".global _start\n"
+        "_start:\n"
+        "	ldr sp, =0x80800000\n"
+        "	mov r0, #0\n"
+        "	mcr p15, 0, r0, c7, c5, 0\n" /* invalidate the I-cache */
+        "	mcr p15, 0, r0, c7, c5, 6\n" /* and the branch predictor */
+        "	mrc p15, 0, r0, c1, c0, 0\n"
+        "	orr r0, r0, #0x1800\n" /* SCTLR.I, SCTLR.Z */
+        "	mcr p15, 0, r0, c1, c0, 0\n"
+        "	isb\n"
+        "	bl flasher_main\n"
+        "1:	b 1b\n"
+        /* enter_kernel(entry, machine, atags): the CPU as U-Boot leaves it for
+         * Linux (cleanup_before_linux), which x-loader does not: L2 invalidated
+         * by the ROM (a GP device's service 1, as U-Boot's
+         * omap3_gp_romcode_call; reset leaves it on and holding garbage, which
+         * the kernel's cache cleaning would write to SDRAM), the MMU, caches,
+         * branch prediction and alignment faults off (x-loader turns those on,
+         * and the kernel's decompressor reads unaligned), the I-cache
+         * invalidated. The ROM call may change r0-r5 and r12. */
+        "	.global enter_kernel\n"
+        "enter_kernel:\n"
+        "	push {r0, r1, r2}\n"
+        "	mov r12, #1\n"
+        "	mov r0, #0\n"
+        "	mcr p15, 0, r0, c7, c10, 4\n" /* DSB */
+        "	mcr p15, 0, r0, c7, c10, 5\n" /* DMB */
+        "	.word 0xe1600070\n"           /* SMC #0 */
+        "	ldmfd sp!, {r4, r5, r6}\n"
+        "	mrc p15, 0, r0, c1, c0, 0\n"
+        "	bic r0, r0, #0x1800\n" /* SCTLR.I, SCTLR.Z */
+        "	bic r0, r0, #0x0007\n" /* SCTLR.C, SCTLR.A, SCTLR.M */
+        "	mcr p15, 0, r0, c1, c0, 0\n"
+        "	isb\n"
+        "	mov r0, #0\n"
+        "	mcr p15, 0, r0, c7, c5, 0\n" /* invalidate the I-cache */
+        "	mcr p15, 0, r0, c7, c5, 6\n" /* and the branch predictor */
+        "	dsb\n"
+        "	isb\n"
+        "	mov r1, r5\n"
+        "	mov r2, r6\n"
+        "	bx r4\n"
+        ".ltorg\n");
 
 struct stream {
 	u32 fill;
 };
 
-static void delay(u32 loops)
-{
-	__asm__ volatile ("1: subs %0, %0, #1\n bne 1b" : "=r" (loops) : "0" (loops));
-}
+static void delay(u32 loops) { __asm__ volatile("1: subs %0, %0, #1\n bne 1b" : "=r"(loops) : "0"(loops)); }
 
 static void put8(struct stream *s, u8 byte)
 {
@@ -254,10 +249,7 @@ static void nand_address(int wide, u8 address)
 		REG8(GPMC_NAND_ADDRESS_0) = address;
 }
 
-static u16 nand_data(int wide)
-{
-	return wide ? REG16(GPMC_NAND_DATA_0) : REG8(GPMC_NAND_DATA_0);
-}
+static u16 nand_data(int wide) { return wide ? REG16(GPMC_NAND_DATA_0) : REG8(GPMC_NAND_DATA_0); }
 
 /* Poll READ STATUS until ready; the status byte, or -1 if it never was. */
 static int nand_status(int wide)
@@ -265,7 +257,7 @@ static int nand_status(int wide)
 	u32 i;
 	u16 status;
 
-	delay(1000);  /* tWB: give the chip time to drop ready */
+	delay(1000); /* tWB: give the chip time to drop ready */
 	nand_command(wide, 0x70);
 	for (i = 0; i < 10000000; i++) {
 		status = nand_data(wide);
@@ -301,7 +293,7 @@ static int nand_read_pages(int wide, u32 first, u32 count)
 				REG16(EP1_TXCSR) |= PKTRDY;
 			return page;
 		}
-		nand_command(wide, 0x00);  /* READ MODE: data out again after status */
+		nand_command(wide, 0x00); /* READ MODE: data out again after status */
 		for (i = 0; i < PAGE_RAW / 4; i++) {
 			if (wide) {
 				lo = REG16(GPMC_NAND_DATA_0);
@@ -332,8 +324,7 @@ static int erasable(int unlocked, u32 block)
 
 static int programmable(int unlocked, u32 page)
 {
-	return (page >= SLOTS_FIRST && page < SLOTS_END) ||
-	       erasable(unlocked, page / PAGES_PER_BLOCK);
+	return (page >= SLOTS_FIRST && page < SLOTS_END) || erasable(unlocked, page / PAGES_PER_BLOCK);
 }
 
 /* Every data and ECC bit still 1: not programmed since its erase. */
@@ -415,7 +406,7 @@ static u32 nand_erase_block(int wide, int unlocked, u32 block)
 
 void flasher_main(void)
 {
-	struct stream s = { 0 };
+	struct stream s = {0};
 	u32 config1 = REG32(GPMC_CONFIG1_0);
 	u32 config7 = REG32(GPMC_CONFIG7_0);
 	/* DEVICETYPE NAND, chip select valid; DEVICESIZE 1 means 16-bit. */
@@ -423,7 +414,7 @@ void flasher_main(void)
 	int wide = ((config1 >> 12) & 3) == 1;
 	int unlocked = 0;
 	u32 command[3];
-	u32 page_data[PAGE_RAW / 4];  /* word-aligned for recv and programming */
+	u32 page_data[PAGE_RAW / 4]; /* word-aligned for recv and programming */
 	u32 got, status;
 	int i, busy;
 
@@ -457,7 +448,7 @@ void flasher_main(void)
 					;
 			}
 		} else if (command[0] == CMD_PROGRAM) {
-			for (got = 0; got < PAGE_RAW; )
+			for (got = 0; got < PAGE_RAW;)
 				got += recv((u8 *)page_data + got, PAGE_RAW - got);
 			status = nand_program_page(wide, unlocked, command[1], page_data);
 			put32(&s, CMD_STATUS);
@@ -479,9 +470,10 @@ void flasher_main(void)
 		} else if (command[0] == CMD_BOOT) {
 			/* The entry word lands just below the ATAGs. */
 			status = command[2] > 4 && command[2] <= 4 + ATAGS_LIMIT && command[2] % 4 == 0
-				? STATUS_OK : STATUS_REFUSED;
+			             ? STATUS_OK
+			             : STATUS_REFUSED;
 			if (status == STATUS_OK)
-				for (got = 0; got < command[2]; )
+				for (got = 0; got < command[2];)
 					got += recv((u8 *)(ATAGS - 4) + got, command[2] - got);
 			put32(&s, CMD_STATUS);
 			put32(&s, 0);

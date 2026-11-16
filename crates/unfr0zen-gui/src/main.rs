@@ -10,16 +10,19 @@ mod about;
 mod backdrop;
 mod backups;
 mod bus;
+mod form;
 mod locale;
 mod logs;
 #[cfg(target_os = "macos")]
 mod macos_about;
 mod nandmap;
-mod form;
 mod run;
 mod setup;
 use setup::Look;
-pub(crate) use setup::{boxed_select, card, checked_field, code_line, field, inset, group, muted_line, option_card, select, switch, switch_row, toggle_card};
+pub(crate) use setup::{
+    boxed_select, card, checked_field, code_line, field, group, inset, muted_line, option_card, select, switch,
+    switch_row, toggle_card,
+};
 #[cfg(test)]
 mod snapshot;
 mod terminal;
@@ -38,8 +41,8 @@ use unfr0zen_host::diamond3::boot;
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::nand::Job;
 use unfr0zen_host::update;
-use unfr0zen_host::WAIT_USB_BOOT_STAGE;
 use unfr0zen_host::Device;
+use unfr0zen_host::WAIT_USB_BOOT_STAGE;
 
 use backups::Library;
 use bus::{Bus, Watcher};
@@ -112,26 +115,31 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     prefer_dx12(&mut options);
     let restart = Arc::new(AtomicBool::new(false));
-    let result = eframe::run_native("unfr0zen", options, Box::new({
-        let restart = restart.clone();
-        move |cc| {
-        // Dark whatever the system uses: egui's widgets, and the parts the
-        // OS draws (title bar, window appearance, Wayland decorations).
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
-        cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
-        install_fonts(&cc.egui_ctx);
-        no_zoom_keys(&cc.egui_ctx);
-        #[cfg(debug_assertions)]
-        no_id_shift_outlines(&cc.egui_ctx);
-        install_style(&cc.egui_ctx);
-        #[cfg(target_os = "macos")]
-        macos_about::install();
-        #[cfg(windows)]
-        round_corners(cc);
-        let mut app = App::new(&cc.egui_ctx, restart);
-        app.backdrop = backdrop::Backdrop::new(cc.wgpu_render_state.as_ref());
-        Ok(Box::new(app))
-    }}));
+    let result = eframe::run_native(
+        "unfr0zen",
+        options,
+        Box::new({
+            let restart = restart.clone();
+            move |cc| {
+                // Dark whatever the system uses: egui's widgets, and the parts the
+                // OS draws (title bar, window appearance, Wayland decorations).
+                cc.egui_ctx.set_theme(egui::Theme::Dark);
+                cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+                install_fonts(&cc.egui_ctx);
+                no_zoom_keys(&cc.egui_ctx);
+                #[cfg(debug_assertions)]
+                no_id_shift_outlines(&cc.egui_ctx);
+                install_style(&cc.egui_ctx);
+                #[cfg(target_os = "macos")]
+                macos_about::install();
+                #[cfg(windows)]
+                round_corners(cc);
+                let mut app = App::new(&cc.egui_ctx, restart);
+                app.backdrop = backdrop::Backdrop::new(cc.wgpu_render_state.as_ref());
+                Ok(Box::new(app))
+            }
+        }),
+    );
     drop(instance);
     // The new version starts once this one has let go of the instance lock.
     if restart.load(Ordering::Relaxed) {
@@ -152,9 +160,13 @@ fn install_style(ctx: &egui::Context) {
         style.visuals.text_options.font_hinting = false;
         // Rounded as the set-up flow's cards: fields and drop-downs 9 px,
         // menus 12, windows 16.
-        for widget in [&mut style.visuals.widgets.noninteractive, &mut style.visuals.widgets.inactive,
-                       &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active,
-                       &mut style.visuals.widgets.open] {
+        for widget in [
+            &mut style.visuals.widgets.noninteractive,
+            &mut style.visuals.widgets.inactive,
+            &mut style.visuals.widgets.hovered,
+            &mut style.visuals.widgets.active,
+            &mut style.visuals.widgets.open,
+        ] {
             widget.corner_radius = egui::CornerRadius::same(9);
         }
         style.visuals.window_corner_radius = egui::CornerRadius::same(16);
@@ -232,16 +244,28 @@ fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     const DM_SANS: &[u8] = include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/DMSans-Variable.ttf"));
     // A cut of DM Sans: its optical size and weight.
-    let cut = |size: f32, weight: f32| Arc::new(egui::FontData::from_static(DM_SANS).tweak(egui::FontTweak {
-        coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
-        ..egui::FontTweak::default()
-    }));
+    let cut = |size: f32, weight: f32| {
+        Arc::new(egui::FontData::from_static(DM_SANS).tweak(egui::FontTweak {
+            coords: egui::epaint::text::VariationCoords::new([(b"opsz", size), (b"wght", weight)]),
+            ..egui::FontTweak::default()
+        }))
+    };
     fonts.font_data.insert("DMSans".into(), cut(14.0, 400.0));
     fonts.font_data.insert("DMSans-Medium".into(), cut(14.0, 500.0));
-    fonts.font_data.insert("Outfit".into(),
-                           Arc::new(egui::FontData::from_static(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/Outfit-Light.ttf")))));
-    fonts.font_data.insert("JetBrainsMono".into(),
-                           Arc::new(egui::FontData::from_static(include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/assets/fonts/JetBrainsMono-Regular.ttf")))));
+    fonts.font_data.insert(
+        "Outfit".into(),
+        Arc::new(egui::FontData::from_static(include_bytes!(concat!(
+            env!("UNFR0ZEN_ROOT"),
+            "/assets/fonts/Outfit-Light.ttf"
+        )))),
+    );
+    fonts.font_data.insert(
+        "JetBrainsMono".into(),
+        Arc::new(egui::FontData::from_static(include_bytes!(concat!(
+            env!("UNFR0ZEN_ROOT"),
+            "/assets/fonts/JetBrainsMono-Regular.ttf"
+        )))),
+    );
     fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "DMSans".into());
     fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".into());
     let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
@@ -271,10 +295,7 @@ pub(crate) fn display(size: f32) -> egui::FontId {
 /// path. The dialog must not run inside the frame: its modal panel pumps
 /// its own event loop, which macOS delivers re-entrantly into winit's
 /// event handler and aborts the process.
-fn spawn_dialog(
-    dialog: Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>,
-    sender: Sender<Option<PathBuf>>,
-) {
+fn spawn_dialog(dialog: Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>, sender: Sender<Option<PathBuf>>) {
     std::thread::spawn(move || {
         let mut dialog = Box::into_pin(dialog);
         loop {
@@ -327,7 +348,10 @@ impl Updates {
             let next = match update::check(update::App::Gui, BUILD_VERSION) {
                 Ok(Some(release)) => UpdateState::Available(release),
                 Ok(None) => UpdateState::None,
-                Err(e) => { log::warn!("{e}"); UpdateState::None }
+                Err(e) => {
+                    log::warn!("{e}");
+                    UpdateState::None
+                }
             };
             if matches!(next, UpdateState::Available(_)) {
                 auto_open.store(true, Ordering::Relaxed);
@@ -377,69 +401,71 @@ impl Updates {
         if self.auto_open.swap(false, Ordering::Relaxed) {
             self.dialog_open = true;
         }
-        if !self.dialog_open { return; }
+        if !self.dialog_open {
+            return;
+        }
         let state = self.state.lock().unwrap().clone();
-        let response = backdrop::modal(ctx, "update").show(ctx, |ui| {
-            match state {
-                UpdateState::Available(ref release) => {
-                    ui.set_width(400.0);
-                    dialog_title(ui, &tr!("update.available_heading", version = release.tag));
-                    ui.label(tr!("update.current_version", version = BUILD_VERSION));
-                    ui.add_space(8.0);
-                    if let Some(body) = &release.body {
-                        let notes = body.trim();
-                        if !notes.is_empty() {
-                            ui.strong(tr!("update.release_notes"));
-                            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                                ui.label(notes);
-                            });
-                            ui.add_space(8.0);
-                        }
+        let response = backdrop::modal(ctx, "update").show(ctx, |ui| match state {
+            UpdateState::Available(ref release) => {
+                ui.set_width(400.0);
+                dialog_title(ui, &tr!("update.available_heading", version = release.tag));
+                ui.label(tr!("update.current_version", version = BUILD_VERSION));
+                ui.add_space(8.0);
+                if let Some(body) = &release.body {
+                    let notes = body.trim();
+                    if !notes.is_empty() {
+                        ui.strong(tr!("update.release_notes"));
+                        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            ui.label(notes);
+                        });
+                        ui.add_space(8.0);
                     }
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if setup::page_button(ui, tr!("update.install"), Look::Primary, true).clicked() {
-                            self.install(ui.ctx(), release.clone());
-                        }
-                        if setup::page_button(ui, tr!("update.not_now"), Look::Secondary, true).clicked() {
-                            self.dialog_open = false;
-                        }
-                        ui.hyperlink_to(tr!("update.github"), &release.url);
-                    });
-                    false
                 }
-                UpdateState::Installing(ref tag) => {
-                    dialog_title(ui, &tr!("update.installing_heading", version = tag));
-                    ui.spinner();
-                    false
-                }
-                UpdateState::Installed(ref tag) => {
-                    dialog_title(ui, &tr!("update.installed_heading", version = tag));
-                    ui.label(tr!("update.restart_description"));
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if setup::page_button(ui, tr!("update.restart"), Look::Primary, true).clicked() {
-                            self.restart.store(true, Ordering::Relaxed);
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        setup::page_button(ui, tr!("update.later"), Look::Secondary, true).clicked()
-                    }).inner
-                }
-                UpdateState::Failed(ref error, ref release) => {
-                    ui.label(egui::RichText::new(tr!("update.failed")).font(display(22.0)).color(WARN));
-                    ui.label(error.as_str());
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if setup::page_button(ui, tr!("update.retry"), Look::Primary, true).clicked() {
-                            self.install(ui.ctx(), release.clone());
-                        }
-                        setup::page_button(ui, tr!("common.close"), Look::Secondary, true).clicked()
-                    }).inner
-                }
-                _ => {
-                    self.dialog_open = false;
-                    false
-                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if setup::page_button(ui, tr!("update.install"), Look::Primary, true).clicked() {
+                        self.install(ui.ctx(), release.clone());
+                    }
+                    if setup::page_button(ui, tr!("update.not_now"), Look::Secondary, true).clicked() {
+                        self.dialog_open = false;
+                    }
+                    ui.hyperlink_to(tr!("update.github"), &release.url);
+                });
+                false
+            }
+            UpdateState::Installing(ref tag) => {
+                dialog_title(ui, &tr!("update.installing_heading", version = tag));
+                ui.spinner();
+                false
+            }
+            UpdateState::Installed(ref tag) => {
+                dialog_title(ui, &tr!("update.installed_heading", version = tag));
+                ui.label(tr!("update.restart_description"));
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if setup::page_button(ui, tr!("update.restart"), Look::Primary, true).clicked() {
+                        self.restart.store(true, Ordering::Relaxed);
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    setup::page_button(ui, tr!("update.later"), Look::Secondary, true).clicked()
+                })
+                .inner
+            }
+            UpdateState::Failed(ref error, ref release) => {
+                ui.label(egui::RichText::new(tr!("update.failed")).font(display(22.0)).color(WARN));
+                ui.label(error.as_str());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if setup::page_button(ui, tr!("update.retry"), Look::Primary, true).clicked() {
+                        self.install(ui.ctx(), release.clone());
+                    }
+                    setup::page_button(ui, tr!("common.close"), Look::Secondary, true).clicked()
+                })
+                .inner
+            }
+            _ => {
+                self.dialog_open = false;
+                false
             }
         });
         if response.inner {
@@ -758,7 +784,10 @@ impl App {
     /// would need, and no dialog is still on its way with a choice the task
     /// would miss.
     fn idle(&self) -> bool {
-        !self.running() && !self.shell.connected() && !self.uboot.connected() && self.pending_image.is_none()
+        !self.running()
+            && !self.shell.connected()
+            && !self.uboot.connected()
+            && self.pending_image.is_none()
             && !self.form.dialog_pending()
     }
 
@@ -787,7 +816,8 @@ impl App {
     fn preselect_latest_run(&mut self) {
         let valid = self.history_selected.as_ref().is_some_and(|s| self.history.iter().any(|r| &r.stamp == s));
         if !valid {
-            self.history_selected = (!self.live_listed()).then(|| self.history.first().map(|r| r.stamp.clone())).flatten();
+            self.history_selected =
+                (!self.live_listed()).then(|| self.history.first().map(|r| r.stamp.clone())).flatten();
         }
     }
 
@@ -800,14 +830,17 @@ impl App {
         self.flow_run = false;
         unfr0zen_host::end_log();
         unfr0zen_host::set_selection(match &task {
-            Task::SetUp | Task::BackupSetUp(_) => format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe()),
+            Task::SetUp | Task::BackupSetUp(_) => {
+                format!("Selected: {}, {}", task.log_title(), self.form.inputs().describe())
+            }
             task => format!("Selected: {}", task.log_title()),
         });
         let entry_point = self.form.entry_point;
         let run = match &task {
             Task::SetUp => self.form.config().map(|config| Run::start(config, None)),
-            Task::BackupSetUp(out) => self.form.config()
-                .and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone())))),
+            Task::BackupSetUp(out) => {
+                self.form.config().and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone()))))
+            }
             Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
             Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
             Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
@@ -894,7 +927,8 @@ impl App {
                     if !ok {
                         self.logs.rows.push(Row { label, started: Instant::now(), done: Some((elapsed, ok)) });
                     }
-                } else if let Some(row) = self.logs.rows.iter_mut().rev().find(|r| r.label == label && r.done.is_none()) {
+                } else if let Some(row) = self.logs.rows.iter_mut().rev().find(|r| r.label == label && r.done.is_none())
+                {
                     row.done = Some((elapsed, ok));
                 }
                 self.logs.notes.clear();
@@ -1050,16 +1084,13 @@ impl App {
         self.title_bar(ui);
         self.status_bar(ui);
         self.sidebar(ui);
-        let frame = egui::Frame::new().fill(BG)
-            .inner_margin(egui::Margin { left: 28, right: 28, top: 16, bottom: 4 });
+        let frame = egui::Frame::new().fill(BG).inner_margin(egui::Margin { left: 28, right: 28, top: 16, bottom: 4 });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| match self.page {
             Page::SetUp => self.setup_page(ui),
             Page::Backups => self.backups_page(ui),
             Page::Logs => self.logs_page(ui),
             Page::Uboot => self.uboot_page(ui),
-            Page::Boot => self.command_page(ui, Task::Boot,
-                tr!("boot.description"),
-                tr!("task.boot")),
+            Page::Boot => self.command_page(ui, Task::Boot, tr!("boot.description"), tr!("task.boot")),
             Page::Terminal => self.terminal_page(ui),
             Page::About => about::page(ui),
         });
@@ -1079,8 +1110,10 @@ impl App {
             self.updates.dialog(ctx);
         }
         let window = ui.ctx().content_rect();
-        let between_bars = egui::Rect::from_min_max(window.min + egui::vec2(0.0, TITLE_HEIGHT),
-                                                    window.max - egui::vec2(0.0, STATUS_HEIGHT));
+        let between_bars = egui::Rect::from_min_max(
+            window.min + egui::vec2(0.0, TITLE_HEIGHT),
+            window.max - egui::vec2(0.0, STATUS_HEIGHT),
+        );
         self.backdrop.show(ui.ctx(), between_bars);
     }
 
@@ -1109,11 +1142,13 @@ impl App {
                 // shaped apart, so merging equal neighbours, as append does,
                 // would move the letters and the title bar as a glint passes.
                 let mut name = egui::text::LayoutJob::single_section(NAME.into(), egui::TextFormat::default());
-                name.sections = (0..NAME.len()).map(|index| egui::text::LayoutSection {
-                    leading_space: 0.0,
-                    byte_range: egui::text::ByteIndex(index)..egui::text::ByteIndex(index + 1),
-                    format: egui::TextFormat::simple(font.clone(), name_color(index, time)),
-                }).collect();
+                name.sections = (0..NAME.len())
+                    .map(|index| egui::text::LayoutSection {
+                        leading_space: 0.0,
+                        byte_range: egui::text::ByteIndex(index)..egui::text::ByteIndex(index + 1),
+                        format: egui::TextFormat::simple(font.clone(), name_color(index, time)),
+                    })
+                    .collect();
                 slashed_zero_label(ui, name, NAME_ZERO, font.size, name_color(NAME_ZERO, time));
                 ui.ctx().request_repaint_after(glint_wait(time));
                 ui.label(egui::RichText::new("›").color(DIM));
@@ -1127,8 +1162,13 @@ impl App {
 
     /// The pages, and the version at the foot.
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        let frame = egui::Frame::new().fill(SIDE).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 8 });
-        egui::Panel::left("sidebar").exact_size(SIDEBAR_WIDTH).resizable(false).show_separator_line(false).frame(frame)
+        let frame =
+            egui::Frame::new().fill(SIDE).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 8 });
+        egui::Panel::left("sidebar")
+            .exact_size(SIDEBAR_WIDTH)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(frame)
             .show(ui, |ui| {
                 for page in Page::MAIN {
                     self.nav_item(ui, page);
@@ -1142,9 +1182,15 @@ impl App {
                     if !self.version.is_empty() {
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
-                            if ui.add(egui::Label::new(egui::RichText::new(self.version).size(11.0).color(DIM))
-                                .sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(tr!("nav.about_hint")).clicked() {
+                            if ui
+                                .add(
+                                    egui::Label::new(egui::RichText::new(self.version).size(11.0).color(DIM))
+                                        .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(tr!("nav.about_hint"))
+                                .clicked()
+                            {
                                 self.show(Page::About);
                             }
                         });
@@ -1155,7 +1201,8 @@ impl App {
                             let text = egui::RichText::new(notice).size(11.0).color(ACCENT);
                             let label = egui::Label::new(text).sense(egui::Sense::click());
                             if ui.add(label).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
-                                && self.updates.has_dialog() {
+                                && self.updates.has_dialog()
+                            {
                                 self.updates.dialog_open = true;
                             }
                         });
@@ -1167,9 +1214,16 @@ impl App {
     /// One row of the sidebar: the page's name, lit when shown, with the
     /// backup count at its right end.
     fn nav_item(&mut self, ui: &mut egui::Ui, page: Page) {
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), NAV_HEIGHT), egui::Sense::click());
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), NAV_HEIGHT), egui::Sense::click());
         let selected = self.page == page;
-        let fill = if selected { NAV_SELECTED } else if response.hovered() { NAV_HOVER } else { egui::Color32::TRANSPARENT };
+        let fill = if selected {
+            NAV_SELECTED
+        } else if response.hovered() {
+            NAV_HOVER
+        } else {
+            egui::Color32::TRANSPARENT
+        };
         let painter = ui.painter();
         painter.rect_filled(rect, 6.0, fill);
         let color = if selected { ui.visuals().strong_text_color() } else { MUTED };
@@ -1180,8 +1234,10 @@ impl App {
         if page == Page::Backups && !self.library.entries.is_empty() {
             let text = self.library.entries.len().to_string();
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(10.5), MUTED);
-            let badge = egui::Rect::from_center_size(end - egui::vec2(galley.size().x * 0.5 + 6.0, 0.0),
-                                                     galley.size() + egui::vec2(12.0, 4.0));
+            let badge = egui::Rect::from_center_size(
+                end - egui::vec2(galley.size().x * 0.5 + 6.0, 0.0),
+                galley.size() + egui::vec2(12.0, 4.0),
+            );
             painter.rect_filled(badge, 8.0, LINE);
             painter.galley(badge.center() - galley.size() * 0.5, galley, MUTED);
         }
@@ -1203,37 +1259,48 @@ impl App {
     /// The unit on USB, and the task under way or how the last one ended.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new().fill(STATUS).inner_margin(egui::Margin::symmetric(12, 0));
-        egui::Panel::bottom("status").exact_size(STATUS_HEIGHT).show_separator_line(false).frame(frame).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let bus = self.bus.current();
-                dot(ui, bus_color(&bus));
-                ui.label(egui::RichText::new(bus.summary()).size(11.5).color(MUTED));
-                if self.shell.port_name().or(self.uboot.port_name()).is_some() {
-                    ui.separator();
-                    ui.label(egui::RichText::new(tr!("status.console_open")).size(11.5).color(ACCENT));
-                }
-                if let Some(task) = &self.task {
-                    ui.separator();
-                    if self.running() {
-                        ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
-                        ui.label(egui::RichText::new(task.doing()).monospace().size(11.0).color(MUTED));
-                    } else if self.cancelled {
-                        ui.label(egui::RichText::new(tr!("status.cancelled", task = task.title())).monospace().size(11.0).color(MUTED));
-                    } else if let Some(outcome) = &self.logs.outcome {
-                        let ok = outcome.is_ok();
-                        outcome_mark(ui, ok, 11.0);
-                        let text = if ok {
-                            tr!("status.done", task = task.title())
-                        } else {
-                            tr!("status.failed", task = task.title())
-                        };
-                        ui.label(egui::RichText::new(text).monospace().size(11.0)
-                            .color(if ok { MUTED } else { BAD }));
+        egui::Panel::bottom("status").exact_size(STATUS_HEIGHT).show_separator_line(false).frame(frame).show(
+            ui,
+            |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let bus = self.bus.current();
+                    dot(ui, bus_color(&bus));
+                    ui.label(egui::RichText::new(bus.summary()).size(11.5).color(MUTED));
+                    if self.shell.port_name().or(self.uboot.port_name()).is_some() {
+                        ui.separator();
+                        ui.label(egui::RichText::new(tr!("status.console_open")).size(11.5).color(ACCENT));
                     }
-                }
-            });
-        });
+                    if let Some(task) = &self.task {
+                        ui.separator();
+                        if self.running() {
+                            ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
+                            ui.label(egui::RichText::new(task.doing()).monospace().size(11.0).color(MUTED));
+                        } else if self.cancelled {
+                            ui.label(
+                                egui::RichText::new(tr!("status.cancelled", task = task.title()))
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(MUTED),
+                            );
+                        } else if let Some(outcome) = &self.logs.outcome {
+                            let ok = outcome.is_ok();
+                            outcome_mark(ui, ok, 11.0);
+                            let text = if ok {
+                                tr!("status.done", task = task.title())
+                            } else {
+                                tr!("status.failed", task = task.title())
+                            };
+                            ui.label(egui::RichText::new(text).monospace().size(11.0).color(if ok {
+                                MUTED
+                            } else {
+                                BAD
+                            }));
+                        }
+                    }
+                });
+            },
+        );
     }
 
     /// The spinner and step of the task started from `page` while it runs,
@@ -1246,7 +1313,10 @@ impl App {
             ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
             ui.label(egui::RichText::new(self.logs.current().unwrap_or(tr!("status.starting"))).color(MUTED));
         } else if let Some(outcome) = &self.logs.outcome {
-            let (ok, text) = match outcome { Ok(t) => (true, t.as_str()), Err(t) => (false, t.as_str()) };
+            let (ok, text) = match outcome {
+                Ok(t) => (true, t.as_str()),
+                Err(t) => (false, t.as_str()),
+            };
             outcome_mark(ui, ok, 14.0);
             let text = egui::RichText::new(text).color(if ok { OK } else { BAD });
             ui.add(egui::Label::new(text).truncate()).on_hover_text(text_of(outcome));
@@ -1264,8 +1334,7 @@ impl App {
             }
         });
         ui.add_space(2.0);
-        ui.label(egui::RichText::new(
-            tr!("backup.description")).color(MUTED));
+        ui.label(egui::RichText::new(tr!("backup.description")).color(MUTED));
         ui.add_space(10.0);
         // The actions as the set-up flow's: under a line, between even gaps.
         egui::Panel::bottom("backup_actions").show_separator_line(false).frame(egui::Frame::new()).show(ui, |ui| {
@@ -1276,13 +1345,15 @@ impl App {
                 let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
                 if accent_button_sized(ui, tr!("backup.create"), self.idle(), size)
                     .on_hover_text(tr!("backup.create_hint"))
-                    .clicked() {
+                    .clicked()
+                {
                     let out = self.library.fresh_path();
                     self.start(Task::Backup(out));
                 }
                 if setup::rounded_button(ui, tr!("backup.restore_file"), Look::Secondary, self.idle(), size)
                     .on_hover_text(tr!("backup.restore_file_hint"))
-                    .clicked() {
+                    .clicked()
+                {
                     self.choose_restore_image();
                 }
             });
@@ -1290,11 +1361,16 @@ impl App {
         });
         // The pane holds the map exactly, whatever the display's pixel ratio.
         let detail_width = nandmap::width(ui.pixels_per_point()) + 2.0 * DETAIL_MARGIN;
-        let frame = egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(DETAIL_MARGIN as i8));
+        let frame =
+            egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(DETAIL_MARGIN as i8));
         // Clear of the actions' line, as the set-up flow's cards are.
         let frame = frame.outer_margin(egui::Margin { bottom: 12, ..egui::Margin::ZERO });
-        egui::Panel::right("backup_detail").exact_size(detail_width).resizable(false).show_separator_line(false)
-            .frame(frame).show(ui, |ui| self.backup_detail(ui));
+        egui::Panel::right("backup_detail")
+            .exact_size(detail_width)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| self.backup_detail(ui));
         egui::ScrollArea::vertical().id_salt("backups").auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(ui.available_width() - 16.0);
             self.backup_table(ui);
@@ -1317,7 +1393,9 @@ impl App {
         const CELL: f32 = 12.5;
         const RIGHT_MARGIN: f32 = 4.0;
         let header_font = egui::FontId::proportional(10.5);
-        let measure = |text: &str, font: &egui::FontId| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font.clone(), DIM).size().x);
+        let measure = |text: &str, font: &egui::FontId| {
+            ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), font.clone(), DIM).size().x)
+        };
         let column = |title: &'static str, values: &mut dyn Iterator<Item = String>| -> (&'static str, f32) {
             let widest = values.map(|v| measure(&v, &egui::FontId::proportional(CELL))).fold(0.0, f32::max);
             (title, widest.max(measure(&title.to_uppercase(), &header_font)).ceil())
@@ -1326,19 +1404,30 @@ impl App {
             column(tr!("common.device"), &mut self.library.entries.iter().map(|e| e.device_label().to_string())),
             column(tr!("backup.taken"), &mut self.library.entries.iter().map(|e| e.taken_label())),
             column(tr!("backup.size_column"), &mut self.library.entries.iter().map(|e| backups::size_label(e.size))),
-            ("SHA-256", measure(tr!("backup.verified"), &egui::FontId::proportional(11.0)).max(measure("SHA-256", &header_font)) + 14.0),
+            (
+                "SHA-256",
+                measure(tr!("backup.verified"), &egui::FontId::proportional(11.0))
+                    .max(measure("SHA-256", &header_font))
+                    + 14.0,
+            ),
             ("", 16.0),
             ("", 16.0),
         ];
         let width = ui.available_width();
         let name_width = (width - RIGHT_MARGIN - fixed.iter().map(|(_, w)| w + GAP).sum::<f32>()).max(80.0);
-        let columns: Vec<(&str, f32)> = std::iter::once((tr!("backup.image_column"), name_width)).chain(fixed).collect();
+        let columns: Vec<(&str, f32)> =
+            std::iter::once((tr!("backup.image_column"), name_width)).chain(fixed).collect();
         // The header.
         let (header, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
         let mut x = header.left() + 8.0;
         for (title, w) in &columns {
-            ui.painter().text(egui::pos2(x, header.center().y), egui::Align2::LEFT_CENTER, title.to_uppercase(),
-                              egui::FontId::proportional(10.5), setup::LABEL);
+            ui.painter().text(
+                egui::pos2(x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                title.to_uppercase(),
+                egui::FontId::proportional(10.5),
+                setup::LABEL,
+            );
             x += w + GAP;
         }
         ui.painter().hline(header.x_range(), header.bottom(), egui::Stroke::new(1.0, LINE));
@@ -1348,14 +1437,25 @@ impl App {
         for (i, entry) in self.library.entries.iter().enumerate() {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ROW), egui::Sense::click());
             // The icons, on top of the row so their clicks do not select it.
-            let icon_at = |column: usize| egui::pos2(rect.left() + name_width + GAP + fixed[..column].iter().map(|(_, w)| w + GAP).sum::<f32>() + 8.0, rect.center().y);
+            let icon_at = |column: usize| {
+                egui::pos2(
+                    rect.left() + name_width + GAP + fixed[..column].iter().map(|(_, w)| w + GAP).sum::<f32>() + 8.0,
+                    rect.center().y,
+                )
+            };
             let icon_rect = |at: egui::Pos2| egui::Rect::from_center_size(at, egui::vec2(24.0, 24.0));
             let (reveal_at, trash_at) = (icon_at(4), icon_at(5));
             let reveal = ui.interact(icon_rect(reveal_at), reveal_id(&entry.path), egui::Sense::click());
             let sense = if idle { egui::Sense::click() } else { egui::Sense::hover() };
             let trash = ui.interact(icon_rect(trash_at), delete_id(&entry.path), sense);
             let selected = Some(&entry.path) == self.library.selected.as_ref();
-            let fill = if selected { NAV_SELECTED } else if response.hovered() || reveal.hovered() || trash.hovered() { NAV_HOVER } else { egui::Color32::TRANSPARENT };
+            let fill = if selected {
+                NAV_SELECTED
+            } else if response.hovered() || reveal.hovered() || trash.hovered() {
+                NAV_HOVER
+            } else {
+                egui::Color32::TRANSPARENT
+            };
             ui.painter().rect_filled(rect, 10.0, fill);
             let text_color = ui.visuals().text_color();
             let cells = [entry.device_label().to_string(), entry.taken_label(), backups::size_label(entry.size)];
@@ -1378,11 +1478,16 @@ impl App {
             if response.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 clicked = Some(i);
             }
-            if reveal.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr!("backup.reveal_hint")).clicked() {
+            if reveal.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tr!("backup.reveal_hint")).clicked()
+            {
                 let _ = entry.path.parent().map(open_path);
             }
-            if idle && trash.on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(tr!("backup.delete_hint")).clicked() {
+            if idle
+                && trash
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(tr!("backup.delete_hint"))
+                    .clicked()
+            {
                 delete = Some(i);
             }
         }
@@ -1408,8 +1513,14 @@ impl App {
         match entry.device.and_then(|device| self.maps.get(&entry.path, device, ui.ctx())) {
             Some(map) => {
                 let colors = nandmap::Colors {
-                    uboot: MAP_UBOOT, env: MAP_ENV, system_config: MAP_SYSTEM_CONFIG,
-                    root0: MAP_ROOT0, root1: MAP_ROOT1, other: MAP_OTHER, erased: MAP_ERASED, bad: BAD,
+                    uboot: MAP_UBOOT,
+                    env: MAP_ENV,
+                    system_config: MAP_SYSTEM_CONFIG,
+                    root0: MAP_ROOT0,
+                    root1: MAP_ROOT1,
+                    other: MAP_OTHER,
+                    erased: MAP_ERASED,
+                    bad: BAD,
                 };
                 nandmap::draw(ui, &map, colors);
                 nandmap::legend(ui, &map, colors);
@@ -1425,8 +1536,12 @@ impl App {
         ui.add_space(2.0);
         ui.label(egui::RichText::new("SHA-256").size(11.0).color(DIM));
         match &entry.checksum {
-            Some(sum) => { ui.add(egui::Label::new(egui::RichText::new(sum).monospace().size(11.5).color(MUTED)).wrap()); }
-            None => { ui.label(egui::RichText::new(tr!("backup.checksum_required")).size(12.0).color(WARN)); }
+            Some(sum) => {
+                ui.add(egui::Label::new(egui::RichText::new(sum).monospace().size(11.5).color(MUTED)).wrap());
+            }
+            None => {
+                ui.label(egui::RichText::new(tr!("backup.checksum_required")).size(12.0).color(WARN));
+            }
         }
         ui.add(egui::Label::new(egui::RichText::new(short_path(&entry.path)).size(11.5).color(DIM)).wrap());
         let idle = self.idle();
@@ -1434,14 +1549,20 @@ impl App {
             // As wide as the page's other actions, within the pane's margin;
             // laid out in a row, as theirs are, so its label is centred.
             let size = egui::vec2(BACKUPS_BUTTON, BUTTON_HEIGHT);
-            let restore = ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center),
-                |ui| accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)).inner;
-            if restore.on_hover_text(tr!("backup.restore_hint"))
+            let restore = ui
+                .allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    accent_button_sized(ui, tr!("backup.restore"), idle && entry.checksum.is_some(), size)
+                })
+                .inner;
+            if restore
+                .on_hover_text(tr!("backup.restore_hint"))
                 .on_disabled_hover_text(if entry.checksum.is_none() {
                     tr!("backup.restore_disabled_checksum")
                 } else {
                     tr!("run.disabled_busy")
-                }).clicked() {
+                })
+                .clicked()
+            {
                 self.start(Task::Restore(entry.path.clone()));
             }
         });
@@ -1462,11 +1583,19 @@ impl App {
         let (bar, _) = ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::hover());
         ui.painter().rect_filled(bar, 10.0, setup::TRACK);
         if fraction > 0.0 {
-            let lit = egui::Rect::from_min_size(bar.min, egui::vec2((bar.width() * fraction.min(1.0)).max(bar.height()), bar.height()));
+            let lit = egui::Rect::from_min_size(
+                bar.min,
+                egui::vec2((bar.width() * fraction.min(1.0)).max(bar.height()), bar.height()),
+            );
             ui.painter().rect_filled(lit, 10.0, ACCENT.gamma_multiply(0.8));
         }
-        ui.painter().text(bar.center(), egui::Align2::CENTER_CENTER, tr!("transfer.percent", percent = format!("{:.0}", fraction * 100.0)),
-                          medium(12.0), ui.visuals().strong_text_color());
+        ui.painter().text(
+            bar.center(),
+            egui::Align2::CENTER_CENTER,
+            tr!("transfer.percent", percent = format!("{:.0}", fraction * 100.0)),
+            medium(12.0),
+            ui.visuals().strong_text_color(),
+        );
         if let Some(t) = &self.logs.transfer {
             let (size, speed, left) = transfer_texts(position(t), t.next, t.total, t.speed());
             let font = egui::FontId::proportional(11.5);
@@ -1491,15 +1620,14 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if setup::small_button(ui, tr!("logs.delete_old"), Look::Secondary, !self.history.is_empty())
                     .on_hover_text(tr!("logs.delete_old_hint"))
-                    .clicked() {
+                    .clicked()
+                {
                     self.delete_logs = true;
                 }
             });
         });
         ui.add_space(2.0);
-        ui.label(egui::RichText::new(
-            tr!("logs.description"))
-            .color(MUTED));
+        ui.label(egui::RichText::new(tr!("logs.description")).color(MUTED));
         ui.add_space(10.0);
         // The list keeps one width; the run pane takes the rest.
         let rows = self.history_rows();
@@ -1509,8 +1637,12 @@ impl App {
         let list_width = columns.iter().sum::<f32>() + HISTORY_GAP * 2.0 + 8.0;
         let pane_width = (ui.available_width() - list_width - 6.0).max(200.0);
         let frame = egui::Frame::new().fill(CARD).corner_radius(14).inner_margin(egui::Margin::same(16));
-        egui::Panel::right("run_pane").exact_size(pane_width).resizable(false).show_separator_line(false)
-            .frame(frame).show(ui, |ui| self.run_pane(ui));
+        egui::Panel::right("run_pane")
+            .exact_size(pane_width)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(frame)
+            .show(ui, |ui| self.run_pane(ui));
         egui::ScrollArea::vertical().id_salt("history").auto_shrink([false, false]).show(ui, |ui| {
             ui.set_width(ui.available_width() - 6.0);
             self.history_table(ui, rows, columns);
@@ -1522,7 +1654,8 @@ impl App {
     /// out. Each: the folder's stamp (None for the live run), when, the
     /// task, the result and its colour.
     fn history_rows(&self) -> Vec<HistoryRow> {
-        let live_stamp = unfr0zen_host::log_path().and_then(|p| p.parent()?.file_name().map(|n| n.to_string_lossy().into_owned()));
+        let live_stamp =
+            unfr0zen_host::log_path().and_then(|p| p.parent()?.file_name().map(|n| n.to_string_lossy().into_owned()));
         let live = self.task.as_ref().filter(|_| self.live_listed()).map(|task| {
             let (result, color) = match (&self.logs.outcome, self.running()) {
                 (_, true) => (tr!("logs.running"), ACCENT),
@@ -1532,12 +1665,15 @@ impl App {
             };
             (None::<String>, tr!("logs.now").to_string(), task.title().to_string(), result, color)
         });
-        live.into_iter().chain(
-            self.history.iter().filter(|r| self.task.is_none() || Some(&r.stamp) != live_stamp.as_ref()).map(|run| {
-                let (result, color) = if run.ok() { (tr!("logs.ok"), OK) } else { (tr!("logs.failed"), BAD) };
-                let when = tr!("logs.run_when", when = run.when, seconds = format!("{:.0}", run.elapsed()));
-                (Some(run.stamp.clone()), when, run.title().to_string(), result, color)
-            })).collect()
+        live.into_iter()
+            .chain(self.history.iter().filter(|r| self.task.is_none() || Some(&r.stamp) != live_stamp.as_ref()).map(
+                |run| {
+                    let (result, color) = if run.ok() { (tr!("logs.ok"), OK) } else { (tr!("logs.failed"), BAD) };
+                    let when = tr!("logs.run_when", when = run.when, seconds = format!("{:.0}", run.elapsed()));
+                    (Some(run.stamp.clone()), when, run.title().to_string(), result, color)
+                },
+            ))
+            .collect()
     }
 
     /// One row per run, the live one first, the shown one lit, in columns
@@ -1548,9 +1684,18 @@ impl App {
         let width = ui.available_width();
         let (header, _) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::hover());
         let mut x = header.left() + HISTORY_PAD;
-        for (title, w) in [(tr!("logs.run_column"), when_width), (tr!("logs.task_column"), task_width), (tr!("logs.result_column"), result_width)] {
-            ui.painter().text(egui::pos2(x, header.center().y), egui::Align2::LEFT_CENTER, title.to_uppercase(),
-                              egui::FontId::proportional(HISTORY_HEADER_FONT), setup::LABEL);
+        for (title, w) in [
+            (tr!("logs.run_column"), when_width),
+            (tr!("logs.task_column"), task_width),
+            (tr!("logs.result_column"), result_width),
+        ] {
+            ui.painter().text(
+                egui::pos2(x, header.center().y),
+                egui::Align2::LEFT_CENTER,
+                title.to_uppercase(),
+                egui::FontId::proportional(HISTORY_HEADER_FONT),
+                setup::LABEL,
+            );
             x += w + HISTORY_GAP;
         }
         ui.painter().hline(header.x_range(), header.bottom(), egui::Stroke::new(1.0, LINE));
@@ -1564,7 +1709,13 @@ impl App {
         for (stamp, when, task, result, color) in rows {
             let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ROW), egui::Sense::click());
             let selected = stamp == self.history_selected && (stamp.is_some() || self.task.is_some());
-            let fill = if selected { NAV_SELECTED } else if response.hovered() { NAV_HOVER } else { egui::Color32::TRANSPARENT };
+            let fill = if selected {
+                NAV_SELECTED
+            } else if response.hovered() {
+                NAV_HOVER
+            } else {
+                egui::Color32::TRANSPARENT
+            };
             ui.painter().rect_filled(rect, 10.0, fill);
             let mut x = rect.left() + HISTORY_PAD;
             let font = if stamp.is_none() { medium(HISTORY_FONT) } else { egui::FontId::proportional(HISTORY_FONT) };
@@ -1598,8 +1749,12 @@ impl App {
             _ => None,
         };
         let (title, subtitle) = match (&run, live) {
-            (Some(run), _) => (run.title().to_string(), tr!("logs.run_version", when = run.when, version = run.version)),
-            (None, true) => (self.task.as_ref().map(Task::title).unwrap_or_default().to_string(), tr!("logs.now").to_string()),
+            (Some(run), _) => {
+                (run.title().to_string(), tr!("logs.run_version", when = run.when, version = run.version))
+            }
+            (None, true) => {
+                (self.task.as_ref().map(Task::title).unwrap_or_default().to_string(), tr!("logs.now").to_string())
+            }
             _ => {
                 ui.label(egui::RichText::new(tr!("logs.select")).color(MUTED));
                 return;
@@ -1609,8 +1764,12 @@ impl App {
         ui.label(egui::RichText::new(subtitle).size(11.0).color(MUTED));
         ui.add_space(2.0);
         let steps_height = (top_end - ui.cursor().top()).max(40.0);
-        egui::ScrollArea::vertical().id_salt("run_steps").max_height(steps_height).auto_shrink([false, true])
-            .stick_to_bottom(live).show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("run_steps")
+            .max_height(steps_height)
+            .auto_shrink([false, true])
+            .stick_to_bottom(live)
+            .show(ui, |ui| {
                 ui.set_width(ui.available_width() - 12.0);
                 // The live run and a past one read the same.
                 ui.style_mut().text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(RUN_STEP_FONT));
@@ -1623,7 +1782,10 @@ impl App {
                             outcome_mark(ui, step.ok, 14.0);
                             ui.label(&step.label);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", step.elapsed))).color(DIM));
+                                ui.label(
+                                    egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", step.elapsed)))
+                                        .color(DIM),
+                                );
                             });
                         });
                     }
@@ -1637,13 +1799,19 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(path) = &path {
                     if setup::small_button(ui, tr!("logs.reveal"), Look::Secondary, true)
-                        .on_hover_text(tr!("logs.reveal_hint")).clicked() {
+                        .on_hover_text(tr!("logs.reveal_hint"))
+                        .clicked()
+                    {
                         let _ = path.parent().map(open_path);
                     }
                 }
                 let width = ui.available_width();
-                setup::small_boxed(ui, egui::TextEdit::singleline(&mut self.log_filter).hint_text(tr!("logs.filter")), width)
-                    .on_hover_text(tr!("logs.filter_hint"));
+                setup::small_boxed(
+                    ui,
+                    egui::TextEdit::singleline(&mut self.log_filter).hint_text(tr!("logs.filter")),
+                    width,
+                )
+                .on_hover_text(tr!("logs.filter_hint"));
             });
         });
         // The log is read once per run shown; the live one again each frame
@@ -1667,9 +1835,14 @@ impl App {
         let frame = egui::Frame::new().fill(STATUS).corner_radius(10).inner_margin(egui::Margin::same(10));
         frame.show(ui, |ui| {
             ui.set_min_height(ui.available_height() - 20.0);
-            egui::ScrollArea::both().id_salt("run_log").auto_shrink([false, false]).stick_to_bottom(live).show(ui, |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(shown).monospace().size(11.0)).extend().selectable(true));
-            });
+            egui::ScrollArea::both().id_salt("run_log").auto_shrink([false, false]).stick_to_bottom(live).show(
+                ui,
+                |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(shown).monospace().size(11.0)).extend().selectable(true),
+                    );
+                },
+            );
         });
     }
 
@@ -1695,7 +1868,8 @@ impl App {
         });
         match response.inner {
             Some(true) => {
-                let live = unfr0zen_host::log_path().and_then(|p| p.parent()?.file_name().map(|n| n.to_string_lossy().into_owned()));
+                let live = unfr0zen_host::log_path()
+                    .and_then(|p| p.parent()?.file_name().map(|n| n.to_string_lossy().into_owned()));
                 logs::delete_older(&self.history, LOG_RETENTION, live.as_deref());
                 self.refresh_history();
                 self.delete_logs = false;
@@ -1707,8 +1881,7 @@ impl App {
     }
 
     fn terminal_page(&mut self, ui: &mut egui::Ui) {
-        page_header(ui, tr!("page.terminal"),
-            tr!("console.description"));
+        page_header(ui, tr!("page.terminal"), tr!("console.description"));
         ui.add_space(8.0);
         let idle = !self.running() && !self.uboot.connected() && self.pending_image.is_none();
         self.shell.ui(ui, idle);
@@ -1716,9 +1889,7 @@ impl App {
 
     /// Recovery U-Boot: loaded over USB, then its prompt in the terminal.
     fn uboot_page(&mut self, ui: &mut egui::Ui) {
-        self.command_page(ui, Task::Uboot,
-            tr!("uboot.description"),
-            tr!("task.uboot"));
+        self.command_page(ui, Task::Uboot, tr!("uboot.description"), tr!("task.uboot"));
         ui.add_space(10.0);
         let idle = !self.running() && !self.shell.connected() && self.pending_image.is_none();
         self.uboot.ui(ui, idle);
@@ -1735,7 +1906,10 @@ impl App {
         page_header(ui, task.title(), about);
         let bus = self.bus.current();
         let devices = command_devices(&task);
-        let other = match &bus { Bus::One(seen) if !devices.contains(&seen.device) => Some(seen.device), _ => None };
+        let other = match &bus {
+            Bus::One(seen) if !devices.contains(&seen.device) => Some(seen.device),
+            _ => None,
+        };
         let disabled = if task == Task::Boot { tr!("command.disabled_learning") } else { tr!("command.disabled") };
         ui.add_space(8.0);
         // Boot takes every generation there is to name.
@@ -1751,7 +1925,8 @@ impl App {
             if accent_button(ui, button, self.idle() && self.command_target_on_bus(&task))
                 .on_hover_text(about)
                 .on_disabled_hover_text(disabled)
-                .clicked() {
+                .clicked()
+            {
                 self.start(task.clone());
             }
             // Booting says how it went on its card and in the status bar.
@@ -1800,8 +1975,13 @@ impl App {
             // the card's most: inside a card an area only grows when asked,
             // and a scroll region never asks.
             let height = self.card_height.clamp(ui.spacing().interact_size.y, POPUP_MAX_HEIGHT);
-            let scroll = egui::ScrollArea::vertical().id_salt("run_popup_steps").min_scrolled_height(height).max_height(height)
-                .auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+            let scroll = egui::ScrollArea::vertical()
+                .id_salt("run_popup_steps")
+                .min_scrolled_height(height)
+                .max_height(height)
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
                     ui.set_width(ui.available_width() - 12.0);
                     // The action in place of the word Device, before the unit;
                     // a failed run's close button at the right.
@@ -1809,11 +1989,17 @@ impl App {
                         ui.label(egui::RichText::new(doing).font(medium(14.0)).color(MUTED));
                         if let Some(device) = &self.logs.device {
                             // One line always: cut at what the close button leaves.
-                            let room = ui.available_width() - if failed { CLOSE_SIZE + ui.spacing().item_spacing.x } else { 0.0 };
+                            let room = ui.available_width()
+                                - if failed { CLOSE_SIZE + ui.spacing().item_spacing.x } else { 0.0 };
                             let height = ui.spacing().interact_size.y;
-                            ui.allocate_ui_with_layout(egui::vec2(room, height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.add(egui::Label::new(egui::RichText::new(device).strong()).truncate()).on_hover_text(device);
-                            });
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(room, height),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.add(egui::Label::new(egui::RichText::new(device).strong()).truncate())
+                                        .on_hover_text(device);
+                                },
+                            );
                         }
                         if failed {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1829,7 +2015,8 @@ impl App {
                         self.nand_progress(ui);
                     }
                     if failed && self.logged {
-                        let link = egui::Label::new(egui::RichText::new(tr!("run.logs_link")).size(12.5).color(ACCENT)).sense(egui::Sense::click());
+                        let link = egui::Label::new(egui::RichText::new(tr!("run.logs_link")).size(12.5).color(ACCENT))
+                            .sense(egui::Sense::click());
                         to_logs = ui.add(link).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
                     }
                 });
@@ -1873,7 +2060,8 @@ impl App {
             ui.add_space(14.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked()
-            }).inner
+            })
+            .inner
         });
         if response.inner || response.should_close() {
             if let Some(run) = &self.run {
@@ -1887,21 +2075,23 @@ impl App {
     fn confirm_ui(&mut self, ctx: &egui::Context) {
         let Some((question, _)) = &self.confirm else { return };
         let question = question.clone();
-        let answer = backdrop::modal(ctx, "confirm_restore").show(ctx, |ui| {
-            ui.set_max_width(320.0);
-            dialog_title(ui, tr!("backup.restore_title"));
-            ui.add(egui::Label::new(question).wrap());
-            let mut answer = None;
-            ui.horizontal(|ui| {
-                if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
-                    answer = Some(false);
-                }
-                if setup::page_button(ui, tr!("backup.erase_restore"), Look::Danger, true).clicked() {
-                    answer = Some(true);
-                }
-            });
-            answer
-        }).inner;
+        let answer = backdrop::modal(ctx, "confirm_restore")
+            .show(ctx, |ui| {
+                ui.set_max_width(320.0);
+                dialog_title(ui, tr!("backup.restore_title"));
+                ui.add(egui::Label::new(question).wrap());
+                let mut answer = None;
+                ui.horizontal(|ui| {
+                    if setup::page_button(ui, tr!("common.cancel"), Look::Secondary, true).clicked() {
+                        answer = Some(false);
+                    }
+                    if setup::page_button(ui, tr!("backup.erase_restore"), Look::Danger, true).clicked() {
+                        answer = Some(true);
+                    }
+                });
+                answer
+            })
+            .inner;
         if let Some(yes) = answer {
             if let Some((_, reply)) = self.confirm.take() {
                 let _ = reply.send(yes);
@@ -1969,7 +2159,10 @@ impl App {
                 // A running step counts up, repainted with the window.
                 let elapsed = row.done.map_or_else(|| row.started.elapsed(), |(elapsed, _)| elapsed);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", elapsed.as_secs_f64()))).color(DIM));
+                    ui.label(
+                        egui::RichText::new(tr!("run.elapsed", seconds = format!("{:.1}", elapsed.as_secs_f64())))
+                            .color(DIM),
+                    );
                 });
             });
         }
@@ -1997,7 +2190,9 @@ impl App {
 }
 
 fn text_of(outcome: &Result<String, String>) -> String {
-    match outcome { Ok(t) | Err(t) => t.clone() }
+    match outcome {
+        Ok(t) | Err(t) => t.clone(),
+    }
 }
 
 /// A dialog's question, in the display cut.
@@ -2023,12 +2218,18 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
     };
     match page {
         // A bolt.
-        Page::SetUp => path(&[(1.0, -6.0), (-4.0, 1.0), (0.0, 1.0), (-1.0, 6.0), (4.0, -1.0), (0.0, -1.0), (1.0, -6.0)]),
+        Page::SetUp => {
+            path(&[(1.0, -6.0), (-4.0, 1.0), (0.0, 1.0), (-1.0, 6.0), (4.0, -1.0), (0.0, -1.0), (1.0, -6.0)])
+        }
         // Two drives.
         Page::Backups => {
             for y in [-5.0, 1.0] {
-                painter.rect_stroke(egui::Rect::from_min_size(p(-6.0, y), egui::vec2(12.0, 4.0)), 1.0, stroke,
-                                    egui::StrokeKind::Middle);
+                painter.rect_stroke(
+                    egui::Rect::from_min_size(p(-6.0, y), egui::vec2(12.0, 4.0)),
+                    1.0,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
             }
         }
         // Lines of text.
@@ -2044,17 +2245,24 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
         }
         // An "i" in a ring.
         Page::About => {
-            let ring: Vec<(f32, f32)> = (0..=32).map(|i| {
-                let a = 2.0 * std::f32::consts::PI * i as f32 / 32.0;
-                (6.0 * a.cos(), 6.0 * a.sin())
-            }).collect();
+            let ring: Vec<(f32, f32)> = (0..=32)
+                .map(|i| {
+                    let a = 2.0 * std::f32::consts::PI * i as f32 / 32.0;
+                    (6.0 * a.cos(), 6.0 * a.sin())
+                })
+                .collect();
             path(&ring);
             path(&[(0.0, -0.5), (0.0, 3.0)]);
             painter.circle_filled(p(0.0, -3.0), 1.0, color);
         }
         // A chip with its pins.
         Page::Uboot => {
-            painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0)), 1.0, stroke, egui::StrokeKind::Middle);
+            painter.rect_stroke(
+                egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
+                1.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
             for at in [-2.0, 2.0] {
                 path(&[(at, -6.5), (at, -4.0)]);
                 path(&[(at, 4.0), (at, 6.5)]);
@@ -2064,10 +2272,14 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
         }
         // A lifebuoy: two rings, the bands between them on the diagonals.
         Page::Boot => {
-            let ring = |r: f32| (0..=32).map(|i| {
-                let a = 2.0 * std::f32::consts::PI * i as f32 / 32.0;
-                (r * a.cos(), r * a.sin())
-            }).collect::<Vec<_>>();
+            let ring = |r: f32| {
+                (0..=32)
+                    .map(|i| {
+                        let a = 2.0 * std::f32::consts::PI * i as f32 / 32.0;
+                        (r * a.cos(), r * a.sin())
+                    })
+                    .collect::<Vec<_>>()
+            };
             path(&ring(6.0));
             path(&ring(2.5));
             let d = std::f32::consts::FRAC_1_SQRT_2;
@@ -2102,7 +2314,10 @@ const ROW_ICON_SCALE: f32 = 10.0 / 12.0;
 /// A folder, a line drawing centred on `c`.
 fn folder_icon(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
     let points = [(-6.0, -4.5), (-2.0, -4.5), (-0.5, -2.5), (6.0, -2.5), (6.0, 4.5), (-6.0, 4.5), (-6.0, -4.5)];
-    painter.add(egui::Shape::line(points.iter().map(|&(x, y)| c + ROW_ICON_SCALE * egui::vec2(x, y)).collect(), egui::Stroke::new(1.25, color)));
+    painter.add(egui::Shape::line(
+        points.iter().map(|&(x, y)| c + ROW_ICON_SCALE * egui::vec2(x, y)).collect(),
+        egui::Stroke::new(1.25, color),
+    ));
 }
 
 /// A trash can, a line drawing centred on `c`.
@@ -2117,7 +2332,10 @@ fn trash_icon(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
         &[(-1.25, -1.0), (-1.25, 3.5)],
         &[(1.25, -1.0), (1.25, 3.5)],
     ] {
-        painter.add(egui::Shape::line(points.iter().map(|&(x, y)| c + ROW_ICON_SCALE * egui::vec2(x, y)).collect(), stroke));
+        painter.add(egui::Shape::line(
+            points.iter().map(|&(x, y)| c + ROW_ICON_SCALE * egui::vec2(x, y)).collect(),
+            stroke,
+        ));
     }
 }
 
@@ -2156,7 +2374,11 @@ fn glint_phase(time: f64) -> f64 {
         return since_first;
     }
     let phase = since_first.rem_euclid(GLINT_PERIOD);
-    if phase < GLINT_CROSSING { phase } else { phase - GLINT_PERIOD }
+    if phase < GLINT_CROSSING {
+        phase
+    } else {
+        phase - GLINT_PERIOD
+    }
 }
 
 /// The colour at `time` of the name's letter at `index`: white under the
@@ -2184,15 +2406,18 @@ pub(crate) fn name_heading(ui: &mut egui::Ui, text: &str) {
         leading_space: 0.0,
         byte_range: egui::text::ByteIndex(0)..egui::text::ByteIndex(start),
         format: egui::TextFormat::simple(font.clone(), ui.visuals().strong_text_color()),
-    }).chain((0..NAME.len()).map(|index| egui::text::LayoutSection {
+    })
+    .chain((0..NAME.len()).map(|index| egui::text::LayoutSection {
         leading_space: 0.0,
         byte_range: egui::text::ByteIndex(start + index)..egui::text::ByteIndex(start + index + 1),
         format: egui::TextFormat::simple(font.clone(), name_color(index, time)),
-    })).chain(std::iter::once(egui::text::LayoutSection {
+    }))
+    .chain(std::iter::once(egui::text::LayoutSection {
         leading_space: 0.0,
         byte_range: egui::text::ByteIndex(start + NAME.len())..egui::text::ByteIndex(text.len()),
         format: egui::TextFormat::simple(font.clone(), ui.visuals().strong_text_color()),
-    })).collect();
+    }))
+    .collect();
     let zero = text[..start + NAME_ZERO].chars().count();
     slashed_zero_label(ui, job, zero, font.size, name_color(NAME_ZERO, time));
     ui.ctx().request_repaint_after(glint_wait(time));
@@ -2206,9 +2431,13 @@ fn slashed_zero_label(ui: &mut egui::Ui, job: egui::text::LayoutJob, zero: usize
     let glyph = galley.rows.iter().flat_map(|row| row.glyphs.iter().map(move |glyph| (row.pos, glyph))).nth(zero);
     ui.painter().galley(rect.min, galley.clone(), color);
     if let Some((row, glyph)) = glyph {
-        let ink = egui::Rect::from_min_size(rect.min + row.to_vec2() + glyph.pos.to_vec2() + glyph.uv_rect.offset, glyph.uv_rect.size);
+        let ink = egui::Rect::from_min_size(
+            rect.min + row.to_vec2() + glyph.pos.to_vec2() + glyph.uv_rect.offset,
+            glyph.uv_rect.size,
+        );
         let stroke = egui::Stroke::new(size * 0.06, color);
-        ui.painter().line_segment([ink.lerp_inside(egui::vec2(0.3, 0.78)), ink.lerp_inside(egui::vec2(0.7, 0.22))], stroke);
+        ui.painter()
+            .line_segment([ink.lerp_inside(egui::vec2(0.3, 0.78)), ink.lerp_inside(egui::vec2(0.7, 0.22))], stroke);
     }
 }
 
@@ -2216,7 +2445,11 @@ fn slashed_zero_label(ui: &mut egui::Ui, job: egui::text::LayoutJob, zero: usize
 /// a smooth frame rate while it crosses.
 fn glint_wait(time: f64) -> Duration {
     let phase = glint_phase(time);
-    if phase < 0.0 { Duration::from_secs_f64(-phase) } else { Duration::from_millis(33) }
+    if phase < 0.0 {
+        Duration::from_secs_f64(-phase)
+    } else {
+        Duration::from_millis(33)
+    }
 }
 
 fn bus_color(bus: &Bus) -> egui::Color32 {
@@ -2228,8 +2461,13 @@ fn bus_color(bus: &Bus) -> egui::Color32 {
 }
 
 /// `text` on one line, cut with an ellipsis at `max_width`.
-pub(crate) fn truncated(ui: &egui::Ui, text: String, font: egui::FontId, color: egui::Color32, max_width: f32)
-             -> std::sync::Arc<egui::Galley> {
+pub(crate) fn truncated(
+    ui: &egui::Ui,
+    text: String,
+    font: egui::FontId,
+    color: egui::Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(max_width);
     ui.fonts_mut(|f| f.layout_job(job))
@@ -2244,7 +2482,11 @@ fn pill(ui: &mut egui::Ui, text: &str, fg: egui::Color32, bg: egui::Color32, cli
     let (rect, response) = ui.allocate_exact_size(size, sense);
     ui.painter().rect(rect, 5.0, bg, egui::Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() * 0.5, galley, fg);
-    if click { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response }
+    if click {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    }
 }
 
 /// A rounded tag painted with its left edge at `left`, centred on its y.
@@ -2280,7 +2522,6 @@ fn close_button(ui: &mut egui::Ui) -> egui::Response {
     response
 }
 
-
 /// A small status dot.
 fn dot(ui: &mut egui::Ui, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
@@ -2312,14 +2553,23 @@ fn transfer_texts(done: u64, next: u64, total: u64, rate: Option<f64>) -> (Strin
     let size = tr!("transfer.size", done = done_size, total = total_size);
     let Some(rate) = rate.filter(|r| *r > 0.0) else {
         let size = if next > 0 {
-            tr!("transfer.size_under_way", done = done_size, total = total_size, next = format!("{:.1}", next as f64 / MIB))
+            tr!(
+                "transfer.size_under_way",
+                done = done_size,
+                total = total_size,
+                next = format!("{:.1}", next as f64 / MIB)
+            )
         } else {
             size
         };
         return (size, String::new(), String::new());
     };
     let left = (total.saturating_sub(done) as f64 / rate).round() as u64;
-    let left = if left >= 60 { tr!("transfer.minutes_left", minutes = left / 60, seconds = format!("{:02}", left % 60)) } else { tr!("transfer.seconds_left", seconds = left) };
+    let left = if left >= 60 {
+        tr!("transfer.minutes_left", minutes = left / 60, seconds = format!("{:02}", left % 60))
+    } else {
+        tr!("transfer.seconds_left", seconds = left)
+    };
     (size, tr!("transfer.speed", speed = format!("{:.1}", rate / MIB)), left)
 }
 
@@ -2337,7 +2587,10 @@ fn outcome_mark(ui: &mut egui::Ui, ok: bool, size: f32) {
     } else {
         let pad = egui::vec2(2.5, 2.5);
         painter.line_segment([rect.left_top() + pad, rect.right_bottom() - pad], stroke);
-        painter.line_segment([rect.right_top() + egui::vec2(-pad.x, pad.y), rect.left_bottom() + egui::vec2(pad.x, -pad.y)], stroke);
+        painter.line_segment(
+            [rect.right_top() + egui::vec2(-pad.x, pad.y), rect.left_bottom() + egui::vec2(pad.x, -pad.y)],
+            stroke,
+        );
     }
 }
 
@@ -2394,17 +2647,24 @@ fn caption_buttons(ui: &mut egui::Ui) {
 fn prefer_dx12(options: &mut eframe::NativeOptions) {
     use eframe::egui_wgpu::WgpuSetup;
     use eframe::wgpu;
-    let WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup else { return };
-    setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
-        let rank = |adapter: &&wgpu::Adapter| {
-            let info = adapter.get_info();
-            (info.backend != wgpu::Backend::Dx12, info.device_type == wgpu::DeviceType::Cpu)
-        };
-        let chosen = adapters.iter().filter(|adapter| surface.is_none_or(|surface| adapter.is_surface_supported(surface)))
-            .min_by_key(rank).cloned().ok_or_else(|| "no graphics adapter can draw to the window".to_string())?;
-        log::info!("Graphics adapter: {:?} on {:?}", chosen.get_info().name, chosen.get_info().backend);
-        Ok(chosen)
-    }));
+    let WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup else {
+        return;
+    };
+    setup.native_adapter_selector =
+        Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
+            let rank = |adapter: &&wgpu::Adapter| {
+                let info = adapter.get_info();
+                (info.backend != wgpu::Backend::Dx12, info.device_type == wgpu::DeviceType::Cpu)
+            };
+            let chosen = adapters
+                .iter()
+                .filter(|adapter| surface.is_none_or(|surface| adapter.is_surface_supported(surface)))
+                .min_by_key(rank)
+                .cloned()
+                .ok_or_else(|| "no graphics adapter can draw to the window".to_string())?;
+            log::info!("Graphics adapter: {:?} on {:?}", chosen.get_info().name, chosen.get_info().backend);
+            Ok(chosen)
+        }));
 }
 
 /// Windows 11 rounds only framed windows' corners by itself; rounds this
@@ -2414,13 +2674,19 @@ fn round_corners(cc: &eframe::CreationContext<'_>) {
     use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
     let Ok(handle) = cc.window_handle() else { return };
-    let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
+    let RawWindowHandle::Win32(window) = handle.as_raw() else {
+        return;
+    };
     let preference = DWMWCP_ROUND;
     // SAFETY: the handle is the live main window's; the attribute takes a
     // DWM_WINDOW_CORNER_PREFERENCE, read for its size.
     unsafe {
-        DwmSetWindowAttribute(window.hwnd.get(), DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-                              (&preference as *const i32).cast(), std::mem::size_of::<i32>() as u32);
+        DwmSetWindowAttribute(
+            window.hwnd.get(),
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&preference as *const i32).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
     }
 }
 
@@ -2430,7 +2696,13 @@ mod tests {
 
     /// One unit of `device` on USB, running its application.
     fn on_usb(device: Device) -> Watcher {
-        Watcher::fixed(Bus::One(bus::Seen { device, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }))
+        Watcher::fixed(Bus::One(bus::Seen {
+            device,
+            mode: "app",
+            port: "1".into(),
+            id: (0x2464, 0x0030),
+            serial: None,
+        }))
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -2451,19 +2723,26 @@ mod tests {
         install_fonts(&context);
         let mut output = None;
         for _ in 0..frames {
-            output = Some(context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))),
-                ..Default::default()
-            }, |ui| app.frame_ui(ui)));
+            output = Some(context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size[0], size[1]))),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            ));
         }
         output.unwrap()
     }
 
     fn texts(output: &egui::FullOutput) -> Vec<String> {
-        output.shapes.iter().filter_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
-            _ => None,
-        }).collect()
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -2547,23 +2826,39 @@ mod tests {
         let release = || App { steps_without_unit: false, ..App::default() };
         let continue_enabled = |app: &mut App| {
             let output = render_frames(app, WINDOW, 2);
-            let label = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(t) if t.galley.job.text == "Continue" => Some(t.galley.job.sections[0].format.color),
-                _ => None,
-            }).expect("Continue is drawn");
+            let label = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if t.galley.job.text == "Continue" => {
+                        Some(t.galley.job.sections[0].format.color)
+                    }
+                    _ => None,
+                })
+                .expect("Continue is drawn");
             label == ON_ACCENT
         };
         assert!(!continue_enabled(&mut release()), "nothing on USB");
         assert!(!continue_enabled(&mut App { bus: on_usb(Device::Onyx), ..release() }), "a Thermostat E");
         assert!(continue_enabled(&mut App { bus: on_usb(Device::J49), ..release() }));
-        assert!(continue_enabled(&mut App { steps_without_unit: true, ..App::default() }), "a debug build goes on without one");
+        assert!(
+            continue_enabled(&mut App { steps_without_unit: true, ..App::default() }),
+            "a debug build goes on without one"
+        );
         let mut app = App { step: setup::Step::Features, ..release() };
         render_frames(&mut app, WINDOW, 1);
         assert_eq!(app.screen_name(), "Step(Connect)", "unplugged before the run");
         let mut running = App { step: setup::Step::Review, flow_run: true, task: Some(Task::SetUp), ..App::default() };
-        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        running.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         render_frames(&mut running, WINDOW, 1);
-        assert_eq!((running.step, running.screen_name().as_str()), (setup::Step::Review, "Running"), "a run re-enumerates the unit");
+        assert_eq!(
+            (running.step, running.screen_name().as_str()),
+            (setup::Step::Review, "Running"),
+            "a run re-enumerates the unit"
+        );
     }
 
     #[test]
@@ -2573,10 +2868,14 @@ mod tests {
         app.form.usb_shell = true;
         app.form.doom = true;
         let output = render_frames(&mut app, [WINDOW[0], WINDOW[1]], 2);
-        let extras = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("SSH · ") => Some(t.galley.clone()),
-            _ => None,
-        }).expect("the extras are listed");
+        let extras = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("SSH · ") => Some(t.galley.clone()),
+                _ => None,
+            })
+            .expect("the extras are listed");
         assert_eq!(extras.job.text, "SSH · USB console · Doom");
         assert!(!extras.elided, "not cut");
     }
@@ -2623,7 +2922,8 @@ mod tests {
 
     #[test]
     fn done_lists_a_next_step_per_integration_chosen() {
-        let mut app = App { flow_run: true, task: Some(Task::SetUp), flow_backup: Some("nand-1.bin".into()), ..App::default() };
+        let mut app =
+            App { flow_run: true, task: Some(Task::SetUp), flow_backup: Some("nand-1.bin".into()), ..App::default() };
         app.form.matter.on = true;
         app.logs.outcome = Some(Ok("set up".into()));
         assert_eq!(app.screen_name(), "Done");
@@ -2642,16 +2942,30 @@ mod tests {
         app.form.matter.on = true;
         app.form.matter.code = "1559-813-5764".into();
         app.start_flow();
-        assert!(matches!(&app.task, Some(Task::BackupSetUp(out)) if out.parent() == Some(dir.as_path())), "{:?}", app.task);
+        assert!(
+            matches!(&app.task, Some(Task::BackupSetUp(out)) if out.parent() == Some(dir.as_path())),
+            "{:?}",
+            app.task
+        );
         assert_eq!(app.screen_name(), "Failed");
         assert!(app.flow_backup.is_none(), "no backup was written");
         let out = dir.join("nand.bin");
         let mut app = App { flow_run: true, task: Some(Task::BackupSetUp(out.clone())), ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         use unfr0zen_host::Phase;
         // Every phase is listed from the start, the steps inside them not.
-        let titles = ["Waiting for download mode", "Starting recovery", "Backing up", "Checking your thermostat",
-                      "Preparing new features", "Setting up", "Restarting"];
+        let titles = [
+            "Waiting for download mode",
+            "Starting recovery",
+            "Backing up",
+            "Checking your thermostat",
+            "Preparing new features",
+            "Setting up",
+            "Restarting",
+        ];
         app.on_event(Event::Phase(Phase::DownloadMode));
         app.on_event(Event::Phase(Phase::Recovery));
         app.on_event(Event::Begin("Load recovery U-Boot".into()));
@@ -2662,8 +2976,10 @@ mod tests {
         assert!(app.backing_up());
         app.on_event(Event::Phase(Phase::Check));
         assert!(!app.backing_up(), "setting up once the backup is done");
-        assert_eq!(app.logs.phases.iter().map(|row| row.done.map(|(_, ok)| ok)).collect::<Vec<_>>(),
-                   [Some(true), Some(true), Some(true), None]);
+        assert_eq!(
+            app.logs.phases.iter().map(|row| row.done.map(|(_, ok)| ok)).collect::<Vec<_>>(),
+            [Some(true), Some(true), Some(true), None]
+        );
         // A setup that fails after the backup marks its phase and still
         // names the backup.
         std::fs::write(unfr0zen_host::nand::checksum_path(&out), "sum").unwrap();
@@ -2672,7 +2988,10 @@ mod tests {
         assert_eq!(app.flow_backup.as_deref(), Some(out.as_path()));
         // Without a backup first, Backing up is not listed.
         let mut plain = App { flow_run: true, task: Some(Task::SetUp), ..App::default() };
-        plain.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        plain.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         plain.on_event(Event::Phase(Phase::DownloadMode));
         let shown = texts(&render_frames(&mut plain, WINDOW, 2));
         assert!(shown.iter().any(|t| t == "Restarting") && !shown.iter().any(|t| t == "Backing up"), "{shown:?}");
@@ -2700,7 +3019,15 @@ mod tests {
             app.show(page);
             shot(&format!("{page:?}").to_lowercase(), &mut app, WINDOW);
         }
-        let gen3 = || Watcher::fixed(Bus::One(Seen { device: Device::Diamond3, mode: "app", port: "1".into(), id: (0x2464, 0x0030), serial: None }));
+        let gen3 = || {
+            Watcher::fixed(Bus::One(Seen {
+                device: Device::Diamond3,
+                mode: "app",
+                port: "1".into(),
+                id: (0x2464, 0x0030),
+                serial: None,
+            }))
+        };
         let flow = |step| App { bus: gen3(), step, ..App::default() };
         shot("1-connect", &mut flow(setup::Step::Connect), WINDOW);
         shot("1-connect-waiting", &mut App::default(), WINDOW);
@@ -2731,7 +3058,10 @@ mod tests {
         let mut running = flow(setup::Step::Review);
         running.flow_run = true;
         running.task = Some(Task::BackupSetUp("nand-20261109-1131.bin".into()));
-        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        running.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(String::new())
+        }));
         running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Backup));
@@ -2749,22 +3079,33 @@ mod tests {
         let mut failed = flow(setup::Step::Review);
         failed.flow_run = true;
         failed.task = Some(Task::SetUp);
-        failed.logs.rows.push(Row { label: "Find the application root volume".into(), started: Instant::now(), done: Some((Duration::from_secs(2), false)) });
+        failed.logs.rows.push(Row {
+            label: "Find the application root volume".into(),
+            started: Instant::now(),
+            done: Some((Duration::from_secs(2), false)),
+        });
         failed.logs.outcome = Some(Err("no application root volume found".into()));
         shot("7-failed", &mut failed, WINDOW);
         let mut sdp = flow(setup::Step::Review);
         sdp.flow_run = true;
         sdp.task = Some(Task::SetUp);
-        sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        sdp.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(String::new())
+        }));
         sdp.on_event(Event::Waiting("Hold the front panel button".into()));
         sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
         dialog("8-download-mode", &mut sdp);
         let mut delete = App { page: Page::Backups, delete: Some("nand-20261109-1131.bin".into()), ..App::default() };
         delete.show(Page::Backups);
         dialog("9-delete-backup", &mut delete);
-        let mut card = App { page: Page::Backups, task: Some(Task::Backup("nand-20261111-2010.bin".into())), ..App::default() };
+        let mut card =
+            App { page: Page::Backups, task: Some(Task::Backup("nand-20261111-2010.bin".into())), ..App::default() };
         card.show(Page::Backups);
-        card.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        card.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(String::new())
+        }));
         card.on_event(Event::Device("Nest gen 3 (diamond3): i.MX6SoloX rev 1.2".into()));
         card.on_event(Event::Begin("Load recovery U-Boot".into()));
         card.on_event(Event::End { label: "Load recovery U-Boot".into(), elapsed: Duration::from_secs(6), ok: true });
@@ -2812,26 +3153,36 @@ mod tests {
             snapshot::render(WINDOW, 2.0, 40, &dir.join(format!("{name}.png")), |ui| app.frame_ui(ui));
         };
         let flow = |step| App { bus: on_usb(Device::Diamond3), step, ..App::default() };
-        shot("guide-connect-waiting", &mut App { bus: Watcher::fixed(Bus::Nothing), steps_without_unit: false, ..App::default() });
+        shot(
+            "guide-connect-waiting",
+            &mut App { bus: Watcher::fixed(Bus::Nothing), steps_without_unit: false, ..App::default() },
+        );
         shot("guide-connect", &mut flow(setup::Step::Connect));
         let mut review = flow(setup::Step::Review);
         review.form.mqtt.on = true;
         review.form.mqtt.value = "homeassistant.local".into();
         shot("guide-review", &mut review);
-        let mut developer = App { bus: on_usb(Device::Diamond), step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut developer =
+            App { bus: on_usb(Device::Diamond), step: setup::Step::Review, developer_open: true, ..App::default() };
         developer.form.device = Some(Device::Diamond);
         shot("guide-developer", &mut developer);
         let mut sdp = flow(setup::Step::Review);
         sdp.flow_run = true;
         sdp.task = Some(Task::SetUp);
-        sdp.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        sdp.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(String::new())
+        }));
         sdp.on_event(Event::Waiting("Hold the front panel button".into()));
         sdp.on_event(Event::Begin(unfr0zen_host::WAIT_USB_BOOT_STAGE.into()));
         dialog("guide-download-mode", &mut sdp);
         let mut running = flow(setup::Step::Review);
         running.flow_run = true;
         running.task = Some(Task::BackupSetUp("nand-20261113-1012.bin".into()));
-        running.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(60)); Ok(String::new()) }));
+        running.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(60));
+            Ok(String::new())
+        }));
         running.on_event(Event::Phase(unfr0zen_host::Phase::DownloadMode));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Recovery));
         running.on_event(Event::Phase(unfr0zen_host::Phase::Backup));
@@ -2874,11 +3225,17 @@ mod tests {
         let mut app = App { library: Library::new(dir.clone()), ..App::default() };
         app.show(Page::Backups);
         let texts = texts(&render(&mut app, WINDOW));
-        assert!(texts.iter().filter(|t| *t == "kitchen.bin").count() >= 2, "in the table and the detail pane: {texts:?}");
+        assert!(
+            texts.iter().filter(|t| *t == "kitchen.bin").count() >= 2,
+            "in the table and the detail pane: {texts:?}"
+        );
         assert!(texts.iter().any(|t| t == "none"), "no checksum beside it");
         assert!(texts.iter().any(|t| t == "Restore to unit"));
         assert!(!texts.iter().any(|t| t == "Verify against unit"));
-        assert!(!texts.iter().any(|t| t == "Delete" || t == "Reveal in Finder" || t == "Show in folder"), "the side panel has neither button: {texts:?}");
+        assert!(
+            !texts.iter().any(|t| t == "Delete" || t == "Reveal in Finder" || t == "Show in folder"),
+            "the side panel has neither button: {texts:?}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2888,16 +3245,27 @@ mod tests {
         let mut app = App { library: Library::new(dir.clone()), ..App::default() };
         app.show(Page::Backups);
         let output = render_frames(&mut app, WINDOW, 2);
-        let rect = |text: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == text => Some(t.galley.rect.translate(t.pos.to_vec2())),
-            _ => None,
-        }).unwrap_or_else(|| panic!("{text} is drawn"));
+        let rect = |text: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if t.galley.job.text == text => {
+                        Some(t.galley.rect.translate(t.pos.to_vec2()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{text} is drawn"))
+        };
         const BUTTON: f32 = BACKUPS_BUTTON;
         let pane = rect("Select a backup");
         let (back_up, restore) = (rect("Back up unit"), rect("Restore from file"));
         assert!((back_up.center().x - (rect("NAND backups").left() + BUTTON / 2.0)).abs() < 1.0, "{back_up:?}");
         assert!((restore.center().x - back_up.center().x - (BUTTON + 8.0)).abs() < 1.0, "{back_up:?} {restore:?}");
-        assert!((back_up.center().y - restore.center().y).abs() < 1.0 && back_up.top() > pane.bottom(), "{back_up:?} {restore:?} {pane:?}");
+        assert!(
+            (back_up.center().y - restore.center().y).abs() < 1.0 && back_up.top() > pane.bottom(),
+            "{back_up:?} {restore:?} {pane:?}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2913,17 +3281,27 @@ mod tests {
         let target = app.library.entries.iter().map(|e| e.path.clone()).find(|p| Some(p) != selected.as_ref()).unwrap();
         let context = egui::Context::default();
         install_fonts(&context);
-        let frame = |app: &mut App, events: Vec<egui::Event>| context.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
-            events,
-            ..Default::default()
-        }, |ui| app.frame_ui(ui));
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            )
+        };
         frame(&mut app, Vec::new());
         frame(&mut app, Vec::new());
         let at = context.read_response(delete_id(&target)).unwrap().rect.center();
         let folder = context.read_response(reveal_id(&target)).unwrap().rect.center();
         assert!(folder.x < at.x && folder.y == at.y, "the folder icon sits left of the trash can: {folder:?} {at:?}");
-        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         let click = |app: &mut App| {
             frame(app, vec![egui::Event::PointerMoved(at)]);
             frame(app, vec![press(true)]);
@@ -2937,7 +3315,10 @@ mod tests {
         // During a run it does nothing.
         app.delete = None;
         frame(&mut app, vec![egui::Event::PointerGone]);
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         click(&mut app);
         assert_eq!(app.delete, None);
         std::fs::remove_dir_all(dir).unwrap();
@@ -2945,24 +3326,48 @@ mod tests {
 
     #[test]
     fn a_dropdowns_last_row_stays_put_under_the_pointer_with_no_scrollbar() {
-        let mut app = App { bus: on_usb(Device::Diamond3), page: Page::SetUp, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App {
+            bus: on_usb(Device::Diamond3),
+            page: Page::SetUp,
+            step: setup::Step::Review,
+            developer_open: true,
+            ..App::default()
+        };
         let context = egui::Context::default();
         install_fonts(&context);
         // The app's theme gives inactive widgets this border.
         context.all_styles_mut(|style| style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, LINE));
-        let mut frame = |events: Vec<egui::Event>| context.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
-            events,
-            ..Default::default()
-        }, |ui| app.frame_ui(ui));
-        let text_at = |output: &egui::FullOutput, want: &str| output.shapes.iter().filter_map(|clipped| match &clipped.shape {
-            egui::epaint::Shape::Text(text) if text.galley.job.text == want => Some((text.pos, clipped.clip_rect)),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let mut frame = |events: Vec<egui::Event>| {
+            context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            )
+        };
+        let text_at = |output: &egui::FullOutput, want: &str| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == want => {
+                        Some((text.pos, clipped.clip_rect))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
         let settled = (0..4).map(|_| frame(vec![])).last().unwrap();
         // Device, then entry point.
         let (device, _) = text_at(&settled, "auto")[0];
-        let press = |pressed| egui::Event::PointerButton { pos: device, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let press = |pressed| egui::Event::PointerButton {
+            pos: device,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         frame(vec![egui::Event::PointerMoved(device)]);
         frame(vec![press(true)]);
         frame(vec![press(false)]);
@@ -2971,26 +3376,44 @@ mod tests {
         // The chosen row, auto, sits on the accent.
         let (chosen, _) = *text_at(&open, "auto").iter().find(|(_, clip)| *clip == list).expect("auto is listed");
         // The list may still be fading in: the accent, whatever its alpha.
-        let accent = |fill: egui::Color32| fill.a() > 0 && {
-            let [r, g, b, _] = fill.to_srgba_unmultiplied();
-            [r, g, b].iter().zip([ACCENT.r(), ACCENT.g(), ACCENT.b()]).all(|(x, y)| x.abs_diff(y) <= 3)
+        let accent = |fill: egui::Color32| {
+            fill.a() > 0 && {
+                let [r, g, b, _] = fill.to_srgba_unmultiplied();
+                [r, g, b].iter().zip([ACCENT.r(), ACCENT.g(), ACCENT.b()]).all(|(x, y)| x.abs_diff(y) <= 3)
+            }
         };
-        assert!(open.shapes.iter().any(|clipped| matches!(&clipped.shape,
+        assert!(
+            open.shapes.iter().any(|clipped| matches!(&clipped.shape,
             egui::epaint::Shape::Rect(r) if accent(r.fill) && r.rect.contains(chosen + egui::vec2(2.0, 2.0)))),
-            "the chosen row is on the accent");
+            "the chosen row is on the accent"
+        );
         frame(vec![egui::Event::PointerMoved(row + egui::vec2(4.0, 4.0))]);
         let hovered = (0..30).map(|_| frame(vec![])).last().unwrap();
-        assert_eq!(*text_at(&hovered, "diamond3").last().unwrap(), (row, list), "the row and the list keep their place and size");
+        assert_eq!(
+            *text_at(&hovered, "diamond3").last().unwrap(),
+            (row, list),
+            "the row and the list keep their place and size"
+        );
         // The list's own: the page behind it may scroll.
-        let bars = hovered.shapes.iter().filter(|clipped| clipped.clip_rect == list && matches!(&clipped.shape,
-            egui::epaint::Shape::Rect(rect) if rect.rect.width() <= 4.0 && rect.rect.height() > 20.0)).count();
+        let bars = hovered
+            .shapes
+            .iter()
+            .filter(|clipped| {
+                clipped.clip_rect == list
+                    && matches!(&clipped.shape,
+            egui::epaint::Shape::Rect(rect) if rect.rect.width() <= 4.0 && rect.rect.height() > 20.0)
+            })
+            .count();
         assert_eq!(bars, 0, "no scrollbar over the list");
     }
 
     #[test]
     fn a_run_called_off_with_no_log_leaves_no_row_on_the_logs_page() {
         let mut app = App { task: Some(Task::Restore("a".into())), page: Page::Logs, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(shown.iter().any(|t| t == "now"), "listed while it runs: {shown:?}");
@@ -3008,7 +3431,10 @@ mod tests {
         let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, ..App::default() };
         // Longer than the test runs: the fake run must not finish and retire
         // itself while the assertions below still expect it live.
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(600));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin("Read NAND".into()));
         let card = |app: &mut App, text: &str| texts(&render_frames(app, WINDOW, 2)).iter().any(|t| t == text);
         assert!(card(&mut app, "Read NAND"));
@@ -3016,23 +3442,35 @@ mod tests {
         assert!(card(&mut app, "Read NAND"), "on every page");
         app.show(Page::Logs);
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert_eq!(shown.iter().filter(|t| *t == "Read NAND").count(), 1, "the Logs page shows the run itself, not the card");
+        assert_eq!(
+            shown.iter().filter(|t| *t == "Read NAND").count(),
+            1,
+            "the Logs page shows the run itself, not the card"
+        );
         app.show(Page::SetUp);
         app.run = None;
         app.on_event(Event::Done(Ok("Backed up to a path with its checksum".into())));
-        assert!(card(&mut app, "Read NAND") && !card(&mut app, "Backed up to a path with its checksum"),
-                "a success keeps the card a moment, without its line");
+        assert!(
+            card(&mut app, "Read NAND") && !card(&mut app, "Backed up to a path with its checksum"),
+            "a success keeps the card a moment, without its line"
+        );
         app.finished_at = Some(Instant::now() - POPUP_LINGER);
         assert!(!card(&mut app, "Read NAND"), "gone after lingering");
         app.logs.outcome = Some(Err("no unit".into()));
-        assert!(card(&mut app, "no unit") && !card(&mut app, "Logs ›"), "a failure stays, with no link while it kept no log");
+        assert!(
+            card(&mut app, "no unit") && !card(&mut app, "Logs ›"),
+            "a failure stays, with no link while it kept no log"
+        );
         app.logged = true;
         assert!(card(&mut app, "no unit") && card(&mut app, "Logs ›"), "with its link once it did");
         app.popup_dismissed = true;
         assert!(!card(&mut app, "no unit"));
         // A wait called off ends the run without an error shown.
         let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(600));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         app.sdp_wait = None;
         app.cancelled = true;
@@ -3045,55 +3483,97 @@ mod tests {
         assert!(unfr0zen_host::log_path().is_none(), "no log is kept of it");
         // The download prompt replaces the card until it is answered.
         let mut app = App { task: Some(Task::Restore("a".into())), page: Page::Backups, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin("Restart the unit from an earlier initramfs shell".into()));
-        app.on_event(Event::End { label: "Restart the unit from an earlier initramfs shell".into(), elapsed: Duration::ZERO, ok: true });
+        app.on_event(Event::End {
+            label: "Restart the unit from an earlier initramfs shell".into(),
+            elapsed: Duration::ZERO,
+            ok: true,
+        });
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Enter USB download mode"), "{shown:?}");
+        assert!(
+            !shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell")
+                && shown.iter().any(|t| t == "Enter USB download mode"),
+            "{shown:?}"
+        );
         app.sdp_wait = None;
         assert!(card(&mut app, "Restart the unit from an earlier initramfs shell"), "the card is back");
         // So does the restore's confirmation.
         let (reply, _answer) = std::sync::mpsc::channel();
         app.on_event(Event::Confirm("Erase the NAND?".into(), reply));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert!(!shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell") && shown.iter().any(|t| t == "Restore NAND?"), "{shown:?}");
+        assert!(
+            !shown.iter().any(|t| t == "Restart the unit from an earlier initramfs shell")
+                && shown.iter().any(|t| t == "Restore NAND?"),
+            "{shown:?}"
+        );
     }
 
     #[test]
     fn the_title_bar_names_the_app_with_its_zero_in_the_accent() {
         let output = render(&mut App::default(), WINDOW);
-        let name = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == "unfr0zen" => Some(t.galley.clone()),
-            _ => None,
-        }).expect("the name is drawn");
+        let name = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == "unfr0zen" => Some(t.galley.clone()),
+                _ => None,
+            })
+            .expect("the name is drawn");
         let colors: Vec<_> = name.job.sections.iter().map(|section| section.format.color).collect();
         assert_eq!(colors, [MUTED, MUTED, MUTED, MUTED, ACCENT, MUTED, MUTED, MUTED]);
     }
 
     #[test]
     fn a_failed_flow_run_left_for_the_review_brings_up_no_card() {
-        let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, flow_run: true, finished_at: Some(Instant::now()),
-                            logged: true, step: setup::Step::Review, ..App::default() };
+        let mut app = App {
+            task: Some(Task::SetUp),
+            page: Page::SetUp,
+            flow_run: true,
+            finished_at: Some(Instant::now()),
+            logged: true,
+            step: setup::Step::Review,
+            ..App::default()
+        };
         app.logs.outcome = Some(Err("endpoint stalled".into()));
         app.on_event(Event::Device("Nest gen 2 (j49)".into()));
         assert_eq!(app.screen_name(), "Failed");
         app.back_to_review();
         assert_eq!(app.screen_name(), "Step(Review)");
-        let drawn = |app: &mut App| render_frames(app, WINDOW, 4).shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::epaint::Shape::Text(t) if t.galley.job.text == "Failed"));
+        let drawn = |app: &mut App| {
+            render_frames(app, WINDOW, 4).shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+            egui::epaint::Shape::Text(t) if t.galley.job.text == "Failed")
+            })
+        };
         assert!(!drawn(&mut app), "the failed run's card stays down");
     }
 
     #[test]
     fn a_failed_run_cards_logs_link_lines_up_with_its_title() {
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, finished_at: Some(Instant::now()), logged: true, ..App::default() };
+        let mut app = App {
+            task: Some(Task::Backup("a".into())),
+            page: Page::SetUp,
+            finished_at: Some(Instant::now()),
+            logged: true,
+            ..App::default()
+        };
         app.logs.outcome = Some(Err("no unit".into()));
         let output = render_frames(&mut app, WINDOW, 4);
-        let left = |text: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
-            _ => None,
-        }).unwrap_or_else(|| panic!("{text} is drawn"));
+        let left = |text: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{text} is drawn"))
+        };
         assert_eq!(left("Logs ›"), left("Failed"));
     }
 
@@ -3102,29 +3582,56 @@ mod tests {
         let context = egui::Context::default();
         install_fonts(&context);
         let mut app = App::default();
-        let frame = |app: &mut App, events: Vec<egui::Event>| context.run_ui(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
-            events,
-            ..Default::default()
-        }, |ui| app.frame_ui(ui));
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            )
+        };
         let output = frame(&mut app, Vec::new());
         let shown = texts(&output);
-        let order = |text: &str| shown.iter().position(|t| t == text).unwrap_or_else(|| panic!("{text} is drawn: {shown:?}"));
+        let order =
+            |text: &str| shown.iter().position(|t| t == text).unwrap_or_else(|| panic!("{text} is drawn: {shown:?}"));
         assert!(order("Logs") < order("About") && order("About") < order("ADVANCED"), "{shown:?}");
         assert!(!shown.iter().any(|t| t == "i" || t == "About unfr0zen"), "no info button, no dialog: {shown:?}");
-        let version = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text == BUILD_VERSION => Some(t.galley.rect.translate(t.pos.to_vec2()).center()),
-            _ => None,
-        }).unwrap();
-        let press = |pressed| egui::Event::PointerButton { pos: version, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let version = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text == BUILD_VERSION => {
+                    Some(t.galley.rect.translate(t.pos.to_vec2()).center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: version,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
         frame(&mut app, vec![egui::Event::PointerMoved(version)]);
         frame(&mut app, vec![press(true)]);
         frame(&mut app, vec![press(false)]);
         assert_eq!(app.page, Page::About);
         let shown = texts(&frame(&mut app, Vec::new()));
-        for text in ["About unfr0zen", "Licenses", "unfr0zen (GPLv3)", "https://github.com/unfr0zen",
-                     "Credits", "BusyBox —", "the BusyBox project",
-                     "CVE-2017-7932 and CVE-2017-7936 —", "Quarkslab", "cuckoo loader gen 1 —", "@guyman70718"] {
+        for text in [
+            "About unfr0zen",
+            "Licenses",
+            "unfr0zen (GPLv3)",
+            "https://github.com/unfr0zen",
+            "Credits",
+            "BusyBox —",
+            "the BusyBox project",
+            "CVE-2017-7932 and CVE-2017-7936 —",
+            "Quarkslab",
+            "cuckoo loader gen 1 —",
+            "@guyman70718",
+        ] {
             assert!(shown.iter().any(|t| t == text), "{text}: {shown:?}");
         }
         assert!(!shown.iter().any(|t| t == "Close"), "{shown:?}");
@@ -3175,11 +3682,10 @@ mod tests {
                 repeat: false,
                 modifiers: egui::Modifiers::COMMAND,
             };
-            let _ = context.run_ui(egui::RawInput {
-                modifiers: egui::Modifiers::COMMAND,
-                events: vec![event],
-                ..Default::default()
-            }, |_| {});
+            let _ = context.run_ui(
+                egui::RawInput { modifiers: egui::Modifiers::COMMAND, events: vec![event], ..Default::default() },
+                |_| {},
+            );
             // A new zoom takes effect as the next frame begins.
             let _ = context.run_ui(egui::RawInput::default(), |_| {});
             context.zoom_factor()
@@ -3194,17 +3700,33 @@ mod tests {
     #[test]
     fn a_widget_whose_id_shifts_draws_no_debug_outline() {
         // The same rect under another id, as when a widget before it comes or goes.
-        let outlines = |context: &egui::Context| (0..3).map(|frame| {
-            let output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
-                ..Default::default()
-            }, |ui| {
-                let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(50.0, 20.0));
-                let _ = ui.interact(rect, egui::Id::new(frame), egui::Sense::click());
-            });
-            output.shapes.iter().filter(|shape| matches!(&shape.shape,
-                egui::epaint::Shape::Rect(r) if r.stroke.color == egui::Color32::RED)).count()
-        }).sum::<usize>();
+        let outlines = |context: &egui::Context| {
+            (0..3)
+                .map(|frame| {
+                    let output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(WINDOW[0], WINDOW[1]),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(50.0, 20.0));
+                            let _ = ui.interact(rect, egui::Id::new(frame), egui::Sense::click());
+                        },
+                    );
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| {
+                            matches!(&shape.shape,
+                egui::epaint::Shape::Rect(r) if r.stroke.color == egui::Color32::RED)
+                        })
+                        .count()
+                })
+                .sum::<usize>()
+        };
         assert!(outlines(&egui::Context::default()) > 0, "debug builds outline it unless told not to");
         let context = egui::Context::default();
         no_id_shift_outlines(&context);
@@ -3217,15 +3739,22 @@ mod tests {
         install_fonts(&context);
         let mut app = App::default();
         let mut at = |time: f64| {
-            let output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
-                time: Some(time),
-                ..Default::default()
-            }, |ui| app.frame_ui(ui));
-            output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(t) if t.galley.job.text == "›" => Some(t.pos.x),
-                _ => None,
-            }).expect("the separator is drawn")
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if t.galley.job.text == "›" => Some(t.pos.x),
+                    _ => None,
+                })
+                .expect("the separator is drawn")
         };
         let rest = at(0.0);
         for step in 0..=20 {
@@ -3245,18 +3774,31 @@ mod tests {
         }
         assert!((0..NAME.len()).all(|index| name_color(index, start) == rest(index)), "it enters without a jump");
         assert!(brightest(start + GLINT_CROSSING * 0.3) < brightest(start + GLINT_CROSSING * 0.7), "left to right");
-        assert_eq!(name_color(0, start + GLINT_CROSSING * (GLINT_REACH + 0.5) / (NAME.len() as f64 + 2.0 * GLINT_REACH)),
-                   egui::Color32::WHITE, "white at its centre");
-        assert_eq!(name_color(4, next + GLINT_CROSSING * 0.5), name_color(4, start + GLINT_CROSSING * 0.5), "again each period");
+        assert_eq!(
+            name_color(0, start + GLINT_CROSSING * (GLINT_REACH + 0.5) / (NAME.len() as f64 + 2.0 * GLINT_REACH)),
+            egui::Color32::WHITE,
+            "white at its centre"
+        );
+        assert_eq!(
+            name_color(4, next + GLINT_CROSSING * 0.5),
+            name_color(4, start + GLINT_CROSSING * 0.5),
+            "again each period"
+        );
         assert_eq!(glint_wait(0.0), Duration::from_secs_f64(GLINT_FIRST), "no repaints before the first");
-        assert!((glint_wait(start + GLINT_CROSSING).as_secs_f64() - (GLINT_PERIOD - GLINT_CROSSING)).abs() < 1e-9, "nor between glints");
+        assert!(
+            (glint_wait(start + GLINT_CROSSING).as_secs_f64() - (GLINT_PERIOD - GLINT_CROSSING)).abs() < 1e-9,
+            "nor between glints"
+        );
         assert_eq!(glint_wait(start + 0.1), Duration::from_millis(33));
     }
 
     #[test]
     fn a_run_waiting_for_download_mode_opens_on_the_prompt_without_the_card() {
         let mut app = App { task: Some(Task::Restore("a".into())), page: Page::Backups, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         app.on_event(Event::Device("Nest gen 3".into()));
         assert!(!texts(&render_frames(&mut app, WINDOW, 4)).iter().any(|t| t == "Nest gen 3"), "no card before a step");
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
@@ -3265,13 +3807,22 @@ mod tests {
         assert!(!shown.iter().any(|t| t == "Nest gen 3"), "{shown:?}");
         app.on_event(Event::End { label: WAIT_USB_BOOT_STAGE.into(), elapsed: Duration::ZERO, ok: true });
         app.on_event(Event::Begin("Check the image's SHA-256".into()));
-        assert!(texts(&render_frames(&mut app, WINDOW, 4)).iter().any(|t| t == "Nest gen 3"), "the card comes with the first step");
+        assert!(
+            texts(&render_frames(&mut app, WINDOW, 4)).iter().any(|t| t == "Nest gen 3"),
+            "the card comes with the first step"
+        );
     }
 
     #[test]
     fn the_entry_point_stays_chosen_while_greyed_for_another_generation() {
         let entry_point = unfr0zen_host::diamond3::usb::EntryPoint::Cve20177936;
-        let mut app = App { bus: on_usb(Device::J49), page: Page::SetUp, step: setup::Step::Review, developer_open: true, ..App::default() };
+        let mut app = App {
+            bus: on_usb(Device::J49),
+            page: Page::SetUp,
+            step: setup::Step::Review,
+            developer_open: true,
+            ..App::default()
+        };
         app.form.entry_point = entry_point;
         let shown = texts(&render_frames(&mut app, WINDOW, 4));
         assert_eq!(app.form.entry_point, entry_point);
@@ -3300,15 +3851,27 @@ mod tests {
                     app.finished_at = Some(Instant::now());
                     app.logs.outcome = Some(Err("no unit".into()));
                 } else {
-                    app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+                    app.run = Some(Run::task(|_| {
+                        std::thread::sleep(Duration::from_secs(5));
+                        Ok(String::new())
+                    }));
                     app.on_event(Event::Begin("Read NAND".into()));
                 }
                 let output = render_frames(&mut app, WINDOW, 4);
-                let galley = output.shapes.iter().find_map(|shape| match &shape.shape {
-                    egui::epaint::Shape::Text(t) if t.galley.job.text == LONGEST => Some(t.galley.clone()),
-                    _ => None,
-                }).unwrap_or_else(|| panic!("{doing}: the unit is drawn"));
-                assert!(galley.rows.len() == 1 && !galley.elided, "{doing}, failed {failed}: {} rows, cut {}", galley.rows.len(), galley.elided);
+                let galley = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(t) if t.galley.job.text == LONGEST => Some(t.galley.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{doing}: the unit is drawn"));
+                assert!(
+                    galley.rows.len() == 1 && !galley.elided,
+                    "{doing}, failed {failed}: {} rows, cut {}",
+                    galley.rows.len(),
+                    galley.elided
+                );
             }
         }
     }
@@ -3316,7 +3879,10 @@ mod tests {
     #[test]
     fn the_run_card_grows_with_its_steps_until_its_most() {
         let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         // Every step's label visible: inside its clip rect, not scrolled
         // away. The card takes a few frames to measure itself and settle.
         let visible = |app: &mut App, label: &str| {
@@ -3344,7 +3910,9 @@ mod tests {
     fn the_run_pane_shows_live_and_past_steps_at_one_size() {
         let size_of = |app: &mut App, label: &str| {
             render_frames(app, WINDOW, 2).shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(t) if t.galley.job.text == label => Some(t.galley.job.sections[0].format.font_id.size),
+                egui::epaint::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.galley.job.sections[0].format.font_id.size)
+                }
                 _ => None,
             })
         };
@@ -3355,7 +3923,12 @@ mod tests {
         assert_eq!(size_of(&mut live, "Device"), Some(RUN_STEP_FONT));
         let text = "[ 1.0] Selected: Set up\n[ 2.0] Load recovery U-Boot: done (1.2s)\n";
         let run = logs::parse("20261104-120000", Path::new("/nonexistent"), text);
-        let mut past = App { page: Page::Logs, history: vec![run], history_selected: Some("20261104-120000".into()), ..App::default() };
+        let mut past = App {
+            page: Page::Logs,
+            history: vec![run],
+            history_selected: Some("20261104-120000".into()),
+            ..App::default()
+        };
         assert_eq!(size_of(&mut past, "Load recovery U-Boot"), Some(RUN_STEP_FONT));
         assert_eq!(size_of(&mut past, "1.2s"), Some(RUN_STEP_FONT));
     }
@@ -3368,14 +3941,24 @@ mod tests {
             app.on_event(Event::End { label: format!("Step number {i}"), elapsed: Duration::ZERO, ok: true });
         }
         let output = render_frames(&mut app, WINDOW, 3);
-        let pane = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Rect(r) if r.fill == CARD && r.rect.left() > SIDEBAR_WIDTH => Some(r.rect),
-            _ => None,
-        }).expect("the run pane is drawn");
-        let steps_end = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("Step number") => Some(shape.clip_rect.bottom()),
-            _ => None,
-        }).expect("a step is drawn");
+        let pane = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(r) if r.fill == CARD && r.rect.left() > SIDEBAR_WIDTH => Some(r.rect),
+                _ => None,
+            })
+            .expect("the run pane is drawn");
+        let steps_end = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text.starts_with("Step number") => {
+                    Some(shape.clip_rect.bottom())
+                }
+                _ => None,
+            })
+            .expect("a step is drawn");
         let inner = pane.shrink(16.0);
         let share = (steps_end - inner.top()) / inner.height();
         assert!((share - RUN_TOP_SHARE).abs() < 0.01, "the top part takes {share} of the pane");
@@ -3398,10 +3981,13 @@ mod tests {
     #[test]
     fn the_logs_page_preselects_the_most_recent_run() {
         let newer = "20261105-100200";
-        let mut app = App { history: vec![
-            logs::parse(newer, Path::new("/x"), "[ 1.0] Back up NAND: done (18.3s)\n"),
-            logs::parse("20261105-100100", Path::new("/x"), "[ 1.0] Restore NAND: failed (2.1s): no room\n"),
-        ], ..App::default() };
+        let mut app = App {
+            history: vec![
+                logs::parse(newer, Path::new("/x"), "[ 1.0] Back up NAND: done (18.3s)\n"),
+                logs::parse("20261105-100100", Path::new("/x"), "[ 1.0] Restore NAND: failed (2.1s): no room\n"),
+            ],
+            ..App::default()
+        };
         app.preselect_latest_run();
         assert_eq!(app.history_selected.as_deref(), Some(newer), "the newest run is shown");
         // A valid choice the user made is kept.
@@ -3424,8 +4010,11 @@ mod tests {
     fn the_logs_page_lists_the_folders_runs_and_the_live_one() {
         let dir = temp_dir("logs-page");
         std::fs::create_dir_all(dir.join("20261104-120000")).unwrap();
-        std::fs::write(dir.join("20261104-120000/unfr0zen.log"),
-                       "[ 1.0] Selected: Boot the application\n[ 2.0] Chainload stock U-Boot from NAND: done (1.2s)\n").unwrap();
+        std::fs::write(
+            dir.join("20261104-120000/unfr0zen.log"),
+            "[ 1.0] Selected: Boot the application\n[ 2.0] Chainload stock U-Boot from NAND: done (1.2s)\n",
+        )
+        .unwrap();
         let mut app = App { page: Page::Logs, ..App::default() };
         app.history = logs::scan(&dir);
         let shown = texts(&render(&mut app, WINDOW));
@@ -3441,15 +4030,26 @@ mod tests {
     fn the_status_bar_says_how_a_run_went_without_its_message() {
         const MESSAGE: &str = "NAND backup: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
         const STEP: &str = "Check the FCB against the restored U-Boot copies";
-        for (outcome, line) in [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")] {
-            let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
+        for (outcome, line) in
+            [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")]
+        {
+            let mut app = App {
+                task: Some(Task::Backup("a".into())),
+                page: Page::SetUp,
+                popup_dismissed: true,
+                ..App::default()
+            };
             app.logs.outcome = Some(outcome);
             let shown = texts(&render_frames(&mut app, WINDOW, 2));
             assert!(shown.iter().any(|t| t == line), "{shown:?}");
             assert!(!shown.iter().any(|t| t.contains(MESSAGE)), "{shown:?}");
         }
-        let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(5)); Ok(String::new()) }));
+        let mut app =
+            App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin(STEP.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(shown.iter().any(|t| t == "Backing up"), "{shown:?}");
@@ -3463,10 +4063,14 @@ mod tests {
         let mut app = App { task: Some(Task::SetUp), page: Page::Logs, logged: true, ..App::default() };
         app.logs.outcome = Some(Err(message.into()));
         let output = render(&mut app, WINDOW);
-        let galley = output.shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(text) if text.galley.job.text == message => Some(&text.galley),
-            _ => None,
-        }).expect("error text is rendered");
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == message => Some(&text.galley),
+                _ => None,
+            })
+            .expect("error text is rendered");
         assert!(galley.rows.len() > 1);
         assert!(galley.rect.width() < WINDOW[0] - SIDEBAR_WIDTH);
     }
@@ -3479,9 +4083,15 @@ mod tests {
             [size, speed, left]
         };
         assert_eq!(texts(0, 5 * mib, 300 * mib, None), ["0.0 / 300.0 MiB, 5.0 MiB under way", "", ""]);
-        assert_eq!(texts(60 * mib, 5 * mib, 300 * mib, Some(2.0 * mib as f64)),
-                   ["60.0 / 300.0 MiB", "2.0 MiB/s", "2m 00s left"], "the speed replaces the piece under way");
-        assert_eq!(texts(290 * mib, 0, 300 * mib, Some(2.0 * mib as f64)), ["290.0 / 300.0 MiB", "2.0 MiB/s", "5s left"]);
+        assert_eq!(
+            texts(60 * mib, 5 * mib, 300 * mib, Some(2.0 * mib as f64)),
+            ["60.0 / 300.0 MiB", "2.0 MiB/s", "2m 00s left"],
+            "the speed replaces the piece under way"
+        );
+        assert_eq!(
+            texts(290 * mib, 0, 300 * mib, Some(2.0 * mib as f64)),
+            ["290.0 / 300.0 MiB", "2.0 MiB/s", "5s left"]
+        );
     }
 
     #[test]
@@ -3530,26 +4140,49 @@ mod tests {
         const MIB: u64 = 1 << 20;
         let ago = |secs| Instant::now() - Duration::from_secs(secs);
         let mut app = App { task: Some(Task::Backup("a".into())), page: Page::SetUp, ..App::default() };
-        app.run = Some(Run::task(|_| { std::thread::sleep(Duration::from_secs(600)); Ok(String::new()) }));
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(600));
+            Ok(String::new())
+        }));
         app.on_event(Event::Begin("Back up NAND".into()));
         // 2 MiB/s over the last piece, its report 4 s ago: 8 MiB past the 64.
-        app.logs.transfer = Some(Transfer { done: 64 * MIB, next: 64 * MIB, total: 512 * MIB, at: ago(4), since: ago(36), since_done: 0 });
+        app.logs.transfer = Some(Transfer {
+            done: 64 * MIB,
+            next: 64 * MIB,
+            total: 512 * MIB,
+            at: ago(4),
+            since: ago(36),
+            since_done: 0,
+        });
         let shapes = render_frames(&mut app, WINDOW, 2).shapes;
-        let at = |wanted: &dyn Fn(&str) -> bool| shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if wanted(&t.galley.job.text) => Some((t.galley.job.text.clone(), t.visual_bounding_rect())),
-            _ => None,
-        }).unwrap();
+        let at = |wanted: &dyn Fn(&str) -> bool| {
+            shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(t) if wanted(&t.galley.job.text) => {
+                        Some((t.galley.job.text.clone(), t.visual_bounding_rect()))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
         let (size, size_at) = at(&|t| t.contains("/ 512.0 MiB"));
         let (_, speed_at) = at(&|t| t == "2.0 MiB/s");
         let (left, left_at) = at(&|t| t.ends_with(" left"));
         assert!(size.starts_with("72.") && !size.contains("under way"), "{size}");
         assert!(left.starts_with("3m "), "{left}");
-        let progress_at = shapes.iter().find_map(|shape| match &shape.shape {
-            egui::epaint::Shape::Text(t) if t.galley.job.text.ends_with('%') => Some(t.visual_bounding_rect()),
-            _ => None,
-        }).unwrap();
+        let progress_at = shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(t) if t.galley.job.text.ends_with('%') => Some(t.visual_bounding_rect()),
+                _ => None,
+            })
+            .unwrap();
         assert!((speed_at.center().x - progress_at.center().x).abs() < 1.0, "centred under the bar");
-        assert!(size_at.right() < speed_at.left() && speed_at.right() < left_at.left(), "{size_at:?} {speed_at:?} {left_at:?}");
+        assert!(
+            size_at.right() < speed_at.left() && speed_at.right() < left_at.left(),
+            "{size_at:?} {speed_at:?} {left_at:?}"
+        );
         // A failed run stands at what it reported, with the bar.
         app.run = None;
         app.logs.outcome = Some(Err("no unit".into()));
@@ -3570,8 +4203,10 @@ mod tests {
         app.on_event(Event::Begin(WAIT_USB_BOOT_STAGE.into()));
         app.on_event(Event::End { label: WAIT_USB_BOOT_STAGE.into(), elapsed: Duration::from_secs(120), ok: false });
         assert!(app.sdp_wait.is_none());
-        assert_eq!(app.logs.rows.iter().map(|r| (r.label.as_str(), r.done.map(|d| d.1))).collect::<Vec<_>>(),
-                   [(WAIT_USB_BOOT_STAGE, Some(false))]);
+        assert_eq!(
+            app.logs.rows.iter().map(|r| (r.label.as_str(), r.done.map(|d| d.1))).collect::<Vec<_>>(),
+            [(WAIT_USB_BOOT_STAGE, Some(false))]
+        );
     }
 
     #[test]

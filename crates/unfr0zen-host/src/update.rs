@@ -46,7 +46,11 @@ pub enum App {
 impl App {
     /// The executable name inside the release archive.
     fn executable(self) -> &'static str {
-        if cfg!(windows) { "unfr0zen.exe" } else { "unfr0zen" }
+        if cfg!(windows) {
+            "unfr0zen.exe"
+        } else {
+            "unfr0zen"
+        }
     }
 }
 
@@ -70,12 +74,10 @@ pub struct Available {
 /// local changes: those never update.
 pub fn release_version(build: &str) -> Option<&str> {
     let version = build.strip_prefix('v')?;
-    let (core, rc) = version.split_once("-rc")
-        .map_or((version, None), |(core, rc)| (core, Some(rc)));
+    let (core, rc) = version.split_once("-rc").map_or((version, None), |(core, rc)| (core, Some(rc)));
     let numbers: Vec<&str> = core.split('.').collect();
     let plain = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    (numbers.len() == 3 && numbers.iter().all(|n| plain(n)) && rc.is_none_or(plain))
-        .then_some(version)
+    (numbers.len() == 3 && numbers.iter().all(|n| plain(n)) && rc.is_none_or(plain)).then_some(version)
 }
 
 /// Picks the release asset for this platform from a list of file names.
@@ -84,11 +86,10 @@ fn pick_asset(names: &[&str]) -> Option<usize> {
     let is_archive = |n: &str| n.ends_with(".zip") || n.ends_with(".tar.gz");
     if cfg!(target_os = "macos") {
         let arch = if cfg!(target_arch = "aarch64") { "macos-arm64-" } else { "macos-x86_64-" };
-        names.iter().position(|n| n.starts_with("unfr0zen-macos-universal-") && is_archive(n))
-            .or_else(|| {
-                let prefix = format!("unfr0zen-{arch}");
-                names.iter().position(|n| n.starts_with(&prefix) && is_archive(n))
-            })
+        names.iter().position(|n| n.starts_with("unfr0zen-macos-universal-") && is_archive(n)).or_else(|| {
+            let prefix = format!("unfr0zen-{arch}");
+            names.iter().position(|n| n.starts_with(&prefix) && is_archive(n))
+        })
     } else {
         let prefix = format!("unfr0zen-{PLATFORM}-");
         names.iter().position(|n| n.starts_with(&prefix) && is_archive(n))
@@ -114,8 +115,10 @@ fn evaluate(current: &str, release: &FetchedRelease) -> Option<Available> {
     let index = pick_asset(&names)?;
     let tag = format!("v{}", release.version);
     Some(Available {
-        url: release.notes_url.clone().unwrap_or_else(
-            || format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/tag/{tag}")),
+        url: release
+            .notes_url
+            .clone()
+            .unwrap_or_else(|| format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/tag/{tag}")),
         tag,
         body: release.body.clone(),
         asset: release.assets[index].0.clone(),
@@ -131,7 +134,9 @@ fn failed(what: &str, e: impl std::fmt::Display) -> Error {
 /// The latest release, if it is newer than `build` and has a file for this
 /// platform.  Development builds get None without asking GitHub.
 pub fn check(app: App, build: &str) -> Result<Option<Available>> {
-    let Some(current) = release_version(build) else { return Ok(None) };
+    let Some(current) = release_version(build) else {
+        return Ok(None);
+    };
     let updater = github::Update::configure()
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
@@ -141,13 +146,13 @@ pub fn check(app: App, build: &str) -> Result<Option<Available>> {
         .no_confirm(true)
         .build()
         .map_err(|e| failed("configure", e))?;
-    let latest = updater.get_latest_release()
-        .map_err(|e| failed("latest release", e))?
-        .into_vec().into_iter().next();
+    let latest = updater.get_latest_release().map_err(|e| failed("latest release", e))?.into_vec().into_iter().next();
     let Some(latest) = latest else { return Ok(None) };
     let fetched = FetchedRelease {
         version: latest.version().to_string(),
-        assets: latest.assets().iter()
+        assets: latest
+            .assets()
+            .iter()
             .map(|a| (a.name().to_string(), a.download_url().to_string(), a.digest().map(str::to_string)))
             .collect(),
         notes_url: latest.release_notes_url().map(str::to_string),
@@ -158,7 +163,8 @@ pub fn check(app: App, build: &str) -> Result<Option<Available>> {
 
 /// Fails unless `data` hashes to `digest`, GitHub's `sha256:<hex>` for `name`.
 fn verify_digest(digest: &str, name: &str, data: &[u8]) -> Result<()> {
-    let expected = digest.strip_prefix("sha256:")
+    let expected = digest
+        .strip_prefix("sha256:")
         .ok_or_else(|| failed("digest", format!("{name} has an unknown digest {digest}; nothing was installed")))?;
     if !expected.eq_ignore_ascii_case(&sha256_hex(data)) {
         return Err(failed("digest", format!("{name} does not match its digest; nothing was installed")));
@@ -168,17 +174,17 @@ fn verify_digest(digest: &str, name: &str, data: &[u8]) -> Result<()> {
 
 /// Downloads `release` and puts it in place of the running app.
 pub fn install(app: App, release: &Available) -> Result<()> {
-    let digest = release.digest.as_deref()
+    let digest = release
+        .digest
+        .as_deref()
         .ok_or_else(|| failed("digest", format!("{} has no digest; nothing was installed", release.asset)))?;
     let exe = std::env::current_exe().map_err(|e| failed("current executable", e))?;
-    let bundle = if cfg!(target_os = "macos") && app == App::Gui {
-        app_bundle(&exe).ok()
-    } else {
-        None
-    };
-    let parent = bundle.as_deref().unwrap_or(&exe).parent()
-        .ok_or_else(|| failed("install directory", exe.display()))?;
-    let work = tempfile::Builder::new().prefix(".unfr0zen-update-").tempdir_in(parent)
+    let bundle = if cfg!(target_os = "macos") && app == App::Gui { app_bundle(&exe).ok() } else { None };
+    let parent =
+        bundle.as_deref().unwrap_or(&exe).parent().ok_or_else(|| failed("install directory", exe.display()))?;
+    let work = tempfile::Builder::new()
+        .prefix(".unfr0zen-update-")
+        .tempdir_in(parent)
         .map_err(|e| failed(&format!("{} is not writable", parent.display()), e))?;
 
     let archive = work.path().join(&release.asset);
@@ -194,24 +200,19 @@ pub fn install(app: App, release: &Available) -> Result<()> {
 
 /// Extracts the archive and puts the result in place.  Factored out of
 /// `install` so tests can skip the download.
-fn install_archive(
-    app: App, archive: &Path, work: &Path, bundle: Option<&Path>, exe: &Path,
-) -> Result<()> {
+fn install_archive(app: App, archive: &Path, work: &Path, bundle: Option<&Path>, exe: &Path) -> Result<()> {
     let unpacked = work.join("unpacked");
-    Extract::from_source(archive).extract_into(&unpacked)
-        .map_err(|e| failed("unpack", e))?;
+    Extract::from_source(archive).extract_into(&unpacked).map_err(|e| failed("unpack", e))?;
     match bundle {
         Some(bundle) => swap_bundle(bundle, &unpacked.join("unfr0zen.app"), work),
         None => {
             let exe_name = app.executable();
             // The macOS archive contains unfr0zen.app, not a bare executable.
-            let new = [
-                unpacked.join(exe_name),
-                unpacked.join(format!("unfr0zen.app/Contents/MacOS/{exe_name}")),
-            ].into_iter().find(|p| p.is_file());
+            let new = [unpacked.join(exe_name), unpacked.join(format!("unfr0zen.app/Contents/MacOS/{exe_name}"))]
+                .into_iter()
+                .find(|p| p.is_file());
             let Some(new) = new else {
-                return Err(failed("unpack",
-                    format!("{} has no {exe_name}", archive.display())));
+                return Err(failed("unpack", format!("{} has no {exe_name}", archive.display())));
             };
             swap_exe(exe, &new)
         }
@@ -256,7 +257,8 @@ pub fn remove_previous() {
 
 /// The unfr0zen.app holding `exe` (…/unfr0zen.app/Contents/MacOS/unfr0zen).
 fn app_bundle(exe: &Path) -> Result<PathBuf> {
-    exe.ancestors().nth(3)
+    exe.ancestors()
+        .nth(3)
         .filter(|bundle| bundle.extension().is_some_and(|e| e == "app"))
         .map(Path::to_path_buf)
         .ok_or_else(|| failed("not running from an .app bundle", exe.display()))
@@ -310,9 +312,18 @@ mod tests {
     #[test]
     fn development_builds_have_no_version() {
         for build in [
-            "v0.1.5-3-g9d49c21", "v0.1.5-dirty", "v0.1.5-3-g9d49c21-dirty",
-            "9d49c21", "0.1.5", "v0.1", "v0.1.5.1", "v0.1.x", "v0.1.5-rc",
-            "v0.1.5-rc1-2-gabc", "v0.1.5-beta1", "",
+            "v0.1.5-3-g9d49c21",
+            "v0.1.5-dirty",
+            "v0.1.5-3-g9d49c21-dirty",
+            "9d49c21",
+            "0.1.5",
+            "v0.1",
+            "v0.1.5.1",
+            "v0.1.x",
+            "v0.1.5-rc",
+            "v0.1.5-rc1-2-gabc",
+            "v0.1.5-beta1",
+            "",
         ] {
             assert_eq!(release_version(build), None, "{build}");
         }
@@ -344,8 +355,14 @@ mod tests {
 
     #[test]
     fn a_release_without_a_digest_installs_nothing() {
-        let release = Available { tag: "v9.9.9".into(), url: String::new(), body: None, asset: "a.zip".into(),
-                                  download: "http://127.0.0.1:9/a.zip".into(), digest: None };
+        let release = Available {
+            tag: "v9.9.9".into(),
+            url: String::new(),
+            body: None,
+            asset: "a.zip".into(),
+            download: "http://127.0.0.1:9/a.zip".into(),
+            digest: None,
+        };
         let error = install(App::Cli, &release).unwrap_err().to_string();
         assert!(error.contains("has no digest"), "{error}");
     }
@@ -374,13 +391,9 @@ mod tests {
         ];
         let i = pick_asset(names).expect("should find an asset for this platform");
         let picked = names[i];
-        let expected_prefix = if cfg!(target_os = "macos") {
-            "unfr0zen-macos-universal"
-        } else {
-            &format!("unfr0zen-{PLATFORM}")
-        };
-        assert!(picked.starts_with(expected_prefix),
-                "picked {picked} but expected prefix {expected_prefix}");
+        let expected_prefix =
+            if cfg!(target_os = "macos") { "unfr0zen-macos-universal" } else { &format!("unfr0zen-{PLATFORM}") };
+        assert!(picked.starts_with(expected_prefix), "picked {picked} but expected prefix {expected_prefix}");
     }
 
     #[test]
@@ -422,8 +435,8 @@ mod tests {
     #[test]
     fn platform_is_a_known_ci_value() {
         assert!(
-            ["linux-x86_64", "linux-arm64", "linux-riscv64",
-             "windows-x86_64", "windows-arm64", "macos"].contains(&PLATFORM),
+            ["linux-x86_64", "linux-arm64", "linux-riscv64", "windows-x86_64", "windows-arm64", "macos"]
+                .contains(&PLATFORM),
             "PLATFORM={PLATFORM} is not a CI platform"
         );
     }
@@ -615,11 +628,15 @@ mod tests {
         let fake_exe = dir.path().join(exe_name);
         fs::write(&fake_exe, b"old").unwrap();
 
-        let archive = make_zip(dir.path(), "update.zip", &[
-            ("unfr0zen.app/Contents/MacOS/", b""),
-            ("unfr0zen.app/Contents/Info.plist", b"v0.2.0"),
-            (&format!("unfr0zen.app/Contents/MacOS/{exe_name}"), b"new-cli"),
-        ]);
+        let archive = make_zip(
+            dir.path(),
+            "update.zip",
+            &[
+                ("unfr0zen.app/Contents/MacOS/", b""),
+                ("unfr0zen.app/Contents/Info.plist", b"v0.2.0"),
+                (&format!("unfr0zen.app/Contents/MacOS/{exe_name}"), b"new-cli"),
+            ],
+        );
         let work = dir.path().join("work");
         fs::create_dir(&work).unwrap();
 
@@ -649,11 +666,15 @@ mod tests {
         make_bundle(&bundle, "old");
         let fake_exe = bundle.join("Contents/MacOS/unfr0zen");
 
-        let archive = make_zip(dir.path(), "update.zip", &[
-            ("unfr0zen.app/Contents/MacOS/", b""),
-            ("unfr0zen.app/Contents/Info.plist", b"v0.2.0"),
-            ("unfr0zen.app/Contents/MacOS/unfr0zen", b"new-binary"),
-        ]);
+        let archive = make_zip(
+            dir.path(),
+            "update.zip",
+            &[
+                ("unfr0zen.app/Contents/MacOS/", b""),
+                ("unfr0zen.app/Contents/Info.plist", b"v0.2.0"),
+                ("unfr0zen.app/Contents/MacOS/unfr0zen", b"new-binary"),
+            ],
+        );
         let work = dir.path().join("work");
         fs::create_dir(&work).unwrap();
 
@@ -670,9 +691,7 @@ mod tests {
         let fake_exe = bundle.join("Contents/MacOS/unfr0zen");
 
         // Zip without Contents/Info.plist.
-        let archive = make_zip(dir.path(), "bad.zip", &[
-            ("unfr0zen.app/Contents/MacOS/unfr0zen", b"bin"),
-        ]);
+        let archive = make_zip(dir.path(), "bad.zip", &[("unfr0zen.app/Contents/MacOS/unfr0zen", b"bin")]);
         let work = dir.path().join("work");
         fs::create_dir(&work).unwrap();
 

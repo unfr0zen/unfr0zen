@@ -20,7 +20,11 @@ fn terminal() -> bool {
 }
 
 fn colored(value: &str, color: &str) -> String {
-    if terminal() { format!("{color}{value}{RESET}") } else { value.to_string() }
+    if terminal() {
+        format!("{color}{value}{RESET}")
+    } else {
+        value.to_string()
+    }
 }
 
 /// Lets a Windows console show the colours.
@@ -136,8 +140,16 @@ fn running(label: &str, secs: u64, transfer: Option<&Transfer>) -> String {
     };
     let (position, total) = (transfer.position(), transfer.total.max(1));
     let filled = (WIDTH * position / total) as usize;
-    format!("{label} [{}{}] {:3}% {}/{} MiB {}:{:02}", "█".repeat(filled), "░".repeat(WIDTH as usize - filled),
-            100 * position / total, position >> 20, total >> 20, secs / 60, secs % 60)
+    format!(
+        "{label} [{}{}] {:3}% {}/{} MiB {}:{:02}",
+        "█".repeat(filled),
+        "░".repeat(WIDTH as usize - filled),
+        100 * position / total,
+        position >> 20,
+        total >> 20,
+        secs / 60,
+        secs % 60
+    )
 }
 
 /// Renders the flow's progress on the terminal: a running stage animates with
@@ -198,7 +210,9 @@ impl Progress for TerminalProgress {
         match (ok, transfer) {
             (true, Some(t)) => line(&format!("{label} {} MiB ({secs:.1}s)", t.total >> 20), '✓'),
             (true, None) => line(&format!("{label} ({secs:.1}s)"), '✓'),
-            (false, Some(t)) => error(&format!("{label} failed at {}/{} MiB ({secs:.1}s)", t.done >> 20, t.total >> 20)),
+            (false, Some(t)) => {
+                error(&format!("{label} failed at {}/{} MiB ({secs:.1}s)", t.done >> 20, t.total >> 20))
+            }
             (false, None) => error(&format!("{label} failed ({secs:.1}s)")),
         }
     }
@@ -241,9 +255,12 @@ mod tests {
 
     #[test]
     fn a_transfer_draws_a_bar() {
-        let transfer = Transfer { done: 160 * MIB, next: 64 * MIB, total: 512 * MIB, started: Instant::now(), measured: (0, 0.0) };
-        assert_eq!(running("Back up NAND", 107, Some(&transfer)),
-                   format!("Back up NAND [{}{}]  31% 160/512 MiB 1:47", "█".repeat(9), "░".repeat(21)));
+        let transfer =
+            Transfer { done: 160 * MIB, next: 64 * MIB, total: 512 * MIB, started: Instant::now(), measured: (0, 0.0) };
+        assert_eq!(
+            running("Back up NAND", 107, Some(&transfer)),
+            format!("Back up NAND [{}{}]  31% 160/512 MiB 1:47", "█".repeat(9), "░".repeat(21))
+        );
         assert_eq!(running("Connect to recovery console", 3, None), "Connect to recovery console (3s)");
     }
 

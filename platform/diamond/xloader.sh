@@ -16,7 +16,10 @@
 #     platform/diamond/xloader.sh OUT
 set -eu
 
-[ $# -eq 1 ] || { echo "usage: $0 OUT" >&2; exit 2; }
+[ $# -eq 1 ] || {
+    echo "usage: $0 OUT" >&2
+    exit 2
+}
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$(dirname "$dir")")
 mkdir -p "$1"
@@ -25,14 +28,17 @@ if [ -f "$out/x-load.bin" ] && [ "$out/x-load.bin" -nt "$0" ]; then
     echo "$out/x-load.bin is up to date"
     exit 0
 fi
-command -v docker > /dev/null || { echo "The gen 1's x-loader builds in Docker, which is missing." >&2; exit 1; }
+command -v docker >/dev/null || {
+    echo "The gen 1's x-loader builds in Docker, which is missing." >&2
+    exit 1
+}
 
 commit=9b7bb7281b715544e6f5201390d8dac416a4a494
 image=ubuntu@sha256:64483f3496c1373bfd55348e88694d1c4d0c9b660dee6bfef5e12f43b9933b30
 source=$root/.work/diamond/x-loader
-if [ "$(git -C "$source" rev-parse -q --verify HEAD 2> /dev/null)" != "$commit" ]; then
+if [ "$(git -C "$source" rev-parse -q --verify HEAD 2>/dev/null)" != "$commit" ]; then
     rm -rf "$source"
-    git clone -q https://nest-open-source.googlesource.com/nest-learning-thermostat/5.9.4/x-loader "$source" 2> /dev/null
+    git clone -q https://nest-open-source.googlesource.com/nest-learning-thermostat/5.9.4/x-loader "$source" 2>/dev/null
     git -C "$source" checkout -q --detach "$commit"
 fi
 
@@ -50,4 +56,4 @@ git -C "$source" archive --format=tar "$commit" x-loader | docker run --rm -i -v
     cp x-load.bin /out/x-load.bin.partial
     chown '"$(id -u):$(id -g)"' /out/x-load.bin.partial'
 mv "$out/x-load.bin.partial" "$out/x-load.bin"
-echo "Built $out/x-load.bin ($(wc -c < "$out/x-load.bin") bytes)"
+echo "Built $out/x-load.bin ($(wc -c <"$out/x-load.bin") bytes)"

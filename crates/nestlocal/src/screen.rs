@@ -85,14 +85,14 @@ mod tests {
 
     #[test]
     fn nlclient_gets_the_seconds_or_a_day_and_nothing_while_unset() {
-        assert_eq!(milliseconds(&fields!{}), None);
-        assert_eq!((seconds(&fields!{}), always_on(&fields!{})), (30, false));
-        assert_eq!(milliseconds(&fields!{TIMEOUT => json!(60)}), Some(60_000));
-        assert_eq!(milliseconds(&fields!{ALWAYS_ON => json!(false)}), Some(30_000));
-        assert_eq!(milliseconds(&fields!{TIMEOUT => json!(60), ALWAYS_ON => json!(true)}), Some(86_400_000));
-        assert_eq!(contents(&fields!{TIMEOUT => json!(60.0)}).as_deref(), Some("60000"), "decimal ASCII milliseconds");
-        assert_eq!(contents(&fields!{ALWAYS_ON => json!(true)}).as_deref(), Some("86400000"));
-        assert_eq!(contents(&fields!{}), None);
+        assert_eq!(milliseconds(&fields! {}), None);
+        assert_eq!((seconds(&fields! {}), always_on(&fields! {})), (30, false));
+        assert_eq!(milliseconds(&fields! {TIMEOUT => json!(60)}), Some(60_000));
+        assert_eq!(milliseconds(&fields! {ALWAYS_ON => json!(false)}), Some(30_000));
+        assert_eq!(milliseconds(&fields! {TIMEOUT => json!(60), ALWAYS_ON => json!(true)}), Some(86_400_000));
+        assert_eq!(contents(&fields! {TIMEOUT => json!(60.0)}).as_deref(), Some("60000"), "decimal ASCII milliseconds");
+        assert_eq!(contents(&fields! {ALWAYS_ON => json!(true)}).as_deref(), Some("86400000"));
+        assert_eq!(contents(&fields! {}), None);
     }
 
     #[test]

@@ -128,10 +128,17 @@ fn load(store: &Path) -> Option<Release> {
 }
 
 fn save(store: &Path, release: Option<&Release>) {
-    let result = match release {
-        Some(release) => std::fs::write(store, serde_json::to_vec(release).expect("a release serializes")),
-        None => std::fs::remove_file(store).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }),
-    };
+    let result =
+        match release {
+            Some(release) => std::fs::write(store, serde_json::to_vec(release).expect("a release serializes")),
+            None => std::fs::remove_file(store).or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        };
     if let Err(e) = result {
         logf!("update: {}: {e}", store.display());
     }
@@ -141,9 +148,13 @@ fn save(store: &Path, release: Option<&Release>) {
 pub fn release(description: &Value, device: &str) -> Option<Release> {
     let version = description["tag_name"].as_str()?.to_string();
     let wanted = format!("unfr0zen-{device}-{version}.tgz");
-    let bundle = description["assets"].as_array().into_iter().flatten()
+    let bundle = description["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
         .find(|asset| asset["name"].as_str() == Some(wanted.as_str()))
-        .and_then(|asset| asset["browser_download_url"].as_str()).map(str::to_string);
+        .and_then(|asset| asset["browser_download_url"].as_str())
+        .map(str::to_string);
     Some(Release { version, url: description["html_url"].as_str().map(str::to_string), bundle })
 }
 
@@ -202,7 +213,8 @@ impl Updates {
 
     /// Whether the release check got an answer.
     async fn check(&self) -> bool {
-        let answer = crate::fetch::get(&self.releases, API_LIMIT, Duration::from_secs(60)).await
+        let answer = crate::fetch::get(&self.releases, API_LIMIT, Duration::from_secs(60))
+            .await
             .and_then(|body| serde_json::from_slice::<Value>(&body).map_err(|e| e.to_string()));
         let found = match answer {
             Ok(description) => release(&description, self.device),
@@ -217,8 +229,11 @@ impl Updates {
         self.offline_said.store(false, Ordering::Relaxed);
         if *self.latest.lock().unwrap() != found {
             if let Some(release) = &found {
-                logf!("update: the latest release is {}{}", release.version,
-                      if release.bundle.is_none() { ", with no bundle for this unit" } else { "" });
+                logf!(
+                    "update: the latest release is {}{}",
+                    release.version,
+                    if release.bundle.is_none() { ", with no bundle for this unit" } else { "" }
+                );
             }
             save(&self.store, found.as_ref());
             *self.latest.lock().unwrap() = found;
@@ -270,10 +285,15 @@ impl Updates {
         logf!("update: downloading {url}");
         let data = crate::fetch::get(url, BUNDLE_LIMIT, Duration::from_secs(600)).await?;
         std::fs::write(DOWNLOAD, &data).map_err(|e| format!("{DOWNLOAD}: {e}"))?;
-        let output = tokio::task::spawn_blocking(|| std::process::Command::new(engine()).args(["update", DOWNLOAD]).output())
-            .await.map_err(|e| e.to_string())?.map_err(|e| format!("{}: {e}", engine()))?;
+        let output =
+            tokio::task::spawn_blocking(|| std::process::Command::new(engine()).args(["update", DOWNLOAD]).output())
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("{}: {e}", engine()))?;
         let _ = std::fs::remove_file(DOWNLOAD);
-        for line in String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines()) {
+        for line in
+            String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines())
+        {
             logf!("update: {line}");
         }
         if !output.status.success() {
@@ -290,8 +310,10 @@ mod tests {
     #[test]
     fn set_update_takes_install_or_a_bundles_url() {
         assert_eq!(request("install\n"), Some(Request::Latest));
-        assert_eq!(request(" http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz "),
-                   Some(Request::Url("http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz".into())));
+        assert_eq!(
+            request(" http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz "),
+            Some(Request::Url("http://nas.lan/unfr0zen-diamond3-v0.5.0.tgz".into()))
+        );
         assert_eq!(request("https://x/b.tgz"), Some(Request::Url("https://x/b.tgz".into())));
         assert_eq!(request("file:///tmp/b.tgz"), None);
         assert_eq!(request("yes"), None);
@@ -320,7 +342,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = dir.join("update.json");
         assert_eq!(load(&store), None);
-        let release = Release { version: "v0.5.0".into(), url: Some("https://x/r".into()), bundle: Some("https://x/b.tgz".into()) };
+        let release = Release {
+            version: "v0.5.0".into(),
+            url: Some("https://x/r".into()),
+            bundle: Some("https://x/b.tgz".into()),
+        };
         save(&store, Some(&release));
         let updates = Updates::new("diamond3", RELEASES, &store);
         assert_eq!(updates.state()["latest_version"], "v0.5.0");

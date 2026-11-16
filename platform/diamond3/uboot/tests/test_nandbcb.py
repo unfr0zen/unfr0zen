@@ -1,8 +1,9 @@
 """Exercise recovery boot-control inspection with corrupt NAND headers."""
-from pathlib import Path
+
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path("arch/arm/mach-imx/cmd_nandbcb.c")
@@ -22,12 +23,19 @@ class BootControlTests(unittest.TestCase):
         cls.addClassCleanup(cls.directory.cleanup)
         work = Path(cls.directory.name)
         patched = work / "nandbcb.c"
-        subprocess.run(["patch", "-s", "-o", str(patched),
-                        str(ROOT / "upstream" / SOURCE),
-                        str(ROOT / "patches/recovery/arch-arm-mach-imx-cmd_nandbcb.c.patch")],
-                       check=True)
+        subprocess.run(
+            [
+                "patch",
+                "-s",
+                "-o",
+                str(patched),
+                str(ROOT / "upstream" / SOURCE),
+                str(ROOT / "patches/recovery/arch-arm-mach-imx-cmd_nandbcb.c.patch"),
+            ],
+            check=True,
+        )
         source = patched.read_text()
-        harness = r'''
+        harness = r"""
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -84,10 +92,11 @@ static int read_fcb(struct boot_config *cfg, struct fcb_block *fcb, loff_t off)
     fcb->fw2_start = 0x500;
     return 0;
 }
-'''
-        harness += "\n".join(function(source, name) for name in
-                             ["read_dbbt", "dump_structure", "check_fingerprint", "nandbcb_dump"])
-        harness += r'''
+"""
+        harness += "\n".join(
+            function(source, name) for name in ["read_dbbt", "dump_structure", "check_fingerprint", "nandbcb_dump"]
+        )
+        harness += r"""
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -109,17 +118,31 @@ int main(int argc, char **argv)
     }
     return 0;
 }
-'''
+"""
         test = work / "test.c"
         test.write_text(harness)
         cls.binary = work / "test"
-        subprocess.run(["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
-                        "-Wno-sign-compare", "-I", str(ROOT / "upstream/arch/arm/include/asm/mach-imx"),
-                        str(test), "-o", str(cls.binary)], check=True)
+        subprocess.run(
+            [
+                "cc",
+                "-std=gnu11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Wno-sign-compare",
+                "-I",
+                str(ROOT / "upstream/arch/arm/include/asm/mach-imx"),
+                str(test),
+                "-o",
+                str(cls.binary),
+            ],
+            check=True,
+        )
 
     def run_case(self, case):
-        return subprocess.run([str(self.binary), str(case)], check=True,
-                              capture_output=True, text=True, timeout=2).stdout
+        return subprocess.run(
+            [str(self.binary), str(case)], check=True, capture_output=True, text=True, timeout=2
+        ).stdout
 
     def test_empty_bad_block_table(self):
         self.run_case(0)

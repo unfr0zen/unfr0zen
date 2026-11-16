@@ -20,7 +20,9 @@ pub fn using(path: &Path) -> bool {
 }
 
 fn on(b: &[u8]) -> bool {
-    nlsettings::value(b, KEY).and_then(|v| std::str::from_utf8(v).ok()?.trim().parse::<i64>().ok()).is_some_and(|v| v != 0)
+    nlsettings::value(b, KEY)
+        .and_then(|v| std::str::from_utf8(v).ok()?.trim().parse::<i64>().ok())
+        .is_some_and(|v| v != 0)
 }
 
 #[cfg(test)]

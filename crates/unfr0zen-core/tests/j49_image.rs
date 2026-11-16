@@ -19,7 +19,8 @@ fn elf_offset(elf: &[u8], address: u32) -> usize {
     let word = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
     let headers = word(28) as usize;
     let count = u16::from_le_bytes(elf[44..46].try_into().unwrap()) as usize;
-    (0..count).map(|i| headers + i * 32)
+    (0..count)
+        .map(|i| headers + i * 32)
         .find(|&h| word(h) == 1 && address >= word(h + 8) && address - word(h + 8) < word(h + 16))
         .map(|h| (word(h + 4) + address - word(h + 8)) as usize)
         .unwrap_or_else(|| panic!("unmapped address {address:#x}"))
@@ -32,18 +33,25 @@ fn pages(image: &[u8], offset: usize, length: usize) -> &[u8] {
 #[test]
 fn the_environment_names_both_slots() {
     let Some(image) = image() else { return };
-    let copies: Vec<Option<Environment>> = nand::ENV_COPIES.iter().map(|&offset| {
-        let data: Vec<u8> = pages(&image, offset, nand::ENV_SIZE).chunks(PAGE_RAW)
-            .flat_map(|raw| nand::correct_page(raw).unwrap().0).collect();
-        Environment::parse(&data)
-    }).collect();
+    let copies: Vec<Option<Environment>> = nand::ENV_COPIES
+        .iter()
+        .map(|&offset| {
+            let data: Vec<u8> = pages(&image, offset, nand::ENV_SIZE)
+                .chunks(PAGE_RAW)
+                .flat_map(|raw| nand::correct_page(raw).unwrap().0)
+                .collect();
+            Environment::parse(&data)
+        })
+        .collect();
     let (_, env) = nand::newest(&copies).unwrap();
     let order = env.boot_order().unwrap();
     assert_ne!(order[0], order[1]);
     // The bytes U-Boot would write back are the bytes it wrote.
     let index = copies.iter().position(|c| c.as_ref() == Some(env)).unwrap();
-    let data: Vec<u8> = pages(&image, nand::ENV_COPIES[index], nand::ENV_SIZE).chunks(PAGE_RAW)
-        .flat_map(|raw| nand::correct_page(raw).unwrap().0).collect();
+    let data: Vec<u8> = pages(&image, nand::ENV_COPIES[index], nand::ENV_SIZE)
+        .chunks(PAGE_RAW)
+        .flat_map(|raw| nand::correct_page(raw).unwrap().0)
+        .collect();
     let written = env.to_bytes().unwrap();
     let end = 5 + env.values.iter().map(|(k, v)| k.len() + v.len() + 2).sum::<usize>() + 1;
     assert_eq!(written[..end], data[..end]);
@@ -68,7 +76,6 @@ fn every_root_page_corrects_and_reencodes() {
     }
 }
 
-
 fn slot(image: &[u8], slot: Slot) -> jffs2::Slot {
     let (offset, length) = nand::slot_partition(slot);
     jffs2::Slot::load(pages(image, offset, length).to_vec()).unwrap()
@@ -81,7 +88,9 @@ fn slot(image: &[u8], slot: Slot) -> jffs2::Slot {
 /// file holds, so the file must be a prefix of what it extracted.
 #[test]
 fn every_file_reads_as_another_reader_extracts_it() {
-    let (Some(image), Some(tree)) = (image(), std::env::var_os("J49_TREE").map(PathBuf::from)) else { return };
+    let (Some(image), Some(tree)) = (image(), std::env::var_os("J49_TREE").map(PathBuf::from)) else {
+        return;
+    };
     for (which, name) in [(Slot::Root0, "root0"), (Slot::Root1, "root1")] {
         let mut volume = slot(&image, which);
         let (mut files, mut missing, mut pending) = (0, 0, vec![tree.join(name)]);
@@ -99,7 +108,9 @@ fn every_file_reads_as_another_reader_extracts_it() {
                             files += 1;
                         }
                         None => {
-                            if !relative.starts_with("usr/share/terminfo/") && !relative.starts_with("usr/share/zoneinfo/") {
+                            if !relative.starts_with("usr/share/terminfo/")
+                                && !relative.starts_with("usr/share/zoneinfo/")
+                            {
                                 eprintln!("{name}/{relative} not in the slot");
                             }
                             missing += 1;
@@ -136,13 +147,27 @@ fn a_file_appended_to_a_real_slot_reads_back() {
 fn a_new_nestlocal_takes_the_old_ones_blocks_when_it_does_not_fit_beside_them() {
     let Some(image) = image() else { return };
     let mut volume = slot(&image, Slot::Root0);
-    let Some(old) = volume.read("nestlabs/sbin/nestlocal").unwrap() else { return };
+    let Some(old) = volume.read("nestlabs/sbin/nestlocal").unwrap() else {
+        return;
+    };
     let inittab = volume.read("etc/inittab").unwrap().unwrap();
     let mut x = 1u32;
-    let new: Vec<u8> = (0..7 << 20).map(|_| { x ^= x << 13; x ^= x >> 17; x ^= x << 5; x as u8 }).collect();
+    let new: Vec<u8> = (0..7 << 20)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect();
     volume.write("nestlabs/sbin/nestlocal", &new, &old.0, old.1).unwrap();
     let plan = volume.programmed().unwrap();
-    eprintln!("root0: {} pages before, {} blocks erased, {} pages after", plan.before.len(), plan.erase.len(), plan.after.len());
+    eprintln!(
+        "root0: {} pages before, {} blocks erased, {} pages after",
+        plan.before.len(),
+        plan.erase.len(),
+        plan.after.len()
+    );
     assert!(!plan.erase.is_empty() && !plan.before.is_empty());
     let mut back = jffs2::Slot::load(plan.raw.clone()).unwrap();
     assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap(), (old.0, old.1, new));
@@ -152,7 +177,8 @@ fn a_new_nestlocal_takes_the_old_ones_blocks_when_it_does_not_fit_beside_them() 
     let (offset, _) = nand::slot_partition(Slot::Root0);
     let mut cut = image[offset / nand::PAGE * nand::PAGE_RAW..][..plan.raw.len()].to_vec();
     for &page in &plan.before {
-        cut[page * nand::PAGE_RAW..(page + 1) * nand::PAGE_RAW].copy_from_slice(&plan.raw[page * nand::PAGE_RAW..(page + 1) * nand::PAGE_RAW]);
+        cut[page * nand::PAGE_RAW..(page + 1) * nand::PAGE_RAW]
+            .copy_from_slice(&plan.raw[page * nand::PAGE_RAW..(page + 1) * nand::PAGE_RAW]);
     }
     for &block in &plan.erase {
         let erased = &mut cut[block * nand::BLOCK_RAW..(block + 1) * nand::BLOCK_RAW];
@@ -169,12 +195,16 @@ fn a_new_nestlocal_takes_the_old_ones_blocks_when_it_does_not_fit_beside_them() 
 #[test]
 fn the_setup_applies_to_both_slots() {
     use unfr0zen_core::nestlocal::{generate_pki, Matter, Mqtt};
-    use unfr0zen_core::setup::{set_up_on_device, root_hash, Options};
+    use unfr0zen_core::setup::{root_hash, set_up_on_device, Options};
     use unfr0zen_core::Device;
     let Some(image) = image() else { return };
     let object = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o");
-    let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (utils/build-firmware.sh)", object.display()) };
-    let build_screen = |source: &[u8], sections: &[unfr0zen_core::nlclient::menu::Section]| unfr0zen_core::nlclient::build(source, &object, sections);
+    let Ok(object) = std::fs::read(&object) else {
+        panic!("{}: build it first (utils/build-firmware.sh)", object.display())
+    };
+    let build_screen = |source: &[u8], sections: &[unfr0zen_core::nlclient::menu::Section]| {
+        unfr0zen_core::nlclient::build(source, &object, sections)
+    };
     let pki = generate_pki().unwrap();
     let options = Options {
         root_hash: root_hash("unfr0zen").unwrap(),
@@ -183,8 +213,10 @@ fn the_setup_applies_to_both_slots() {
         block_cloud: true,
         mqtt: Some(Mqtt { url: "tcp://broker:1883".into(), ..Mqtt::default() }),
         ssh: true,
-        ssh_server: Some(unfr0zen_core::nestlocal::Overlay { directories: vec![],
-                                                             files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())] }),
+        ssh_server: Some(unfr0zen_core::nestlocal::Overlay {
+            directories: vec![],
+            files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"DROPBEAR".to_vec())],
+        }),
         matter: Some(Matter::from_pairing_code(unfr0zen_core::nestlocal::DEFAULT_MATTER_CODE).unwrap()),
         local_cloud: b"\x7fELF local cloud".to_vec(),
         ..Options::default()
@@ -198,11 +230,23 @@ fn the_setup_applies_to_both_slots() {
         };
         let dark = unfr0zen_core::nlclient::dark_theme::reviewed(&stock);
         let options = Options { dark_theme: dark, ..options.clone() };
-        let changes = set_up_on_device(&mut volume, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
-                                      false, &build_screen).unwrap_or_else(|e| panic!("{which}: {e}"));
+        let changes = set_up_on_device(
+            &mut volume,
+            Device::J49,
+            &options,
+            b"NESTLOCAL",
+            &mut || Ok(pki.clone()),
+            false,
+            &build_screen,
+        )
+        .unwrap_or_else(|e| panic!("{which}: {e}"));
         let (free, used) = volume.usage();
         let plan = volume.programmed().unwrap();
-        eprintln!("{which}: {} changes, {} pages in {used} of {free} erased blocks", changes.len(), plan.before.len() + plan.after.len());
+        eprintln!(
+            "{which}: {} changes, {} pages in {used} of {free} erased blocks",
+            changes.len(),
+            plan.before.len() + plan.after.len()
+        );
         let mut back = jffs2::Slot::load(plan.raw).unwrap();
         let inittab = String::from_utf8(back.read("etc/inittab").unwrap().unwrap().2).unwrap();
         assert!(!inittab.contains("ttyGS0"), "{inittab}");
@@ -210,28 +254,55 @@ fn the_setup_applies_to_both_slots() {
         assert!(client.contains("value=\"https://127.0.0.1/entry\""));
         assert_eq!(back.read("nestlabs/sbin/nestlocal").unwrap().unwrap().2, b"NESTLOCAL");
         assert_eq!(back.read("usr/sbin/dropbearmulti").unwrap().unwrap(), ("0:0".into(), 0o755, b"DROPBEAR".to_vec()));
-        assert!(String::from_utf8(back.read("etc/init.d/rcS").unwrap().unwrap().2).unwrap()
+        assert!(String::from_utf8(back.read("etc/init.d/rcS").unwrap().unwrap().2)
+            .unwrap()
             .contains("${INITDIR}/sshd start\n${INITDIR}/unfr0zen-ssh start\n"));
         assert!(String::from_utf8(back.read("etc/shadow").unwrap().unwrap().2).unwrap().contains("root:$6$"));
         let nlclient = back.read("nestlabs/sbin/nlclient").unwrap().unwrap().2;
         assert!(!back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2.is_empty());
-        assert_ne!(unfr0zen_core::shell::sha256_hex(&nlclient), "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7");
+        assert_ne!(
+            unfr0zen_core::shell::sha256_hex(&nlclient),
+            "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7"
+        );
         // The settings screens are dark when asked for.
         let original = back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2;
         if dark {
-            let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-                "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"))).unwrap();
-            let hex = |value: &serde_json::Value| u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+            let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+                env!("UNFR0ZEN_ROOT"),
+                "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"
+            )))
+            .unwrap();
+            let hex = |value: &serde_json::Value| {
+                u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
+            };
             for edit in golden["edits"].as_array().unwrap() {
                 let at = elf_offset(&original, hex(&edit[0]));
-                assert_eq!(u32::from_le_bytes(nlclient[at..at + 4].try_into().unwrap()), hex(&edit[2]), "{which}: {}", edit[0]);
+                assert_eq!(
+                    u32::from_le_bytes(nlclient[at..at + 4].try_into().unwrap()),
+                    hex(&edit[2]),
+                    "{which}: {}",
+                    edit[0]
+                );
             }
         }
         // A second run finds everything in place.
         let mut again = jffs2::Slot::load(volume.programmed().unwrap().raw).unwrap();
-        let second = set_up_on_device(&mut again, Device::J49, &options, b"NESTLOCAL", &mut || Ok(pki.clone()),
-                                     false, &build_screen).unwrap();
+        let second = set_up_on_device(
+            &mut again,
+            Device::J49,
+            &options,
+            b"NESTLOCAL",
+            &mut || Ok(pki.clone()),
+            false,
+            &build_screen,
+        )
+        .unwrap();
         let rewritten: Vec<&str> = second.iter().map(|c| c.name.as_str()).collect();
-        assert!(rewritten.iter().all(|name| *name == "etc/shadow" || *name == "etc/nestlocal/server.crt" || *name == "etc/nestlocal/server.key"), "{which}: {rewritten:?}");
+        assert!(
+            rewritten.iter().all(|name| *name == "etc/shadow"
+                || *name == "etc/nestlocal/server.crt"
+                || *name == "etc/nestlocal/server.key"),
+            "{which}: {rewritten:?}"
+        );
     }
 }

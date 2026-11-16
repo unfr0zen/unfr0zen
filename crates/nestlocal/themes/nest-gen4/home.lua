@@ -80,14 +80,20 @@ local home = {}
 ---------------------------------------------------------------------------
 
 local function celsius(t, value)
-  if t.unit == "F" then return (value - 32) * 5 / 9 end
+  if t.unit == "F" then
+    return (value - 32) * 5 / 9
+  end
   return value
 end
 
 -- Whether the target saves energy, earning the leaf.
 local function eco(t)
-  if t.mode == "heat" then return celsius(t, t.target) <= ECO_HEAT_MAX end
-  if t.mode == "cool" then return celsius(t, t.target) >= ECO_COOL_MIN end
+  if t.mode == "heat" then
+    return celsius(t, t.target) <= ECO_HEAT_MAX
+  end
+  if t.mode == "cool" then
+    return celsius(t, t.target) >= ECO_COOL_MIN
+  end
   return false
 end
 
@@ -103,7 +109,9 @@ end
 -- The colour of a heat-cool end's mark: dim while the other end is picked.
 local function range_color(t, side)
   local other = side == "low" and "high" or "low"
-  if t.range == other then return colors.dim end
+  if t.range == other then
+    return colors.dim
+  end
   return side == "low" and colors.heat or colors.cool
 end
 
@@ -114,7 +122,9 @@ end
 
 -- Whole degrees as text, and in Celsius "5" for a half, else nil.
 local function digits(value, unit)
-  if unit == "F" then return string.format("%d", math.floor(value + 0.5)), nil end
+  if unit == "F" then
+    return string.format("%d", math.floor(value + 0.5)), nil
+  end
   local halves = math.floor(value * 2 + 0.5)
   return string.format("%d", math.floor(halves / 2)), halves % 2 == 1 and "5" or nil
 end
@@ -143,10 +153,18 @@ local function status(t)
     local text = (t.range_editing and "Press to set " or "Press to change ") .. side
     return text, t.range == "low" and colors.heat or colors.cool
   end
-  if t.mode == "off" then return "Inside " .. short(t.current, t.unit), colors.secondary end
-  if t.hvac == "heating" then return "Heating", colors.heat end
-  if t.hvac == "cooling" then return "Cooling", colors.cool end
-  if t.mode == "heat-cool" then return "Heat • Cool", colors.secondary end
+  if t.mode == "off" then
+    return "Inside " .. short(t.current, t.unit), colors.secondary
+  end
+  if t.hvac == "heating" then
+    return "Heating", colors.heat
+  end
+  if t.hvac == "cooling" then
+    return "Cooling", colors.cool
+  end
+  if t.mode == "heat-cool" then
+    return "Heat • Cool", colors.secondary
+  end
   return t.mode == "cool" and "Cool" or "Heat", colors.secondary
 end
 
@@ -164,7 +182,9 @@ local function heat_symbol(g, x, y, s, line_color)
       local f = j / steps
       local qx = x + i * s * 0.32 + math.sin(f * 2 * math.pi) * s * 0.09
       local qy = y + s * 0.5 - f * s
-      if px then geom.push_line(segs, px, py, qx, qy) end
+      if px then
+        geom.push_line(segs, px, py, qx, qy)
+      end
       px, py = qx, qy
     end
   end
@@ -205,7 +225,9 @@ local function leaf_symbol(g, x, y, s, fill)
     end
   end
   g:polygon(pts, fill)
-  local function on_axis(along) return x - along * sin_t, y + along * cos_t end
+  local function on_axis(along)
+    return x - along * sin_t, y + along * cos_t
+  end
   local x1, y1 = on_axis(half * 0.75)
   local x2, y2 = on_axis(-half * 0.45)
   g:line(x1, y1, x2, y2, s * 0.08, colors.bg, true)
@@ -253,7 +275,9 @@ local function paint_glyph(g, ch, x, base, size, fill, dy, top, bottom)
   local name, pad, w, h = glyph(g, ch, size)
   local lx, ly = math.floor(x - pad + 0.5), math.floor(base - size * FIGTREE.ascent + dy + 0.5)
   local y0, y1 = math.max(0, top - ly), math.min(h, bottom - ly)
-  if y1 <= y0 then return end
+  if y1 <= y0 then
+    return
+  end
   g:save()
   g:translate(lx, ly)
   g:paint_layer(name, fill, { 0, y0, w, y0, w, y1, 0, y1 })
@@ -263,7 +287,9 @@ end
 -- A digit's cell at `size`: number.cell of the widest digit.
 local function cell(g, size)
   local widest = 0
-  for d = 0, 9 do widest = math.max(widest, measure(g, tostring(d), size)) end
+  for d = 0, 9 do
+    widest = math.max(widest, measure(g, tostring(d), size))
+  end
   return widest * number.cell
 end
 
@@ -350,8 +376,17 @@ end
 local function advance_roll(slot, value, unit, now)
   local r = rolls[slot]
   if not r then
-    r = { value = value, target = value, from = shown_digits(value, unit), to = shown_digits(value, unit),
-          at = LONG_AGO, length = motion.roll, pace = motion.roll, changed = LONG_AGO, dir = 1 }
+    r = {
+      value = value,
+      target = value,
+      from = shown_digits(value, unit),
+      to = shown_digits(value, unit),
+      at = LONG_AGO,
+      length = motion.roll,
+      pace = motion.roll,
+      changed = LONG_AGO,
+      dir = 1,
+    }
     rolls[slot] = r
   end
   if value ~= r.target then
@@ -379,8 +414,18 @@ local function rolling_number(g, slot, x, value, unit, base, size, fill, now)
   local old_w, new_w = run_width(g, r.from[1], size), run_width(g, r.to[1], size)
   local old_x, new_x = x - old_w / 2, x - new_w / 2
   roll_run(g, r.from[1], r.to[1], old_x, new_x, base, size, fill, q, r.dir)
-  roll_run(g, r.from[2], r.to[2], old_x + old_w + HALF_GAP, new_x + new_w + HALF_GAP,
-    half_base(base, size, small), small, fill, q, r.dir)
+  roll_run(
+    g,
+    r.from[2],
+    r.to[2],
+    old_x + old_w + HALF_GAP,
+    new_x + new_w + HALF_GAP,
+    half_base(base, size, small),
+    small,
+    fill,
+    q,
+    r.dir
+  )
   return moving
 end
 
@@ -389,13 +434,39 @@ end
 local function draw_number(g, c, t, fade_in, now)
   local o = alpha(fade_in)
   if t.mode == "off" then
-    g:text(tr("Off"), c, number.base - number.off_drop,
-      { font = "figtree", size = number.size * number.off_scale, color = colors.text .. o, align = "center" })
+    g:text(
+      tr("Off"),
+      c,
+      number.base - number.off_drop,
+      { font = "figtree", size = number.size * number.off_scale, color = colors.text .. o, align = "center" }
+    )
     return false
   elseif t.mode == "heat-cool" then
-    local function tone(side) return ((t.range and t.range ~= side) and colors.dim or colors.text) .. o end
-    local low = rolling_number(g, "low", c - number.range_gap, t.low, t.unit, number.range_base, number.range_size, tone("low"), now)
-    local high = rolling_number(g, "high", c + number.range_gap, t.high, t.unit, number.range_base, number.range_size, tone("high"), now)
+    local function tone(side)
+      return ((t.range and t.range ~= side) and colors.dim or colors.text) .. o
+    end
+    local low = rolling_number(
+      g,
+      "low",
+      c - number.range_gap,
+      t.low,
+      t.unit,
+      number.range_base,
+      number.range_size,
+      tone("low"),
+      now
+    )
+    local high = rolling_number(
+      g,
+      "high",
+      c + number.range_gap,
+      t.high,
+      t.unit,
+      number.range_base,
+      number.range_size,
+      tone("high"),
+      now
+    )
     g:circle(c, number.range_base - number.range_size * number.range_dot_rise, number.range_dot, colors.secondary .. o)
     return low or high
   end
@@ -424,20 +495,42 @@ local function draw_track(gfx, c, t, extent, opacity)
     local left, right = ring.from + half, ring.to - half
     local stop = math.min(left, ring.from + ring.fade)
     if stop > ring.from then
-      g:gradient_arc(c, c, ring.radius, ring.from, stop, ring.width,
-                     line_color .. "00", line_color .. alpha((stop - ring.from) / ring.fade))
+      g:gradient_arc(
+        c,
+        c,
+        ring.radius,
+        ring.from,
+        stop,
+        ring.width,
+        line_color .. "00",
+        line_color .. alpha((stop - ring.from) / ring.fade)
+      )
     end
-    if left > stop then g:arc(c, c, ring.radius, stop, left, ring.width, line_color) end
+    if left > stop then
+      g:arc(c, c, ring.radius, stop, left, ring.width, line_color)
+    end
     local start = math.max(right, ring.to - ring.fade)
-    if start > right then g:arc(c, c, ring.radius, right, start, ring.width, line_color) end
+    if start > right then
+      g:arc(c, c, ring.radius, right, start, ring.width, line_color)
+    end
     if start < ring.to then
-      g:gradient_arc(c, c, ring.radius, start, ring.to, ring.width,
-                     line_color .. alpha((ring.to - start) / ring.fade), line_color .. "00")
+      g:gradient_arc(
+        c,
+        c,
+        ring.radius,
+        start,
+        ring.to,
+        ring.width,
+        line_color .. alpha((ring.to - start) / ring.fade),
+        line_color .. "00"
+      )
     end
   end
   local track_color = t.mode == "off" and colors.track_off or colors.track
   if extent >= 1 then
-    gfx:layer("track", "1", function(g) draw(g, 1, WHITE) end)
+    gfx:layer("track", "1", function(g)
+      draw(g, 1, WHITE)
+    end)
     for _, clip in ipairs(track_band(c, ring.radius - TRACK_CLIP, ring.radius + TRACK_CLIP)) do
       gfx:paint_layer("track", track_color .. alpha(opacity), clip)
     end
@@ -475,12 +568,16 @@ local function draw_scale(gfx, c, t, a, s)
   end
   -- The lit stretch runs from the tick nearest `lo` to the one nearest
   -- `hi`; clip edges sit half a step beyond ticks.
-  local function nearest(at) return ring.from + math.floor((at - ring.from) / ticks.step + 0.5) * ticks.step end
+  local function nearest(at)
+    return ring.from + math.floor((at - ring.from) / ticks.step + 0.5) * ticks.step
+  end
   local lit_from, lit_to = nearest(lo) - ticks.step / 2, nearest(hi) + ticks.step / 2
   local first, last = ring.from - ticks.step / 2, ring.to + ticks.step / 2
   local function paint(name, fill, from, to)
     from, to = math.max(from, first), math.min(to, last)
-    if to <= from then return end
+    if to <= from then
+      return
+    end
     for _, clip in ipairs(geom.ring_clips(c, inner - TICK_CLIP_PAD, outer + TICK_CLIP_PAD, from, to, CLIP.span)) do
       gfx:paint_layer(name, fill, clip)
     end
@@ -501,8 +598,13 @@ local function draw_scale(gfx, c, t, a, s)
   local function target_bar(at, bar_color)
     for i = GLOW_STEPS, 1, -1 do
       local f = i / GLOW_STEPS
-      bar(at, ticks.bar_inner, ticks.bar_outer, ticks.bar_width + ticks.glow * f,
-          bar_color .. alpha(s * ticks.glow_alpha * (1 - f) * 2))
+      bar(
+        at,
+        ticks.bar_inner,
+        ticks.bar_outer,
+        ticks.bar_width + ticks.glow * f,
+        bar_color .. alpha(s * ticks.glow_alpha * (1 - f) * 2)
+      )
     end
     bar(at, ticks.bar_inner, ticks.bar_outer, ticks.bar_width, bar_color .. alpha(s))
   end
@@ -536,8 +638,12 @@ end
 local function scale_opacity(ui)
   local turned = ui.changed.turned
   local since = ui.now - turned
-  if turned < 0 or since >= motion.hold + motion.fade then return 0, false end
-  if since < motion.hold then return 1, true end
+  if turned < 0 or since >= motion.hold + motion.fade then
+    return 0, false
+  end
+  if since < motion.hold then
+    return 1, true
+  end
   return 1 - anim.ease_in_out((since - motion.hold) / motion.fade), true
 end
 
@@ -605,8 +711,12 @@ local function draw_marks(g, t, p, label_opacity)
     local symbol = t.mode == "cool" and cool_symbol or heat_symbol
     symbol(g, p.set[1], p.set[2], SYMBOL, target_color(t))
   end
-  local style = { font = ROOM_LABEL_FONT.font, size = ROOM_LABEL_FONT.size,
-                  color = colors.room .. alpha(label_opacity), align = "center" }
+  local style = {
+    font = ROOM_LABEL_FONT.font,
+    size = ROOM_LABEL_FONT.size,
+    color = colors.room .. alpha(label_opacity),
+    align = "center",
+  }
   g:text(bare(t.current, t.unit), p.label[1], p.label[2] + ROOM_LABEL.drop, style)
 end
 
@@ -680,8 +790,11 @@ local function paint_glow(gfx, ui, c, fade_in)
     -- Only the glow's square: the layer beyond it is black, like the
     -- cleared screen.
     local r = glow.radius + GLOW_CLIP_PAD
-    gfx:paint_layer("glow", color.scale(glow_color, strength * fade_in),
-      { c - r, cy - r, c + r, cy - r, c + r, cy + r, c - r, cy + r })
+    gfx:paint_layer(
+      "glow",
+      color.scale(glow_color, strength * fade_in),
+      { c - r, cy - r, c + r, cy - r, c + r, cy + r, c - r, cy + r }
+    )
   end
   return fading
 end
@@ -693,24 +806,38 @@ end
 -- The status words and the leaf.
 local function draw_words(g, c, t)
   local text, text_color = status(t)
-  g:text(tr(text), c, status_style.y, { font = "figtree_medium", size = status_style.size, color = text_color, align = "center" })
-  if eco(t) then leaf_symbol(g, c, leaf_style.y, leaf_style.size, colors.leaf) end
+  g:text(
+    tr(text),
+    c,
+    status_style.y,
+    { font = "figtree_medium", size = status_style.size, color = text_color, align = "center" }
+  )
+  if eco(t) then
+    leaf_symbol(g, c, leaf_style.y, leaf_style.size, colors.leaf)
+  end
 end
 
 local function dial(gfx, ui, c)
   local t = ui.thermostat
   -- Coming home, the track draws in from its ends and the rest fades up.
-  local intro = ui.screen == "home" and anim.ease_out((ui.now - ui.changed.screen - motion.intro_from) / motion.intro) or 1
+  local intro = ui.screen == "home" and anim.ease_out((ui.now - ui.changed.screen - motion.intro_from) / motion.intro)
+    or 1
   local animating = intro < 1
   animating = paint_glow(gfx, ui, c, intro) or animating
 
   if t.mode ~= "off" then
     local a, moving = mark_angles(t, ui.now)
     local s, scale_moving = scale_opacity(ui)
-    if s < 1 then draw_track(gfx, c, t, intro, 1 - s) end
-    if s > 0 then draw_scale(gfx, c, t, a, s * intro) end
+    if s < 1 then
+      draw_track(gfx, c, t, intro, 1 - s)
+    end
+    if s > 0 then
+      draw_scale(gfx, c, t, a, s * intro)
+    end
     -- The scale's bars stand for the dots while it shows.
-    if s < 1 then draw_dots(gfx, c, t, a, (1 - s) * intro) end
+    if s < 1 then
+      draw_dots(gfx, c, t, a, (1 - s) * intro)
+    end
 
     local p, shown, gliding = place_marks(gfx, c, t, a, s, ui.now)
     moving = moving or gliding
@@ -720,10 +847,27 @@ local function dial(gfx, ui, c)
       draw_marks(gfx, t, p, shown)
       gfx:restore()
     else
-      local key = table.concat({ t.mode, t.unit, t.current, t.range or "",
-        string.format("%.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.2f", p.label[1], p.label[2],
-          p.set[1], p.set[2], p.low[1], p.low[2], p.high[1], p.high[2], shown) }, "|")
-      gfx:layer("marks", key, function(g) draw_marks(g, t, p, shown) end)
+      local key = table.concat({
+        t.mode,
+        t.unit,
+        t.current,
+        t.range or "",
+        string.format(
+          "%.1f %.1f %.1f %.1f %.1f %.1f %.1f %.1f %.2f",
+          p.label[1],
+          p.label[2],
+          p.set[1],
+          p.set[2],
+          p.low[1],
+          p.low[2],
+          p.high[1],
+          p.high[2],
+          shown
+        ),
+      }, "|")
+      gfx:layer("marks", key, function(g)
+        draw_marks(g, t, p, shown)
+      end)
       for _, clip in ipairs(track_band(c, ring.radius - MARKS_CLIP.inside, ring.radius + MARKS_CLIP.outside)) do
         gfx:paint_layer("marks", WHITE, clip)
       end

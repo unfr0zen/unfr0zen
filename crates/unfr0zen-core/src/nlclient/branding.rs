@@ -20,32 +20,23 @@ pub(super) fn recolor(source: &[u8], output: &mut [u8]) -> Result<bool> {
         for at in (section.offset..(section.offset + section.size).saturating_sub(7)).step_by(4) {
             let lo = word(source, at)?;
             let hi = word(source, at + 4)?;
-            if lo & 0xfff00000 != 0xe3000000
-                || hi & 0xfff00000 != 0xe3400000
-                || lo & 0xf000 != hi & 0xf000
-            {
+            if lo & 0xfff00000 != 0xe3000000 || hi & 0xfff00000 != 0xe3400000 || lo & 0xf000 != hi & 0xf000 {
                 continue;
             }
-            let value =
-                (((hi >> 4) & 0xf000) | (hi & 0xfff)) << 16 | ((lo >> 4) & 0xf000) | (lo & 0xfff);
+            let value = (((hi >> 4) & 0xf000) | (hi & 0xfff)) << 16 | ((lo >> 4) & 0xf000) | (lo & 0xfff);
             let Some(index) = COLORS.iter().position(|&(before, _)| before == value) else {
                 continue;
             };
             let address = section.address + (at - section.offset) as u32;
             let index_fn = starts.partition_point(|&s| s <= address);
             if index_fn > 0 {
-                candidates
-                    .entry(starts[index_fn - 1])
-                    .or_default()
-                    .push((at, index));
+                candidates.entry(starts[index_fn - 1]).or_default().push((at, index));
             }
         }
     }
     let candidates: Vec<_> = candidates
         .into_iter()
-        .filter(|(_, hits)| {
-            hits.len() == 4 && (0..4).all(|i| hits.iter().any(|&(_, index)| index == i))
-        })
+        .filter(|(_, hits)| hits.len() == 4 && (0..4).all(|i| hits.iter().any(|&(_, index)| index == i)))
         .collect();
     let [(function, hits)] = candidates.as_slice() else {
         return Ok(false);
@@ -79,28 +70,14 @@ mod tests {
         let mut output = source.clone();
         assert!(recolor(&source, &mut output).unwrap());
         assert_eq!(source.len(), output.len());
-        assert_eq!(
-            source.iter().zip(&output).filter(|(a, b)| a != b).count(),
-            15
-        );
+        assert_eq!(source.iter().zip(&output).filter(|(a, b)| a != b).count(), 15);
         let journal = super::super::Patch::journal(&source, &output).unwrap();
-        assert_eq!(
-            super::super::Patch::parse(&journal)
-                .unwrap()
-                .apply(&output, true)
-                .unwrap(),
-            source
-        );
+        assert_eq!(super::super::Patch::parse(&journal).unwrap().apply(&output, true).unwrap(), source);
         let before = output.clone();
         assert!(!recolor(&before, &mut output).unwrap());
         assert_eq!(output, before);
         // The palette match alone is insufficient: the enclosing function must match too.
-        let first = source
-            .iter()
-            .zip(&output)
-            .position(|(a, b)| a != b)
-            .unwrap()
-            & !3;
+        let first = source.iter().zip(&output).position(|(a, b)| a != b).unwrap() & !3;
         let mut unknown = source.clone();
         unknown[first - 3] ^= 0x10;
         let mut untouched = unknown.clone();

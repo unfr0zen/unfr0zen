@@ -1,0 +1,13 @@
+// Biome lints the JavaScript; prettier formats it.
+{
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "rules": {
+      "correctness": {
+        // Zigbee2MQTT calls a converter with positional arguments it may not use.
+        "noUnusedFunctionParameters": "off"
+      }
+    }
+  }
+}

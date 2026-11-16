@@ -1,7 +1,11 @@
 //! The j49 kernels' boot logo recoloured for the dark theme: the kernel with
 //! the USB serial port from build/, and the stock kernel of a NAND sample.
 use std::path::PathBuf;
-use unfr0zen_core::j49::{flasher::Image, kernel, logo::{self, Logo}};
+use unfr0zen_core::j49::{
+    flasher::Image,
+    kernel,
+    logo::{self, Logo},
+};
 use unfr0zen_core::Slot;
 
 fn kernels() -> Vec<(String, Vec<u8>)> {

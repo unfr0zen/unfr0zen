@@ -67,9 +67,10 @@ fn startup(address: u32) -> Result<Vec<u8>> {
 
 /// Pass the native run flag and reply string to the bounded command reader.
 fn bounded_read(address: u32, reader: u32) -> Result<Vec<u8>> {
-    Ok([0xe59fc00c, 0xe92d5000, 0xe1a03008,
-        branch(address + 12, reader, 0xeb000000)?, 0xe8bd9000, 0x4fa9c0]
-        .into_iter().flat_map(u32::to_le_bytes).collect())
+    Ok([0xe59fc00c, 0xe92d5000, 0xe1a03008, branch(address + 12, reader, 0xeb000000)?, 0xe8bd9000, 0x4fa9c0]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect())
 }
 
 /// Set SO_REUSEADDR before binding, so accepted connections in TIME_WAIT do
@@ -109,14 +110,14 @@ fn reusable_socket(address: u32) -> Result<Vec<u8>> {
 /// the native caller's missing-temperature sentinel. Preserve error handling.
 fn control_reading(address: u32) -> Result<Vec<u8>> {
     let mut code = vec![
-        0xe92d4010, 0xe24dd008, 0xe1a04000, 0xe5900018,
-        0xe3500000, 0, 0xe1a0100d, 0, 0xe3500000, 0,
-        0xe59d0000, 0xe3a01001, 0, 0xe1a00004, 0,
-        0xe3a01000, 0xe28dd008, 0xe8bd4010, 0xe12fff1e,
+        0xe92d4010, 0xe24dd008, 0xe1a04000, 0xe5900018, 0xe3500000, 0, 0xe1a0100d, 0, 0xe3500000, 0, 0xe59d0000,
+        0xe3a01001, 0, 0xe1a00004, 0, 0xe3a01000, 0xe28dd008, 0xe8bd4010, 0xe12fff1e,
     ];
     for (index, target, opcode) in [
-        (5, address + 13 * 4, 0x0a000000), (7, 0x1ebc18, 0xeb000000),
-        (9, address + 13 * 4, 0x1a000000), (12, address + 16 * 4, 0xea000000),
+        (5, address + 13 * 4, 0x0a000000),
+        (7, 0x1ebc18, 0xeb000000),
+        (9, address + 13 * 4, 0x1a000000),
+        (12, address + 16 * 4, 0xea000000),
         (14, 0x1b72ec, 0xeb000000),
     ] {
         code[index] = branch(address + index as u32 * 4, target, opcode)?;
@@ -125,31 +126,46 @@ fn control_reading(address: u32) -> Result<Vec<u8>> {
 }
 
 fn control_result(address: u32) -> Result<Vec<u8>> {
-    Ok([0xe3510000, branch(address + 4, 0x237a8c, 0x0a000000)?,
-        branch(address + 8, 0x237ad8, 0xea000000)?]
-        .into_iter().flat_map(u32::to_le_bytes).collect())
+    Ok([0xe3510000, branch(address + 4, 0x237a8c, 0x0a000000)?, branch(address + 8, 0x237ad8, 0xea000000)?]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect())
 }
 
 fn screen_guard(address: u32) -> Result<Vec<u8>> {
-    Ok([0xe3500000, 0x012fff1e, 0xe59000ec,
-        branch(address + 12, 0x19a66c, 0xea000000)?]
-        .into_iter().flat_map(u32::to_le_bytes).collect())
+    Ok([0xe3500000, 0x012fff1e, 0xe59000ec, branch(address + 12, 0x19a66c, 0xea000000)?]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect())
 }
 
 fn sample_reply(address: u32, retry: u32) -> Result<Vec<u8>> {
-    Ok([0xe3500000, 0x159f1008, 0x059f1008, 0xe2840004,
-        branch(address + 16, 0x141868, 0xea000000)?, 0x3dfa1c, retry]
-        .into_iter().flat_map(u32::to_le_bytes).collect())
+    Ok([0xe3500000, 0x159f1008, 0x059f1008, 0xe2840004, branch(address + 16, 0x141868, 0xea000000)?, 0x3dfa1c, retry]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect())
 }
 
 fn screen_bindings() -> std::collections::BTreeMap<String, u32> {
-    [("rcs_screen_lookup", 0x51a1c), ("rcs_layer_lookup", 0x519a0),
-     ("rcs_layer_new", 0x19862c), ("rcs_screen_new", 0x19a6f8),
-     ("rcs_add_layer", 0x51968), ("rcs_add_screen", 0x519e8), ("strcmp", 0x2bec4),
-     ("rcs_associated", 0x96a08), ("rcs_string_find", 0x2a820), ("rcs_native_post", 0x6c180),
-     ("rcs_native_read", 0x2c77c), ("rcs_interval", 0x2b36c),
-     ("rcs_string_clear", 0x2ce48), ("rcs_poll", 0x2ad60)]
-        .into_iter().map(|(name, address)| (name.into(), address)).collect()
+    [
+        ("rcs_screen_lookup", 0x51a1c),
+        ("rcs_layer_lookup", 0x519a0),
+        ("rcs_layer_new", 0x19862c),
+        ("rcs_screen_new", 0x19a6f8),
+        ("rcs_add_layer", 0x51968),
+        ("rcs_add_screen", 0x519e8),
+        ("strcmp", 0x2bec4),
+        ("rcs_associated", 0x96a08),
+        ("rcs_string_find", 0x2a820),
+        ("rcs_native_post", 0x6c180),
+        ("rcs_native_read", 0x2c77c),
+        ("rcs_interval", 0x2b36c),
+        ("rcs_string_clear", 0x2ce48),
+        ("rcs_poll", 0x2ad60),
+    ]
+    .into_iter()
+    .map(|(name, address)| (name.into(), address))
+    .collect()
 }
 
 /// Extend the screen builder's executable load segment. The stock hash guards
@@ -178,12 +194,21 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     let simulation = elf.offset(0x47e94)?;
     let temperature = elf.offset(0x237af4)?;
     let temperature_result = elf.offset(0x237afc)?;
-    for (offset, expected) in [(hook, 0xe3051140), (limit, 0xe3560068),
-                               (run_flag, 0xe5882000), (read, 0xebfbaa8d), (open, 0xebfba06e),
-                               (menu, 0xebfc3c7a), (configure, 0xe59000ec),
-                               (post, 0xebfcaa48), (reply, 0xe30f1a1c), (visible, 0x0affffb0),
-                               (simulation, 0xebff8824), (temperature, 0xebfdfdfc),
-                               (temperature_result, 0xeaffffe0)] {
+    for (offset, expected) in [
+        (hook, 0xe3051140),
+        (limit, 0xe3560068),
+        (run_flag, 0xe5882000),
+        (read, 0xebfbaa8d),
+        (open, 0xebfba06e),
+        (menu, 0xebfc3c7a),
+        (configure, 0xe59000ec),
+        (post, 0xebfcaa48),
+        (reply, 0xe30f1a1c),
+        (visible, 0x0affffb0),
+        (simulation, 0xebff8824),
+        (temperature, 0xebfdfdfc),
+        (temperature_result, 0xeaffffe0),
+    ] {
         if word(output, offset)? != expected {
             return device("the external temperature patch site changed");
         }
@@ -193,16 +218,23 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     }
     let phoff = word(output, 28)? as usize;
     let stride = half(output, 42)? as usize;
-    if stride != 32 { return device("unsupported nlclient program header size"); }
+    if stride != 32 {
+        return device("unsupported nlclient program header size");
+    }
     let mut segment = None;
     for i in 0..half(output, 44)? as usize {
         let at = phoff + i * stride;
         let offset = word(output, at + 4)? as usize;
         let size = word(output, at + 16)? as usize;
-        if word(output, at)? == 1 && word(output, at + 24)? == 5
-            && offset >= stock.len() && offset.checked_add(size) == Some(output.len())
-            && word(output, at + 20)? as usize == size {
-            if segment.is_some() { return device("ambiguous nlclient payload segment"); }
+        if word(output, at)? == 1
+            && word(output, at + 24)? == 5
+            && offset >= stock.len()
+            && offset.checked_add(size) == Some(output.len())
+            && word(output, at + 20)? as usize == size
+        {
+            if segment.is_some() {
+                return device("ambiguous nlclient payload segment");
+            }
             segment = Some((at, offset, word(output, at + 8)?));
         }
     }
@@ -210,7 +242,8 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
         return device("the external temperature needs the linked screen payload");
     };
     let start = align(output.len(), 4)?;
-    let address = base.checked_add((start - offset) as u32)
+    let address = base
+        .checked_add((start - offset) as u32)
         .ok_or_else(|| crate::Error::Device("external temperature payload address overflow".into()))?;
     let mut code = startup(address)?;
     let read_address = address + code.len() as u32;
@@ -230,9 +263,15 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     code.extend(RETRY_REPLY);
     code.resize(align(code.len(), 4)?, 0);
     let screen = super::linker::link(screen_object, address + code.len() as u32, &screen_bindings())?;
-    let post_entry = screen.symbols.get("rcs_post_reading").copied()
+    let post_entry = screen
+        .symbols
+        .get("rcs_post_reading")
+        .copied()
         .ok_or_else(|| crate::Error::Device("the RCS payload has no reading gate".into()))?;
-    let reader = screen.symbols.get("rcs_read_command").copied()
+    let reader = screen
+        .symbols
+        .get("rcs_read_command")
+        .copied()
         .ok_or_else(|| crate::Error::Device("the RCS payload has no command reader".into()))?;
     let read_code = bounded_read(read_address, reader)?;
     let read_at = (read_address - address) as usize;
@@ -302,14 +341,22 @@ mod tests {
 
     #[test]
     fn emitted_payload_matches_the_independent_assembler_golden() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
-            "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
+        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("UNFR0ZEN_ROOT"),
+            "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"
+        )))
+        .unwrap();
         assert_eq!(STOCK_SHA, golden["stock_sha256"].as_str().unwrap());
         let address = golden["entry"].as_u64().unwrap() as u32;
         let mut code = startup(address).unwrap();
         assert_eq!(address + code.len() as u32, golden["read_entry"].as_u64().unwrap() as u32);
-        code.extend(bounded_read(address + code.len() as u32,
-            golden["ui_symbols"]["rcs_read_command"].as_u64().unwrap() as u32).unwrap());
+        code.extend(
+            bounded_read(
+                address + code.len() as u32,
+                golden["ui_symbols"]["rcs_read_command"].as_u64().unwrap() as u32,
+            )
+            .unwrap(),
+        );
         assert_eq!(address + code.len() as u32, golden["socket_entry"].as_u64().unwrap() as u32);
         code.extend(reusable_socket(address + code.len() as u32).unwrap());
         assert_eq!(address + code.len() as u32, golden["temperature_entry"].as_u64().unwrap() as u32);

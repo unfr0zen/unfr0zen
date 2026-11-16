@@ -11,9 +11,7 @@ use unfr0zen_core::{
     shell::sha256_hex,
 };
 fn root() -> PathBuf {
-    Path::new(env!("UNFR0ZEN_ROOT"))
-        .canonicalize()
-        .unwrap()
+    Path::new(env!("UNFR0ZEN_ROOT")).canonicalize().unwrap()
 }
 fn goldens() -> Vec<Value> {
     let mut paths = std::fs::read_dir(root().join("platform/common/nlclient/tests/golden"))
@@ -22,10 +20,7 @@ fn goldens() -> Vec<Value> {
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect::<Vec<_>>();
     paths.sort();
-    paths
-        .iter()
-        .map(|p| serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap())
-        .collect()
+    paths.iter().map(|p| serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()).collect()
 }
 /// The hand-over's symbols, as the builder links them for the golden's build.
 fn handover(golden: &Value) -> BTreeMap<String, u32> {
@@ -33,9 +28,8 @@ fn handover(golden: &Value) -> BTreeMap<String, u32> {
     nlclient::discovery::handover_externals(&discovery)
 }
 fn object() -> Option<Vec<u8>> {
-    let p = std::env::var_os("NLCLIENT_OBJECT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("build/custom-screen.o"));
+    let p =
+        std::env::var_os("NLCLIENT_OBJECT").map(PathBuf::from).unwrap_or_else(|| root().join("build/custom-screen.o"));
     let object = std::fs::read(p).ok();
     if object.is_none() {
         assert!(
@@ -50,20 +44,14 @@ fn object() -> Option<Vec<u8>> {
 fn embedded_object_links_to_golden_payloads() {
     let Some(object) = object() else { return };
     for golden in goldens() {
-        let api: BTreeMap<String, u32> =
-            serde_json::from_value(golden["native_api"].clone()).unwrap();
+        let api: BTreeMap<String, u32> = serde_json::from_value(golden["native_api"].clone()).unwrap();
         let mut externals = api;
         externals.entry("native_rename".into()).or_insert(0);
-        let layout: BTreeMap<String, u32> =
-            serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
+        let layout: BTreeMap<String, u32> = serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
         externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
         externals.extend(handover(&golden));
-        let linked = linker::link(
-            &object,
-            golden["patch"]["payload_address"].as_u64().unwrap() as u32,
-            &externals,
-        )
-        .unwrap();
+        let linked =
+            linker::link(&object, golden["patch"]["payload_address"].as_u64().unwrap() as u32, &externals).unwrap();
         assert_eq!(
             json!({"size":linked.bytes.len(),"entry":linked.entry,"symbols":linked.symbols,"sha256":sha256_hex(&linked.bytes)}),
             golden["payload"]
@@ -72,9 +60,8 @@ fn embedded_object_links_to_golden_payloads() {
 }
 #[test]
 fn stock_dumps_match_every_recorded_stage() {
-    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join(".work/firmware"));
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root().join(".work/firmware"));
     let Some(object) = object() else { return };
     let Ok(paths) = std::fs::read_dir(&firmware) else {
         assert!(
@@ -101,20 +88,10 @@ fn stock_dumps_match_every_recorded_stage() {
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         checked += 1;
         for stage in ["discovery", "native_api"] {
-            assert_eq!(
-                found.manifest[stage],
-                golden[stage],
-                "{}: {stage}",
-                path.display()
-            );
+            assert_eq!(found.manifest[stage], golden[stage], "{}: {stage}", path.display());
         }
         for (key, want) in golden["patch"].as_object().unwrap() {
-            assert_eq!(
-                &found.manifest[key],
-                want,
-                "{}: patch.{key}",
-                path.display()
-            );
+            assert_eq!(&found.manifest[key], want, "{}: patch.{key}", path.display());
         }
         let offset = found.manifest["payload_offset"].as_u64().unwrap() as usize;
         let size = found.manifest["payload_size"].as_u64().unwrap() as usize;
@@ -123,9 +100,7 @@ fn stock_dumps_match_every_recorded_stage() {
             golden["payload"]
         );
         let mut journal = Vec::new();
-        flate2::read::GzDecoder::new(found.journal.as_slice())
-            .read_to_end(&mut journal)
-            .unwrap();
+        flate2::read::GzDecoder::new(found.journal.as_slice()).read_to_end(&mut journal).unwrap();
         assert_eq!(
             json!({"size":found.output.len(),"sha256":sha256_hex(&found.output),"journal_sha256":sha256_hex(&journal)}),
             golden["output"]
@@ -135,11 +110,7 @@ fn stock_dumps_match_every_recorded_stage() {
     }
     eprintln!("Checked {checked} unchanged firmware samples");
     if std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_some() {
-        assert_eq!(
-            checked,
-            goldens().len(),
-            "all private stock samples are required"
-        );
+        assert_eq!(checked, goldens().len(), "all private stock samples are required");
     }
 }
 #[test]
@@ -156,11 +127,7 @@ fn invalid_objects_are_rejected() {
 fn linker_matches_lld_using_the_same_object() {
     let Some(object) = object() else { return };
     let lld = std::env::var_os("NLCLIENT_REFERENCE_LLD").unwrap_or_else(|| "ld.lld".into());
-    if std::process::Command::new(&lld)
-        .arg("--version")
-        .output()
-        .is_err()
-    {
+    if std::process::Command::new(&lld).arg("--version").output().is_err() {
         eprintln!("Optional reference check: ld.lld not present");
         return;
     }
@@ -178,11 +145,9 @@ fn linker_matches_lld_using_the_same_object() {
     let object_path = directory.join("screen.o");
     std::fs::write(&object_path, &object).unwrap();
     for golden in goldens() {
-        let mut externals: BTreeMap<String, u32> =
-            serde_json::from_value(golden["native_api"].clone()).unwrap();
+        let mut externals: BTreeMap<String, u32> = serde_json::from_value(golden["native_api"].clone()).unwrap();
         externals.entry("native_rename".into()).or_insert(0);
-        let layout: BTreeMap<String, u32> =
-            serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
+        let layout: BTreeMap<String, u32> = serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
         externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
         externals.extend(handover(&golden));
         let address = golden["patch"]["payload_address"].as_u64().unwrap() as u32;
@@ -220,10 +185,7 @@ fn linker_matches_lld_using_the_same_object() {
             let offset = word(at + 16);
             reference.extend(&elf[offset..offset + word(at + 20)]);
         }
-        assert_eq!(
-            linked.bytes, reference,
-            "same object and addresses must produce exactly ld.lld -O0's bytes"
-        );
+        assert_eq!(linked.bytes, reference, "same object and addresses must produce exactly ld.lld -O0's bytes");
     }
 }
 
@@ -291,19 +253,18 @@ fn discovery_moves_with_the_elf_and_rejects_corrupted_abis() {
     }
     for bucket in ["device", "shared", "schedule"] {
         let slot = before.anchors[&format!("{bucket}_commit_slot")];
-        let relocation = sections(&stock).into_iter()
+        let relocation = sections(&stock)
+            .into_iter()
             .filter(|(_, kind, _, _, _, _)| *kind == 9)
             .flat_map(|(_, _, _, _, offset, size)| (offset..offset + size).step_by(8))
-            .find(|&at| w(&stock, at) == slot).unwrap();
+            .find(|&at| w(&stock, at) == slot)
+            .unwrap();
         let mut changed = stock.clone();
         put(&mut changed, relocation + 4, 2); // R_ARM_ABS32 does not preserve PIE load bias.
         assert!(nlclient::discovery::discover(&changed).is_err());
     }
     let mut changed = stock.clone();
-    let at = va(
-        &changed,
-        before.native_api["native_screen_vtable"] + before.layout["SCREEN_SECOND_VPTR"] - 16,
-    );
+    let at = va(&changed, before.native_api["native_screen_vtable"] + before.layout["SCREEN_SECOND_VPTR"] - 16);
     put(&mut changed, at, 0xfffffff8);
     assert!(nlclient::discovery::discover(&changed).is_err());
     let shift = 0x100000;
@@ -339,46 +300,26 @@ fn discovery_moves_with_the_elf_and_rejects_corrupted_abis() {
     assert_eq!(after.layout, before.layout);
     assert_eq!(after.fingerprints, before.fingerprints);
     assert_eq!(after.factory, before.factory + shift);
-    assert_eq!(
-        after.native_api,
-        before
-            .native_api
-            .into_iter()
-            .map(|(k, v)| (k, v + shift))
-            .collect()
-    );
+    assert_eq!(after.native_api, before.native_api.into_iter().map(|(k, v)| (k, v + shift)).collect());
 }
 
 #[test]
 fn unsupported_relocations_and_branch_veneers_are_refused() {
     let Some(object) = object() else { return };
     let golden = goldens().remove(0);
-    let mut externals: BTreeMap<String, u32> =
-        serde_json::from_value(golden["native_api"].clone()).unwrap();
+    let mut externals: BTreeMap<String, u32> = serde_json::from_value(golden["native_api"].clone()).unwrap();
     externals.entry("native_rename".into()).or_insert(0);
-    let layout: BTreeMap<String, u32> =
-        serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
+    let layout: BTreeMap<String, u32> = serde_json::from_value(golden["discovery"]["layout"].clone()).unwrap();
     externals.extend(layout.into_iter().map(|(k, v)| (format!("layout_{k}"), v)));
     externals.extend(handover(&golden));
     let mut changed = object.clone();
-    let reloc = sections(&object)
-        .into_iter()
-        .find(|(_, kind, _, _, _, _)| *kind == 9)
-        .unwrap();
+    let reloc = sections(&object).into_iter().find(|(_, kind, _, _, _, _)| *kind == 9).unwrap();
     let at = reloc.4 + 4;
     let info = w(&changed, at);
     put(&mut changed, at, (info & !255) | 255);
-    assert!(linker::link(&changed, 0x510000, &externals)
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("relocation 255"));
+    assert!(linker::link(&changed, 0x510000, &externals).err().unwrap().to_string().contains("relocation 255"));
     externals.insert("native_new".into(), 0x80000000);
-    assert!(linker::link(&object, 0x510000, &externals)
-        .err()
-        .unwrap()
-        .to_string()
-        .contains("veneer"));
+    assert!(linker::link(&object, 0x510000, &externals).err().unwrap().to_string().contains("veneer"));
 }
 
 #[test]
@@ -404,25 +345,18 @@ fn layout_numbers_do_not_acquire_the_pie_load_bias() {
     // Some discovered fields are intentionally unused by the adapter.
     // Check representative live sizes, offsets and flags as well as every
     // layout relocation above, rather than requiring unused symbols.
-    for name in [
-        "PRIMARY_SIZE",
-        "COMMON_OFFSET",
-        "SCREEN_SECOND_VPTR",
-        "LEGACY_CLICK",
-    ] {
-        assert!(
-            checked.contains(&format!("layout_{name}")),
-            "missing layout {name}"
-        );
+    for name in ["PRIMARY_SIZE", "COMMON_OFFSET", "SCREEN_SECOND_VPTR", "LEGACY_CLICK"] {
+        assert!(checked.contains(&format!("layout_{name}")), "missing layout {name}");
     }
 }
 
 /// Every private sample, by file name, with its golden.
 fn samples() -> Vec<(PathBuf, Vec<u8>, Value)> {
-    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join(".work/firmware"));
-    let Ok(paths) = std::fs::read_dir(&firmware) else { return Vec::new() };
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root().join(".work/firmware"));
+    let Ok(paths) = std::fs::read_dir(&firmware) else {
+        return Vec::new();
+    };
     let mut found = Vec::new();
     for path in paths.flatten().map(|p| p.path()).filter(|p| p.is_file()) {
         let stock = std::fs::read(&path).unwrap();
@@ -448,8 +382,10 @@ fn reviewed_builds_share_their_natives_library_calls() {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks require the private samples");
         return;
     }
-    let shapes: Value =
-        serde_json::from_slice(&std::fs::read(root().join("crates/unfr0zen-core/src/nlclient/abi_shapes.json")).unwrap()).unwrap();
+    let shapes: Value = serde_json::from_slice(
+        &std::fs::read(root().join("crates/unfr0zen-core/src/nlclient/abi_shapes.json")).unwrap(),
+    )
+    .unwrap();
     for (path, stock, _) in &samples {
         let found = nlclient::discovery::discover(stock).unwrap();
         let own = found.variant.clone().unwrap();
@@ -462,7 +398,11 @@ fn reviewed_builds_share_their_natives_library_calls() {
             .map(|(name, _)| name.as_str())
             .collect();
         let allowed = if own == "2025-6.5-14" { 5 } else { 1 };
-        assert!(unmatched.len() <= allowed, "{}: no other reviewed build's natives call what these do: {unmatched:?}", path.display());
+        assert!(
+            unmatched.len() <= allowed,
+            "{}: no other reviewed build's natives call what these do: {unmatched:?}",
+            path.display()
+        );
     }
 }
 
@@ -525,15 +465,19 @@ fn natives_of_another_shape_are_refused() {
         }
     }
     let error = nlclient::discovery::discover(&changed).unwrap_err().to_string();
-    assert!(error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"), "{error}");
+    assert!(
+        error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"),
+        "{error}"
+    );
 }
 #[test]
 fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
     let Some(object) = object() else { return };
-    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join(".work/firmware"));
-    let Ok(paths) = std::fs::read_dir(&firmware) else { return };
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root().join(".work/firmware"));
+    let Ok(paths) = std::fs::read_dir(&firmware) else {
+        return;
+    };
     for path in paths {
         let path = path.unwrap().path();
         if !path.is_file() {
@@ -543,7 +487,9 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
         let all = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL).unwrap();
         let none = nlclient::builder::build(&stock, &object, &[]).unwrap();
         let (all, none) = (&all.manifest["settings_menu"], (&none.manifest["settings_menu"], &none.output));
-        let names = |menu: &Value| menu["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let names = |menu: &Value| {
+            menu["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect::<Vec<_>>()
+        };
         let shown = names(none.0);
         assert_eq!(shown.len() + 4, names(all).len(), "{}", path.display());
         assert!(!shown.iter().any(|n| ["account", "update", "proinfoscreen", "templock"].contains(&n.as_str())));
@@ -560,7 +506,8 @@ fn file_offset(elf: &[u8], address: u32) -> usize {
     let word = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
     let half = |at: usize| u16::from_le_bytes(elf[at..at + 2].try_into().unwrap()) as usize;
     let (phoff, count) = (word(28) as usize, half(44));
-    (0..count).map(|i| phoff + i * 32)
+    (0..count)
+        .map(|i| phoff + i * 32)
         .find(|&h| word(h) == 1 && (word(h + 8)..word(h + 8) + word(h + 16)).contains(&address))
         .map(|h| (address - word(h + 8) + word(h + 4)) as usize)
         .unwrap()

@@ -1,7 +1,11 @@
 #include <assert.h>
 #include "../src/custom_flow.h"
 static int last = -1, fail = 0;
-static int request(int action, void *context) { (void)context; last = action; return fail; }
+static int request(int action, void *context) {
+    (void)context;
+    last = action;
+    return fail;
+}
 static void matter_refresh_test(void) {
     struct custom_flow f = {.page = CUSTOM_MATTER, .root = CUSTOM_MATTER};
     int started = 0;
@@ -15,7 +19,8 @@ static void matter_refresh_test(void) {
     assert(f.page == CUSTOM_MATTER);
     f.page = CUSTOM_MATTER_PAIRING;
     assert(!custom_back(&f));
-    f.page = CUSTOM_MATTER_PAIRING; started = 0;
+    f.page = CUSTOM_MATTER_PAIRING;
+    started = 0;
     /* A pre-existing Paired status cannot acknowledge a pending request. */
     assert(!custom_matter_refresh(&f, paired, 1, &started, 1));
     assert(!started && f.page == CUSTOM_MATTER_PAIRING);
@@ -26,7 +31,8 @@ static void matter_refresh_test(void) {
     assert(started && f.page == CUSTOM_MATTER_PAIRING);
     assert(custom_matter_refresh(&f, paired, 0, &started, 3));
     assert(f.page == CUSTOM_MATTER && !f.action_failed);
-    f.page = CUSTOM_MATTER_PAIRING; started = 0;
+    f.page = CUSTOM_MATTER_PAIRING;
+    started = 0;
     assert(!custom_matter_refresh(&f, "Pairing open. Scan in your Matter app.", 1, &started, 1));
     assert(!started);
     assert(custom_matter_refresh(&f, "Pairing open. Scan in your Matter app.", 0, &started, 2));
@@ -34,11 +40,13 @@ static void matter_refresh_test(void) {
     assert(!custom_matter_refresh(&f, "Pairing open. Scan in your Matter app.", 0, &started, 120));
     assert(custom_matter_refresh(&f, paired, 0, &started, 121));
     assert(f.page == CUSTOM_MATTER);
-    f.page = CUSTOM_MATTER_PAIRING; started = 0;
+    f.page = CUSTOM_MATTER_PAIRING;
+    started = 0;
     assert(!custom_matter_refresh(&f, paired, 1, &started, 119));
     assert(custom_matter_refresh(&f, paired, 1, &started, 120));
     assert(f.page == CUSTOM_MATTER && f.action_failed);
-    f.page = CUSTOM_MATTER_PAIRING; started = 1;
+    f.page = CUSTOM_MATTER_PAIRING;
+    started = 1;
     assert(custom_matter_refresh(&f, "Matter not enabled", 0, &started, 3));
     assert(f.page == CUSTOM_MATTER && f.action_failed);
     f.page = CUSTOM_MATTER_PAIRING;
@@ -70,16 +78,21 @@ int main(void) {
     assert(custom_choose(&f, 0, request, 0) == 2);
     f.page = CUSTOM_MATTER;
     custom_choose(&f, 0, request, 0);
-    fail = 1; custom_choose(&f, 0, request, 0); assert(f.action_failed && f.page == CUSTOM_MATTER);
+    fail = 1;
+    custom_choose(&f, 0, request, 0);
+    assert(f.action_failed && f.page == CUSTOM_MATTER);
     fail = 0;
     assert(custom_choose(&f, 1, request, 0) == 2 && f.page == CUSTOM_MATTER && !f.action_failed);
     assert(!custom_back(&f));
     /* Zigbee alike. */
     f = (struct custom_flow){.page = CUSTOM_ZIGBEE, .root = CUSTOM_ZIGBEE};
-    last = -1; custom_choose(&f, 0, request, 0);
+    last = -1;
+    custom_choose(&f, 0, request, 0);
     assert(f.page == CUSTOM_ZIGBEE_CONFIRM && last == -1);
-    custom_choose(&f, 1, request, 0); assert(f.page == CUSTOM_ZIGBEE && last == -1);
-    custom_choose(&f, 0, request, 0); custom_choose(&f, 0, request, 0);
+    custom_choose(&f, 1, request, 0);
+    assert(f.page == CUSTOM_ZIGBEE && last == -1);
+    custom_choose(&f, 0, request, 0);
+    custom_choose(&f, 0, request, 0);
     assert(f.page == CUSTOM_ZIGBEE_PAIRING && last == 1 && !f.action_failed);
     assert(custom_back(&f) && f.page == CUSTOM_ZIGBEE);
     assert(!custom_back(&f) && custom_choose(&f, 1, request, 0) == 2);
@@ -87,8 +100,11 @@ int main(void) {
     f = (struct custom_flow){.page = CUSTOM_DOOM, .root = CUSTOM_DOOM};
     last = -1;
     assert(custom_choose(&f, 0, request, 0) == 1 && last == 2 && f.page == CUSTOM_DOOM && !f.action_failed);
-    fail = 1; custom_choose(&f, 0, request, 0); assert(f.action_failed && f.page == CUSTOM_DOOM);
-    fail = 0; assert(custom_choose(&f, 1, request, 0) == 2 && !f.action_failed);
+    fail = 1;
+    custom_choose(&f, 0, request, 0);
+    assert(f.action_failed && f.page == CUSTOM_DOOM);
+    fail = 0;
+    assert(custom_choose(&f, 1, request, 0) == 2 && !f.action_failed);
     /* Themes: a choice asks for it and leaves, as Back does; a failed one stays. */
     f = (struct custom_flow){.page = CUSTOM_THEMES, .root = CUSTOM_THEMES, .theme_count = 4};
     for (int choice = 0; choice < f.theme_count; choice++) {
@@ -96,7 +112,8 @@ int main(void) {
     }
     fail = 1;
     assert(custom_choose(&f, 0, request, 0) == 1 && last == 3 && f.action_failed && f.page == CUSTOM_THEMES);
-    fail = 0; last = -1;
+    fail = 0;
+    last = -1;
     assert(custom_choose(&f, f.theme_count, request, 0) == 2 && last == -1);
     f.theme_count = 7;
     assert(custom_choose(&f, 6, request, 0) == 2 && last == 9);

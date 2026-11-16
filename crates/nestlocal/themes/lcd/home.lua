@@ -31,7 +31,9 @@ end
 -- A temperature as segments: whole degrees, and in Celsius the tenths.
 local function figures(value, unit)
   local whole, half = thermostat.digits(value, unit)
-  if unit == "F" then return whole, nil end
+  if unit == "F" then
+    return whole, nil
+  end
   return whole, half or "0"
 end
 
@@ -41,8 +43,12 @@ end
 local function draw_bars(g, c, t, ink, faint)
   local step = (bars.to - bars.from) / bars.count
   local lo, hi = t.min, t.target
-  if t.mode == "heat-cool" then lo, hi = t.low, t.high end
-  if t.mode == "off" then hi = t.min - 1 end
+  if t.mode == "heat-cool" then
+    lo, hi = t.low, t.high
+  end
+  if t.mode == "off" then
+    hi = t.min - 1
+  end
   for i = 0, bars.count - 1 do
     local a0 = bars.from + i * step + step * (1 - bars.fill) / 2
     local value = t.min + (i + 0.5) / bars.count * (t.max - t.min)
@@ -66,9 +72,15 @@ local function draw_target(g, c, value, unit, top, h, ink)
   local tw = tenth and segments.measure(tenth, small) + h * 0.12 or 0
   local x = c - (w + tw) / 2
   segments.draw(g, whole .. (tenth and "." or ""), x, top, h, ink)
-  if tenth then segments.draw(g, tenth, x + w + h * 0.12, top, small, ink) end
-  g:text("°" .. unit, x + w + tw + h * 0.06, top, { font = "medium", size = layout.unit_size, color = ink,
-                                                 baseline = "top", spacing = 1 })
+  if tenth then
+    segments.draw(g, tenth, x + w + h * 0.12, top, small, ink)
+  end
+  g:text(
+    "°" .. unit,
+    x + w + tw + h * 0.06,
+    top,
+    { font = "medium", size = layout.unit_size, color = ink, baseline = "top", spacing = 1 }
+  )
 end
 
 -- What is printed: the time, the bar graph, the target (or range, or
@@ -122,7 +134,9 @@ local function draw_print(g, c, t, clock, blink)
   for _, m in ipairs(texts) do
     local text = m[1]
     -- Blinking leaves the space "ON" takes.
-    if m[2] and running and not blink then text = text:gsub(" " .. tr("ON") .. "$", "") end
+    if m[2] and running and not blink then
+      text = text:gsub(" " .. tr("ON") .. "$", "")
+    end
     label(g, text, x, modes.y, m[2] and ink or dim)
     x = x + g:measure(m[1], style) + modes.gap
   end
@@ -152,10 +166,16 @@ end
 -- fading. Whether it moves, and how long it stays on.
 local function backlight(ui)
   local since = ui.now - math.max(ui.changed.turned, ui.changed.screen)
-  if since < 0 then since = 0 end
-  if since < motion.backlight then return 1, false, motion.backlight - since end
+  if since < 0 then
+    since = 0
+  end
+  if since < motion.backlight then
+    return 1, false, motion.backlight - since
+  end
   local p = (since - motion.backlight) / motion.fade
-  if p >= 1 then return 0, false, nil end
+  if p >= 1 then
+    return 0, false, nil
+  end
   return 1 - anim.ease_in_out(p), true, nil
 end
 
@@ -176,18 +196,43 @@ function home.draw(gfx, ui)
 
   local running = thermostat.running(t)
   local blink = not running or (ui.now % motion.blink) < motion.blink / 2
-  local key = table.concat({ t.mode, t.unit, t.target, t.low, t.high, t.current, t.min, t.max, tostring(t.humidity),
-                             t.hvac, t.range or "", tostring(t.range_editing), tostring(t.eco), clock.weekday,
-                             clock.hour, clock.minute, tostring(clock.twelve_hour), tostring(blink) }, "|")
-  gfx:layer("print", key, function(g) draw_print(g, c, t, clock, blink) end)
+  local key = table.concat({
+    t.mode,
+    t.unit,
+    t.target,
+    t.low,
+    t.high,
+    t.current,
+    t.min,
+    t.max,
+    tostring(t.humidity),
+    t.hvac,
+    t.range or "",
+    tostring(t.range_editing),
+    tostring(t.eco),
+    clock.weekday,
+    clock.hour,
+    clock.minute,
+    tostring(clock.twelve_hour),
+    tostring(blink),
+  }, "|")
+  gfx:layer("print", key, function(g)
+    draw_print(g, c, t, clock, blink)
+  end)
   gfx:paint_layer("print", WHITE)
 
   -- The next frame: while the backlight fades, at once; else when the
   -- "ON" blinks, the backlight goes out or the minute turns.
-  if fading then return true end
+  if fading then
+    return true
+  end
   local wake = thermostat.next_minute(clock)
-  if running then wake = math.min(wake, motion.blink / 2 - ui.now % (motion.blink / 2)) end
-  if hold then wake = math.min(wake, hold) end
+  if running then
+    wake = math.min(wake, motion.blink / 2 - ui.now % (motion.blink / 2))
+  end
+  if hold then
+    wake = math.min(wake, hold)
+  end
   gfx:wake(wake)
   return false
 end

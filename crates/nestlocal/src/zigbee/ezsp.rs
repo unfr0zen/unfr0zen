@@ -169,7 +169,6 @@ impl<'a> Reader<'a> {
     pub fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
-
 }
 
 /// EmberApsFrame.
@@ -291,18 +290,27 @@ mod tests {
             0xd8, 0xc4, // LQI, RSSI
         ];
         let mut r = Reader(&params);
-        assert_eq!(Network::read(&mut r).unwrap(), Network {
-            channel: 25, pan_id: 0x1a62, extended_pan_id: [0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0x01],
-            allowing_join: true, stack_profile: 2, update_id: 0,
-        });
+        assert_eq!(
+            Network::read(&mut r).unwrap(),
+            Network {
+                channel: 25,
+                pan_id: 0x1a62,
+                extended_pan_id: [0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0x01],
+                allowing_join: true,
+                stack_profile: 2,
+                update_id: 0,
+            }
+        );
         assert_eq!(r.u8().unwrap(), 0xd8);
         assert!(Network::read(&mut Reader(&params[..13])).is_err());
     }
 
     #[test]
     fn an_incoming_message_shorter_than_its_length_says_is_refused() {
-        let mut params = vec![0x00, 0x04, 0x01, 0x00, 0x00, 0x01, 0x01, 0x40, 0x00, 0x00, 0x00, 0x2a,
-                              0xff, 0xd0, 0x00, 0x00, 0xff, 0xff, 0x05, 0x00, 0x07, 0x00, 0x05];
+        let mut params = vec![
+            0x00, 0x04, 0x01, 0x00, 0x00, 0x01, 0x01, 0x40, 0x00, 0x00, 0x00, 0x2a, 0xff, 0xd0, 0x00, 0x00, 0xff, 0xff,
+            0x05, 0x00, 0x07, 0x00, 0x05,
+        ];
         assert!(Incoming::read(&params).is_err());
         // Bytes past the payload are not part of it.
         params.extend([0x00, 0xEE]);
@@ -320,8 +328,18 @@ mod tests {
             0x05, 0x00, 0x07, 0x00, 0x05, 0x00, // ZCL: read attribute 0x0005
         ];
         let m = Incoming::read(&params).unwrap();
-        assert_eq!(m.aps, Aps { profile: 0x0104, cluster: 0, source_endpoint: 1, destination_endpoint: 1,
-                                options: 0x0040, group: 0, sequence: 0x2a });
+        assert_eq!(
+            m.aps,
+            Aps {
+                profile: 0x0104,
+                cluster: 0,
+                source_endpoint: 1,
+                destination_endpoint: 1,
+                options: 0x0040,
+                group: 0,
+                sequence: 0x2a
+            }
+        );
         assert_eq!((m.sender, m.payload), (0x0000, vec![0x00, 0x07, 0x00, 0x05, 0x00]));
         let mut out = Vec::new();
         m.aps.write(&mut out);

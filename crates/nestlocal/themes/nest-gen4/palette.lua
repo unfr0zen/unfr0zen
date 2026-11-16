@@ -37,10 +37,22 @@ return {
   -- the dots (inside the bars while the scale shows). While a symbol
   -- overlaps the room's number, the number dims to `under` opacity.
   ticks = {
-    step = 2.6, radius = 232, length = 27, width = 1.6, dim = 0.55, lit_width = 2.5,
-    room_inner = 202, room_outer = 234, room_width = 4.5,
-    bar_inner = 198, bar_outer = 236, bar_width = 7, glow = 8, glow_alpha = 0.35,
-    margin = 3, under = 0.3,
+    step = 2.6,
+    radius = 232,
+    length = 27,
+    width = 1.6,
+    dim = 0.55,
+    lit_width = 2.5,
+    room_inner = 202,
+    room_outer = 234,
+    room_width = 4.5,
+    bar_inner = 198,
+    bar_outer = 236,
+    bar_width = 7,
+    glow = 8,
+    glow_alpha = 0.35,
+    margin = 3,
+    under = 0.3,
   },
   -- The glow behind the number: its radius, `drop` units below the
   -- middle, and the rings it is drawn in.
@@ -52,9 +64,17 @@ return {
   -- above the baseline. "Off" at `off_scale` of the size, `off_drop`
   -- units above the baseline.
   number = {
-    size = 168, base = 300, half = 0.34, cell = 0.86,
-    range_size = 108, range_base = 283, range_gap = 96, range_dot = 4, range_dot_rise = 0.34,
-    off_scale = 0.82, off_drop = 6,
+    size = 168,
+    base = 300,
+    half = 0.34,
+    cell = 0.86,
+    range_size = 108,
+    range_base = 283,
+    range_gap = 96,
+    range_dot = 4,
+    range_dot_rise = 0.34,
+    off_scale = 0.82,
+    off_drop = 6,
   },
   -- The words under the number, and the leaf under them.
   status = { size = 25, y = 362 },
@@ -68,5 +88,15 @@ return {
   --   hold, fade      the scale staying after the wheel stops, then fading
   --   intro           the ring drawing in on coming home, `intro_from`
   --                   after the screen changed (as the menus fold away)
-  motion = { roll = 0.3, roll_min = 0.06, dot = 0.08, room = 0.25, glow = 0.6, hold = 1.5, fade = 0.4, intro = 0.6, intro_from = 0.15 },
+  motion = {
+    roll = 0.3,
+    roll_min = 0.06,
+    dot = 0.08,
+    room = 0.25,
+    glow = 0.6,
+    hold = 1.5,
+    fade = 0.4,
+    intro = 0.6,
+    intro_from = 0.15,
+  },
 }

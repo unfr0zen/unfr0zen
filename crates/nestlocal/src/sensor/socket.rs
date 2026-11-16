@@ -1,8 +1,8 @@
 //! Gen 1 and gen 2 readings enter the patched nlclient over its loopback RCS input.
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
-use std::sync::{mpsc, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use super::{beacon, boot_time, Sensor, REPEAT};
@@ -73,8 +73,12 @@ fn watch_restart(store: &Arc<crate::store::Store>, serial: &str, sensor: &Arc<Se
     let key = format!("rcs_settings.{serial}");
     let (weak, sensor, serial) = (Arc::downgrade(store), Arc::downgrade(sensor), serial.to_string());
     store.watch(move |object| {
-        if object.key != key || object.value.get("rcs_control_setting").and_then(serde_json::Value::as_str) != Some("OFF")
-            || !booting.swap(false, Ordering::SeqCst) { return; }
+        if object.key != key
+            || object.value.get("rcs_control_setting").and_then(serde_json::Value::as_str) != Some("OFF")
+            || !booting.swap(false, Ordering::SeqCst)
+        {
+            return;
+        }
         let (store, sensor, serial) = (weak.clone(), sensor.clone(), serial.clone());
         std::thread::spawn(move || {
             // The OFF upload must finish before its acknowledgement can
@@ -84,7 +88,9 @@ fn watch_restart(store: &Arc<crate::store::Store>, serial: &str, sensor: &Arc<Se
                 // Native startup must load the association before it can
                 // accept a sample, including before the first real reading.
                 super::choose(&store, &serial, &sensor.bucket, false);
-                if sensor.has_reading() { sensor.select_when_ready(&store, &serial); }
+                if sensor.has_reading() {
+                    sensor.select_when_ready(&store, &serial);
+                }
             }
         });
     });
@@ -97,7 +103,9 @@ pub fn start(sensor: Arc<Sensor>, store: Arc<crate::store::Store>, serial: Strin
     const RETRY: Duration = Duration::from_secs(1);
     let address = "127.0.0.1:1234".parse().expect("constant loopback address");
     let (send, receive) = mpsc::sync_channel(1);
-    sensor.set_notify(move || { let _ = send.try_send(()); });
+    sensor.set_notify(move || {
+        let _ = send.try_send(());
+    });
     let select = Arc::new(AtomicBool::new(false));
     let requested = select.clone();
     let _ = sensor.select_after_delivery.set(Box::new(move || requested.store(true, Ordering::SeqCst)));
@@ -114,7 +122,9 @@ pub fn start(sensor: Arc<Sensor>, store: Arc<crate::store::Store>, serial: Strin
                     let mut state = sensor.state.lock().unwrap();
                     state.last_beacon = None;
                     state.pending = true;
-                    if state.reading.is_none() { state.introduced = false; }
+                    if state.reading.is_none() {
+                        state.introduced = false;
+                    }
                 }
                 if current.is_some() {
                     // Unlike BLE startup, the gen 1's and gen 2's UI also emits OFF when the
@@ -155,14 +165,22 @@ mod tests {
     use std::net::TcpListener;
 
     fn sensor() -> Arc<Sensor> {
-        let path = std::env::temp_dir().join(format!("nestlocal-socket-{}-{:?}.json", std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "nestlocal-socket-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         Sensor::open(&path, "S", std::path::Path::new("/no-settings"), Duration::from_secs(120)).unwrap()
     }
 
     #[test]
     fn input_uses_the_canonical_bucket_and_requires_an_acknowledgement() {
-        for (reply, ok) in [(b"Done".as_slice(), true), (b"Retry".as_slice(), false),
-                            (b"Unknown command".as_slice(), false), (b"".as_slice(), false)] {
+        for (reply, ok) in [
+            (b"Done".as_slice(), true),
+            (b"Retry".as_slice(), false),
+            (b"Unknown command".as_slice(), false),
+            (b"".as_slice(), false),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let worker = std::thread::spawn(move || {
@@ -189,11 +207,13 @@ mod tests {
         sensor.select_after_delivery.set(Box::new(move || flag.store(true, Ordering::SeqCst))).ok().unwrap();
         let booting = Arc::new(AtomicBool::new(true));
         watch_restart(&store, "S", &sensor, booting.clone());
-        let off = crate::fields!{"rcs_control_setting" => "OFF"};
-        let override_mode = crate::fields!{"rcs_control_setting" => "OVERRIDE"};
+        let off = crate::fields! {"rcs_control_setting" => "OFF"};
+        let override_mode = crate::fields! {"rcs_control_setting" => "OVERRIDE"};
         store.merge("rcs_settings.S", &off, 0, 0, true);
         for _ in 0..100 {
-            if requested.load(Ordering::SeqCst) { break; }
+            if requested.load(Ordering::SeqCst) {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(requested.load(Ordering::SeqCst));
@@ -215,9 +235,11 @@ mod tests {
         let store = crate::store::tests::temp_store();
         let booting = Arc::new(AtomicBool::new(true));
         watch_restart(&store, "S", &sensor, booting);
-        store.merge("rcs_settings.S", &crate::fields!{"rcs_control_setting" => "OFF"}, 0, 0, true);
+        store.merge("rcs_settings.S", &crate::fields! {"rcs_control_setting" => "OFF"}, 0, 0, true);
         for _ in 0..100 {
-            if store.get("rcs_settings.S").unwrap().value["rcs_control_setting"] == "OVERRIDE" { break; }
+            if store.get("rcs_settings.S").unwrap().value["rcs_control_setting"] == "OVERRIDE" {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(2));
         }
         let settings = store.get("rcs_settings.S").unwrap();

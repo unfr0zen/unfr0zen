@@ -29,8 +29,10 @@ impl Names {
 /// A root Home Assistant keeps as it is in an entity ID: lowercase letters
 /// and digits, words joined by single underscores.
 pub fn valid_root(root: &str) -> bool {
-    !root.is_empty() && root.split('_').all(|word| !word.is_empty()
-        && word.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
+    !root.is_empty()
+        && root
+            .split('_')
+            .all(|word| !word.is_empty() && word.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
 }
 
 /// What the store holds.
@@ -63,7 +65,8 @@ impl Naming {
     /// The names given (each None to keep the one last announced), and those
     /// last announced, from the store, or the defaults.
     pub fn load(store: &str, serial: &str, device: Option<String>, root: Option<String>) -> Naming {
-        let Saved { names: announced, unconfirmed, matter_label } = std::fs::read(store).ok()
+        let Saved { names: announced, unconfirmed, matter_label } = std::fs::read(store)
+            .ok()
             .and_then(|data| serde_json::from_slice::<Saved>(&data).ok())
             .unwrap_or_else(|| Saved { names: Names::default_for(serial), unconfirmed: false, matter_label: None });
         let named = device.is_some();
@@ -116,8 +119,11 @@ impl Naming {
     }
 
     fn save(&self) {
-        let saved = Saved { names: self.announced.clone(), unconfirmed: self.unconfirmed,
-                            matter_label: self.matter_label.clone() };
+        let saved = Saved {
+            names: self.announced.clone(),
+            unconfirmed: self.unconfirmed,
+            matter_label: self.matter_label.clone(),
+        };
         if let Err(e) = std::fs::write(&self.store, serde_json::to_vec(&saved).unwrap()) {
             logf!("mqtt: {}: {e}", self.store);
         }
@@ -186,7 +192,10 @@ mod tests {
         assert_eq!(n.matter_label_due().as_deref(), Some("Nest Lounge"));
         n.matter_labelled();
         assert_eq!(Naming::load(&store, "09AC", Some("Nest Lounge".into()), None).matter_label_due(), None);
-        assert_eq!(Naming::load(&store, "09AC", Some("Nest Den".into()), None).matter_label_due().as_deref(), Some("Nest Den"));
+        assert_eq!(
+            Naming::load(&store, "09AC", Some("Nest Den".into()), None).matter_label_due().as_deref(),
+            Some("Nest Den")
+        );
 
         let name = dir.join("name");
         std::fs::write(&name, "  Nest FamRm \nrest\n").unwrap();

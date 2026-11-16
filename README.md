@@ -1,4 +1,5 @@
 # unfr0zen
+
 [![Build](https://dl.circleci.com/status-badge/img/gh/unfr0zen/unfr0zen/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/unfr0zen/unfr0zen/tree/main)
 [![GitHub Release](https://img.shields.io/github/v/release/unfr0zen/unfr0zen?include_prereleases&color=06b6d4)](https://github.com/unfr0zen/unfr0zen/releases)
 [![GitHub License](https://img.shields.io/github/license/unfr0zen/unfr0zen?v=1)](LICENSE)
@@ -26,22 +27,22 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 
 ## What you get
 
-| | Stock | With unfr0zen |
-|-|-|-|
-| Control from | the Nest/Google Home app, through Google's cloud | Home Assistant or any MQTT client, Matter controller or Zigbee coordinator, on your network |
-| Internet access | required | not needed: the unit only has to join your Wi-Fi |
-| Nest and Google servers | always contacted | blocked with Block cloud (`--block-cloud`) |
-| Integrations | none | MQTT, Matter over Wi-Fi or Thread, Zigbee router |
-| Room temperature | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
-| Extras | none | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore |
+|                         | Stock                                                    | With unfr0zen                                                                               |
+| ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Control from            | the Nest/Google Home app, through Google's cloud         | Home Assistant or any MQTT client, Matter controller or Zigbee coordinator, on your network |
+| Internet access         | required                                                 | not needed: the unit only has to join your Wi-Fi                                            |
+| Nest and Google servers | always contacted                                         | blocked with Block cloud (`--block-cloud`)                                                  |
+| Integrations            | none                                                     | MQTT, Matter over Wi-Fi or Thread, Zigbee router                                            |
+| Room temperature        | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
+| Extras                  | none                                                     | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore                               |
 
 ## Supported thermostats
 
-| Device | Codename | MQTT | Matter | Zigbee | External temperature |
-|-|-|:-:|:-:|:-:|:-:|
-| Nest Learning Thermostat (3rd generation) | `diamond3` | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
-| Nest Learning Thermostat (2nd generation) | `j49` | ✅ | ✅ Wi-Fi · ✅ Thread | ✅ | ✅ |
-| Nest Learning Thermostat (1st generation) | `diamond` | ✅ | ✅ Wi-Fi · — Thread | — | ✅ |
+| Device                                    | Codename   | MQTT |        Matter        | Zigbee | External temperature |
+| ----------------------------------------- | ---------- | :--: | :------------------: | :----: | :------------------: |
+| Nest Learning Thermostat (3rd generation) | `diamond3` |  ✅  | ✅ Wi-Fi · ✅ Thread |   ✅   |          ✅          |
+| Nest Learning Thermostat (2nd generation) | `j49`      |  ✅  | ✅ Wi-Fi · ✅ Thread |   ✅   |          ✅          |
+| Nest Learning Thermostat (1st generation) | `diamond`  |  ✅  | ✅ Wi-Fi · — Thread  |   —    |          ✅          |
 
 ✅ supported · — not available
 
@@ -71,20 +72,22 @@ network doesn't need internet access.
 
 ### Tested firmware
 
-| Device | Nest firmware |
-|-|-|
+| Device                                    | Nest firmware                 |
+| ----------------------------------------- | ----------------------------- |
 | Nest Learning Thermostat (3rd generation) | 5.9.4-5, 6.3-5, 6.4-8, 6.5-14 |
-| Nest Learning Thermostat (2nd generation) | 5.9.4-5 |
+| Nest Learning Thermostat (2nd generation) | 5.9.4-5                       |
 
 Other versions aren't blocked: unfr0zen sets them up by their structure and
 keeps the stock nlclient beside the run log. Running a version not listed here?
 [Open an issue](https://github.com/unfr0zen/unfr0zen/issues) with the run log.
 
 ## Requirements
+
 1. **A USB data cable.** Gen 1 uses mini-USB; Gen 2 and 3 use micro-USB. Charge-only cables won't work.
 2. **Windows (x86_64, arm64), macOS 13+ (universal, arm64, x86_64) or Linux (x86_64, arm64, riscv64; glibc 2.28+).**
 
 ## Install
+
 Download the latest build from the [releases page](https://github.com/unfr0zen/unfr0zen/releases).
 
 - **Windows:** unzip and run `unfr0zen.exe`. 1st and 2nd generation: the first run
@@ -126,15 +129,16 @@ Both frontends save logs to `~/.local/share/unfr0zen/logs/<timestamp>/unfr0zen.l
 (or `$XDG_DATA_HOME/unfr0zen/logs/<timestamp>/unfr0zen.log` when set). Errors creating
 run or log directories include the affected path.
 
-| Dependency | Why |
-|-|-|
-| A Wayland or X11 desktop with OpenGL or Vulkan drivers (Arch: `mesa`, or your GPU's driver) | Draws the window. |
+| Dependency                                                                                                 | Why                                          |
+| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| A Wayland or X11 desktop with OpenGL or Vulkan drivers (Arch: `mesa`, or your GPU's driver)                | Draws the window.                            |
 | `xdg-desktop-portal` and the backend for your desktop (Arch: `xdg-desktop-portal-gtk`, `-kde` or `-gnome`) | The file picker for the MQTT CA certificate. |
-| `libudev` (part of systemd) | USB access. |
+| `libudev` (part of systemd)                                                                                | USB access.                                  |
 
 </details>
 
 ## Usage
+
 **App:** open it, tick the integrations on the Set up page, fill in their
 settings (the MQTT broker, Matter's pairing code), plug in the thermostat,
 press **Start** and follow the prompts. The sidebar's other pages are Backups
@@ -148,7 +152,8 @@ application boot and a serial console on the USB root shell of a unit unfr0zen s
 terminal, over SSH or headless, with a few things the app doesn't have
 (`--nand-image`, `verify`, `uboot`, `nlclient`). On macOS it is
 `unfr0zen.app/Contents/MacOS/unfr0zen`. Windows has the app only.
-```
+
+```text
 unfr0zen [OPTIONS] [COMMAND]
 
 Commands:
@@ -170,12 +175,14 @@ Common options:
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
 ```
+
 Run `unfr0zen --help` for every option.
 
 Setting up MQTT, Matter, Thread, Zigbee, the external temperature and Doom, with the app's and the CLI's
 options side by side: [unfr0zen.com/integrations](https://unfr0zen.com/integrations/).
 
 ## Updating
+
 Release builds keep themselves current: the window checks for a newer release
 when it starts and offers to install it next to its version, and
 `unfr0zen update` does the same for the command-line tool. On macOS the window
@@ -183,6 +190,7 @@ replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
 commits past a tag, or local changes) never update.
 
 ## Undo it
+
 - **Before the first run:** the app's Set up page offers a backup of the
   whole NAND just before setting up, with the unit in recovery once for both;
   the Backups page's Back up unit (or `unfr0zen backup`) takes one on its
@@ -191,6 +199,7 @@ commits past a tag, or local changes) never update.
   that backup back to the unit.
 
 ## When something is wrong
+
 **The app doesn't see the thermostat.** Use a USB cable that carries data:
 charge-only cables are the usual cause. Connect to the USB port on the back of
 the detached display, not the power-only USB port on a European stand or Heat
@@ -215,24 +224,29 @@ connected to the broker. Check that the unit is on Wi-Fi (Settings → Network)
 and that it reaches the broker URL you gave it.
 
 Still stuck? [Open an issue](https://github.com/unfr0zen/unfr0zen/issues/new) with:
+
 - How you ran it (app or CLI, with the options used) and the OS of your computer
 - The full log of the run
 - What the thermostat screen showed
 
 ## Disclaimers
+
 unfr0zen is provided **as is, without any warranty**. We are **NOT** responsible
 for any data loss, a bricked thermostat, damage to your heating or cooling
 system, or anything else that happens to your device. By using unfr0zen you
 accept full responsibility for the result.
+
 - Modifying the thermostat voids its warranty and may break Google's services for it.
 - Matter uses the test vendor ID (0xFFF1) and test attestation; controllers treat the unit as uncertified.
 - unfr0zen is not affiliated with, endorsed or sponsored by Google LLC or Nest Labs.
   Nest and Nest Learning Thermostat are trademarks of Google LLC.
 
 ## Building
+
 See [BUILDING.md](BUILDING.md).
 
 ## License
+
 unfr0zen is licensed under the [GNU General Public License v3.0](LICENSE).
 Bundled third-party components keep their own licenses: U-Boot and its patches
 (GPL-2.0+), busybox (GPL-2.0), doomgeneric (GPL-2.0), the `zbwake` kernel
@@ -240,6 +254,7 @@ module (GPL-2.0). DOOM1.WAD is id Software's shareware episode, redistributed
 under its shareware terms.
 
 ## Credits
+
 - U-Boot (i.MX) — [NXP](https://github.com/nxp-imx/uboot-imx)
 - BusyBox — [the BusyBox project](https://busybox.net)
 - rs-matter — [Project CHIP](https://github.com/project-chip/rs-matter)

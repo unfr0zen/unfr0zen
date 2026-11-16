@@ -35,56 +35,54 @@ extern uint8_t gpioOutPowerDown[3];
 extern GpioMaskType gpioRadioPowerBoardMask;
 
 // The pins EZSP's GPIO commands must not touch: the host link.
-#define EZSP_PIN_BLACKOUT_MASK ((((GpioMaskType)1) << PORTA_PIN(0))   /* MOSI */      \
-                                | (((GpioMaskType)1) << PORTA_PIN(1)) /* MISO */      \
-                                | (((GpioMaskType)1) << PORTA_PIN(2)) /* SCLK */      \
-                                | (((GpioMaskType)1) << PORTA_PIN(3)) /* nSSEL */     \
-                                | (((GpioMaskType)1) << PORTB_PIN(2)) /* nHOST_INT */ \
-                                | (((GpioMaskType)1) << PORTB_PIN(3)) /* nSSEL_INT */ \
-                                | (((GpioMaskType)1) << PORTB_PIN(4)) /* nHOST_INT */ \
-                                | (((GpioMaskType)1) << PORTB_PIN(6))) /* nWAKE */
+#define EZSP_PIN_BLACKOUT_MASK                              \
+    ((((GpioMaskType)1) << PORTA_PIN(0))    /* MOSI */      \
+     | (((GpioMaskType)1) << PORTA_PIN(1))  /* MISO */      \
+     | (((GpioMaskType)1) << PORTA_PIN(2))  /* SCLK */      \
+     | (((GpioMaskType)1) << PORTA_PIN(3))  /* nSSEL */     \
+     | (((GpioMaskType)1) << PORTB_PIN(2))  /* nHOST_INT */ \
+     | (((GpioMaskType)1) << PORTB_PIN(3))  /* nSSEL_INT */ \
+     | (((GpioMaskType)1) << PORTB_PIN(4))  /* nHOST_INT */ \
+     | (((GpioMaskType)1) << PORTB_PIN(6))) /* nWAKE */
 
-#define DEFINE_GPIO_RADIO_POWER_BOARD_MASK_VARIABLE() \
-  GpioMaskType gpioRadioPowerBoardMask = 0
+#define DEFINE_GPIO_RADIO_POWER_BOARD_MASK_VARIABLE() GpioMaskType gpioRadioPowerBoardMask = 0
 
 // Nest's words, PACFGL to PCCFGH: four bits a pin, pin 0 lowest.
 #define DEFINE_POWERUP_GPIO_CFG_VARIABLES() \
-  uint16_t gpioCfgPowerUp[6] = { 0x8494, 0x1199, 0x4141, 0x8811, 0x4919, 0x4994 }
+    uint16_t gpioCfgPowerUp[6] = {0x8494, 0x1199, 0x4141, 0x8811, 0x4919, 0x4994}
 
-#define DEFINE_POWERUP_GPIO_OUTPUT_DATA_VARIABLES() \
-  uint8_t gpioOutPowerUp[3] = { 0xEF, 0x5F, 0x05 }
+#define DEFINE_POWERUP_GPIO_OUTPUT_DATA_VARIABLES() uint8_t gpioOutPowerUp[3] = {0xEF, 0x5F, 0x05}
 
 #define DEFINE_POWERDOWN_GPIO_CFG_VARIABLES() \
-  uint16_t gpioCfgPowerDown[6] = { 0x8888, 0x1188, 0x8881, 0x8818, 0x8118, 0x4118 }
+    uint16_t gpioCfgPowerDown[6] = {0x8888, 0x1188, 0x8881, 0x8818, 0x8118, 0x4118}
 
-#define DEFINE_POWERDOWN_GPIO_OUTPUT_DATA_VARIABLES() \
-  uint8_t gpioOutPowerDown[3] = { 0xEF, 0x5E, 0x05 }
+#define DEFINE_POWERDOWN_GPIO_OUTPUT_DATA_VARIABLES() uint8_t gpioOutPowerDown[3] = {0xEF, 0x5E, 0x05}
 
 #define SET_POWERUP_GPIO_CFG_REGISTERS() \
-  GPIO_PACFGL = gpioCfgPowerUp[0];       \
-  GPIO_PACFGH = gpioCfgPowerUp[1];       \
-  GPIO_PBCFGL = gpioCfgPowerUp[2];       \
-  GPIO_PBCFGH = gpioCfgPowerUp[3];       \
-  GPIO_PCCFGL = gpioCfgPowerUp[4];       \
-  GPIO_PCCFGH = gpioCfgPowerUp[5];
+    GPIO_PACFGL = gpioCfgPowerUp[0];     \
+    GPIO_PACFGH = gpioCfgPowerUp[1];     \
+    GPIO_PBCFGL = gpioCfgPowerUp[2];     \
+    GPIO_PBCFGH = gpioCfgPowerUp[3];     \
+    GPIO_PCCFGL = gpioCfgPowerUp[4];     \
+    GPIO_PCCFGH = gpioCfgPowerUp[5];
 
 #define SET_POWERUP_GPIO_OUTPUT_DATA_REGISTERS() \
-  GPIO_PAOUT = gpioOutPowerUp[0];                \
-  GPIO_PBOUT = gpioOutPowerUp[1];                \
-  GPIO_PCOUT = gpioOutPowerUp[2];
+    GPIO_PAOUT = gpioOutPowerUp[0];              \
+    GPIO_PBOUT = gpioOutPowerUp[1];              \
+    GPIO_PCOUT = gpioOutPowerUp[2];
 
 #define SET_POWERDOWN_GPIO_CFG_REGISTERS() \
-  GPIO_PACFGL = gpioCfgPowerDown[0];       \
-  GPIO_PACFGH = gpioCfgPowerDown[1];       \
-  GPIO_PBCFGL = gpioCfgPowerDown[2];       \
-  GPIO_PBCFGH = gpioCfgPowerDown[3];       \
-  GPIO_PCCFGL = gpioCfgPowerDown[4];       \
-  GPIO_PCCFGH = gpioCfgPowerDown[5];
+    GPIO_PACFGL = gpioCfgPowerDown[0];     \
+    GPIO_PACFGH = gpioCfgPowerDown[1];     \
+    GPIO_PBCFGL = gpioCfgPowerDown[2];     \
+    GPIO_PBCFGH = gpioCfgPowerDown[3];     \
+    GPIO_PCCFGL = gpioCfgPowerDown[4];     \
+    GPIO_PCCFGH = gpioCfgPowerDown[5];
 
 #define SET_POWERDOWN_GPIO_OUTPUT_DATA_REGISTERS() \
-  GPIO_PAOUT = gpioOutPowerDown[0];                \
-  GPIO_PBOUT = gpioOutPowerDown[1];                \
-  GPIO_PCOUT = gpioOutPowerDown[2];
+    GPIO_PAOUT = gpioOutPowerDown[0];              \
+    GPIO_PBOUT = gpioOutPowerDown[1];              \
+    GPIO_PCOUT = gpioOutPowerDown[2];
 
 // nWAKE wakes the chip from deep sleep.
 #define WAKE_ON_PA0 false
@@ -113,27 +111,31 @@ extern GpioMaskType gpioRadioPowerBoardMask;
 #define WAKE_ON_PC7 false
 
 #define halInternalInitBoard()     \
-  do {                             \
-    halInternalPowerUpBoard();     \
-    halHostSerialInit();           \
-  } while (0)
+    do {                           \
+        halInternalPowerUpBoard(); \
+        halHostSerialInit();       \
+    } while (0)
 
 #define halInternalPowerDownBoard()                \
-  do {                                             \
-    halHostSerialPowerdown();                      \
-    SET_POWERDOWN_GPIO_OUTPUT_DATA_REGISTERS()     \
-    SET_POWERDOWN_GPIO_CFG_REGISTERS()             \
-  } while (0)
+    do {                                           \
+        halHostSerialPowerdown();                  \
+        SET_POWERDOWN_GPIO_OUTPUT_DATA_REGISTERS() \
+        SET_POWERDOWN_GPIO_CFG_REGISTERS()         \
+    } while (0)
 
-#define halInternalPowerUpBoard()                  \
-  do {                                             \
-    SET_POWERUP_GPIO_OUTPUT_DATA_REGISTERS()       \
-    SET_POWERUP_GPIO_CFG_REGISTERS()               \
-    halHostSerialPowerup();                        \
-    halInternalInitAdc();                          \
-  } while (0)
+#define halInternalPowerUpBoard()                \
+    do {                                         \
+        SET_POWERUP_GPIO_OUTPUT_DATA_REGISTERS() \
+        SET_POWERUP_GPIO_CFG_REGISTERS()         \
+        halHostSerialPowerup();                  \
+        halInternalInitAdc();                    \
+    } while (0)
 
-#define halInternalSuspendBoard() do {} while (0)
-#define halInternalResumeBoard()  do {} while (0)
+#define halInternalSuspendBoard() \
+    do {                          \
+    } while (0)
+#define halInternalResumeBoard() \
+    do {                         \
+    } while (0)
 
 #endif // __BOARD_H__

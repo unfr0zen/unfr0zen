@@ -61,8 +61,11 @@ pub fn stage<T>(progress: &mut dyn Progress, label: &str, step: impl FnOnce() ->
 }
 
 /// [`stage`] for a step that reports into the progress itself.
-pub fn stage_with<T>(progress: &mut dyn Progress, label: &str,
-                     step: impl FnOnce(&mut dyn Progress) -> Result<T>) -> Result<T> {
+pub fn stage_with<T>(
+    progress: &mut dyn Progress,
+    label: &str,
+    step: impl FnOnce(&mut dyn Progress) -> Result<T>,
+) -> Result<T> {
     progress.begin(label);
     log::info!("{label}");
     let started = Instant::now();
@@ -131,8 +134,7 @@ pub(crate) fn app_version() -> &'static str {
 pub(crate) fn set_log_file(path: &Path) -> Result<()> {
     *RUN_LOG.0.lock().unwrap() = Some((fs::File::create(path)?, Instant::now()));
     *LOG_PATH.lock().unwrap() = Some(path.to_path_buf());
-    log::info!("unfr0zen {}, built for {} {}", app_version(),
-               std::env::consts::OS, std::env::consts::ARCH);
+    log::info!("unfr0zen {}, built for {} {}", app_version(), std::env::consts::OS, std::env::consts::ARCH);
     for line in crate::machine::describe() {
         log::info!("{line}");
     }

@@ -103,7 +103,11 @@ fn matter_port(mac: [u8; 6], ipv6: bool) -> Pattern {
 /// solicited-node group, which only its last three bytes tell apart.
 fn neighbour_solicitation(address: &Ipv6Addr) -> Pattern {
     let a = address.octets();
-    Pattern::default().at(0, &[0x33, 0x33, 0xff, a[13], a[14], a[15]]).at(ETHERTYPE, &[0x86, 0xdd]).at(20, &[58]).at(54, &[135])
+    Pattern::default()
+        .at(0, &[0x33, 0x33, 0xff, a[13], a[14], a[15]])
+        .at(ETHERTYPE, &[0x86, 0xdd])
+        .at(20, &[58])
+        .at(54, &[135])
 }
 
 /// An mDNS packet whose first name starts with `instance`, or with any
@@ -111,9 +115,23 @@ fn neighbour_solicitation(address: &Ipv6Addr) -> Pattern {
 fn mdns_query(ipv6: bool, instance: Option<&str>) -> Pattern {
     // The first question's name follows the Ethernet, IP, UDP and DNS headers.
     let (pattern, name) = if ipv6 {
-        (Pattern::default().at(0, &[0x33, 0x33, 0, 0, 0, 0xfb]).at(ETHERTYPE, &[0x86, 0xdd]).at(20, &[17]).at(56, &[0x14, 0xe9]), 74)
+        (
+            Pattern::default()
+                .at(0, &[0x33, 0x33, 0, 0, 0, 0xfb])
+                .at(ETHERTYPE, &[0x86, 0xdd])
+                .at(20, &[17])
+                .at(56, &[0x14, 0xe9]),
+            74,
+        )
     } else {
-        (Pattern::default().at(0, &[0x01, 0x00, 0x5e, 0, 0, 0xfb]).at(ETHERTYPE, &[0x08, 0x00]).at(23, &[17]).at(36, &[0x14, 0xe9]), 54)
+        (
+            Pattern::default()
+                .at(0, &[0x01, 0x00, 0x5e, 0, 0, 0xfb])
+                .at(ETHERTYPE, &[0x08, 0x00])
+                .at(23, &[17])
+                .at(36, &[0x14, 0xe9]),
+            54,
+        )
     };
     let pattern = pattern.at(name, &[INSTANCE_LEN as u8]);
     match instance {
@@ -206,7 +224,9 @@ mod tests {
     fn bytes(line: &str) -> Vec<Option<u8>> {
         let fields: Vec<&str> = line.split(' ').collect();
         assert_eq!(fields[0], "0");
-        let decode = |hex: &str| (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect::<Vec<u8>>();
+        let decode = |hex: &str| {
+            (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect::<Vec<u8>>()
+        };
         let (mask, pattern) = (decode(fields[1]), decode(fields[2]));
         assert_eq!(mask.len(), pattern.len().div_ceil(8));
         pattern.iter().enumerate().map(|(i, b)| (mask[i / 8] >> (i % 8) & 1 == 1).then_some(*b)).collect()

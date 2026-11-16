@@ -24,10 +24,17 @@ pub struct Candidate {
 impl Candidate {
     pub fn label(&self) -> String {
         match device::identify(self.id) {
-            Some(dev) => crate::tr!("terminal.port_label", device = dev.description(),
-                                   mode = device::mode_name(dev, self.id).unwrap_or(crate::tr!("terminal.unknown_mode")),
-                                   port = self.name),
-            None => crate::tr!("terminal.unidentified_port_label", id = format!("{:04x}:{:04x}", self.id.0, self.id.1), port = self.name),
+            Some(dev) => crate::tr!(
+                "terminal.port_label",
+                device = dev.description(),
+                mode = device::mode_name(dev, self.id).unwrap_or(crate::tr!("terminal.unknown_mode")),
+                port = self.name
+            ),
+            None => crate::tr!(
+                "terminal.unidentified_port_label",
+                id = format!("{:04x}:{:04x}", self.id.0, self.id.1),
+                port = self.name
+            ),
         }
     }
 }
@@ -42,8 +49,10 @@ fn with_ids(ports: Vec<Candidate>, ids: &[Id]) -> Vec<Candidate> {
 /// The application's root shells: the USB shell of a unit unfr0zen set up, and the
 /// gen 3's initramfs shell.
 pub const SHELLS: &[Id] = &[
-    unfr0zen_host::diamond3::usb::APP_ACM, unfr0zen_host::diamond3::usb::INITRAMFS,
-    unfr0zen_host::j49::usb::APP, unfr0zen_host::j49::usb::DIAMOND_APP,
+    unfr0zen_host::diamond3::usb::APP_ACM,
+    unfr0zen_host::diamond3::usb::INITRAMFS,
+    unfr0zen_host::j49::usb::APP,
+    unfr0zen_host::j49::usb::DIAMOND_APP,
 ];
 
 /// Recovery U-Boot's console.
@@ -109,8 +118,14 @@ const LIST_EVERY: Duration = Duration::from_secs(1);
 impl Terminal {
     pub fn new(ids: &'static [Id]) -> Terminal {
         Terminal {
-            ids, ports: Vec::new(), listed: None, chosen: None, connection: None,
-            scrollback: Arc::default(), auto_connect: None, error: None,
+            ids,
+            ports: Vec::new(),
+            listed: None,
+            chosen: None,
+            connection: None,
+            scrollback: Arc::default(),
+            auto_connect: None,
+            error: None,
         }
     }
 
@@ -130,7 +145,8 @@ impl Terminal {
             return;
         }
         self.listed = Some(Instant::now());
-        self.ports = with_ids(usb::acm_ports().into_iter().map(|(name, id)| Candidate { name, id }).collect(), self.ids);
+        self.ports =
+            with_ids(usb::acm_ports().into_iter().map(|(name, id)| Candidate { name, id }).collect(), self.ids);
         if self.chosen.as_ref().is_some_and(|c| !self.ports.iter().any(|p| &p.name == c)) {
             self.chosen = None;
         }
@@ -203,32 +219,45 @@ impl Terminal {
         ui.horizontal(|ui| {
             let connected = self.connected();
             ui.add_enabled_ui(!connected, |ui| {
-                let selected = self.ports.iter().find(|p| Some(&p.name) == self.chosen.as_ref())
+                let selected = self
+                    .ports
+                    .iter()
+                    .find(|p| Some(&p.name) == self.chosen.as_ref())
                     .map_or_else(|| crate::tr!("terminal.no_port").to_string(), Candidate::label);
                 crate::boxed_select(ui, "serial_port", 380.0, &selected, |ui| {
                     for port in &self.ports {
                         ui.selectable_value(&mut self.chosen, Some(port.name.clone()), port.label());
                     }
-                }).on_hover_text(crate::tr!("terminal.port_hint"));
+                })
+                .on_hover_text(crate::tr!("terminal.port_hint"));
             });
             // Both buttons the accent button's height, so the row, and the
             // terminal under it, keep their size across connect and disconnect.
             let size = egui::vec2(120.0, crate::BUTTON_HEIGHT);
             if connected {
-                if crate::setup::rounded_button(ui, crate::tr!("terminal.disconnect"), crate::setup::Look::Secondary, true, size)
-                    .on_hover_text(crate::tr!("terminal.disconnect_hint"))
-                    .clicked() {
+                if crate::setup::rounded_button(
+                    ui,
+                    crate::tr!("terminal.disconnect"),
+                    crate::setup::Look::Secondary,
+                    true,
+                    size,
+                )
+                .on_hover_text(crate::tr!("terminal.disconnect_hint"))
+                .clicked()
+                {
                     self.disconnect();
                 }
             } else if crate::accent_button(ui, crate::tr!("terminal.connect"), idle && self.chosen.is_some())
                 .on_hover_text(crate::tr!("terminal.connect_hint"))
                 .on_disabled_hover_text(crate::tr!("terminal.connect_disabled_hint"))
-                .clicked() {
+                .clicked()
+            {
                 self.connect(ui.ctx().clone());
             }
             if crate::setup::page_button(ui, crate::tr!("terminal.clear"), crate::setup::Look::Secondary, true)
                 .on_hover_text(crate::tr!("terminal.clear_hint"))
-                .clicked() {
+                .clicked()
+            {
                 self.scrollback.lock().unwrap().clear();
             }
             // An error on the row, not a line of its own.
@@ -241,57 +270,88 @@ impl Terminal {
         // The terminal takes the keys while it has focus; a click gives it.
         let id = ui.id().with("terminal");
         let focused = ui.memory(|m| m.has_focus(id));
-        let stroke = if focused && self.connected() { egui::Stroke::new(1.0, crate::ACCENT) } else { egui::Stroke::new(1.0, crate::LINE) };
-        let frame = egui::Frame::new().fill(crate::STATUS).stroke(stroke).corner_radius(14).inner_margin(egui::Margin::same(12));
+        let stroke = if focused && self.connected() {
+            egui::Stroke::new(1.0, crate::ACCENT)
+        } else {
+            egui::Stroke::new(1.0, crate::LINE)
+        };
+        let frame = egui::Frame::new()
+            .fill(crate::STATUS)
+            .stroke(stroke)
+            .corner_radius(14)
+            .inner_margin(egui::Margin::same(12));
         let height = ui.available_height().max(80.0);
         // Its frame's margins and edge, and the gap under it the set-up
         // flow's pages keep above the status bar.
-        let area = frame.show(ui, |ui| {
-            ui.set_min_height(height - 38.0);
-            ui.set_max_height(height - 38.0);
-            egui::ScrollArea::vertical().id_salt("terminal").auto_shrink([false, false]).stick_to_bottom(true)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    let (job, cursor) = self.job(ui);
-                    if job.text.is_empty() && !self.connected() {
-                        ui.label(egui::RichText::new(crate::tr!("terminal.empty")).color(crate::DIM));
-                    } else {
-                        // Laid out here so the cursor's cell is known: a block
-                        // that blinks while the console has focus, hollow else.
-                        let text_color = ui.visuals().text_color();
-                        let (pos, galley, response) = egui::Label::new(job).wrap().selectable(true).layout_in_ui(ui);
-                        egui::text_selection::LabelSelectionState::label_text_selection(
-                            ui, &response, pos, galley.clone(), text_color, egui::Stroke::NONE);
-                        if self.connected() {
-                            let caret = galley.pos_from_cursor(egui::text::CCursor::new(cursor)).translate(pos.to_vec2());
-                            let font = egui::TextStyle::Monospace.resolve(ui.style());
-                            let width = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
-                            let cell = egui::Rect::from_min_size(caret.min, egui::vec2(width, caret.height()));
-                            let lit = (ui.input(|i| i.time) % 1.0) < 0.5;
-                            if focused && lit {
-                                ui.painter().rect_filled(cell, 1.0, crate::ACCENT.gamma_multiply(0.85));
-                            } else if !focused {
-                                ui.painter().rect_stroke(cell, 1.0, egui::Stroke::new(1.0, crate::MUTED), egui::StrokeKind::Inside);
-                            }
-                            if focused {
-                                ui.ctx().request_repaint_after(Duration::from_millis(500));
+        let area = frame
+            .show(ui, |ui| {
+                ui.set_min_height(height - 38.0);
+                ui.set_max_height(height - 38.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("terminal")
+                    .auto_shrink([false, false])
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let (job, cursor) = self.job(ui);
+                        if job.text.is_empty() && !self.connected() {
+                            ui.label(egui::RichText::new(crate::tr!("terminal.empty")).color(crate::DIM));
+                        } else {
+                            // Laid out here so the cursor's cell is known: a block
+                            // that blinks while the console has focus, hollow else.
+                            let text_color = ui.visuals().text_color();
+                            let (pos, galley, response) =
+                                egui::Label::new(job).wrap().selectable(true).layout_in_ui(ui);
+                            egui::text_selection::LabelSelectionState::label_text_selection(
+                                ui,
+                                &response,
+                                pos,
+                                galley.clone(),
+                                text_color,
+                                egui::Stroke::NONE,
+                            );
+                            if self.connected() {
+                                let caret =
+                                    galley.pos_from_cursor(egui::text::CCursor::new(cursor)).translate(pos.to_vec2());
+                                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                                let width = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
+                                let cell = egui::Rect::from_min_size(caret.min, egui::vec2(width, caret.height()));
+                                let lit = (ui.input(|i| i.time) % 1.0) < 0.5;
+                                if focused && lit {
+                                    ui.painter().rect_filled(cell, 1.0, crate::ACCENT.gamma_multiply(0.85));
+                                } else if !focused {
+                                    ui.painter().rect_stroke(
+                                        cell,
+                                        1.0,
+                                        egui::Stroke::new(1.0, crate::MUTED),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                if focused {
+                                    ui.ctx().request_repaint_after(Duration::from_millis(500));
+                                }
                             }
                         }
-                    }
-                });
-        }).response;
+                    });
+            })
+            .response;
         if ui.interact(area.rect, id, egui::Sense::click()).clicked() {
             ui.memory_mut(|m| m.request_focus(id));
         }
         if focused && self.connected() {
-            ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter {
-                tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true,
-            }));
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true },
+                )
+            });
             let mut bytes = Vec::new();
-            ui.input_mut(|input| input.events.retain(|event| {
-                let taken = key_bytes(event, &mut bytes);
-                !taken
-            }));
+            ui.input_mut(|input| {
+                input.events.retain(|event| {
+                    let taken = key_bytes(event, &mut bytes);
+                    !taken
+                })
+            });
             if !bytes.is_empty() {
                 self.send(bytes);
             }
@@ -308,7 +368,8 @@ fn key_bytes(event: &egui::Event, out: &mut Vec<u8>) -> bool {
         Event::Key { key, pressed: true, modifiers, .. } => {
             if modifiers.ctrl && !modifiers.alt {
                 // Ctrl with a letter: its control character.
-                if let Some(c) = key.name().chars().next().filter(|c| c.is_ascii_alphabetic() && key.name().len() == 1) {
+                if let Some(c) = key.name().chars().next().filter(|c| c.is_ascii_alphabetic() && key.name().len() == 1)
+                {
                     out.push(c.to_ascii_uppercase() as u8 & 0x1f);
                     return true;
                 }
@@ -336,8 +397,13 @@ fn key_bytes(event: &egui::Event, out: &mut Vec<u8>) -> bool {
 
 /// The port's thread: writes what the window sends, reads what the unit
 /// answers into the scrollback, until stopped or the port fails.
-fn pump(mut port: Port, from_window: Receiver<Vec<u8>>, scrollback: Arc<Mutex<Scrollback>>, stop: Arc<AtomicBool>,
-        ctx: egui::Context) {
+fn pump(
+    mut port: Port,
+    from_window: Receiver<Vec<u8>>,
+    scrollback: Arc<Mutex<Scrollback>>,
+    stop: Arc<AtomicBool>,
+    ctx: egui::Context,
+) {
     // Keys are written between reads: a short read keeps them prompt.
     if let Err(e) = port.set_timeout(Duration::from_millis(10)) {
         log::warn!("terminal read timeout: {e}");
@@ -415,12 +481,15 @@ impl Scrollback {
     /// Applies a Select Graphic Rendition: the foreground colour and bold,
     /// which brightens it. Backgrounds and the other attributes are ignored.
     fn sgr(&mut self, params: &[u8]) {
-        let codes: Vec<u32> = std::str::from_utf8(params).unwrap_or("").split(';')
-            .map(|p| p.parse().unwrap_or(0)).collect();
+        let codes: Vec<u32> =
+            std::str::from_utf8(params).unwrap_or("").split(';').map(|p| p.parse().unwrap_or(0)).collect();
         let mut i = 0;
         while i < codes.len() {
             match codes[i] {
-                0 => { self.color = None; self.bold = false; }
+                0 => {
+                    self.color = None;
+                    self.bold = false;
+                }
                 1 => self.bold = true,
                 22 => self.bold = false,
                 39 => self.color = None,
@@ -460,7 +529,10 @@ impl Scrollback {
             }
             self.put_text(&mut plain);
             // ESC [ params final, or ESC and one byte; incomplete waits.
-            let Some(&next) = bytes.get(i + 1) else { self.pending = bytes[i..].to_vec(); break };
+            let Some(&next) = bytes.get(i + 1) else {
+                self.pending = bytes[i..].to_vec();
+                break;
+            };
             if next != b'[' {
                 i += 2;
                 continue;
@@ -475,7 +547,10 @@ impl Scrollback {
                 // Erase to the end of the line, or the whole line.
                 b'K' => match params {
                     b"" | b"0" => self.line.truncate(self.col),
-                    _ => { self.line.clear(); self.col = 0; }
+                    _ => {
+                        self.line.clear();
+                        self.col = 0;
+                    }
                 },
                 // Clear the screen.
                 b'J' => self.clear(),
@@ -543,14 +618,22 @@ impl Scrollback {
 
 /// The 16 ANSI colours, as a dark terminal shows them.
 const ANSI: [egui::Color32; 16] = [
-    egui::Color32::from_rgb(0x5c, 0x65, 0x75), egui::Color32::from_rgb(0xf0, 0x80, 0x80),
-    egui::Color32::from_rgb(0x5f, 0xe0, 0x8a), egui::Color32::from_rgb(0xf3, 0xc5, 0x65),
-    egui::Color32::from_rgb(0x7c, 0xc7, 0xf5), egui::Color32::from_rgb(0xd0, 0x9c, 0xf0),
-    egui::Color32::from_rgb(0x6c, 0xd8, 0xd8), egui::Color32::from_rgb(0xc9, 0xd1, 0xd9),
-    egui::Color32::from_rgb(0x8a, 0x94, 0xa6), egui::Color32::from_rgb(0xff, 0x9a, 0x9a),
-    egui::Color32::from_rgb(0x8f, 0xf0, 0xbf), egui::Color32::from_rgb(0xff, 0xd3, 0x8a),
-    egui::Color32::from_rgb(0xa8, 0xdc, 0xff), egui::Color32::from_rgb(0xe6, 0xb8, 0xff),
-    egui::Color32::from_rgb(0x9a, 0xf0, 0xf0), egui::Color32::from_rgb(0xff, 0xff, 0xff),
+    egui::Color32::from_rgb(0x5c, 0x65, 0x75),
+    egui::Color32::from_rgb(0xf0, 0x80, 0x80),
+    egui::Color32::from_rgb(0x5f, 0xe0, 0x8a),
+    egui::Color32::from_rgb(0xf3, 0xc5, 0x65),
+    egui::Color32::from_rgb(0x7c, 0xc7, 0xf5),
+    egui::Color32::from_rgb(0xd0, 0x9c, 0xf0),
+    egui::Color32::from_rgb(0x6c, 0xd8, 0xd8),
+    egui::Color32::from_rgb(0xc9, 0xd1, 0xd9),
+    egui::Color32::from_rgb(0x8a, 0x94, 0xa6),
+    egui::Color32::from_rgb(0xff, 0x9a, 0x9a),
+    egui::Color32::from_rgb(0x8f, 0xf0, 0xbf),
+    egui::Color32::from_rgb(0xff, 0xd3, 0x8a),
+    egui::Color32::from_rgb(0xa8, 0xdc, 0xff),
+    egui::Color32::from_rgb(0xe6, 0xb8, 0xff),
+    egui::Color32::from_rgb(0x9a, 0xf0, 0xf0),
+    egui::Color32::from_rgb(0xff, 0xff, 0xff),
 ];
 
 /// A colour of the 256-colour table: the 16, the 6×6×6 cube, the greys.
@@ -574,8 +657,7 @@ fn brighter(color: egui::Color32) -> egui::Color32 {
     color.lerp_to_gamma(egui::Color32::WHITE, 0.3)
 }
 
-impl Scrollback {
-}
+impl Scrollback {}
 
 #[cfg(test)]
 mod tests {

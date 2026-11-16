@@ -15,7 +15,11 @@ use crate::{device, Result, Slot};
 const UIMAGE_MAGIC: u32 = 0x2705_1956;
 
 fn check(status: u32, what: String) -> Result<()> {
-    if status == 0 { Ok(()) } else { device(format!("{what}: {}", status_text(status))) }
+    if status == 0 {
+        Ok(())
+    } else {
+        device(format!("{what}: {}", status_text(status)))
+    }
 }
 
 /// Programs raw pages from `first`, skipping the all-0xff ones.
@@ -94,7 +98,8 @@ pub fn install(nand: &mut dyn Nand, slot: Slot, image: &[u8]) -> Result<bool> {
     let first = (start + KERNEL_TAIL) / BLOCK;
     let blocks = (size - KERNEL_TAIL) / BLOCK;
     let raw = nand.read(first * PAGES_PER_BLOCK, blocks * PAGES_PER_BLOCK)?;
-    let good: Vec<usize> = (0..blocks).filter(|b| !nand::factory_bad(&raw[b * BLOCK_RAW..(b + 1) * BLOCK_RAW])).collect();
+    let good: Vec<usize> =
+        (0..blocks).filter(|b| !nand::factory_bad(&raw[b * BLOCK_RAW..(b + 1) * BLOCK_RAW])).collect();
     let pages = nand::encode(image);
     let chunks: Vec<&[u8]> = pages.chunks(BLOCK_RAW).collect();
     if chunks.len() > good.len() {
@@ -126,14 +131,17 @@ pub fn install(nand: &mut dyn Nand, slot: Slot, image: &[u8]) -> Result<bool> {
 
 /// Both environment copies, as read (None where invalid).
 fn environments(nand: &mut dyn Nand) -> Result<Vec<Option<Environment>>> {
-    nand::ENV_COPIES.iter().map(|&offset| {
-        let raw = nand.read(offset / nand::PAGE, nand::ENV_SIZE / nand::PAGE)?;
-        let mut data = Vec::with_capacity(nand::ENV_SIZE);
-        for page in raw.chunks(PAGE_RAW) {
-            data.extend(nand::correct_page(page)?.0);
-        }
-        Ok(Environment::parse(&data))
-    }).collect()
+    nand::ENV_COPIES
+        .iter()
+        .map(|&offset| {
+            let raw = nand.read(offset / nand::PAGE, nand::ENV_SIZE / nand::PAGE)?;
+            let mut data = Vec::with_capacity(nand::ENV_SIZE);
+            for page in raw.chunks(PAGE_RAW) {
+                data.extend(nand::correct_page(page)?.0);
+            }
+            Ok(Environment::parse(&data))
+        })
+        .collect()
 }
 
 /// Has U-Boot try the kernel `install` placed first: nandbootNacm, the
@@ -141,13 +149,15 @@ fn environments(nand: &mut dyn Nand) -> Result<Vec<Option<Environment>>> {
 /// as U-Boot does, into the other copy one generation on, and read back;
 /// false when the environment has it already.
 pub fn boot_first(nand: &mut dyn Nand, slot: Slot) -> Result<bool> {
-    static NBOOT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"nboot\.i \$\{loadaddr\} 0 (0x[0-9a-fA-F]+)").unwrap());
+    static NBOOT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"nboot\.i \$\{loadaddr\} 0 (0x[0-9a-fA-F]+)").unwrap());
     let copies = environments(nand)?;
     let (active, env) = nand::newest(&copies)?;
     let n = slot.number();
     let stock = env.get(&format!("nandboot{n}")).unwrap_or("").to_string();
     let start = nand::boot_partition(slot).0;
-    let Some(found) = NBOOT.captures(&stock).filter(|c| usize::from_str_radix(&c[1][2..], 16).ok() == Some(start)) else {
+    let Some(found) = NBOOT.captures(&stock).filter(|c| usize::from_str_radix(&c[1][2..], 16).ok() == Some(start))
+    else {
         return device(format!("nandboot{n} does not load {slot}'s kernel: {stock:?}"));
     };
     let acm = format!("nandboot{n}acm");
@@ -191,10 +201,13 @@ mod tests {
         let boot = nand::encode(&stock);
         image.raw[nand::boot_partition(Slot::Root0).0 / nand::PAGE * PAGE_RAW..][..boot.len()].copy_from_slice(&boot);
         for (index, offset) in nand::ENV_COPIES.into_iter().enumerate() {
-            let env = Environment { generation: index as u8, values: vec![
-                ("bootcmd".into(), "run nandboot0 || run nandboot1".into()),
-                ("nandboot0".into(), "nboot.i ${loadaddr} 0 0x400000 && bootm".into()),
-            ] };
+            let env = Environment {
+                generation: index as u8,
+                values: vec![
+                    ("bootcmd".into(), "run nandboot0 || run nandboot1".into()),
+                    ("nandboot0".into(), "nboot.i ${loadaddr} 0 0x400000 && bootm".into()),
+                ],
+            };
             let raw = nand::encode(&env.to_bytes().unwrap());
             image.raw[offset / nand::PAGE * PAGE_RAW..][..raw.len()].copy_from_slice(&raw);
         }

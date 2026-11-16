@@ -1,0 +1,3 @@
+# The home screen themes: LuaJIT, with the globals the theme engine adds
+# (crates/nestlocal-theme/src/engine/theme.rs).
+std = "nestlocal-theme"

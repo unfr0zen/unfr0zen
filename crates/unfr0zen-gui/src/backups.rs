@@ -89,25 +89,33 @@ impl Library {
 /// Every whole-NAND image in `dir`, newest first. A file is an image when
 /// its size is one a supported NAND has.
 pub fn scan(dir: &Path) -> Vec<Entry> {
-    let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut entries: Vec<Entry> = read.flatten().filter_map(|file| {
-        let path = file.path();
-        let metadata = file.metadata().ok()?;
-        let device = metadata.is_file().then(|| nand::image_device(metadata.len())).flatten()?;
-        let device = match device {
-            Device::J49 => omap_device(&path).unwrap_or(Device::J49),
-            other => other,
-        };
-        Some(Entry {
-            checksum: std::fs::read_to_string(nand::checksum_path(&path)).ok()
-                .and_then(|text| text.split_whitespace().next().map(str::to_string)),
-            path,
-            size: metadata.len(),
-            device: Some(device),
-            taken: metadata.modified().map_or_else(|_| crate::tr!("backup.unknown_date").into(), crate::when::short),
-            modified: metadata.modified().ok(),
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<Entry> = read
+        .flatten()
+        .filter_map(|file| {
+            let path = file.path();
+            let metadata = file.metadata().ok()?;
+            let device = metadata.is_file().then(|| nand::image_device(metadata.len())).flatten()?;
+            let device = match device {
+                Device::J49 => omap_device(&path).unwrap_or(Device::J49),
+                other => other,
+            };
+            Some(Entry {
+                checksum: std::fs::read_to_string(nand::checksum_path(&path))
+                    .ok()
+                    .and_then(|text| text.split_whitespace().next().map(str::to_string)),
+                path,
+                size: metadata.len(),
+                device: Some(device),
+                taken: metadata
+                    .modified()
+                    .map_or_else(|_| crate::tr!("backup.unknown_date").into(), crate::when::short),
+                modified: metadata.modified().ok(),
+            })
         })
-    }).collect();
+        .collect();
     entries.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
     entries
 }

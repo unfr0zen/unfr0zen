@@ -1,0 +1,6 @@
+# Kernel-style C: tabs eight columns wide, a function's brace on a line of its own.
+BasedOnStyle: InheritParentConfig
+UseTab: ForIndentation
+IndentWidth: 8
+TabWidth: 8
+BreakBeforeBraces: Linux

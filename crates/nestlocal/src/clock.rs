@@ -38,7 +38,9 @@ fn with_port(server: &str) -> String {
 /// Asks server (host or host:port) for the time.
 pub async fn sntp(server: &str) -> std::io::Result<SystemTime> {
     let server = with_port(server);
-    let addr = tokio::net::lookup_host(&server).await?.next()
+    let addr = tokio::net::lookup_host(&server)
+        .await?
+        .next()
         .ok_or_else(|| std::io::Error::other(format!("{server}: no address")))?;
     let socket = UdpSocket::bind(if addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }).await?;
     socket.connect(addr).await?;
@@ -47,7 +49,8 @@ pub async fn sntp(server: &str) -> std::io::Result<SystemTime> {
     let sent = SystemTime::now();
     socket.send(&request).await?;
     let mut response = [0u8; 48];
-    let n = tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut response)).await
+    let n = tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut response))
+        .await
         .map_err(|_| std::io::Error::other(format!("{server}: no answer")))??;
     let rtt = SystemTime::now().duration_since(sent).unwrap_or_default();
     if n < 48 || response[0] & 7 != 4 || response[1] == 0 {
@@ -61,7 +64,8 @@ pub async fn sntp(server: &str) -> std::io::Result<SystemTime> {
         0 => None,
         s if s & 0x8000_0000 != 0 => s.checked_sub(NTP_EPOCH),
         s => Some(s + (1 << 32) - NTP_EPOCH),
-    }.ok_or_else(|| std::io::Error::other(format!("{server}: not a server answer")))?;
+    }
+    .ok_or_else(|| std::io::Error::other(format!("{server}: not a server answer")))?;
     let nanos = ((fraction * 1_000_000_000) >> 32) as u32;
     Ok(UNIX_EPOCH + Duration::new(seconds, nanos) + rtt / 2)
 }
@@ -124,7 +128,10 @@ pub fn set_clock(t: SystemTime, from: &str) {
         return logf!("clock: setting it to {when} from {from}: {}", std::io::Error::last_os_error());
     }
     let sign = if off < 0.0 { "-" } else { "" };
-    logf!("clock: set to {when} from {from} (was off by {sign}{})", crate::logger::duration(Duration::from_secs(off.abs().round() as u64)));
+    logf!(
+        "clock: set to {when} from {from} (was off by {sign}{})",
+        crate::logger::duration(Duration::from_secs(off.abs().round() as u64))
+    );
 }
 
 #[cfg(test)]

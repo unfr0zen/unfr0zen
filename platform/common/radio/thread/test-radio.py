@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """ARM radio scan/entropy contracts; SDK calls are mocked, RF is not simulated."""
+
 import runpy
 from pathlib import Path
 
 from unicorn import UC_HOOK_CODE
-from unicorn.arm_const import UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_PC, UC_ARM_REG_LR
+from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1
 
 rcp = runpy.run_path(str(Path(__file__).with_name("test-source-match.py")))
 cpu, call, symbols = rcp["cpu"], rcp["call"], rcp["symbols"]
 now, rssi, entropy_status, threshold = 0, -90, 0, -75
 events = []
+
 
 def mock(cpu, address, size, user):
     global threshold
@@ -17,20 +19,35 @@ def mock(cpu, address, size, user):
     args = [cpu.reg_read(UC_ARM_REG_R0), cpu.reg_read(UC_ARM_REG_R1)]
     events.append((name, args))
     result = 0
-    if name == "otPlatAlarmMicroGetNow": result = now
-    elif name == "emRadioEnergyDetection": result = rssi & 0xFFFFFFFF
-    elif name == "emRadioGetEdCcaThreshold": result = threshold & 0xFFFFFFFF
-    elif name == "emRadioSetEdCcaThreshold": threshold = args[0]
+    if name == "otPlatAlarmMicroGetNow":
+        result = now
+    elif name == "emRadioEnergyDetection":
+        result = rssi & 0xFFFFFFFF
+    elif name == "emRadioGetEdCcaThreshold":
+        result = threshold & 0xFFFFFFFF
+    elif name == "emRadioSetEdCcaThreshold":
+        threshold = args[0]
     elif name == "emberGetStrongRandomNumberArray":
         assert args[1] == 1
-        if entropy_status == 0: cpu.mem_write(args[0], b"\x34\x12")
+        if entropy_status == 0:
+            cpu.mem_write(args[0], b"\x34\x12")
         result = entropy_status
     cpu.reg_write(UC_ARM_REG_R0, result)
     cpu.reg_write(UC_ARM_REG_PC, cpu.reg_read(UC_ARM_REG_LR))
 
-for name in ["otPlatAlarmMicroGetNow", "emRadioEnergyDetection", "emSetPhyRadioChannel",
-             "emRadioWakeUp", "emRadioSleep", "emRadioEnableAutoAck", "otPlatRadioEnergyScanDone",
-             "emberGetStrongRandomNumberArray", "emRadioSetEdCcaThreshold", "emRadioGetEdCcaThreshold"]:
+
+for name in [
+    "otPlatAlarmMicroGetNow",
+    "emRadioEnergyDetection",
+    "emSetPhyRadioChannel",
+    "emRadioWakeUp",
+    "emRadioSleep",
+    "emRadioEnableAutoAck",
+    "otPlatRadioEnergyScanDone",
+    "emberGetStrongRandomNumberArray",
+    "emRadioSetEdCcaThreshold",
+    "emRadioGetEdCcaThreshold",
+]:
     cpu.hook_add(UC_HOOK_CODE, mock, name, begin=symbols[name], end=symbols[name])
 
 assert call("otPlatRadioEnergyScan", 0, 20, 1) != 0  # disabled radio
@@ -74,9 +91,9 @@ assert call("otPlatRadioGetCcaEnergyDetectThreshold", 0, scratch) == 0
 assert cpu.mem_read(scratch, 1) == b"\xab"
 assert call("otPlatRadioGetCcaEnergyDetectThreshold", 0, 0) == 7
 
-cpu.mem_write(scratch, b"\xAA" * 8)
+cpu.mem_write(scratch, b"\xaa" * 8)
 assert call("otPlatEntropyGet", scratch, 3) == 0
-assert cpu.mem_read(scratch, 4) == b"\x34\x12\x34\xAA"
+assert cpu.mem_read(scratch, 4) == b"\x34\x12\x34\xaa"
 entropy_status = 0x7F
 assert call("otPlatEntropyGet", scratch, 3) == 1
 assert call("otPlatEntropyGet", 0, 3) == 7
