@@ -54,7 +54,8 @@ start)
     case "$serial" in /dev/pts/*) ;; *) exit 1;; esac
     cd "$STATE"
     # OpenThread requests SIGHUP on parent exit; keep the supervised daemon alive.
-    nohup "$DAEMON" -I thread0 -d 4 -v "spinel+hdlc+uart://$serial?uart-baudrate=115200&no-reset" >/tmp/nestlocal-thread-daemon.log 2>&1 &
+    # It logs to syslog; the file takes only what it prints before opening it.
+    nohup "$DAEMON" -I thread0 -d 4 "spinel+hdlc+uart://$serial?uart-baudrate=115200&no-reset" >/tmp/nestlocal-thread-daemon.log 2>&1 &
     echo $! >/run/nestlocal-thread-daemon.pid
     count=0
     while ! "$BIN/ot-ctl" -I thread0 state >/dev/null 2>&1; do

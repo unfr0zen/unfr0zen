@@ -1,6 +1,8 @@
 //! Logging as Go's log package did it for nestlocal: to stderr with the
 //! date and microseconds, or with -syslog to the system log (daemon.info,
-//! tag nestlocal), which on the unit is where everything else logs too.
+//! tag nestlocal), which on the unit is where everything else logs too. The
+//! unit's syslogd keeps only its current file, so with -log-file the lines
+//! also go to a file of nestlocal's own that survives a reboot.
 
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
@@ -35,8 +37,63 @@ pub fn to_syslog() -> std::io::Result<()> {
     Err(last)
 }
 
+/// The file the log is kept in beside the sink: at its limit it moves to
+/// NAME.1, replacing the one before, and a new one starts.
+struct File {
+    path: std::path::PathBuf,
+    file: std::fs::File,
+    size: u64,
+    limit: u64,
+}
+
+/// Where a file's size moves it to NAME.1: 256 KiB, so the two take 512 KiB.
+const FILE_LIMIT: u64 = 256 * 1024;
+
+static FILE: Mutex<Option<File>> = Mutex::new(None);
+
+fn open(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
+}
+
+/// Keeps the log in `path` too from now on.
+pub fn to_file(path: &str) -> std::io::Result<()> {
+    keep_in(std::path::Path::new(path), FILE_LIMIT)
+}
+
+fn keep_in(path: &std::path::Path, limit: u64) -> std::io::Result<()> {
+    let file = open(path)?;
+    let size = file.metadata()?.len();
+    *FILE.lock().unwrap() = Some(File { path: path.into(), file, size, limit });
+    Ok(())
+}
+
+/// Appends `text` to the file, moving it to NAME.1 first when `text` would
+/// take it past its limit. A failure drops the file: the sink still logs.
+fn keep(text: &str) {
+    let mut kept = FILE.lock().unwrap();
+    let Some(file) = kept.as_mut() else { return };
+    let len = text.len() as u64;
+    if file.size > 0 && file.size + len > file.limit {
+        let mut old = file.path.clone().into_os_string();
+        old.push(".1");
+        match std::fs::rename(&file.path, &old).and_then(|()| open(&file.path)) {
+            Ok(new) => (file.file, file.size) = (new, 0),
+            Err(_) => return *kept = None,
+        }
+    }
+    match file.file.write_all(text.as_bytes()) {
+        Ok(()) => file.size += len,
+        Err(_) => *kept = None,
+    }
+}
+
 pub fn line(message: &str) {
     let now = chrono::Local::now();
+    keep(&format!("{} {message}\n", now.format("%Y-%m-%d %H:%M:%S%.6f")));
     let mut sink = sink().lock().unwrap();
     match &mut *sink {
         Sink::Stderr => {
@@ -76,6 +133,26 @@ macro_rules! fatal {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    #[test]
+    fn the_file_moves_to_name_1_at_its_limit() {
+        let dir = std::env::temp_dir().join(format!("nestlocal-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nestlocal.log");
+        std::fs::write(&path, "before a restart\n").unwrap();
+        super::keep_in(&path, 40).unwrap();
+        super::keep("0123456789\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before a restart\n0123456789\n", "appended to");
+        super::keep("abcdefghijklmnopq\n");
+        assert_eq!(std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(), "before a restart\n0123456789\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "abcdefghijklmnopq\n");
+        super::keep("rstuvwxyz\n");
+        super::keep("0123456789abcdef\n");
+        assert_eq!(std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(), "abcdefghijklmnopq\nrstuvwxyz\n", "the older one replaced");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "0123456789abcdef\n");
+        *super::FILE.lock().unwrap() = None;
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn durations_as_go_printed_them() {

@@ -106,6 +106,11 @@ fn main() {
         if let Err(e) = logger::to_syslog() {
             fatal!("{e}");
         }
+        if !config.log_file.is_empty() {
+            if let Err(e) = logger::to_file(&config.log_file) {
+                logf!("{}: {e}", config.log_file);
+            }
+        }
     }
     if config.serial.is_empty() {
         config.serial = hostname().unwrap_or_else(|e| fatal!("{e}"));
