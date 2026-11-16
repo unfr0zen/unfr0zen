@@ -61,20 +61,21 @@ fn open(path: &std::path::Path) -> std::io::Result<std::fs::File> {
 
 /// Keeps the log in `path` too from now on.
 pub fn to_file(path: &str) -> std::io::Result<()> {
-    keep_in(std::path::Path::new(path), FILE_LIMIT)
+    *FILE.lock().unwrap() = Some(File::open(std::path::Path::new(path), FILE_LIMIT)?);
+    Ok(())
 }
 
-fn keep_in(path: &std::path::Path, limit: u64) -> std::io::Result<()> {
-    let file = open(path)?;
-    let size = file.metadata()?.len();
-    *FILE.lock().unwrap() = Some(File { path: path.into(), file, size, limit });
-    Ok(())
+impl File {
+    fn open(path: &std::path::Path, limit: u64) -> std::io::Result<File> {
+        let file = open(path)?;
+        let size = file.metadata()?.len();
+        Ok(File { path: path.into(), file, size, limit })
+    }
 }
 
 /// Appends `text` to the file, moving it to NAME.1 first when `text` would
 /// take it past its limit. A failure drops the file: the sink still logs.
-fn keep(text: &str) {
-    let mut kept = FILE.lock().unwrap();
+fn keep(kept: &mut Option<File>, text: &str) {
     let Some(file) = kept.as_mut() else { return };
     let len = text.len() as u64;
     if file.size > 0 && file.size + len > file.limit {
@@ -93,7 +94,7 @@ fn keep(text: &str) {
 
 pub fn line(message: &str) {
     let now = chrono::Local::now();
-    keep(&format!("{} {message}\n", now.format("%Y-%m-%d %H:%M:%S%.6f")));
+    keep(&mut FILE.lock().unwrap(), &format!("{} {message}\n", now.format("%Y-%m-%d %H:%M:%S%.6f")));
     let mut sink = sink().lock().unwrap();
     match &mut *sink {
         Sink::Stderr => {
@@ -140,17 +141,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("nestlocal.log");
         std::fs::write(&path, "before a restart\n").unwrap();
-        super::keep_in(&path, 40).unwrap();
-        super::keep("0123456789\n");
+        let mut kept = Some(super::File::open(&path, 40).unwrap());
+        super::keep(&mut kept, "0123456789\n");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "before a restart\n0123456789\n", "appended to");
-        super::keep("abcdefghijklmnopq\n");
+        super::keep(&mut kept, "abcdefghijklmnopq\n");
         assert_eq!(std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(), "before a restart\n0123456789\n");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "abcdefghijklmnopq\n");
-        super::keep("rstuvwxyz\n");
-        super::keep("0123456789abcdef\n");
+        super::keep(&mut kept, "rstuvwxyz\n");
+        super::keep(&mut kept, "0123456789abcdef\n");
         assert_eq!(std::fs::read_to_string(dir.join("nestlocal.log.1")).unwrap(), "abcdefghijklmnopq\nrstuvwxyz\n", "the older one replaced");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "0123456789abcdef\n");
-        *super::FILE.lock().unwrap() = None;
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
