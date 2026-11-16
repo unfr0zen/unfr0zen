@@ -26,6 +26,7 @@ mod nlsettings;
 mod occupancy;
 mod sensor;
 mod scratch;
+mod screen;
 mod store;
 mod settings_ui;
 mod structure;
@@ -228,9 +229,12 @@ async fn run(config: flags::Config) {
             logf!("matter BLE: stand-in: {e}");
         }
     }
-    // nestlocal.init holds nlclient back until here.
-    let _ = std::fs::create_dir_all(settings_ui::DIR)
-        .and_then(|()| std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b""));
+    // nestlocal.init holds nlclient back until here; its first commit takes
+    // the screen timeout.
+    if std::fs::create_dir_all(settings_ui::DIR).is_ok() {
+        screen::republish(&store, &config.serial);
+        let _ = std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b"");
+    }
     if !config.ntp_server.is_empty() {
         tokio::spawn(clock::keep_clock(config.ntp_server.clone()));
     }

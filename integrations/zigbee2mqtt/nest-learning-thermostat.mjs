@@ -46,6 +46,8 @@
 //   37  cool stage 1            Binary Input (with another cool stage)
 //   38  cool stage 2            Binary Input (Y2 wired)
 //   39  cool stage 3            Binary Input (Y3 wired)
+//   40  screen timeout          Analog Output, seconds the screen stays lit after the last touch, 10-600
+//   41  screen always on        Binary Output
 //
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
@@ -88,7 +90,7 @@ const ea = exposes.access;
 const THERMOSTAT = 1;
 const BACKPLATE = 2;
 const OUTPUTS = {fan_timer_duration: 3, target_humidity: 4, fan_schedule_minutes: 7, fan_schedule_start: 8,
-    fan_schedule_end: 9};
+    fan_schedule_end: 9, screen_timeout: 40};
 const INPUTS = {time_to_target: 5, filter_runtime: 6};
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
@@ -103,6 +105,7 @@ const SWITCHES = {
     hot_water_schedule: 18,
     filter_reminder: 19,
     fan_schedule: 29,
+    screen_always_on: 41,
 };
 // Label, icon, description.
 const SWITCH_LABELS = {
@@ -117,6 +120,7 @@ const SWITCH_LABELS = {
     hot_water_schedule: ['Hot water schedule', 'mdi:water-boiler', 'Hot water follows its schedule; off stops it'],
     filter_reminder: ['Filter reminder', 'mdi:air-filter', 'The thermostat reminds you to change the air filter'],
     fan_schedule: ['Fan schedule', 'mdi:fan-auto', 'The fan runs part of every hour, between the schedule\'s start and end'],
+    screen_always_on: ['Screen always on', 'mdi:monitor-shimmer', 'The screen stays lit (a day after the last touch)'],
 };
 const STATES = {
     leaf: 20,
@@ -510,6 +514,11 @@ const definition = {
                     .withDescription(`Hour of the day the fan schedule ${when}; the same start and end: all day`));
             }
         }
+        if (has(device, OUTPUTS.screen_timeout)) {
+            result.push(e.numeric('screen_timeout', ea.ALL).withLabel('Screen timeout').withUnit('s').withValueMin(10)
+                .withValueMax(600).withValueStep(5).withCategory('config').withHomeAssistant({icon: 'mdi:monitor'})
+                .withDescription('How long the screen stays lit after the last touch'));
+        }
         if (has(device, OUTPUTS.target_humidity)) {
             result.push(e.numeric('target_humidity', ea.ALL).withUnit('%').withValueMin(10).withValueMax(60)
                 .withValueStep(5).withCategory('config').withDescription('Humidity the (de)humidifier aims for'));
@@ -615,14 +624,14 @@ const definition = {
             }
         };
         for (const [name, id] of Object.entries(OUTPUTS)) {
-            if (name.startsWith('fan_schedule')) {
+            if (name.startsWith('fan_schedule') || name === 'screen_timeout') {
                 await read(id, 'genAnalogOutput');
             } else {
                 await report(id, 'genAnalogOutput', ['presentValue']);
             }
         }
         for (const [name, id] of Object.entries(SWITCHES)) {
-            if (name.startsWith('hot_water') || name === 'filter_reminder' || name === 'fan_schedule') {
+            if (name.startsWith('hot_water') || ['filter_reminder', 'fan_schedule', 'screen_always_on'].includes(name)) {
                 await read(id, 'genBinaryOutput');
             } else {
                 await report(id, 'genBinaryOutput', ['presentValue']);

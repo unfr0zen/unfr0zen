@@ -596,6 +596,9 @@ impl Bridge {
             "options" => vec!["C", "F"],
             "entity_category" => "config",
         });
+        number_entity(&mut add, "screen_timeout", "Screen timeout", *crate::screen::SECONDS.start() as f64,
+                      *crate::screen::SECONDS.end() as f64, 5.0, "s", "");
+        sw(&mut add, "screen_always_on", "Screen always on", "mdi:monitor-shimmer");
         add("button", "clear_schedule", "Clear Nest schedule", fields!{
             "command_topic" => format!("{set}clear_schedule"),
             "entity_category" => "config",
@@ -711,6 +714,7 @@ pub fn switch_on(dev: &Fields, key: &str) -> bool {
         "hot_water_boost" => hot_water_boost(dev).is_some(),
         "hot_water_schedule" => hot_water_schedule(dev),
         "fan_schedule" => fan_schedule(dev),
+        "screen_always_on" => crate::screen::always_on(dev),
         _ => truthy(dev.get(key)),
     }
 }
@@ -857,6 +861,8 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
               "target_humidity_enabled", "filter_reminder_enabled", "hot_water_boiling_state", "heatpump_ready"] {
         s.insert(k.into(), truthy(dev.get(k)).into());
     }
+    s.insert("screen_timeout".into(), crate::screen::seconds(dev).into());
+    s.insert("screen_always_on".into(), crate::screen::always_on(dev).into());
     match number(dev.get("time_to_target")) {
         Some(t) if t > now => s.insert("time_to_target".into(), rfc3339(t)),
         _ => s.insert("time_to_target".into(), Value::Null),
@@ -1105,6 +1111,7 @@ pub mod tests {
                         "fan_schedule_start" | "fan_schedule_end" => "07:00",
                         "temperature_scale" => "F",
                         "target_humidity" => "40",
+                        "screen_timeout" => "60",
                         "clear_schedule" => "PRESS",
                         n if n.ends_with("_enabled") => "ON",
                         "away_temperature_high" => "28",
@@ -1137,7 +1144,7 @@ pub mod tests {
         let configs = b.announced.lock().unwrap().clone().unwrap();
         let numbers: Vec<Value> = configs.iter().filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
             .map(|(_, c)| serde_json::from_str(c).unwrap()).collect();
-        assert_eq!(numbers.len(), 3);
+        assert_eq!(numbers.len(), 4);
         for c in numbers {
             let name = c["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
             let (min, max) = (c["min"].as_f64().unwrap(), c["max"].as_f64().unwrap());

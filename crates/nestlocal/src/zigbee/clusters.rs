@@ -30,6 +30,9 @@
 //!   30+ the HVAC stages that run, those the wiring has: Binary Input, in
 //!       bridge::HEAT_STAGES then COOL_STAGES order (30 heat stage 1 to 39
 //!       cool stage 3); Thermostat's running state also has the second stages
+//!   40  how long the screen stays lit after the last interaction, seconds:
+//!       Analog Output (screen.rs)
+//!   41  whether the screen stays on: Binary Output, in SWITCHES
 //!
 //! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
 //!
@@ -113,6 +116,8 @@ const FAN_SCHEDULE_MINUTES_ENDPOINT: u8 = 7;
 const FAN_SCHEDULE_START_ENDPOINT: u8 = 8;
 const FAN_SCHEDULE_END_ENDPOINT: u8 = 9;
 const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
+/// Past the stages' endpoints (STAGE_ENDPOINTS, ten of them).
+const SCREEN_TIMEOUT_ENDPOINT: u8 = 40;
 const STAGE_ENDPOINTS: u8 = 30;
 
 /// The switches, by endpoint: their bucket field and description.
@@ -128,6 +133,7 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (18, "hot_water_schedule", "Hot water schedule"),
     (19, "filter_reminder_enabled", "Filter reminder"), // with an air filter
     (29, "fan_schedule", "Fan schedule"),               // with a fan
+    (41, "screen_always_on", "Screen always on"),
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -267,6 +273,7 @@ impl Nest {
                 endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
             }
         }
+        endpoints.push(Endpoint { id: SCREEN_TIMEOUT_ENDPOINT, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
         for &(id, key, _) in SWITCHES {
             let present = match key {
                 "away_temperature_low_enabled" => has("can_heat"),
@@ -451,7 +458,8 @@ impl Nest {
     }
 
     /// An Analog Output: the fan timer's minutes, the fan schedule's, its
-    /// start and end hours, or the target humidity.
+    /// start and end hours, the screen timeout's seconds, or the target
+    /// humidity.
     fn analog_output(&self, endpoint: u8, attribute: u16) -> Option<Value> {
         let dev = self.view().dev;
         let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
@@ -466,6 +474,8 @@ impl Nest {
             }
             FAN_SCHEDULE_START_ENDPOINT => ("Fan schedule start", HOURS, 0.0, 23.0, hour("fan_duty_start_time")),
             FAN_SCHEDULE_END_ENDPOINT => ("Fan schedule end", HOURS, 0.0, 23.0, hour("fan_duty_end_time")),
+            SCREEN_TIMEOUT_ENDPOINT => ("Screen timeout", SECONDS, *crate::screen::SECONDS.start() as f32,
+                                        *crate::screen::SECONDS.end() as f32, crate::screen::seconds(&dev) as f64),
             _ => ("Target humidity", PERCENT, 10.0, 60.0, number(dev.get("target_humidity")).unwrap_or(35.0)),
         };
         Some(match attribute {
@@ -491,6 +501,9 @@ impl Nest {
             (0x0055, Value::F32(v)) if endpoint == FAN_SCHEDULE_START_ENDPOINT || endpoint == FAN_SCHEDULE_END_ENDPOINT => {
                 let name = if endpoint == FAN_SCHEDULE_START_ENDPOINT { "fan_schedule_start" } else { "fan_schedule_end" };
                 self.apply(name, &(v.round() as i64).to_string())
+            }
+            (0x0055, Value::F32(v)) if endpoint == SCREEN_TIMEOUT_ENDPOINT => {
+                self.apply("screen_timeout", &(v.round() as i64).to_string())
             }
             (0x0055, Value::F32(v)) => self.apply("target_humidity", &format!("{}", v.round())),
             _ => status::READ_ONLY,
@@ -757,11 +770,11 @@ mod tests {
     fn endpoints_follow_the_equipment() {
         let ids = |n: &Nest| n.endpoints.iter().map(|e| e.id).collect::<Vec<_>>();
         let n = nest(fields!{}, fields!{"can_heat" => true});
-        assert_eq!(ids(&n), [1, 2, 5, 10, 11, 12, 13, 14, 20, 21, 22, 23]);
+        assert_eq!(ids(&n), [1, 2, 5, 40, 10, 11, 12, 13, 14, 41, 20, 21, 22, 23]);
         assert!(!n.has(1, FAN));
         let n = nest(fields!{"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
                      fields!{"can_heat" => true, "can_cool" => true});
-        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 29, 20, 21, 22, 23, 24, 26]);
+        assert_eq!(ids(&n), [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 20, 21, 22, 23, 24, 26]);
         assert!(n.has(1, FAN));
     }
 
@@ -879,13 +892,14 @@ mod tests {
         let n = nest(fields!{"has_x2_heat" => true, "has_aux_heat" => true},
                      fields!{"target_temperature_type" => "heat", "can_heat" => true, "hvac_heater_state" => true,
                              "hvac_heat_x2_state" => true, "hvac_fan_state" => true});
-        let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|&id| id >= STAGE_ENDPOINTS).collect();
+        let stage = |id: u8| (STAGE_ENDPOINTS..SCREEN_TIMEOUT_ENDPOINT).contains(&id);
+        let ids: Vec<u8> = n.endpoints.iter().map(|e| e.id).filter(|&id| stage(id)).collect();
         assert_eq!(ids, [30, 31, 33], "heat stages 1 and 2, aux; no cool stage of its own");
         assert_eq!(n.read(31, BINARY_INPUT, 0x001C), Some(Value::Str("Heat stage 2".into())));
         assert_eq!(n.read(31, BINARY_INPUT, 0x0055), Some(Value::Bool(true)));
         assert_eq!(n.read(33, BINARY_INPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x000D)));
-        assert!(nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().all(|e| e.id < STAGE_ENDPOINTS));
+        assert!(!nest(fields!{}, fields!{"can_heat" => true}).endpoints.iter().any(|e| stage(e.id)));
         let cool = nest(fields!{"has_x2_cool" => true},
                         fields!{"target_temperature_type" => "cool", "can_cool" => true, "hvac_cool_x2_state" => true});
         assert_eq!(cool.read(1, THERMOSTAT, 0x0029), Some(Value::Bitmap16(0x0012)));
@@ -981,6 +995,29 @@ mod tests {
         let without = nest(fields!{}, fields!{});
         assert!([7, 8, 9].iter().all(|&id| without.attributes(id, ANALOG_OUTPUT).is_none()));
         assert!(without.attributes(29, BINARY_OUTPUT).is_none());
+    }
+
+    #[test]
+    fn the_screen_timeout_is_an_analog_output_and_always_on_a_switch() {
+        let n = nest(fields!{}, fields!{});
+        assert_eq!(n.read(40, ANALOG_OUTPUT, 0x001C), Some(Value::Str("Screen timeout".into())));
+        assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0055), Some(Value::F32(30.0)), "nlclient's own until set");
+        assert_eq!((n.read(40, ANALOG_OUTPUT, 0x0045), n.read(40, ANALOG_OUTPUT, 0x0041)),
+                   (Some(Value::F32(10.0)), Some(Value::F32(600.0))));
+        assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(SECONDS)));
+        assert_eq!(n.write(40, ANALOG_OUTPUT, 0x0055, Value::F32(119.6)), status::SUCCESS);
+        assert_eq!(n.read(40, ANALOG_OUTPUT, 0x0055), Some(Value::F32(120.0)));
+        assert_eq!(n.view().dev[crate::screen::TIMEOUT], 120);
+        for bad in [5.0, 601.0] {
+            assert_eq!(n.write(40, ANALOG_OUTPUT, 0x0055, Value::F32(bad)), status::INVALID_VALUE, "{bad}");
+        }
+        assert_eq!(n.read(41, BINARY_OUTPUT, 0x001C), Some(Value::Str("Screen always on".into())));
+        assert_eq!(n.read(41, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.write(41, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(41, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(crate::screen::milliseconds(&n.view().dev), Some(crate::screen::ALWAYS_ON_MS));
+        assert!(n.reported().contains(&(40, ANALOG_OUTPUT, &[0x0055][..])));
+        assert!(n.reported().contains(&(41, BINARY_OUTPUT, &[0x0055][..])));
     }
 
     #[test]
