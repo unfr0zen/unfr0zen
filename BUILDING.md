@@ -90,7 +90,8 @@ The version comes from `git describe --tag --always --dirty`.
 - Linux desktop entry and icon: `sh utils/install_linux.sh`
 - The setup bundles: the gen 3's (`diamond3`), which the app sends the unit to
   set itself up, and the gen 1's and gen 2's (`j49`), from which it sets
-  up the slot on the host:
+  up the slot on the host; `diamond` packs the same for the gen 1 under its
+  own name, which a gen 1 asks a release for to update itself:
 
   ```sh
   cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-diamond3-VERSION.tgz
