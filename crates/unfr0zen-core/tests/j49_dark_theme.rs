@@ -74,7 +74,7 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
         assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need both screen objects");
         return;
     };
-    let screen = nlclient::builder::build(&stock, &object).unwrap().output;
+    let screen = nlclient::builder::build(&stock, &object, &[]).unwrap().output;
     let mut combined = screen.clone();
     external_temperature::patch(&stock, &mut combined, &rcs_object).unwrap();
     dark_theme::patch(&stock, &mut combined).unwrap();

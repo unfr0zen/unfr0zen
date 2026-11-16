@@ -14,7 +14,7 @@ pub struct Built {
 fn hex(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect()
 }
-pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
+pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) -> Result<Built> {
     let discovery = discovery::discover(source)?;
     let elf = Elf::parse(source)?;
     let phoff = word(source, 28)? as usize;
@@ -67,34 +67,31 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
             .map(|(k, &v)| (format!("layout_{k}"), v)),
     );
     let linked = linker::link(object, address, &externals)?;
-    let factory = discovery.factory;
-    let factory_offset = elf.offset(factory)?;
-    let old = bytes(source, factory_offset, 4)?;
-    if word(old, 0)? >> 24 == 0xea {
-        return device("account factory is already patched");
+    // Each entry's stock screen builds unfr0zen's instead (custom_root).
+    let factories = discovery::screen_factories(&elf)?;
+    let mut branches = Vec::new();
+    for name in super::menu::HOSTS {
+        let factory = *factories.get(name)
+            .ok_or_else(|| crate::Error::Device(format!("no {name} screen registration")))?;
+        let factory_offset = elf.offset(factory)?;
+        let old = bytes(source, factory_offset, 4)?;
+        if word(old, 0)? >> 24 == 0xea {
+            return device(format!("{name} factory is already patched"));
+        }
+        let delta = linked.entry as i64 - factory as i64 - 8;
+        if delta % 4 != 0 || !(-(1 << 25)..(1 << 25)).contains(&delta) {
+            return device("ARM factory branch out of range or unaligned");
+        }
+        let branch = 0xea000000 | ((delta >> 2) as u32 & 0xffffff);
+        branches.push((name, factory, factory_offset, hex(old), branch));
     }
-    let delta = linked.entry as i64 - factory as i64 - 8;
-    if delta % 4 != 0 || !(-(1 << 25)..(1 << 25)).contains(&delta) {
-        return device("ARM factory branch out of range or unaligned");
-    }
-    let branch = 0xea000000 | ((delta >> 2) as u32 & 0xffffff);
-    let (menu_address, menu_names) = discovery::settings(&elf)?;
-    let menu_offset = elf.offset(menu_address)?;
-    bytes(source, menu_offset, menu_names.len() * 4)?;
-    let mut menu_words = Vec::new();
-    for i in 0..menu_names.len() {
-        menu_words.push(word(source, menu_offset + i * 4)?);
-    }
-    let account = menu_names
-        .iter()
-        .position(|n| n == "account")
-        .ok_or_else(|| crate::Error::Device("settings menu has no account".into()))?;
-    let account = menu_words.remove(account);
-    menu_words.insert(1, account);
     // Room for the payload from the start: growing a copy of the source would double it.
     let mut output = Vec::with_capacity(offset.max(source.len()) + linked.bytes.len());
     output.extend_from_slice(source);
-    output[factory_offset..factory_offset + 4].copy_from_slice(&branch.to_le_bytes());
+    for (_, _, factory_offset, _, branch) in &branches {
+        output[*factory_offset..factory_offset + 4].copy_from_slice(&branch.to_le_bytes());
+    }
+    let settings_menu = super::menu::arrange(source, &mut output, sections)?;
     for bucket in ["device", "shared", "schedule"] {
         let slot = elf.offset(discovery.anchors[&format!("{bucket}_commit_slot")])?;
         let target = linked.symbols[&format!("custom_{bucket}_commit")];
@@ -117,9 +114,6 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
         }
         let call = 0xeb000000 | ((delta >> 2) as u32 & 0xffffff);
         output[swap_offset..swap_offset + 4].copy_from_slice(&call.to_le_bytes());
-    }
-    for (i, w) in menu_words.iter().enumerate() {
-        output[menu_offset + i * 4..menu_offset + i * 4 + 4].copy_from_slice(&w.to_le_bytes());
     }
     output.resize(offset, 0);
     output.extend(&linked.bytes);
@@ -145,12 +139,13 @@ pub fn build(source: &[u8], object: &[u8]) -> Result<Built> {
         "boot_branding":boot_branding,
         "status":discovery.validation,"reviewed":discovery.variant.is_some(),"stock_sha256":discovery.stock_sha256,
         "source_size":source.len(),"program_header_offset":phoff,"original_program_headers":hex(original_headers),
-        "output_sha256":sha256_hex(&output),"replaced_screen":"account","factory":factory,
-        "factory_file_offset":factory_offset,"original_factory_bytes":hex(old),
+        "output_sha256":sha256_hex(&output),
+        "factories":branches.iter().map(|(name, factory, offset, old, _)| (name.to_string(), serde_json::json!({
+            "address":factory,"file_offset":offset,"original_bytes":old}))).collect::<serde_json::Map<_, _>>(),
         "payload_address":address,"payload_offset":offset,"payload_size":linked.bytes.len(),"entry":linked.entry,
         "symbols":linked.symbols,"native_api":discovery.native_api,"discovery":discovery,
         "image":"/nestlabs/share/images/G_unfr0zen_192px.png","runtime_directory":"/var/run/unfr0zen","wheel_trace":false,
-        "handover":handover,"dial":discovery.dial,"swap_call":discovery.anchors.get("swap_call_slot"),"settings_menu":{"address":menu_address,"file_offset":menu_offset,"original":menu_names,"unfr0zen_index":1}
+        "handover":handover,"dial":discovery.dial,"swap_call":discovery.anchors.get("swap_call_slot"),"settings_menu":settings_menu
     });
     let journal = Patch::journal(source, &output)?;
     if Patch::parse(&journal)?.apply(source, false)? != output {

@@ -60,7 +60,7 @@ fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
         .unwrap_or_else(|| root.join("build/j49-rcs-screen.o"))).expect("build the j49 RCS screen object");
     let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(env!("UNFR0ZEN_ROOT"),
         "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"))).unwrap();
-    let screen = nlclient::builder::build(&stock, &object).unwrap().output;
+    let screen = nlclient::builder::build(&stock, &object, &[]).unwrap().output;
     assert_eq!(unfr0zen_core::shell::sha256_hex(&stock), golden["stock_sha256"]);
     assert_eq!(unfr0zen_core::shell::sha256_hex(&screen), golden["screen_sha256"]);
     assert_eq!(screen.len(), golden["screen_size"].as_u64().unwrap() as usize);

@@ -22,16 +22,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() == 4 && args[0] == "--golden" {
         let source = std::fs::read(&args[1])?;
         let object = std::fs::read(&args[2])?;
-        let found = builder::build(&source, &object)?;
+        let found = builder::build(&source, &object, &unfr0zen_core::nlclient::menu::Section::ALL)?;
         let manifest = &found.manifest;
         let offset = manifest["payload_offset"].as_u64().unwrap() as usize;
         let size = manifest["payload_size"].as_u64().unwrap() as usize;
         let mut journal = Vec::new();
         flate2::read::GzDecoder::new(found.journal.as_slice()).read_to_end(&mut journal)?;
         let patch: serde_json::Map<String, serde_json::Value> = [
-            "factory", "factory_file_offset", "image", "original_factory_bytes", "original_program_headers",
-            "payload_address", "payload_offset", "program_header_offset", "replaced_screen", "runtime_directory",
-            "settings_menu", "source_size",
+            "factories", "image", "original_program_headers", "payload_address", "payload_offset",
+            "program_header_offset", "runtime_directory", "settings_menu", "source_size",
         ].into_iter().map(|key| (key.to_owned(), manifest[key].clone())).collect();
         let golden = serde_json::json!({
             "discovery": manifest["discovery"],
@@ -54,7 +53,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let source = std::fs::read(&args[0])?;
     let object = std::fs::read(&args[1])?;
-    let found = builder::build(&source, &object)?;
+    let found = builder::build(&source, &object, &unfr0zen_core::nlclient::menu::Section::ALL)?;
     let out = PathBuf::from(&args[2]);
     std::fs::write(&out, &found.output)?;
     std::fs::write(

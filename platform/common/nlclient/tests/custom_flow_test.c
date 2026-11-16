@@ -3,7 +3,7 @@
 static int last = -1, fail = 0;
 static int request(int action, void *context) { (void)context; last = action; return fail; }
 static void matter_refresh_test(void) {
-    struct custom_flow f = {.page = CUSTOM_MATTER};
+    struct custom_flow f = {.page = CUSTOM_MATTER, .root = CUSTOM_MATTER};
     int started = 0;
     const char *paired = "Paired. Enable pairing to replace the controller.";
     assert(!custom_matter_refresh(&f, "Pairing open. Already paired; scan to replace the controller.", 0, &started, 0));
@@ -14,7 +14,7 @@ static void matter_refresh_test(void) {
     assert(custom_matter_refresh(&f, paired, 0, &started, 1));
     assert(f.page == CUSTOM_MATTER);
     f.page = CUSTOM_MATTER_PAIRING;
-    assert(custom_back(&f) && f.page == CUSTOM_HOME);
+    assert(!custom_back(&f));
     f.page = CUSTOM_MATTER_PAIRING; started = 0;
     /* A pre-existing Paired status cannot acknowledge a pending request. */
     assert(!custom_matter_refresh(&f, paired, 1, &started, 1));
@@ -50,56 +50,56 @@ static void matter_refresh_test(void) {
 }
 int main(void) {
     matter_refresh_test();
-    const int actions[16][5] = {{2, -1, -1, -1, -1}, {0, 2, -1, -1, -1}, {1, 2, -1, -1, -1}, {0, 1, 2, -1, -1},
-                                {3, 2, -1, -1, -1}, {0, 3, 2, -1, -1}, {1, 3, 2, -1, -1}, {0, 1, 3, 2, -1},
-                                {4, 2, -1, -1, -1}, {0, 4, 2, -1, -1}, {1, 4, 2, -1, -1}, {0, 1, 4, 2, -1},
-                                {4, 3, 2, -1, -1}, {0, 4, 3, 2, -1}, {1, 4, 3, 2, -1}, {0, 1, 4, 3, 2}};
-    for (unsigned int mask = 0; mask < 16; mask++) {
-        for (int i = 0; i < 5; i++) assert(custom_home_action(i, mask) == actions[mask][i]);
-        assert(custom_home_action(custom_home_count(mask) - 1, mask) == 2);
-        assert(custom_home_action(-1, mask) == -1);
-    }
-    struct custom_flow f = {0};
-    assert(custom_choose(&f, 0, request, 0) == 1 && f.page == CUSTOM_MATTER);
+    /* Each entry's stock screen name opens its page; Legal Info's is UNFR0ZEN's. */
+    assert(custom_root("account") == CUSTOM_ZIGBEE && custom_root("update") == CUSTOM_MATTER);
+    assert(custom_root("proinfoscreen") == CUSTOM_THEMES && custom_root("templock") == CUSTOM_DOOM);
+    assert(custom_root("legalinfo") == CUSTOM_HOME && custom_root("accounts") == CUSTOM_HOME);
+    /* UNFR0ZEN: Done leaves; Back has no page to go to. */
+    struct custom_flow f = {.page = CUSTOM_HOME, .root = CUSTOM_HOME};
+    assert(custom_choose(&f, 0, request, 0) == 2);
+    assert(!custom_back(&f));
+    /* Matter: Enable pairing, its confirmation, the pairing; Back goes up a
+     * page, and from Matter's own page out to the menu. */
+    f = (struct custom_flow){.page = CUSTOM_MATTER, .root = CUSTOM_MATTER};
     last = -1;
     assert(custom_choose(&f, 0, request, 0) == 1 && last == -1 && f.page == CUSTOM_MATTER_CONFIRM);
     assert(custom_choose(&f, 1, request, 0) == 1 && last == -1 && f.page == CUSTOM_MATTER);
     custom_choose(&f, 0, request, 0);
     assert(custom_choose(&f, 0, request, 0) == 1 && last == 0 && f.page == CUSTOM_MATTER_PAIRING);
-    assert(custom_choose(&f, 0, request, 0) == 1 && f.page == CUSTOM_HOME);
-    custom_choose(&f, 0, request, 0);
+    /* The pairing's Back leaves: Matter's page would show the pairing again. */
+    assert(custom_choose(&f, 0, request, 0) == 2);
+    f.page = CUSTOM_MATTER;
     custom_choose(&f, 0, request, 0);
     fail = 1; custom_choose(&f, 0, request, 0); assert(f.action_failed && f.page == CUSTOM_MATTER);
-    assert(custom_back(&f) && f.page == CUSTOM_HOME && !f.action_failed);
-    custom_choose(&f, 1, request, 0); assert(f.page == CUSTOM_ZIGBEE);
+    fail = 0;
+    assert(custom_choose(&f, 1, request, 0) == 2 && f.page == CUSTOM_MATTER && !f.action_failed);
+    assert(!custom_back(&f));
+    /* Zigbee alike. */
+    f = (struct custom_flow){.page = CUSTOM_ZIGBEE, .root = CUSTOM_ZIGBEE};
     last = -1; custom_choose(&f, 0, request, 0);
     assert(f.page == CUSTOM_ZIGBEE_CONFIRM && last == -1);
     custom_choose(&f, 1, request, 0); assert(f.page == CUSTOM_ZIGBEE && last == -1);
-    custom_choose(&f, 0, request, 0); fail = 0; custom_choose(&f, 0, request, 0);
+    custom_choose(&f, 0, request, 0); custom_choose(&f, 0, request, 0);
     assert(f.page == CUSTOM_ZIGBEE_PAIRING && last == 1 && !f.action_failed);
     assert(custom_back(&f) && f.page == CUSTOM_ZIGBEE);
-    custom_back(&f); assert(f.page == CUSTOM_HOME && f.parent_selection == 1);
-    assert(!custom_back(&f)); assert(custom_choose(&f, 2, request, 0) == 2);
-    /* Doom opens its page; Play asks for the game and stays, Back goes home. */
-    last = -1; assert(custom_choose(&f, 3, request, 0) == 1 && last == -1 && f.page == CUSTOM_DOOM);
+    assert(!custom_back(&f) && custom_choose(&f, 1, request, 0) == 2);
+    /* Doom: Play asks for the game and stays; Back leaves. */
+    f = (struct custom_flow){.page = CUSTOM_DOOM, .root = CUSTOM_DOOM};
+    last = -1;
     assert(custom_choose(&f, 0, request, 0) == 1 && last == 2 && f.page == CUSTOM_DOOM && !f.action_failed);
     fail = 1; custom_choose(&f, 0, request, 0); assert(f.action_failed && f.page == CUSTOM_DOOM);
-    fail = 0; assert(custom_choose(&f, 1, request, 0) == 1 && f.page == CUSTOM_HOME && !f.action_failed);
-    custom_choose(&f, 3, request, 0); assert(custom_back(&f) && f.page == CUSTOM_HOME);
-    /* Theme choices and Back return to the unfr0zen menu. */
-    f.theme_count = 4;
-    last = -1; assert(custom_choose(&f, 4, request, 0) == 1 && last == -1 && f.page == CUSTOM_THEMES);
+    fail = 0; assert(custom_choose(&f, 1, request, 0) == 2 && !f.action_failed);
+    /* Themes: a choice asks for it and leaves, as Back does; a failed one stays. */
+    f = (struct custom_flow){.page = CUSTOM_THEMES, .root = CUSTOM_THEMES, .theme_count = 4};
     for (int choice = 0; choice < f.theme_count; choice++) {
-        f.page = CUSTOM_THEMES;
-        assert(custom_choose(&f, choice, request, 0) == 1 && last == 3 + choice && f.page == CUSTOM_HOME && !f.action_failed);
+        assert(custom_choose(&f, choice, request, 0) == 2 && last == 3 + choice && !f.action_failed);
     }
-    custom_choose(&f, 4, request, 0); fail = 1;
-    custom_choose(&f, 0, request, 0); assert(last == 3 && f.action_failed && f.page == CUSTOM_THEMES);
+    fail = 1;
+    assert(custom_choose(&f, 0, request, 0) == 1 && last == 3 && f.action_failed && f.page == CUSTOM_THEMES);
     fail = 0; last = -1;
-    assert(custom_choose(&f, f.theme_count, request, 0) == 1 && last == -1 && f.page == CUSTOM_HOME);
-    f.page = CUSTOM_THEMES; f.theme_count = 7;
-    assert(custom_choose(&f, 6, request, 0) == 1 && last == 9 && f.page == CUSTOM_HOME);
-    f.page = CUSTOM_THEMES; last = -1;
-    assert(custom_choose(&f, 7, request, 0) == 1 && last == -1 && f.page == CUSTOM_HOME);
+    assert(custom_choose(&f, f.theme_count, request, 0) == 2 && last == -1);
+    f.theme_count = 7;
+    assert(custom_choose(&f, 6, request, 0) == 2 && last == 9);
+    assert(custom_choose(&f, 8, request, 0) == 1);
     return 0;
 }

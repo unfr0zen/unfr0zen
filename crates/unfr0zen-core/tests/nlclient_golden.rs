@@ -97,7 +97,7 @@ fn stock_dumps_match_every_recorded_stage() {
             continue;
         }
         let golden: Value = serde_json::from_slice(&std::fs::read(golden_path).unwrap()).unwrap();
-        let found = nlclient::builder::build(&stock, &object)
+        let found = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         checked += 1;
         for stage in ["discovery", "native_api"] {
@@ -484,8 +484,8 @@ fn a_recompiled_build_is_patched_and_named_as_no_reviewed_one() {
     assert_eq!(found.matches["2025"], found.evidence.len());
     assert!(found.validation.starts_with("unreviewed build: structurally consistent"), "{}", found.validation);
     let object = object().unwrap();
-    assert_eq!(nlclient::builder::build(&changed, &object).unwrap().manifest["reviewed"], false);
-    assert_eq!(nlclient::builder::build(&stock, &object).unwrap().manifest["reviewed"], true);
+    assert_eq!(nlclient::builder::build(&changed, &object, &[]).unwrap().manifest["reviewed"], false);
+    assert_eq!(nlclient::builder::build(&stock, &object, &[]).unwrap().manifest["reviewed"], true);
 }
 
 /// Discovery holds every native to its shape whatever its fingerprints: a
@@ -526,4 +526,42 @@ fn natives_of_another_shape_are_refused() {
     }
     let error = nlclient::discovery::discover(&changed).unwrap_err().to_string();
     assert!(error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"), "{error}");
+}
+#[test]
+fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
+    let Some(object) = object() else { return };
+    let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root().join(".work/firmware"));
+    let Ok(paths) = std::fs::read_dir(&firmware) else { return };
+    for path in paths {
+        let path = path.unwrap().path();
+        if !path.is_file() {
+            continue;
+        }
+        let stock = std::fs::read(&path).unwrap();
+        let all = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL).unwrap();
+        let none = nlclient::builder::build(&stock, &object, &[]).unwrap();
+        let (all, none) = (&all.manifest["settings_menu"], (&none.manifest["settings_menu"], &none.output));
+        let names = |menu: &Value| menu["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let shown = names(none.0);
+        assert_eq!(shown.len() + 4, names(all).len(), "{}", path.display());
+        assert!(!shown.iter().any(|n| ["account", "update", "proinfoscreen", "templock"].contains(&n.as_str())));
+        assert_eq!(shown[shown.len() - 3..], ["legalinfo", "reset", "temperature"]);
+        let bound = none.0["bound"].as_u64().unwrap() as u32;
+        let at = file_offset(&stock, bound);
+        let add = u32::from_le_bytes(none.1[at..at + 4].try_into().unwrap());
+        assert_eq!(add & 0xfff, shown.len() as u32 * 4, "{}", path.display());
+    }
+}
+
+/// The file offset of a virtual address, from the ELF's load segments.
+fn file_offset(elf: &[u8], address: u32) -> usize {
+    let word = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
+    let half = |at: usize| u16::from_le_bytes(elf[at..at + 2].try_into().unwrap()) as usize;
+    let (phoff, count) = (word(28) as usize, half(44));
+    (0..count).map(|i| phoff + i * 32)
+        .find(|&h| word(h) == 1 && (word(h + 8)..word(h + 8) + word(h + 16)).contains(&address))
+        .map(|h| (address - word(h + 8) + word(h + 4)) as usize)
+        .unwrap()
 }

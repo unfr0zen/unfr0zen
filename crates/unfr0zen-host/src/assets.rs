@@ -9,7 +9,7 @@ use unfr0zen_core::nestlocal::Overlay;
 const BUSYBOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/busybox.gz"));
 const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"));
 const APPLY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unfr0zen-apply.gz"));
-/// The UNFR0ZEN screen, compiled once, for linking into the unit's nlclient.
+/// unfr0zen's settings screens, compiled once, for linking into the unit's nlclient.
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
 /// The gen 1's and gen 2's Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
@@ -40,7 +40,7 @@ pub fn apply() -> Vec<u8> {
 }
 
 /// Doom for --doom: the game, its launcher, the shareware WAD and the title
-/// the UNFR0ZEN screen's Doom page shows.
+/// the DOOM settings entry's page shows.
 pub fn doom() -> Overlay {
     Overlay {
         directories: vec![("usr/share/doom".into(), 0o755)],

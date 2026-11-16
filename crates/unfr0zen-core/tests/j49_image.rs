@@ -174,7 +174,7 @@ fn the_setup_applies_to_both_slots() {
     let Some(image) = image() else { return };
     let object = PathBuf::from(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o");
     let Ok(object) = std::fs::read(&object) else { panic!("{}: build it first (utils/build-firmware.sh)", object.display()) };
-    let build_screen = |source: &[u8]| unfr0zen_core::nlclient::build(source, &object);
+    let build_screen = |source: &[u8], sections: &[unfr0zen_core::nlclient::menu::Section]| unfr0zen_core::nlclient::build(source, &object, sections);
     let pki = generate_pki().unwrap();
     let options = Options {
         root_hash: root_hash("unfr0zen").unwrap(),

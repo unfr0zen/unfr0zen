@@ -1,7 +1,7 @@
-# Native UNFR0ZEN settings
+# Native unfr0zen settings screens
 
 Recovery reads the device's `nlclient`, discovers its native UI addresses and
-C++ object layouts, then links the embedded UNFR0ZEN ARM object **in memory**.
+C++ object layouts, then links the embedded settings-screen ARM object **in memory**.
 The finished GUI and CLI require no Python, GCC, clang, LLVM linker, pip,
 network access, or installed disassembly library to patch the screen.
 The object is compiled once with the firmware when building the app.
@@ -14,14 +14,17 @@ this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
 
-The home screen has a **192×192 unfr0zen icon**, the line “unfr0zen” with the
-version of the app that set up the unit (`/etc/unfr0zen/version`), and Matter,
-Zigbee, Doom and Done ring choices. Pages open at the top; status updates
-preserve the viewport unless pairing completes. The larger QR has 10px of extra spacing above
-its manual code. Matter, Zigbee and Doom choices appear only for enabled integrations. nestlocal
-publishes its actual configured feature flags, independently of radio/service
-readiness. Before it starts, the screen reads its installed options (including
-the device override). With none enabled, the only choice is Done. **Doom** opens its page:
+The settings menu has one entry per section: **ZIGBEE**, **MATTER**,
+**THEMES** and **DOOM** right after its first entry, each only when that
+feature was installed (`--zigbee`, `--matter`, `--themes` on the gen 3,
+`--doom`), and **UNFR0ZEN** in Legal Info's place, just before Reset. Each
+tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
+`G_unfr0zen_glyph_80px.png`) above its name. An entry opens its page
+directly, and Back on that page returns to the menu. The UNFR0ZEN page has the
+**192×192 unfr0zen icon**, the line “unfr0zen” with the version of the app
+that set up the unit (`/etc/unfr0zen/version`), and Done. Pages open at the
+top; status updates preserve the viewport unless pairing completes. The larger
+QR has 10px of extra spacing above its manual code. **DOOM** opens its page:
 Doom's title (`G_unfr0zen_doom.png`, which the app makes from the WAD when it
 installs Doom), how to quit, and Play and Back. **Play** asks nestlocal to
 launch the game, which takes the screen until it quits and then returns to
@@ -57,9 +60,19 @@ holding it no longer starts Zigbee pairing.
 While an activity page is visible, stock user-activity notifications keep the
 display and device awake: for the open Matter window, or at most 30 seconds
 for Zigbee. Back or completion stops those notifications and restores normal inactivity behavior.
-UNFR0ZEN is at settings-menu index 1, after the thermostat/Back entry at 0.
-Its carousel tile displays the glyph above UNFR0ZEN.
-The other items retain their order.
+## The settings menu
+
+Each entry is a stock screen whose factory builds unfr0zen's screen instead
+(`custom_root` in `src/custom_flow.h`): Nest app (`account`) is ZIGBEE,
+Software (`update`) MATTER, Nest Pro (`proinfoscreen`) THEMES, Lock
+(`templock`) DOOM and Legal Info (`legalinfo`) UNFR0ZEN. Those stock screens
+leave the menu; a unit whose Lock was on before setup no longer has the Lock
+entry. The menu is a static list of screen names between two `temperature`
+entries, which nlclient reads in a loop of fixed length. The setup rewrites
+the list from the chosen options and shortens the loop's bound to match
+(`crates/unfr0zen-core/src/nlclient/menu.rs`); the stock entries keep their
+order, and the slots past the bound keep valid names for nlclient's lookup of
+a screen by name.
 
 ## Screen hand-over
 
@@ -91,9 +104,10 @@ whose nlclient is not that pid stops nlclient instead.
 ## The dial's theme
 
 With customizable themes installed (gen 3), nestlocal's options carry
-`-themes` and this screen offers a Themes page: its choices are
+`-themes` and the settings menu has a THEMES entry: its choices are
 `/var/run/unfr0zen/theme.catalog` (`id<TAB>label` lines), the current one
-`theme.status`, and a choice is written to `theme.request` for nestlocal. The
+`theme.status`, and a choice is written to `theme.request` for nestlocal,
+then the page returns to the menu. The
 theme itself is drawn in nlclient's own GPU context by a preloaded library
 (`platform/common/theme`); the screen patch does not touch the dial.
 
@@ -142,7 +156,7 @@ With the dark theme selected (`--dark-theme`, or **Dark theme** under
 Advanced in the app, offered for a gen 1 or gen 2), their settings screens take the
 gen 3's colours: black backgrounds, white text, `#00a3d9` selection,
 `#004157` fields being edited, `#666666` unselected rows and `#00a1f2`
-carousel tiles. The UNFR0ZEN screen draws with the stock palette, so it
+carousel tiles. unfr0zen's settings screens draw with the stock palette, so they
 follows. Each colour is the one the gen 3's nlclient sets in the same
 function. Like the external temperature input, it applies only to the
 reviewed 5.9.4-5 stock binary, at fixed, hash-guarded addresses, and fails
@@ -189,7 +203,8 @@ changes, verifies the complete output SHA256 and atomically renames the copy.
 The generated **undo journal** records changed original bytes, injected bytes,
 and both hashes. It is generated per device, never used as a prebuilt shortcut:
 
-- `/nestlabs/share/images/G_unfr0zen_192px.png`
+- `/nestlabs/share/images/G_unfr0zen_192px.png` and the menu glyphs
+  (`G_unfr0zen_*_80px.png`)
 - `/etc/unfr0zen/nlclient.undo.gz`
 - `/etc/unfr0zen/nlclient.original` — full original executable, root-only (mode 600);
   on the gen 3 `/media/scratch/.unfr0zen/backup/nlclient.original`, on its scratch
@@ -277,4 +292,4 @@ unfr0zen nlclient nlclient-from-unit --undo nlclient.undo.gz --out nlclient-stoc
 ```
 
 Both hashes are checked. Install stock with nlclient stopped, then restart
-it. A later recovery rebuilds the UNFR0ZEN screen from that executable.
+it. A later recovery rebuilds unfr0zen's settings screens from that executable.

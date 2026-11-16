@@ -1,5 +1,5 @@
 //! The setup bundle: one gzipped tar holding everything a setup installs
-//! (nestlocal, its overlays, the UNFR0ZEN screen's object, the scripts run
+//! (nestlocal, its overlays, the settings screens' object, the scripts run
 //! around the setup) and unfr0zen-apply, which runs the setup on the unit.
 //! The same for every unit of a device and release: what a run asks for
 //! travels beside it as Settings.

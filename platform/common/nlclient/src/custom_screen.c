@@ -1,5 +1,6 @@
-/* The UNFR0ZEN screen, linked into the unit's stock nlclient as a Settings
- * screen. It draws through stock text layout, selection and image APIs, no
+/* unfr0zen's settings screens, linked into the unit's stock nlclient: the
+ * Zigbee, Matter, Themes, Doom and UNFR0ZEN entries of the settings menu,
+ * one screen each (custom_root) built by one factory. It draws through stock text layout, selection and image APIs, no
  * framebuffer drawing of its own. Native API addresses and object layouts
  * are discovered from the input ELF; they are build-specific and still need
  * validating on a unit.
@@ -161,7 +162,12 @@ DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 /* --- Files --------------------------------------------------------------- */
 #define IMAGES "/nestlabs/share/images/"
 #define CUSTOM_IMAGE IMAGES "G_unfr0zen_192px.png"
+/* The menu glyphs: each entry's, 80 px. */
 #define MENU_GLYPH IMAGES "G_unfr0zen_glyph_80px.png"
+#define ZIGBEE_GLYPH IMAGES "G_unfr0zen_zigbee_80px.png"
+#define MATTER_GLYPH IMAGES "G_unfr0zen_matter_80px.png"
+#define THEMES_GLYPH IMAGES "G_unfr0zen_themes_80px.png"
+#define DOOM_GLYPH IMAGES "G_unfr0zen_doom_80px.png"
 /* Doom's title, made from the WAD when the app installs Doom (246x120). */
 #define DOOM_IMAGE IMAGES "G_unfr0zen_doom.png"
 /* nestlocal's files. */
@@ -274,7 +280,6 @@ struct custom_state {
     struct custom_flow flow;
     int active;
     int at_top;
-    unsigned int features;
     void *refresh_request;
     char status[96];
     char code[32];
@@ -778,38 +783,6 @@ static void load_activity(void *raw) {
         s->activity_images[i] = native_image_load(path, &error);
     }
 }
-static int is_space(char c) { return c == ' ' || c == '\n' || c == '\t' || c == '\r'; }
-/* Whether a whitespace-separated word of `text` is `option`, or with
- * `with_value` also `option=value`. */
-static int has_option(const char *text, const char *option, int with_value) {
-    while (*text) {
-        while (is_space(*text)) text++;
-        const char *word = text, *needle = option;
-        while (*text && !is_space(*text)) text++;
-        while (word < text && *needle && *word == *needle) { word++; needle++; }
-        if (!*needle && (word == text || (with_value && *word == '='))) return 1;
-    }
-    return 0;
-}
-/* The features on (enum custom_feature): nestlocal's, or before it starts,
- * read from its options. */
-static unsigned int enabled_features(void) {
-    char flags[8];
-    read_text(RUN "features", flags, sizeof(flags), "");
-    if (flags[0] >= '0' && flags[0] <= '9' && !flags[1]) return flags[0] - '0';
-    if (flags[0] >= 'a' && flags[0] <= 'f' && !flags[1]) return flags[0] - 'a' + 10;
-    /* Before nestlocal starts, use the same options precedence as its init script.
-     * No installed options means no protocol integrations. */
-    char options[1024];
-    void *installed = native_fopen("/etc/nestlocal/options", "rb");
-    const char *path = installed ? "/etc/nestlocal/options" : "/media/system-config/nestlocal.options";
-    if (installed) native_fclose(installed);
-    read_text(path, options, sizeof(options), "");
-    return (has_option(options, "-matter", 0) || has_option(options, "--matter", 0) ? FEATURE_MATTER : 0) |
-           (has_option(options, "-zigbee", 0) || has_option(options, "--zigbee", 0) ? FEATURE_ZIGBEE : 0) |
-           (has_option(options, "-doom", 0) || has_option(options, "--doom", 0) ? FEATURE_DOOM : 0) |
-           (has_option(options, "-themes", 0) || has_option(options, "--themes", 0) ? FEATURE_THEMES : 0);
-}
 /* The page's service status: Matter's or Zigbee's. */
 static void read_status(enum custom_page page, char *out, unsigned int size) {
     read_text(custom_matter(page) ? MATTER_STATUS : ZIGBEE_STATUS, out, size, NOT_ENABLED);
@@ -837,8 +810,7 @@ static void show(void *raw, int opening) {
     choices_capacity(s, theme && s->themes.count + 1 > CHOICE_ROWS ? s->themes.count + 1 : CHOICE_ROWS);
     int activity = custom_activity(s->flow.page);
     int matter_pairing = s->flow.page == CUSTOM_MATTER_PAIRING;
-    if (s->flow.page == CUSTOM_HOME) s->features = enabled_features();
-    int choice_count = s->flow.page == CUSTOM_HOME ? custom_home_count(s->features) :
+    int choice_count = s->flow.page == CUSTOM_HOME ? 1 :
                        theme ? s->themes.count + 1 : activity ? 1 : 2;
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
     s->config.text_count = activity ? 3 : 2;
@@ -853,12 +825,8 @@ static void show(void *raw, int opening) {
         char name[64];
         read_text("/etc/unfr0zen/version", name, sizeof(name), "unfr0zen");
         native_string_copy(&s->text[1], name);
-        for (int i = 0; i < CHOICE_ROWS; i++) {
-            int action = custom_home_action(i, s->features);
-            native_string_copy(&s->choices[i], action == HOME_MATTER ? "Matter" : action == HOME_ZIGBEE ? "Zigbee" :
-                               action == HOME_DONE ? "Done" : action == HOME_DOOM ? "Doom" :
-                               action == HOME_THEMES ? "Themes" : "");
-        }
+        native_string_copy(&s->choices[0], "Done");
+        clear_choices(s, 1);
     } else if (theme) {
         native_string_copy(&s->text[0], s->flow.action_failed ? "nestlocal is unavailable. Try again." :
                            "The theme used on the home screen.");
@@ -912,7 +880,7 @@ static void show(void *raw, int opening) {
     WORD(base, COMMON_CHOICE_FIRST) = 0;
     WORD(base, COMMON_CHOICE_LAST) = choice_count - 1;
     native_config_layout(raw, &s->config, FIXED_ONE, choice_count);
-    int selection = opening ? (s->flow.page == CUSTOM_HOME ? s->flow.parent_selection : 0) : old_selection;
+    int selection = opening ? 0 : old_selection;
     if (selection >= choice_count) selection = choice_count - 1;
     if (selection < 0) selection = 0;
     native_select(raw, selection);
@@ -937,32 +905,19 @@ static int click(void *raw) {
     keeper_start(PTR(common(raw), COMMON_GLOBALS));
     int selected = (int)WORD(common(raw), COMMON_SELECTION);
     enum custom_page before = s->flow.page;
-    int result;
-    if (before == CUSTOM_HOME) {
-        int action = custom_home_action(selected, s->features);
-        result = action < 0 ? RESULT_HANDLED : custom_choose(&s->flow, action, request_action, s);
-        if (result != RESULT_EXIT) s->flow.parent_selection = selected;
-    } else result = custom_choose(&s->flow, selected, request_action, s);
+    int result = custom_choose(&s->flow, selected, request_action, s);
     if (s->flow.page != before && custom_activity(s->flow.page)) {
         s->activity_ticks = 0; s->activity_started = 0;
         if (s->flow.page == CUSTOM_ZIGBEE_PAIRING) keep_awake(raw);
     }
     if (result != RESULT_EXIT) show(raw, s->flow.page != before);
-    if (before == CUSTOM_THEMES && s->flow.page == CUSTOM_HOME) {
-        s->at_top = 0;
-        native_select(raw, (int)WORD(common(raw), COMMON_SELECTION_SHOWN));
-    }
     return result;
 }
 /* A status poll: follows nestlocal's status, the pairing's progress and
  * timeout, and lays the page out again when it changed. */
 static void refresh_status(void *raw) {
     struct custom_state *s = state(raw);
-    if (s->flow.page == CUSTOM_HOME) {
-        if (s->features != enabled_features()) show(raw, 0);
-        return;
-    }
-    if (s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM ||
+    if (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM || s->flow.page == CUSTOM_DOOM ||
         s->flow.page == CUSTOM_THEMES) return;
     enum custom_page before = s->flow.page;
     int pending = 0;
@@ -1128,7 +1083,10 @@ static int draw_common(void *base, void *context) {
     return draw((u8 *)base - COMMON_OFFSET, context);
 }
 static void title(void *screen) {
-    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE), "\nUNFR0ZEN");
+    enum custom_page root = state(raw_layer(screen))->flow.root;
+    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE),
+                       root == CUSTOM_ZIGBEE ? "\nZIGBEE" : root == CUSTOM_MATTER ? "\nMATTER" :
+                       root == CUSTOM_THEMES ? "\nTHEMES" : root == CUSTOM_DOOM ? "\nDOOM" : "\nUNFR0ZEN");
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE), "");
     native_rebuild_title(screen);
 }
@@ -1171,7 +1129,10 @@ static int screen_draw(void *screen, void *context) {
     if (menu_visible) {
         if (!s->menu_glyph) {
             int error = 0;
-            s->menu_glyph = native_image_load(MENU_GLYPH, &error);
+            enum custom_page root = s->flow.root;
+            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE ? ZIGBEE_GLYPH : root == CUSTOM_MATTER ? MATTER_GLYPH :
+                                              root == CUSTOM_THEMES ? THEMES_GLYPH : root == CUSTOM_DOOM ? DOOM_GLYPH :
+                                              MENU_GLYPH, &error);
         }
         if (s->menu_glyph) {
             /* Native menu titles settle at half scale; glyph coordinates
@@ -1195,8 +1156,7 @@ static void enter_screen(void *screen) {
     s->drawn = 0;
     attempt_begin();
     s->active = 1;
-    s->flow.page = CUSTOM_HOME;
-    s->flow.parent_selection = 0;
+    s->flow.page = s->flow.root;
     s->flow.action_failed = 0;
     load_image(raw_layer(screen));
     native_screen_enter(screen);
@@ -1228,8 +1188,9 @@ static int screen_event(void *screen, void *event, void *target) {
 }
 
 /* --- The factory -------------------------------------------------------- */
-/* Replaces the account screen's factory: builds the screen and its layer,
- * their vtables copies of stock ones with our methods in. */
+/* Replaces the factories of the stock screens the entries take the names
+ * of (custom_root): builds the screen and its layer, their vtables copies of
+ * stock ones with our methods in. */
 void *custom_factory(void *globals, void *handler, const char *name) {
     if (attempt_pending()) return 0;
     attempt_begin();
@@ -1255,6 +1216,7 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     native_layer_ctor(raw);
     struct custom_state *s = state(raw);
     s->screen = screen;
+    s->flow.root = custom_root(name);
     s->display = display_width();
     s->config.text_count = 2;
     s->config.text = s->text;

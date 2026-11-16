@@ -1,4 +1,4 @@
-//! Doom, chosen on the UNFR0ZEN screen: nlclient cannot start a program, so
+//! Doom, chosen in the DOOM settings entry: nlclient cannot start a program, so
 //! it leaves doom.request and this runs the launcher, which stops nlclient,
 //! plays and starts nlclient again. The launcher has a session of its own,
 //! so a restart of nestlocal leaves the game running.

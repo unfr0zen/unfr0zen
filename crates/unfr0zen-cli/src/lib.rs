@@ -105,10 +105,10 @@ struct Args {
     /// how the 3rd generation's boot ROM is entered for recovery: auto, cve-2017-7932, cve-2017-7936 or official-loader
     #[arg(long, global = true)]
     entry_point: Option<EntryPoint>,
-    /// gen 3: customizable home screen themes, picked on the UNFR0ZEN settings screen (Stock, Hyperdrive, Nest 4th Gen) and drawn on the unit's GPU; needs a firmware the themes support
+    /// gen 3: customizable home screen themes, picked from the THEMES settings entry (Stock, Hyperdrive, Nest 4th Gen) and drawn on the unit's GPU; needs a firmware the themes support
     #[arg(long, help_heading = "Root filesystem options")]
     themes: bool,
-    /// install Doom (shareware episode), launched from the UNFR0ZEN settings screen; hold the button 3 s to quit
+    /// install Doom (shareware episode), launched from the DOOM settings entry; hold the button 3 s to quit
     #[arg(long, help_heading = "Root filesystem options")]
     doom: bool,
     /// regulate from temperatures sent over MQTT, Zigbee or Matter, using one sensor named after the thermostat's room; gen 1 and gen 2 need the reviewed 5.9.4-5 nlclient patch; gen 3 turns off its own Bluetooth, so real Nest Temperature Sensors stop working; needs --mqtt, --matter or --zigbee
@@ -356,7 +356,7 @@ fn local_nlclient(binary: &std::path::Path, out: &std::path::Path, undo: Option<
         let patch = nlclient::Patch::parse(&std::fs::read(journal)?)?;
         (patch.apply(&source, true)?, None)
     } else {
-        let built = nlclient::builder::build(&source, assets::CUSTOM_SCREEN)?;
+        let built = nlclient::builder::build(&source, assets::CUSTOM_SCREEN, &nlclient::menu::Section::ALL)?;
         let manifest = serde_json::to_vec_pretty(&built.manifest).map_err(|e| unfr0zen_host::Error::Io(e.to_string()))?;
         (built.output, Some((built.journal, manifest)))
     };

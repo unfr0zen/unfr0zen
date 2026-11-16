@@ -7,7 +7,7 @@ GPU context at up to 60 frames a second. Everything else stays stock:
 the ring and the button, the menus, the setpoints and the HVAC control. A
 theme only reads the thermostat's state and draws it.
 
-The UNFR0ZEN screen's **Themes** page picks the theme; **Stock** is
+The settings menu's **THEMES** entry picks the theme; **Stock** is
 nlclient's own dial. The page lists the theme folders as they are when it
 opens: a folder added or removed by hand shows within a few seconds.
 
