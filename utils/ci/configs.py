@@ -3,12 +3,12 @@
 which of them a pipeline merges.
 
 The setup workflow's path filtering sets a parameter per workflow the push's
-files call for: the build image's and the app's. The config holding a workflow
-declares its parameter and gates the workflow on it. The app and release
-workflows list every module's job, so the subsystem configs defining them are
-merged too: that is the table below. A push to main runs the app workflow, as
-main has no base to compare with: what it changed says nothing about what
-reached it. A release tag runs the release workflow alone, with the image's.
+files call for: the build image's, the linters' and the app's. The config
+holding a workflow declares its parameter and gates the workflow on it. The app
+and release workflows list every module's job, so the subsystem configs
+defining them are merged too: that is the table below. A push to main runs the
+app and lint workflows, as main has no base to compare with: what it changed
+says nothing about what reached it. A release tag runs the release workflow alone, with the image's.
 
 A job runs only when its inputs changed. Each job of INPUTS has a key of its
 inputs: the build image, its sources' git trees, and the keys of the modules
@@ -79,6 +79,7 @@ APP = [
 # parameter: the config holding its workflow and those defining the jobs it lists
 CONFIGS = {
     "build-image": ["utils/ci/.circleci/config.yml"],
+    "lint": [".circleci/lint.yml"],
     "app": APP,
     "release": APP + [".circleci/release.yml"],
 }
@@ -276,7 +277,7 @@ def setup(parameters_path, config_list_path):
         parameters = {"build-image": parameters.get("build-image", False), "release": True}
     elif os.environ.get("CIRCLE_BRANCH") == "main":
         # The image only when its Dockerfile changed: this one publishes it.
-        parameters = {"app": True, "build-image": parameters.get("build-image", False)}
+        parameters = {"app": True, "lint": True, "build-image": parameters.get("build-image", False)}
     fork = os.environ.get("FORK") == "true"
     if fork:
         parameters["build-image"] = False
