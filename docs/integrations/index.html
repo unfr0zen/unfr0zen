@@ -69,7 +69,7 @@
             </ul>
 
             <h2 id="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>Settings menu</h2>
-            <p>The thermostat's settings menu gets an entry for each installed feature, right after its first entry: <b>ZIGBEE</b> (pairing with a 30-second countdown), <b>MATTER</b> (pairing), <b>THEMES</b> (the home screen themes, 2nd and 3rd generation) and <b>DOOM</b>. <b>UNFR0ZEN</b>, with the version that set the thermostat up, takes <b>LEGAL INFO</b>'s place before <b>RESET</b>. <b>NEST APP</b>, <b>SOFTWARE</b>, <b>NEST PRO</b>, <b>LOCK</b> and <b>LEGAL INFO</b> leave the menu. Each entry opens its page; Back returns to the menu.</p>
+            <p>The thermostat's settings menu gets an entry for each installed feature, right after its first entry: <b>ZIGBEE</b> (pairing with a 30-second countdown), <b>MATTER</b> (pairing), <b>THEMES</b> (the home screen themes) and <b>DOOM</b>. <b>UNFR0ZEN</b>, with the version that set the thermostat up, takes <b>LEGAL INFO</b>'s place before <b>RESET</b>. <b>NEST APP</b>, <b>SOFTWARE</b>, <b>NEST PRO</b>, <b>LOCK</b> and <b>LEGAL INFO</b> leave the menu. Each entry opens its page; Back returns to the menu.</p>
             <p>The screens are linked into the unit's own <code>nlclient</code>; the original is kept at <code>/etc/unfr0zen/nlclient.original</code> across installs (on the 3rd generation at <code>/media/scratch/.unfr0zen/backup/nlclient.original</code>). Supported versions and undo: <a href="https://github.com/unfr0zen/unfr0zen/blob/main/platform/common/nlclient/README.md" target="_blank" rel="noopener">platform/common/nlclient/README.md</a>.</p>
 
             <h2 id="mqtt"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>MQTT</h2>
@@ -301,9 +301,9 @@ data:
                     </tbody>
                 </table>
             </div>
-            <p>2nd and 3rd generation, on the firmware versions the themes support; another is refused at install. A few themes are built in; pick how the home screen's dial looks from <b>UNFR0ZEN → Themes</b>. The choice is kept across restarts.</p>
+            <p>On the firmware versions the themes support; another is refused at install. A few themes are built in; pick how the home screen's dial looks from <b>UNFR0ZEN → Themes</b>. The choice is kept across restarts.</p>
             <ul>
-                <li>The ring, the button and the menus work as stock: the theme only draws the dial. The 3rd generation draws it on its GPU, at up to 60 frames a second while it moves; the 2nd generation has no GPU and draws it on its processor, at fewer frames a second.</li>
+                <li>The ring, the button and the menus work as stock: the theme only draws the dial. It is drawn on the GPU at up to 60 frames a second while it moves, or on the processor at up to 30 where the firmware draws there.</li>
                 <li>A theme that fails shows the target and its error on the dial; pick another from <b>UNFR0ZEN → Themes</b>. A theme that keeps restarting the display is not started again until you pick it again.</li>
                 <li>Your own themes go in <code>/media/scratch/.unfr0zen/themes</code> (see <a href="https://github.com/unfr0zen/unfr0zen/tree/main/crates/nestlocal/themes">making a theme</a>); the Themes page shows them within a few seconds.</li>
                 <li>Install again without the option to remove it.</li>

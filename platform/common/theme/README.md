@@ -1,11 +1,10 @@
-# Customizable home screen themes (gen 2 and gen 3)
+# Customizable home screen themes
 
 With `--themes` (the app's **Customizable home screen themes**), the UNFR0ZEN
 screen's **Themes** page picks how the home screen's dial is drawn: Stock
 (nlclient's own) or one of nestlocal's Lua themes (`crates/nestlocal/themes`).
-On the gen 3 a theme draws in nlclient's own GLES2 context, on the GPU, at
-the panel's rate while it moves; the gen 2 has no GPU, and draws it on the
-CPU. nlclient keeps the ring, the button, the menus and the setpoints.
+A theme draws in nlclient's own GLES2 context, on the GPU, at the panel's
+rate while it moves, or on the CPU where nlclient draws there. nlclient keeps the ring, the button, the menus and the setpoints.
 
 | Part                                               | What it does                                                                                                                                                                                                                                                                                         |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,11 +15,11 @@ CPU. nlclient keeps the ring, the button, the menus and the setpoints.
 
 ## How the theme is drawn
 
-The dial's draw places a marker image the display's size (480×480 on the gen
-3, 320×320 on the gen 2; `/var/run/unfr0zen/theme-marker.png`, every pixel
+The dial's draw places a marker image the dial's size (`dial_size` in the
+bindings; `/var/run/unfr0zen/theme-marker.png`, every pixel
 RGBA `12 34 56 ff`) where the dial would show.
 
-On the gen 2 nlclient draws on the CPU into the framebuffer's pages. The
+On the gen 1 and gen 2 nlclient draws on the CPU into the framebuffer's pages. The
 library paints the theme's frame with tiny-skia straight into the marker
 image's pixels (`nestlocal_theme_draw_pixels`), which nlclient's software
 context then draws as the dial would be: placed, and scaled and faded into
@@ -81,8 +80,8 @@ Discovery finds the dial, its event handler, its figures and the natives the
 preload calls in any build; the background layer, brightness manager, views,
 displayed temperature and humidity, the leaf, the globals' setpoint, unit and
 mode getters, the dial's size and whether nlclient draws on the CPU come from
-the builds reviewed by hand (`REVIEWED` in `nlclient/theme.rs`): the gen 3's
-6.4-8 and 6.5-14, the gen 2's 5.9.4-5. Another build is refused at setup. The preload
+the builds reviewed by hand (`REVIEWED` in `nlclient/theme.rs`): 6.4-8,
+6.5-14 and 5.9.4-5. Another build is refused at setup. The preload
 hooks nothing without a complete `/etc/unfr0zen/theme.bindings` (`name value`
 lines) or when a vtable slot does not hold the stock method it names.
 
@@ -91,8 +90,8 @@ lines) or when a vtable slot does not hold the stock method it names.
 `platform/common/radio/thread/nestlocal.sh` runs `build.sh build/theme` in the build
 image. The preload links against nothing but libc, libdl and libpthread: its
 GL calls resolve against nlclient's own libGLESv2 when it is loaded, and are
-never made on the gen 2. Both build for the gen 2's Cortex-A8, which the gen
-3's A9 runs too, against glibc 2.19. The library builds
+never made where nlclient draws on the CPU. Both build for the Cortex-A8,
+which an A9 runs too, against glibc 2.19. The library builds
 `crates/nestlocal-theme` with LuaJIT, linked to be bound lazily, and the
 preload loads it so: glibc 2.19's loader binds a library at once only when
 its `.rel.plt` follows its `.rel.dyn`, which zig's linker does not lay out.

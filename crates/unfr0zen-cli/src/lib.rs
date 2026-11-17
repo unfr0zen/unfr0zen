@@ -105,7 +105,7 @@ struct Args {
     /// how the 3rd generation's boot ROM is entered for recovery: auto, cve-2017-7932, cve-2017-7936 or official-loader
     #[arg(long, global = true)]
     entry_point: Option<EntryPoint>,
-    /// gen 2 and gen 3: customizable home screen themes, a few built in, picked from the THEMES settings entry and drawn in place of the dial; needs a firmware the themes support
+    /// Customizable home screen themes: a few built in, picked from the THEMES settings entry and drawn in place of the dial; needs a firmware the themes support
     #[arg(long, help_heading = "Root filesystem options")]
     themes: bool,
     /// install Doom (shareware episode), launched from the DOOM settings entry; hold the button 3 s to quit

@@ -2,8 +2,8 @@
 # Builds what draws customizable home screen themes into OUT:
 # libunfr0zen-theme.so, the library preloaded into nlclient (theme.c), and
 # nestlocal's theme library libnestlocal_theme.so (crates/nestlocal-theme, with
-# LuaJIT), which it loads. Both for the gen 2's Cortex-A8, which the gen 3's
-# A9 runs too, against glibc 2.19, as nlclient. Run inside the build image,
+# LuaJIT), which it loads. Both for the Cortex-A8, which an A9 runs too,
+# against glibc 2.19, as nlclient. Run inside the build image,
 # from the repository root.
 #
 #     platform/common/theme/build.sh OUT

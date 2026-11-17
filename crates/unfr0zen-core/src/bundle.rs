@@ -43,7 +43,7 @@ pub const POST_SETUP: &str = "scripts/post-setup.sh";
 const OVERLAYS: &str = "overlays/";
 pub const THREAD: &str = "thread";
 pub const DOOM: &str = "doom";
-/// Customizable home screen themes (gen 2 and gen 3): the theme preload and library.
+/// Customizable home screen themes: the theme preload and library.
 pub const THEME: &str = "theme";
 /// The SSH server of a unit without its own (the gen 2's dropbear).
 pub const SSH: &str = "ssh";
@@ -390,7 +390,7 @@ pub struct Settings {
     pub zigbee: bool,
     pub wwn_boiler: bool,
     pub doom: bool,
-    /// Customizable home screen themes (the gen 2 and gen 3).
+    /// Customizable home screen themes.
     #[serde(default)]
     pub theme: bool,
     pub external_temperature: bool,

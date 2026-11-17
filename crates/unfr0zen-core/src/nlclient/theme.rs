@@ -1,7 +1,6 @@
 //! The bindings of the theme preload (platform/common/theme), which draws
-//! customizable home screen themes in nlclient, in its GPU context on the
-//! gen 3 and on the CPU on the gen 2: where, in
-//! the unit's stock nlclient, the dial, its figures, the background layer
+//! customizable home screen themes in nlclient, in its GPU context or on the
+//! CPU: where, in the unit's stock nlclient, the dial, its figures, the background layer
 //! and the natives the preload calls are. Discovery finds the dial and the
 //! natives in any build; the rest comes from the builds reviewed by hand.
 //! The setup writes them to BINDINGS as `name value` lines (hexadecimal
@@ -17,8 +16,7 @@ pub const BINDINGS: &str = "etc/unfr0zen/theme.bindings";
 
 /// The globals' vtable slots of the native control model's getters:
 /// setpoints (Celsius 16.16), the unit and the mode; where the mode is the
-/// schedule's (the gen 2's), the system off and eco apart from it (0 for
-/// none).
+/// schedule's, the system off and eco apart from it (0 for none).
 struct Globals {
     target: u32,
     fahrenheit: u32,
@@ -55,7 +53,7 @@ struct Reviewed {
     leaf_slot: u32,
     globals: Globals,
     /// The dial's size in pixels, and whether nlclient draws on the CPU
-    /// (the gen 2's framebuffer) rather than in GLES2.
+    /// (into the framebuffer) rather than in GLES2.
     dial_size: u32,
     software: bool,
 }
@@ -95,8 +93,7 @@ const REVIEWED: &[Reviewed] = &[
         dial_size: 480,
         software: false,
     },
-    // The gen 2's 5.9.4-5, whose globals' vtable is laid out apart from the
-    // gen 3's.
+    // 5.9.4-5, whose globals' vtable is laid out apart from 6.x's.
     Reviewed {
         stock_sha256: "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
         background_slot: 0x3f5b58,

@@ -3,13 +3,13 @@
  * the dial's own drawing.
  *
  * The dial's draw marks the theme's place with a marker image the display's
- * size. On the gen 3 the frame is drawn in nlclient's own GLES2 context: the
- * texture nlclient uploads for the marker is tracked, and its draw is
- * replaced by the theme's, straight into the framebuffer nlclient has bound
- * (or, scaled into the menus, into that texture). The gen 2 has no GPU
- * (`software`): the library paints the frame on the CPU into the marker
- * image's own pixels, which nlclient's software context then draws, placed,
- * scaled and faded as the dial would be. nlclient's native controls stay its
+ * size. In nlclient's own GLES2 context the texture nlclient uploads for the
+ * marker is tracked, and its draw is replaced by the theme's, straight into
+ * the framebuffer nlclient has bound (or, scaled into the menus, into that
+ * texture). Where nlclient draws on the CPU (`software`), the library paints
+ * the frame at full size straight into the page being drawn, and scaled into
+ * the menus into the marker image's own pixels, which nlclient's software
+ * context then draws, placed, scaled and faded as the dial would be. nlclient's native controls stay its
  * own: the theme reads the setpoints, mode and heat-cool pick from the native
  * control model each frame. A redraw is asked of nlclient's event queue at
  * the panel's rate while the theme moves, and about once a second while it
@@ -119,10 +119,9 @@ static uintptr_t thermostat_view_vtable, view_offset, current_temperature, curre
 static uintptr_t activity_client, activity_ctor, activity_init, delete_native, enqueue, event_type;
 static uintptr_t image_load, layer_lookup, menu_hidden, menu_scale, new_native;
 /* The globals' vtable slots for the setpoints (Celsius 16.16), the unit and
- * the mode, and on a build whose mode is its schedule's (the gen 2's) the
- * slots telling the system off and eco on, 0 elsewhere; the dial's and the
- * marker's size in pixels; and whether nlclient draws on the CPU (the gen 2)
- * rather than in GLES2 (the gen 3). */
+ * the mode, and on a build whose mode is its schedule's the slots telling
+ * the system off and eco on, 0 elsewhere; the dial's and the marker's size
+ * in pixels; and whether nlclient draws on the CPU rather than in GLES2. */
 static uintptr_t target_slot, fahrenheit_slot, low_slot, high_slot, mode_slot, off_slot, eco_slot, dial_size, software;
 static const struct {
     const char *name;
@@ -881,8 +880,8 @@ static void start_ticker(void);
 #define MODE_HEAT 0
 #define MODE_ECO  4
 #define MODE_OFF  0xff
-/* The native mode, as the library knows it. A schedule's mode (the gen 2's)
- * has emergency heat for 4, and the system off and eco apart. */
+/* The native mode, as the library knows it. A schedule's mode has emergency
+ * heat for 4, and the system off and eco apart. */
 static unsigned native_mode(void *g) {
     unsigned mode = VIRTUAL(unsigned_fn, g, mode_slot)(g);
     if (!off_slot)

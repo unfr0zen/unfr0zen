@@ -1,7 +1,6 @@
-//! Customizable home screen themes (-themes, gen 2 and gen 3): the themes
-//! (themes/, which the setup installs in THEMES on the scratch volume) draw
-//! the home screen's dial inside nlclient, on the gen 3's GPU or the gen 2's
-//! CPU, through the theme preload (platform/common/theme) and the theme
+//! Customizable home screen themes (-themes): the themes (themes/, which the
+//! setup installs in THEMES on the scratch volume) draw the home screen's dial
+//! inside nlclient, on the GPU or the CPU as nlclient draws, through the theme preload (platform/common/theme) and the theme
 //! library (crates/nestlocal-theme). This side
 //! offers them in the settings menu's THEMES entry, keeps the choice, and
 //! hands the library the chosen theme with the device and shared buckets.

@@ -2,9 +2,9 @@
 //! (crates/nestlocal/themes, which the setup installs under
 //! /media/scratch/.unfr0zen/themes). The theme preload (platform/common/theme)
 //! loads this library into nlclient and asks it for each frame of the dial:
-//! on the gen 3 in nlclient's own GLES2 context (nestlocal_theme_draw), on the
-//! gen 2, which has no GPU, on the CPU into the image nlclient draws in the
-//! dial's place (nestlocal_theme_draw_pixels). The theme, with the device and
+//! in nlclient's own GLES2 context (nestlocal_theme_draw), or, where nlclient
+//! draws on the CPU, into the pixels of its page or of the image it draws in
+//! the dial's place (nestlocal_theme_draw_pixels). The theme, with the device and
 //! shared buckets, comes from nestlocal (theme.native.json), the live
 //! setpoints, mode and heat-cool pick from the native control model through
 //! the preload (nestlocal_native_theme_v1).
@@ -176,8 +176,8 @@ impl NativeState {
 }
 type NativeReader = unsafe extern "C" fn(*mut NativeState);
 type Loader = unsafe extern "C" fn(*const c_char) -> *const c_void;
-/// What paints the theme: femtovg in nlclient's GLES2 context (the gen 3), or
-/// tiny-skia on the CPU into a pixmap the dial's size (the gen 2).
+/// What paints the theme: femtovg in nlclient's GLES2 context, or tiny-skia
+/// on the CPU into a pixmap the dial's size.
 enum Painting {
     Gpu(Box<Renderer>),
     Soft(Box<soft::Renderer>),
@@ -725,7 +725,7 @@ pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, 
 }
 
 /// Draws the dial's frame on the CPU into `pixels`, `size` pixels square, as
-/// ARGB words (the gen 2's image in the dial's place, which nlclient draws);
+/// ARGB words (nlclient's page, or the image it draws in the dial's place);
 /// `native` reads the native control model. Called only on nlclient's UI
 /// thread; 1 when drawn (or unchanged and copied out again), 0 when not.
 ///

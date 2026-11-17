@@ -153,9 +153,9 @@ const NLCLIENT_START: (&str, &str, &str) = (
     "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
     "\n LD_PRELOAD=\"/nestlabs/lib/liblocalcloud.so /nestlabs/lib/libunfr0zen-theme.so\" ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
 
-/// monit's rule for nlclient, and the line restarting it past its memory
-/// limit: the gen 2's 28 MB, which a theme drawn on its CPU takes nlclient
-/// past, raised with themes (the gen 3's limit is far above both).
+/// monit's rule for nlclient, and the line restarting it past 28 MB, which a
+/// theme drawn on the CPU takes nlclient past: raised with themes. A rule
+/// with another limit is left as it is.
 const NLCLIENT_MONIT: &str = "etc/monit.d/nlclient.monitrc";
 const NLCLIENT_MEMORY: (&str, &str) =
     ("if mem > 28000 KB for 2 cycles then restart", "if mem > 44000 KB for 2 cycles then restart");
@@ -690,8 +690,8 @@ pub fn set_up_owned(
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
     }
-    if options.theme.is_some() && !matches!(target, Device::J49 | Device::Diamond3) {
-        return device("customizable home screen themes are for the gen 2 and gen 3");
+    if options.theme.is_some() && !matches!(target, Device::Diamond | Device::J49 | Device::Diamond3) {
+        return device("customizable home screen themes are not available on this device");
     }
     if options.theme.is_some() && !on_scratch {
         return device("customizable home screen themes need the unit's scratch volume");
@@ -1846,7 +1846,7 @@ mod tests {
         let error =
             set_up_on_device(&mut volume, Device::Diamond, &on, b"ARMV7", &mut no_pki, true, &|_, _| unreachable!())
                 .unwrap_err();
-        assert!(error.to_string().contains("gen 2 and gen 3"), "{error}");
+        assert!(error.to_string().contains("do not support this firmware"), "{error}");
     }
 
     #[test]

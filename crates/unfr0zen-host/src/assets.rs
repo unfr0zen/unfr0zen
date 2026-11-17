@@ -1,6 +1,6 @@
 //! What the binary carries (build.rs) for any device: the initramfs's busybox,
 //! nestlocal for --mqtt, unfr0zen-apply for the setup bundle, Doom with its
-//! WAD for --doom, and the customizable themes for --themes (gen 2 and gen 3). Each device's own firmware is in its module.
+//! WAD for --doom, and the customizable themes for --themes. Each device's own firmware is in its module.
 
 use std::io::Read;
 
@@ -68,7 +68,7 @@ pub fn doom() -> Overlay {
 /// The Lua themes (crates/nestlocal/themes), by their names there.
 const THEMES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/themes.rs"));
 
-/// Customizable home screen themes for the gen 2 and gen 3: the library preloaded into
+/// Customizable home screen themes: the library preloaded into
 /// nlclient, nestlocal's theme library it draws the themes with, and the
 /// themes, which go on the scratch volume with the library.
 pub fn theme() -> Overlay {
