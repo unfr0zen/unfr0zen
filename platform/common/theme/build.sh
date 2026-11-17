@@ -21,7 +21,10 @@ if command -v zig >/dev/null 2>&1; then zig=zig; else zig="python3 -m ziglang"; 
 $zig cc -target arm-linux-gnueabihf.2.19 -mcpu=cortex_a8 -O2 -Wall -Wextra -Werror -shared -fPIC -s \
     -Wl,-z,lazy -Wl,-soname,libunfr0zen-theme.so -o "$out/libunfr0zen-theme.so" "$dir/theme.c" -ldl -lpthread
 
-target=armv7-unknown-linux-gnueabihf
+# With NEON, which Rust's armv7 target leaves off and the cores it runs on
+# have: the CPU painter's pixel work runs on it rather than on the A8's slow
+# VFP.
+target=thumbv7neon-unknown-linux-gnueabihf
 target_dir=${THEME_TARGET_DIR:-.work/theme-target}
 # LuaJIT's build: target C through zig, linked and archived by the ARM GNU
 # tools; its 32-bit host tools natively, or under qemu-i386 on arm64.
@@ -36,7 +39,14 @@ if [ "$(uname -m)" = aarch64 ]; then export HOST_CC="$dir/host-cc.py"; fi
 # library at once only when its .rel.plt follows its .rel.dyn, which zig's
 # linker does not lay out.
 libgcc=$(arm-linux-gnueabihf-gcc -print-libgcc-file-name)
-export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C target-cpu=cortex-a8 -C link-arg=-Wl,-z,lazy -C link-arg=$libgcc -A linker_messages"
-cargo zigbuild --locked -p nestlocal-theme --no-default-features --features luajit --lib --release \
-    --target "$target.2.19" --target-dir "$target_dir"
+export CARGO_TARGET_THUMBV7NEON_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS="-C target-cpu=cortex-a8 -C linker-flavor=gcc -C link-arg=-Wl,-z,lazy -C link-arg=$libgcc -A linker_messages"
+# Linked by zig against glibc 2.19 (cargo-zigbuild does not know this
+# target); rustc's own flavor for it passes ld's arguments, hence gcc's.
+mkdir -p "$target_dir"
+linker=$(CDPATH= cd -- "$target_dir" && pwd)/zig-ld
+printf '#!/bin/sh\nexec %s cc -target arm-linux-gnueabihf.2.19 -mcpu=cortex_a8 "$@"\n' "$zig" >"$linker"
+chmod +x "$linker"
+export CARGO_TARGET_THUMBV7NEON_UNKNOWN_LINUX_GNUEABIHF_LINKER="$linker"
+cargo build --locked -p nestlocal-theme --no-default-features --features luajit --lib --release \
+    --target "$target" --target-dir "$target_dir"
 cp "$target_dir/$target/release/libnestlocal_theme.so" "$out/libnestlocal_theme.so"

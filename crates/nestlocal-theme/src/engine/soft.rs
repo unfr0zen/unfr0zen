@@ -29,11 +29,41 @@ const EVICT_EVERY: u64 = 64;
 struct Layer {
     key: String,
     pixmap: Pixmap,
+    /// Where the layer is not transparent, which alone is painted.
+    runs: Runs,
     /// Its size in design units.
     size: (f32, f32),
     /// The layer in the tints it was last painted with, most recent first
     /// (a theme may paint one in two, alternately).
     tinted: Vec<(Color, Pixmap)>,
+}
+
+/// Each row's runs of pixels that are not transparent, as columns from
+/// (inclusive) to (exclusive): painting a layer blends only these, as most
+/// of a layer the dial's size is clear. Gaps shorter than RUN_GAP are kept
+/// in a run, as a run costs more to start than a few clear pixels to skip.
+type Runs = Vec<Vec<(u16, u16)>>;
+const RUN_GAP: usize = 8;
+
+fn runs(pixmap: &Pixmap) -> Runs {
+    let width = pixmap.width() as usize;
+    pixmap
+        .data()
+        .chunks_exact(width * 4)
+        .map(|row| {
+            let mut runs: Vec<(u16, u16)> = Vec::new();
+            for (i, px) in row.as_chunks::<4>().0.iter().enumerate() {
+                if px[3] == 0 {
+                    continue;
+                }
+                match runs.last_mut() {
+                    Some((_, end)) if i - usize::from(*end) < RUN_GAP => *end = i as u16 + 1,
+                    _ => runs.push((i as u16, i as u16 + 1)),
+                }
+            }
+            runs
+        })
+        .collect()
 }
 
 /// A run of text as an image, its placement in pixels from the pen.
@@ -444,6 +474,16 @@ fn blit(target: &mut Pixmap, source: &Pixmap, x: i32, y: i32, opacity: f32) {
     }
 }
 
+/// `blit` of a layer, only its `runs`.
+fn blit_runs(target: &mut Pixmap, source: &Pixmap, runs: &Runs, x: i32, y: i32, opacity: f32) {
+    let k = (opacity.clamp(0.0, 1.0) * 256.0) as u32;
+    for row in y.max(0)..(y + source.height() as i32).min(target.height() as i32) {
+        for &(from, to) in &runs[(row - y) as usize] {
+            blit_row(target, source, (x, y), row, (x + i32::from(from), x + i32::from(to)), k);
+        }
+    }
+}
+
 /// Where `at` places a pixmap's top-left corner, when it does so one to one
 /// on whole pixels.
 fn whole_pixels(at: &Transform) -> Option<(i32, i32)> {
@@ -664,7 +704,15 @@ fn blit_row(target: &mut Pixmap, source: &Pixmap, (x, y): (i32, i32), row: i32, 
 
 /// `source` over `target` as `blit` does, only the pixels whose centres lie
 /// inside `polygon` (in the target's pixels, even-odd), with no soft edge.
-fn blit_polygon(target: &mut Pixmap, source: &Pixmap, x: i32, y: i32, polygon: &[(f32, f32)], opacity: f32) {
+fn blit_polygon(
+    target: &mut Pixmap,
+    source: &Pixmap,
+    runs: Option<&Runs>,
+    x: i32,
+    y: i32,
+    polygon: &[(f32, f32)],
+    opacity: f32,
+) {
     if polygon.len() < 3 {
         return;
     }
@@ -681,8 +729,20 @@ fn blit_polygon(target: &mut Pixmap, source: &Pixmap, x: i32, y: i32, polygon: &
             }
         }
         crossings.sort_by(f32::total_cmp);
+        let source_row = usize::try_from(row - y).ok();
         for pair in crossings.as_chunks::<2>().0 {
-            blit_row(target, source, (x, y), row, ((pair[0] - 0.5).ceil() as i32, (pair[1] - 0.5).ceil() as i32), k);
+            let (from, to) = ((pair[0] - 0.5).ceil() as i32, (pair[1] - 0.5).ceil() as i32);
+            match (runs, source_row) {
+                (Some(runs), Some(r)) if r < runs.len() => {
+                    for &(a, b) in &runs[r] {
+                        let (a, b) = (from.max(x + i32::from(a)), to.min(x + i32::from(b)));
+                        if a < b {
+                            blit_row(target, source, (x, y), row, (a, b), k);
+                        }
+                    }
+                }
+                _ => blit_row(target, source, (x, y), row, (from, to), k),
+            }
         }
     }
 }
@@ -957,7 +1017,8 @@ impl Painter for SoftPainter<'_> {
         let drawn = draw(self);
         let pixmap = std::mem::replace(&mut self.layer, outer_layer).expect("the layer was set above");
         self.stack = outer_stack;
-        self.r.layers.insert(name.to_string(), Layer { key: key.to_string(), pixmap, size, tinted: Vec::new() });
+        let runs = runs(&pixmap);
+        self.r.layers.insert(name.to_string(), Layer { key: key.to_string(), pixmap, runs, size, tinted: Vec::new() });
         drawn
     }
 
@@ -1003,7 +1064,7 @@ impl Painter for SoftPainter<'_> {
                     (p[0].x, p[0].y)
                 })
                 .collect();
-            blit_polygon(target, source, x, y, &device, s.alpha);
+            blit_polygon(target, source, Some(&layer.runs), x, y, &device, s.alpha);
             r.painting += started.elapsed();
             return Ok(());
         }
@@ -1026,7 +1087,7 @@ impl Painter for SoftPainter<'_> {
             }
             // On whole pixels, copied over directly; else through tiny-skia.
             None if at.sx == 1.0 && at.sy == 1.0 && at.kx == 0.0 && at.ky == 0.0 => {
-                blit(target, source, at.tx as i32, at.ty as i32, s.alpha);
+                blit_runs(target, source, &layer.runs, at.tx as i32, at.ty as i32, s.alpha);
             }
             None => blit_transformed(target, source, at, s.alpha),
         }
@@ -1083,7 +1144,7 @@ mod tests {
 
         let clip = [(40.0, 30.0), (200.0, 50.0), (180.0, 125.0), (60.0, 120.0)];
         let mut ours = Pixmap::new(320, 320).unwrap();
-        blit_polygon(&mut ours, &source, 20, 10, &clip, 1.0);
+        blit_polygon(&mut ours, &source, None, 20, 10, &clip, 1.0);
         let mut theirs = Pixmap::new(320, 320).unwrap();
         let paint = Paint {
             shader: Pattern::new(
