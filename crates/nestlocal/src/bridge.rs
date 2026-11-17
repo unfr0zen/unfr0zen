@@ -407,14 +407,15 @@ impl Bridge {
         if can_heat && can_cool {
             modes.push("heat_cool");
         }
-        // What the unit's screen shows.
+        // What the unit's screen shows; Home Assistant takes a step in its own
+        // unit, unconverted.
         let precision = if sprint(dev.get("temperature_scale")) == "F" { 1.0 } else { 0.5 };
         let mut climate = fields! {
             "state_topic" => Value::Null,
             "modes" => modes,
             "temperature_unit" => "C",
             "precision" => num(precision),
-            "temp_step" => 0.5,
+            "temp_step" => num(precision),
             "min_temp" => 9,
             "max_temp" => 32,
             "mode_state_topic" => st.clone(),
@@ -636,7 +637,7 @@ impl Bridge {
                 "Eco heat temperature",
                 ECO_LOW.0,
                 ECO_LOW.1,
-                0.5,
+                precision,
                 "°C",
                 "temperature",
             );
@@ -648,7 +649,7 @@ impl Bridge {
                 "Eco cool temperature",
                 ECO_HIGH.0,
                 ECO_HIGH.1,
-                0.5,
+                precision,
                 "°C",
                 "temperature",
             );
@@ -1214,6 +1215,7 @@ pub mod tests {
             serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
         assert_eq!(climate["modes"], json!(["off", "heat"]));
         assert_eq!(climate["precision"], json!(1));
+        assert_eq!(climate["temp_step"], json!(1));
         assert_eq!(climate["name"], Value::Null);
         assert!(climate.get("state_topic").is_none() && climate.get("temperature_low_command_topic").is_none());
         assert!(configs.contains_key("homeassistant/binary_sensor/nestlocal_s/heating/config"));
@@ -1226,6 +1228,7 @@ pub mod tests {
             (&json!("°C"), &json!("temperature")),
             "Home Assistant shows it in its own unit"
         );
+        assert_eq!(eco["step"], json!(1), "Home Assistant takes the step in its own unit");
     }
 
     #[test]
