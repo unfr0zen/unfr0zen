@@ -76,6 +76,7 @@ network doesn't need internet access.
 | ----------------------------------------- | ----------------------------- |
 | Nest Learning Thermostat (3rd generation) | 5.9.4-5, 6.3-5, 6.4-8, 6.5-14 |
 | Nest Learning Thermostat (2nd generation) | 5.9.4-5                       |
+| Nest Learning Thermostat (1st generation) | 5.9.4-5                       |
 
 Other versions aren't blocked: unfr0zen sets them up by their structure and
 keeps the stock nlclient beside the run log. Running a version not listed here?
