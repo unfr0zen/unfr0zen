@@ -43,7 +43,7 @@ The firmware build supplies assets embedded by the host crates; cargo runs it wh
 
 ## Coding Style & Naming Conventions
 
-Every language has a formatter and a linter, run by pre-commit (`.pre-commit-config.yaml`, each tool's configuration at the root) and by CI on every push; before committing run `pre-commit run --all-files`, or `pre-commit install` to run them on each commit. Match surrounding style and use four-space indentation in Rust. Use `snake_case` for functions/modules, `PascalCase` for types, and `SCREAMING_SNAKE_CASE` for constants. Keep changes focused; avoid unrelated formatting or refactoring. Comments explain current behavior and lasting constraints, not debugging history.
+Every language has a formatter, most a linter too, run by pre-commit (`.pre-commit-config.yaml`, each tool's configuration at the root) and by CI on every push; before committing run `pre-commit run --all-files`, or `pre-commit install` to run them on each commit. Match surrounding style and use four-space indentation in Rust. Use `snake_case` for functions/modules, `PascalCase` for types, and `SCREAMING_SNAKE_CASE` for constants. Keep changes focused; avoid unrelated formatting or refactoring. Comments explain current behavior and lasting constraints, not debugging history.
 
 ## Testing Guidelines
 

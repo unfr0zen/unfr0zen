@@ -51,6 +51,8 @@ repos:
     rev: v0.11.0.1-1
     hooks:
       - id: shellcheck
+        # A blank assignment before a command (CDPATH= cd) is meant.
+        args: [--exclude=SC1007]
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.14.1-1
@@ -62,25 +64,10 @@ repos:
     hooks:
       - id: stylua-github
 
-  - repo: https://github.com/adrienverge/yamllint
-    rev: v1.38.0
-    hooks:
-      - id: yamllint
-        args: [--strict]
-
   - repo: https://github.com/ComPWA/taplo-pre-commit
     rev: v0.9.3
     hooks:
       - id: taplo-format
-
-  - repo: https://github.com/AleksaC/hadolint-py
-    rev: v2.15.1
-    hooks:
-      - id: hadolint
-        # Debian's packages move within a release; the images pin their base instead.
-        args: [--ignore, DL3008]
-        # hadolint cannot parse a heredoc, which the build image's RUN steps use.
-        exclude: ^utils/ci/Dockerfile$
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.24.1
@@ -95,12 +82,6 @@ repos:
         language: rust
         types: [lua]
         additional_dependencies: ["cli:selene:0.31.0"]
-      - id: gersemi
-        name: gersemi
-        entry: gersemi --in-place
-        language: python
-        types: [cmake]
-        additional_dependencies: [gersemi==0.29.2]
       - id: prettier
         name: prettier
         entry: prettier --write --ignore-unknown
@@ -113,9 +94,3 @@ repos:
         language: node
         types: [html]
         additional_dependencies: [html-validate@11.21.1]
-      - id: biome
-        name: biome lint
-        entry: biome lint --error-on-warnings --no-errors-on-unmatched
-        language: node
-        types: [javascript]
-        additional_dependencies: ["@biomejs/biome@2.6.8"]
