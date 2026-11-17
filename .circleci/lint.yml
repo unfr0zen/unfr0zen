@@ -18,6 +18,7 @@ jobs:
     environment:
       PRE_COMMIT_VERSION: 4.7.0
       PSSCRIPTANALYZER_VERSION: 1.25.0
+      PSSCRIPTANALYZER_SHA256: 14e634c828eb98efb9f40b2918ba90f139ed5eccdf663a2a747736d996995d60
       POWERSHELL_VERSION: 7.7.0
       POWERSHELL_SHA256: c89d9c682d2c403dfe726f3df948e359675235a5bd6fab535776de69729ca0cb
     steps:
@@ -45,11 +46,17 @@ jobs:
             curl -fsSL -o /tmp/pwsh.tar.gz \
               "https://github.com/PowerShell/PowerShell/releases/download/v$POWERSHELL_VERSION/powershell-$POWERSHELL_VERSION-linux-x64.tar.gz"
             echo "$POWERSHELL_SHA256  /tmp/pwsh.tar.gz" | sha256sum -c
+            # Fetched directly rather than by Install-Module, whose PSGallery
+            # repository is at times missing on the executor.
+            curl -fsSL --retry 5 -o /tmp/pssa.nupkg \
+              "https://www.powershellgallery.com/api/v2/package/PSScriptAnalyzer/$PSSCRIPTANALYZER_VERSION"
+            echo "$PSSCRIPTANALYZER_SHA256  /tmp/pssa.nupkg" | sha256sum -c
+            python3 -m zipfile -e /tmp/pssa.nupkg \
+              "$HOME/.local/share/powershell/Modules/PSScriptAnalyzer/$PSSCRIPTANALYZER_VERSION"
             mkdir /tmp/pwsh && tar xzf /tmp/pwsh.tar.gz -C /tmp/pwsh
             /tmp/pwsh/pwsh -NoProfile -Command '
               $ErrorActionPreference = "Stop"
-              Set-PSRepository PSGallery -InstallationPolicy Trusted
-              Install-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser
+              Import-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION
               $failed = $false
               foreach ($file in git ls-files "*.ps1") {
                 $findings = Invoke-ScriptAnalyzer -Path $file
