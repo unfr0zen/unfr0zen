@@ -14,10 +14,10 @@ return {
     tick = "#a8b2b7",
     -- What the system is doing: the target's tick, symbol and words, and
     -- the glow behind the number.
-    heat = "#e97f3a",
-    heat_glow = "#d1651f",
+    heat = "#f1ad8f",
+    heat_glow = "#ff8667",
     cool = "#b8dfea",
-    cool_glow = "#659dc4",
+    cool_glow = "#507c9b",
     leaf = "#4fc36b",
   },
   -- The track, open at the bottom: the lowest temperature at `from`, the
@@ -56,7 +56,7 @@ return {
   },
   -- The glow behind the number: its radius, `drop` units below the
   -- middle, and the rings it is drawn in.
-  glow = { radius = 206, drop = 6, steps = 64 },
+  glow = { radius = 210, drop = 6, steps = 120 },
   -- The target: its size and baseline, the half's size against it, and a
   -- digit's cell width against the widest digit. Heat-cool's ends at
   -- `range_size` on `range_base`, `range_gap` either side of the middle

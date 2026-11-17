@@ -39,10 +39,9 @@ sunrise, sunset and forecast). `ui.clock` gives the local time with its
 epoch seconds and UTC offset, for the times the weather gives as epoch
 seconds.
 
-A theme that animates for long, as the Weather theme's rain and snow, draws
-its particles as stamps of layers it drew once (`gfx:warp_layer`): each is
-one textured quad, and runs of the same layer at the same opacity are one
-GPU draw.
+A theme that animates for long, as with rain or snow, draws its particles as
+stamps of layers it drew once (`gfx:warp_layer`): each is one textured quad,
+and runs of the same layer at the same opacity are one GPU draw.
 
 The library tells the preload when the theme needs its next frame
 (`nestlocal_theme_next`): at once while it animates, when it asked with

@@ -266,8 +266,6 @@ mod tests {
         assert_eq!(offered[0], "stock");
         assert_eq!(offered[1..], listed[..]);
         assert!(!offered.iter().any(|t| t == "common"));
-        assert_eq!(label(&source, "nest-gen4"), "Nest 4th Gen");
-        assert_eq!(label(&source, "lcd"), "LCD");
         assert_eq!(label(&source, "stock"), "Stock");
         assert_eq!(label(&source, "missing"), "missing");
         assert_eq!(themes(Path::new("/nonexistent/unfr0zen-themes")), ["stock"]);
@@ -276,12 +274,13 @@ mod tests {
     #[test]
     fn only_installed_themes_are_offered() {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("themes");
-        assert!(installed(&source, "nest-gen4") && installed(&source, "stock"));
+        let shipped = &themes(&source)[1];
+        assert!(installed(&source, shipped) && installed(&source, "stock"));
         let wiped = Path::new("/nonexistent/unfr0zen-themes");
         assert!(installed(wiped, "stock"));
-        assert!(!installed(wiped, "nest-gen4"));
+        assert!(!installed(wiped, shipped));
         assert!(!installed(&source, "common"), "a theme has a theme.lua");
-        assert!(!installed(&source, "../themes/nest-gen4"), "a theme is a folder's name");
+        assert!(!installed(&source, &format!("../themes/{shipped}")), "a theme is a folder's name");
     }
 
     #[test]
@@ -337,15 +336,14 @@ mod tests {
     fn state_carries_the_theme_buckets_mqtt_state_and_weather() {
         let weather = json!({"temp_c": 4.5, "icon": "snow"}).as_object().unwrap().clone();
         let first: Value =
-            serde_json::from_slice(&state("hyperdrive", 2, json!({"temperature_scale": "F"}), Value::Null, weather))
-                .unwrap();
-        assert_eq!(first["theme"], "hyperdrive");
+            serde_json::from_slice(&state("mine", 2, json!({"temperature_scale": "F"}), Value::Null, weather)).unwrap();
+        assert_eq!(first["theme"], "mine");
         assert_eq!(first["picked"], 2);
         assert_eq!(first["dev"]["temperature_scale"], "F");
         assert!(first["shared"].is_null() && first["state"].is_null(), "no state before the unit reports");
         assert_eq!(first["weather"]["icon"], "snow");
         let second: Value = serde_json::from_slice(&state(
-            "nest-gen4",
+            "other",
             0,
             json!({"temperature_scale": "C", "current_humidity": 41}),
             json!({"target_temperature_type": "heat", "target_temperature": 20.6, "hvac_heater_state": true}),

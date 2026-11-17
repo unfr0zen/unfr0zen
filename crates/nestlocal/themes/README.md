@@ -21,14 +21,15 @@ again.
 
 ## The themes here
 
-| Folder       | Look                                                                                                      |
-| ------------ | --------------------------------------------------------------------------------------------------------- |
-| `hyperdrive` | A heads-up display in a dark editor palette, set in JetBrains Mono.                                       |
-| `nest-gen4`  | Black, with a glow in the colour of what the system is doing.                                             |
-| `analog`     | An old-school round thermostat: a printed cover that turns under an index, a bimetal needle for the room. |
-| `lcd`        | A round backlit LCD: seven-segment figures and a bar graph round the rim.                                 |
-| `weather`    | The weather outside, animated: sky, sun and moon, clouds, rain, snow, fog, lightning.                     |
-| `common`     | Not a theme: helper modules every theme can use.                                                          |
+| Folder       | Look                                                                                                               |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `hyperdrive` | A heads-up display in a dark editor palette, set in JetBrains Mono.                                                |
+| `nest-gen4`  | Black, with a glow in the colour of what the system is doing.                                                      |
+| `analog`     | A classic round dial thermostat: a domed cover printed with the scale turns under a lens, a needle shows the room. |
+| `lcd`        | A round backlit LCD: seven-segment figures and a bar graph round the rim.                                          |
+| `weather`    | The weather outside, animated: sky, sun and moon, clouds, rain, snow, fog, lightning.                              |
+| `pixel`      | 8-bit pixel art in the PICO-8 palette, moving a step at a time like an arcade.                                     |
+| `common`     | Not a theme: helper modules every theme can use.                                                                   |
 
 Read `hyperdrive` first (one file of drawing, ~300 lines), then `lcd` for
 static layout and `weather` for animation.

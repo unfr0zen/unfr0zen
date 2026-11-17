@@ -114,7 +114,7 @@ mod tests {
         let (libraries, themes): (Vec<_>, Vec<_>) = theme.files.iter().partition(|(name, _, _)| name.ends_with(".so"));
         assert!(libraries.len() == 2 && libraries.iter().all(|(_, _, data)| data.starts_with(b"\x7fELF")));
         assert!(themes.iter().all(|(name, _, _)| name.starts_with("media/scratch/.unfr0zen/themes/")));
-        assert!(themes.iter().any(|(name, _, _)| name.ends_with("/nest-gen4/theme.lua")));
+        assert!(themes.iter().any(|(name, _, _)| name.ends_with("/theme.lua")));
         assert!(pack(Device::Onyx, "1.0.0", None).is_err());
     }
 

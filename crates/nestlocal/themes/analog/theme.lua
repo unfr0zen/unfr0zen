@@ -1,5 +1,5 @@
--- Analog: the home screen as an instrument, a needle on a printed scale.
--- Set in Figtree.
+-- Analog: the home screen as a classic round dial thermostat, set in
+-- Archivo.
 local home = require("home")
 
 return {
@@ -7,8 +7,8 @@ return {
   api = 1,
   design = 480,
   fonts = {
-    light = "nest-gen4:fonts/Figtree-Light.ttf",
-    medium = "nest-gen4:fonts/Figtree-Medium.ttf",
+    print = "fonts/Archivo-Medium.ttf",
+    wide = "fonts/ArchivoExpanded-SemiBold.ttf",
   },
   draw = home.draw,
 }

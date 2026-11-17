@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn directories_come_parents_first_and_only_on_scratch() {
         let names = [
-            "media/scratch/.unfr0zen/themes/nest-gen4/fonts/Figtree-Light.ttf",
+            "media/scratch/.unfr0zen/themes/mine/fonts/Regular.ttf",
             "media/scratch/.unfr0zen/doom/doom",
             "etc/unfr0zen/options.json",
         ];
@@ -114,8 +114,8 @@ mod tests {
                 "media/scratch/.unfr0zen",
                 "media/scratch/.unfr0zen/doom",
                 "media/scratch/.unfr0zen/themes",
-                "media/scratch/.unfr0zen/themes/nest-gen4",
-                "media/scratch/.unfr0zen/themes/nest-gen4/fonts"
+                "media/scratch/.unfr0zen/themes/mine",
+                "media/scratch/.unfr0zen/themes/mine/fonts"
             ]
         );
     }

@@ -4,7 +4,7 @@
 //!
 //! ```lua
 //! return {
-//!   name = "Nest 4th Gen", api = 1, design = 480,
+//!   name = "My theme", api = 1, design = 480,
 //!   fonts = { regular = { "unit:AkkuratNest-Regular.ttf", "fonts/Inter-Regular.ttf" }, ... },
 //!   draw = function(gfx, ui) ... return animating end,
 //! }

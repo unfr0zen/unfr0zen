@@ -676,8 +676,8 @@ mod tests {
     }
     #[test]
     fn theme_names_are_folder_names() {
-        assert!(theme_id("nest-gen4"));
-        assert!(!theme_id("../hyperdrive"));
+        assert!(theme_id("my-theme_2"));
+        assert!(!theme_id("../my-theme"));
         assert!(!theme_id(""));
     }
     #[test]
@@ -764,14 +764,23 @@ mod tests {
     }
     /// Renders themes in a range of states into PNGs, to look at:
     /// `THEME_PREVIEWS=DIR [THEME_PREVIEW_THEMES=a,b] cargo test -p
-    /// nestlocal-theme previews -- --ignored`.
+    /// nestlocal-theme previews -- --ignored`: every theme without the list.
     #[test]
     #[ignore]
     fn previews() {
         let out = std::path::PathBuf::from(std::env::var("THEME_PREVIEWS").expect("THEME_PREVIEWS=DIR"));
         std::fs::create_dir_all(&out).unwrap();
         let themes = Path::new(env!("UNFR0ZEN_ROOT")).join("crates/nestlocal/themes");
-        let names = std::env::var("THEME_PREVIEW_THEMES").unwrap_or("analog,lcd,weather".into());
+        let names = std::env::var("THEME_PREVIEW_THEMES").unwrap_or_else(|_| {
+            let mut all: Vec<String> = std::fs::read_dir(&themes)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .filter(|p| p.join("theme.lua").is_file())
+                .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
+                .collect();
+            all.sort();
+            all.join(",")
+        });
         let day = 1_794_660_000_i64; // 2026-11-14 12:40 UTC
         let weather = |condition: &str, temp: f64| {
             serde_json::json!({"temp_c": temp, "humidity": 70, "condition": condition,
