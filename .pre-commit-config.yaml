@@ -77,6 +77,8 @@ repos:
     rev: v2.15.1
     hooks:
       - id: hadolint
+        # Debian's packages move within a release; the images pin their base instead.
+        args: [--ignore, DL3008]
         # hadolint cannot parse a heredoc, which the build image's RUN steps use.
         exclude: ^utils/ci/Dockerfile$
 
