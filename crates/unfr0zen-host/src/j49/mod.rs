@@ -433,6 +433,7 @@ fn build_initramfs(config: &Config, run_dir: &Path) -> Result<Vec<u8>> {
         || options.matter.is_some()
         || options.zigbee
         || options.doom.is_some()
+        || options.theme.is_some()
         || options.external_temperature;
     let pki = if nestlocal { Some(stored_pki(&config.data_dir.join("nestlocal-pki"))?) } else { None };
     let settings = serde_json::to_vec_pretty(&Settings::new(options, pki.as_ref())).expect("settings serialize");

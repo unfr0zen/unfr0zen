@@ -1,9 +1,10 @@
 # Home screen themes
 
-A theme redraws the gen 3's home screen: the dial nlclient shows when no
-menu is open. It is a folder of Lua that the theme engine
-(`crates/nestlocal-theme`) runs inside nlclient, drawing straight into its
-GPU context at up to 60 frames a second. Everything else stays stock:
+A theme redraws the home screen of the gen 2 and gen 3: the dial nlclient
+shows when no menu is open. It is a folder of Lua that the theme engine
+(`crates/nestlocal-theme`) runs inside nlclient, drawing on the gen 3
+straight into its GPU context at up to 60 frames a second, and on the gen 2,
+which has no GPU, on its CPU at fewer. Everything else stays stock:
 the ring and the button, the menus, the setpoints and the HVAC control. A
 theme only reads the thermostat's state and draws it.
 
@@ -284,8 +285,8 @@ something moves every frame.
 
 ## Making it fast
 
-The unit's GPU is small, and a theme shares nlclient's thread and frame
-budget:
+The gen 3's GPU is small, the gen 2 draws on its CPU, and a theme shares
+nlclient's thread and frame budget:
 
 - **Cache what does not change in layers.** A face, a scale, a block of text:
   draw them once into a layer keyed by what they show, and paint the layer

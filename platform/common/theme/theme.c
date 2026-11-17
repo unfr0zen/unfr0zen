@@ -1,11 +1,15 @@
-/* Customizable home screen themes on the gen 3: preloaded into nlclient, this
- * draws the chosen theme (libnestlocal_theme.so, nestlocal's theme library) in
- * nlclient's own GLES2 context, in place of the dial's own drawing.
+/* Customizable home screen themes: preloaded into nlclient, this draws the
+ * chosen theme (libnestlocal_theme.so, nestlocal's theme library) in place of
+ * the dial's own drawing.
  *
- * The dial's draw marks the theme's place with a 480x480 marker image; the
- * texture nlclient uploads for it is tracked, and its draw is replaced by
- * the theme's, straight into the framebuffer nlclient has bound (or, scaled
- * into the menus, into that texture). nlclient's native controls stay its
+ * The dial's draw marks the theme's place with a marker image the display's
+ * size. On the gen 3 the frame is drawn in nlclient's own GLES2 context: the
+ * texture nlclient uploads for the marker is tracked, and its draw is
+ * replaced by the theme's, straight into the framebuffer nlclient has bound
+ * (or, scaled into the menus, into that texture). The gen 2 has no GPU
+ * (`software`): the library paints the frame on the CPU into the marker
+ * image's own pixels, which nlclient's software context then draws, placed,
+ * scaled and faded as the dial would be. nlclient's native controls stay its
  * own: the theme reads the setpoints, mode and heat-cool pick from the native
  * control model each frame. A redraw is asked of nlclient's event queue at
  * the panel's rate while the theme moves, and about once a second while it
@@ -75,12 +79,6 @@
 #define CONTEXT_DRAW_SCALED_SLOT 0x60
 #define CONTEXT_SURFACE_SLOT     0xa0
 #define SURFACE_CLEAR_SLOT       0x0c
-/* The globals' vtable: setpoints (Celsius 16.16), the unit and the mode. */
-#define GLOBALS_TARGET_SLOT      0xa8
-#define GLOBALS_FAHRENHEIT_SLOT  0xa0
-#define GLOBALS_LOW_SLOT         0xf0
-#define GLOBALS_HIGH_SLOT        0xe8
-#define GLOBALS_MODE_SLOT        0x138
 
 /* nlclient's events and their size. */
 #define EVENT_SIZE     16
@@ -89,9 +87,7 @@
 
 /* 16.16 fixed point's 1. */
 #define FIXED_ONE    65536
-/* The dial's and the marker's size, in pixels. */
-#define DIAL_SIZE    480
-/* The marker's first pixel, RGBA 12 34 56 ff. */
+/* The marker's pixels, RGBA 12 34 56 ff. */
 #define MARKER_PIXEL 0xff123456u
 
 /* Calls a native function at a bound address, or a virtual method. */
@@ -109,6 +105,8 @@ typedef void (*activity_init_fn)(void *, unsigned, unsigned);
 typedef void (*enqueue_fn)(void *, void *, void *);
 typedef int (*event_fn)(void *, void *, void *);
 typedef void (*draw_scaled_fn)(void *, int, int, void *, int, int, void *);
+struct native_theme_state;
+typedef unsigned (*render_pixels_fn)(void (*)(struct native_theme_state *), uint32_t *, unsigned, float);
 
 /* A 16.16 native temperature, in degrees. */
 static float from_fixed(int value) { return value / 65536.0f; }
@@ -120,6 +118,12 @@ static uintptr_t background_slot, background_draw, brightness_manager, read_als,
 static uintptr_t thermostat_view_vtable, view_offset, current_temperature, current_humidity, leaf_slot;
 static uintptr_t activity_client, activity_ctor, activity_init, delete_native, enqueue, event_type;
 static uintptr_t image_load, layer_lookup, menu_hidden, menu_scale, new_native;
+/* The globals' vtable slots for the setpoints (Celsius 16.16), the unit and
+ * the mode, and on a build whose mode is its schedule's (the gen 2's) the
+ * slots telling the system off and eco on, 0 elsewhere; the dial's and the
+ * marker's size in pixels; and whether nlclient draws on the CPU (the gen 2)
+ * rather than in GLES2 (the gen 3). */
+static uintptr_t target_slot, fahrenheit_slot, low_slot, high_slot, mode_slot, off_slot, eco_slot, dial_size, software;
 static const struct {
     const char *name;
     uintptr_t *value;
@@ -151,6 +155,15 @@ static const struct {
     {"menu_hidden", &menu_hidden},
     {"menu_scale", &menu_scale},
     {"new", &new_native},
+    {"target_slot", &target_slot},
+    {"fahrenheit_slot", &fahrenheit_slot},
+    {"low_slot", &low_slot},
+    {"high_slot", &high_slot},
+    {"mode_slot", &mode_slot},
+    {"off_slot", &off_slot},
+    {"eco_slot", &eco_slot},
+    {"dial_size", &dial_size},
+    {"software", &software},
 };
 
 /* --- GLES2 ------------------------------------------------------------------ */
@@ -402,8 +415,10 @@ static unsigned compile(unsigned kind, const char *source) {
 }
 
 /* --- The theme's library -------------------------------------------------- */
-/* The library's draw, its input hooks, and the destination it draws into. */
+/* The library's draw (render_pixels on the CPU), its input hooks, and the
+ * destination it draws into. */
 static unsigned (*render)(void *(*)(const char *), unsigned, unsigned, float);
+static render_pixels_fn render_pixels;
 static _Atomic(void (*)(void)) lua_wheel, lua_enter;
 /* The library's seconds until its theme needs another frame: 0 while it
  * moves, infinite while it stands still. */
@@ -471,7 +486,7 @@ static void into_texture(unsigned source, unsigned target) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
-    glViewport(0, 0, DIAL_SIZE, DIAL_SIZE);
+    glViewport(0, 0, (int)dial_size, (int)dial_size);
     for (unsigned i = 0; i < SAVED_CAP_COUNT; i++)
         glDisable(saved_caps[i]);
     glUseProgram(program);
@@ -660,16 +675,19 @@ static void gl_restore(const struct gl_state *s) {
 
 /* The theme's library, loaded on its first frame; false when it cannot be. */
 static int load_library(void) {
-    if (render)
+    if (software ? render_pixels != 0 : render != 0)
         return 1;
-    void *library = dlopen(LIBRARY, RTLD_NOW | RTLD_LOCAL);
+    /* Bound lazily: binding it at once, glibc 2.19's loader takes its
+     * .rel.plt to follow its .rel.dyn, which zig's linker does not lay out. */
+    void *library = dlopen(LIBRARY, RTLD_LAZY | RTLD_LOCAL);
     if (library) {
         render = dlsym(library, "nestlocal_theme_draw");
+        render_pixels = dlsym(library, "nestlocal_theme_draw_pixels");
         atomic_store(&lua_wheel, dlsym(library, "nestlocal_theme_input"));
         atomic_store(&lua_enter, dlsym(library, "nestlocal_theme_home"));
         next_frame = dlsym(library, "nestlocal_theme_next");
     }
-    if (!render) {
+    if (software ? !render_pixels : !render) {
         fprintf(stderr, "theme: %s\n", dlerror());
         fail();
         return 0;
@@ -677,10 +695,20 @@ static int load_library(void) {
     return 1;
 }
 
+static void kick(void);
+/* When the library's theme needs its next frame, for the ticker. */
+static void plan_next(void) {
+    float wait = next_frame ? next_frame() : 0;
+    long long due = wait <= 0 ? 0 : wait >= 1e6f ? LLONG_MAX : monotonic_ns() + (long long)(wait * 1e9f);
+    /* Sooner than the ticker last planned for (a still theme starting to
+     * move, as coming home): it plans again, or it sleeps the settled
+     * period through while nlclient draws nothing. */
+    if (due < atomic_exchange(&theme_due, due))
+        kick();
+}
 /* Draws the theme's frame: into texture `image`, or (0) straight into the
  * framebuffer nlclient has bound. The library shares nlclient's context,
  * so every piece of state it can touch is saved and restored. */
-static void kick(void);
 static void draw_theme(unsigned image) {
     if (!load_library())
         return;
@@ -692,13 +720,7 @@ static void draw_theme(unsigned image) {
     if (!result)
         fail();
     else {
-        float wait = next_frame ? next_frame() : 0;
-        long long due = wait <= 0 ? 0 : wait >= 1e6f ? LLONG_MAX : monotonic_ns() + (long long)(wait * 1e9f);
-        /* Sooner than the ticker last planned for (a still theme starting to
-         * move, as coming home): it plans again, or it sleeps the settled
-         * period through while nlclient draws nothing. */
-        if (due < atomic_exchange(&theme_due, due))
-            kick();
+        plan_next();
         if (image)
             into_texture(result, image);
     }
@@ -723,7 +745,7 @@ static struct texture *tracked(unsigned id) {
     return 0;
 }
 static int marker(int width, int height, const void *pixels) {
-    return pixels && theme_pixels && width == DIAL_SIZE && height == DIAL_SIZE &&
+    return pixels && theme_pixels && width == (int)dial_size && height == (int)dial_size &&
            (pixels == theme_pixels || *(const uint32_t *)pixels == MARKER_PIXEL);
 }
 /* Tracks the bound texture as holding the marker. */
@@ -768,7 +790,7 @@ void glTexImage2D(unsigned target, int level, int internal, int width, int heigh
 static void full_size(struct texture *texture) {
     if (!texture->texel)
         return;
-    next_tex_image(GL_TEXTURE_2D, 0, marker_internal, DIAL_SIZE, DIAL_SIZE, 0, marker_format, marker_type, 0);
+    next_tex_image(GL_TEXTURE_2D, 0, marker_internal, (int)dial_size, (int)dial_size, 0, marker_format, marker_type, 0);
     texture->texel = 0;
 }
 void glTexSubImage2D(unsigned target, int level, int x, int y, int width, int height, unsigned format, unsigned type,
@@ -854,6 +876,53 @@ static int preview(void *ctx, void *g) {
     return result;
 }
 static void start_ticker(void);
+/* The modes the library knows: heat, cool and heat-cool (0 to 2) and eco (4);
+ * it shows any other as off. */
+#define MODE_HEAT 0
+#define MODE_ECO  4
+#define MODE_OFF  0xff
+/* The native mode, as the library knows it. A schedule's mode (the gen 2's)
+ * has emergency heat for 4, and the system off and eco apart. */
+static unsigned native_mode(void *g) {
+    unsigned mode = VIRTUAL(unsigned_fn, g, mode_slot)(g);
+    if (!off_slot)
+        return mode;
+    if (VIRTUAL(int_fn, g, off_slot)(g))
+        return MODE_OFF;
+    if (VIRTUAL(int_fn, g, eco_slot)(g))
+        return MODE_ECO;
+    return mode == MODE_ECO ? MODE_HEAT : mode;
+}
+/* The marker image, the display's size, its pixels every one MARKER_PIXEL:
+ * false (the theme failed) when it cannot be loaded, or on the CPU when its
+ * pixels are not where the library is to paint them. */
+static int load_marker(void) {
+    int error = 0;
+    void *image = NATIVE(image_load_fn, image_load)(MARKER, &error);
+    if (!image)
+        return 0;
+    uint32_t *pixels = PTR(image, IMAGE_PIXELS);
+    if (software && (!pixels || pixels[0] != MARKER_PIXEL || pixels[dial_size * dial_size - 1] != MARKER_PIXEL)) {
+        fprintf(stderr, "theme: the marker's pixels are not nlclient's image's\n");
+        fail();
+        return 0;
+    }
+    theme_image = image;
+    theme_pixels = pixels;
+    return 1;
+}
+/* Paints the theme's frame on the CPU into the marker's pixels: false (the
+ * theme failed) when it cannot be drawn. */
+static int paint_pixels(void) {
+    if (!load_library())
+        return 0;
+    if (!render_pixels(native_read_state, theme_pixels, (unsigned)dial_size, atomic_load(&native_target))) {
+        fail();
+        return 0;
+    }
+    plan_next();
+    return 1;
+}
 /* The dial's draw: the native state for the theme, and the marker where the
  * dial would show. */
 static int draw(void *layer, void *ctx) {
@@ -877,17 +946,17 @@ static int draw(void *layer, void *ctx) {
     }
     void *g = PTR(layer, LAYER_GLOBALS);
     /* Native setpoints are Celsius 16.16; themes use the selected unit. */
-    float target = from_fixed(VIRTUAL(int_fn, g, GLOBALS_TARGET_SLOT)(g));
-    int fahrenheit = VIRTUAL(int_fn, g, GLOBALS_FAHRENHEIT_SLOT)(g);
+    float target = from_fixed(VIRTUAL(int_fn, g, target_slot)(g));
+    int fahrenheit = VIRTUAL(int_fn, g, fahrenheit_slot)(g);
     atomic_store(&native_target, fahrenheit ? target * 1.8f + 32.0f : target);
     struct native_theme_state state = {
         .target = target,
         .current = from_fixed(NATIVE(int_fn, current_temperature)(g)),
-        .low = from_fixed(VIRTUAL(int_fn, g, GLOBALS_LOW_SLOT)(g)),
-        .high = from_fixed(VIRTUAL(int_fn, g, GLOBALS_HIGH_SLOT)(g)),
+        .low = from_fixed(VIRTUAL(int_fn, g, low_slot)(g)),
+        .high = from_fixed(VIRTUAL(int_fn, g, high_slot)(g)),
         .humidity = from_fixed(NATIVE(int_fn, current_humidity)(g)),
         .unit = (unsigned)fahrenheit,
-        .mode = VIRTUAL(unsigned_fn, g, GLOBALS_MODE_SLOT)(g),
+        .mode = native_mode(g),
         .hvac = atomic_load(&native_hvac),
         .leaf = VIRTUAL(unsigned_fn, g, leaf_slot)(g),
         .range = WORD(layer, RANGE_STATE_OFFSET),
@@ -896,13 +965,8 @@ static int draw(void *layer, void *ctx) {
     /* Home is entered once it shows, not as the dial fades out to the menu. */
     if (showing && !atomic_exchange(&showing_home, 1))
         home();
-    if (!theme_image) {
-        int error = 0;
-        theme_image = NATIVE(image_load_fn, image_load)(MARKER, &error);
-        if (!theme_image)
-            return original_draw(layer, ctx);
-        theme_pixels = PTR(theme_image, IMAGE_PIXELS);
-    }
+    if (!theme_image && !load_marker())
+        return original_draw(layer, ctx);
     uint32_t alpha = WORD(layer, LAYER_ALPHA);
     float scale = FLOAT(layer, LAYER_SCALE);
     float scaled_menu = NATIVE(float_fn, menu_scale)(g);
@@ -919,8 +983,14 @@ static int draw(void *layer, void *ctx) {
         result = original_draw(layer, ctx);
         WORD(layer, LAYER_ALPHA) = alpha;
     }
-    generation++;
-    int width = (int)(DIAL_SIZE * scale);
+    if (software) {
+        /* A frame is being drawn: the ticker may queue the next redraw. */
+        atomic_store(&pending, 0);
+        if (!paint_pixels())
+            return full_theme ? original_draw(layer, ctx) : result;
+    } else
+        generation++;
+    int width = (int)((float)dial_size * scale);
     VIRTUAL(draw_scaled_fn, ctx, CONTEXT_DRAW_SCALED_SLOT)(ctx, -width / 2, -width / 2, theme_image,
                                                            (int)(alpha * FIXED_ONE / 255), (int)(scale * FIXED_ONE), 0);
     return result;
@@ -944,10 +1014,13 @@ static int background(void *layer, void *ctx) {
         atomic_store(&native_hvac, thermostat ? (r ? HVAC_HEATING : HVAC_COOLING) : HVAC_IDLE);
     if (selected() && !tile && (thermostat || color == OPAQUE_BLACK)) {
         WORD(layer, LAYER_COLOR) = color & OPAQUE_BLACK;
-        /* The GPU context keeps its clear colour apart from the layer. */
-        WORD(ctx, CONTEXT_CLEAR_COLOR) = WORD(layer, LAYER_COLOR);
-        WORD(ctx, CONTEXT_CLEAR_COLOR_2) = WORD(layer, LAYER_COLOR);
-        if (!nested(ctx) && !owns_home(PTR(layer, LAYER_GLOBALS))) {
+        /* The GPU context keeps its clear colour apart from the layer; the
+         * CPU's draws the layer's alone. */
+        if (!software) {
+            WORD(ctx, CONTEXT_CLEAR_COLOR) = WORD(layer, LAYER_COLOR);
+            WORD(ctx, CONTEXT_CLEAR_COLOR_2) = WORD(layer, LAYER_COLOR);
+        }
+        if (!software && !nested(ctx) && !owns_home(PTR(layer, LAYER_GLOBALS))) {
             /* A complete opaque background keeps partial menu frames off the front page. */
             void *surface = VIRTUAL(pointer_fn, ctx, CONTEXT_SURFACE_SLOT)(ctx);
             if (surface) {

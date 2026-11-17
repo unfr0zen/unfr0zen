@@ -46,7 +46,7 @@ pub struct Form {
     last_device: Option<Device>,
     /// The serial of the unit on the bus, for the entity IDs' preview.
     serial: Option<String>,
-    /// Customizable home screen themes, offered for the gen 3.
+    /// Customizable home screen themes, offered for the gen 2 and gen 3.
     pub themes: bool,
     pub doom: bool,
     external_temperature: bool,
@@ -174,8 +174,8 @@ impl Form {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
             entry_point: self.entry_point,
-            // Only for the gen 3 the switch was offered for.
-            themes: self.themes && self.device.or(self.last_device) == Some(Device::Diamond3),
+            // Only for the gen 2 or gen 3 the switch was offered for.
+            themes: self.themes && matches!(self.device.or(self.last_device), Some(Device::J49 | Device::Diamond3)),
             doom: self.doom,
             external_temperature: self.external_temperature && self.supports_external_temperature(),
             // Only for the gen 1 or gen 2 the checkbox was offered for.
@@ -593,8 +593,8 @@ impl Form {
                 crate::tr!("form.dark_theme_hint"),
             );
         }
-        // Offered only with a gen 3 chosen or on the bus.
-        if self.known_device(bus) == Some(Device::Diamond3) {
+        // Offered only with a gen 2 or gen 3 chosen or on the bus.
+        if matches!(self.known_device(bus), Some(Device::J49 | Device::Diamond3)) {
             crate::toggle_card(ui, &mut self.themes, true, crate::tr!("form.themes"), crate::tr!("setup.themes_about"));
         }
         crate::toggle_card(ui, &mut self.doom, true, crate::tr!("form.doom"), crate::tr!("setup.doom_about"));

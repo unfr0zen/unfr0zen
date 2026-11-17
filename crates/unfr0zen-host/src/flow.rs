@@ -405,8 +405,8 @@ pub fn run_after_backup(
         Device::Diamond3 if config.options.dark_theme => {
             Err(failure("--dark-theme is only for the 1st and 2nd generation"))
         }
-        Device::Diamond | Device::J49 if config.options.theme.is_some() => {
-            Err(failure("--themes is only for the 3rd generation"))
+        Device::Diamond if config.options.theme.is_some() => {
+            Err(failure("--themes is only for the 2nd and 3rd generation"))
         }
         Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),

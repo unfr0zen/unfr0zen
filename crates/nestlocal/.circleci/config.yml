@@ -4,7 +4,7 @@ version: 2.1
 # every zbwake.ko: the radio, zbwake and j49 modules are its inputs, taken
 # from the cache, where the jobs upstream in the workflow stored them. The
 # setup bundle's unfr0zen-apply builds here too, with the same toolchain, and
-# the gen 3's theme preload and theme library (platform/common/theme).
+# the theme preload and theme library (platform/common/theme).
 
 jobs:
   nestlocal:

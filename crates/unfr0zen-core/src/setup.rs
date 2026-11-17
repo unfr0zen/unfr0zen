@@ -153,6 +153,24 @@ const NLCLIENT_START: (&str, &str, &str) = (
     "\n LD_PRELOAD=/nestlabs/lib/liblocalcloud.so ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ",
     "\n LD_PRELOAD=\"/nestlabs/lib/liblocalcloud.so /nestlabs/lib/libunfr0zen-theme.so\" ${STARTDAEMON} -q -b -p \"${NLCLIENTPIDFILE}\" -a \"${NLCLIENTAPP}\" ");
 
+/// monit's rule for nlclient, and the line restarting it past its memory
+/// limit: the gen 2's 28 MB, which a theme drawn on its CPU takes nlclient
+/// past, raised with themes (the gen 3's limit is far above both).
+const NLCLIENT_MONIT: &str = "etc/monit.d/nlclient.monitrc";
+const NLCLIENT_MEMORY: (&str, &str) =
+    ("if mem > 28000 KB for 2 cycles then restart", "if mem > 44000 KB for 2 cycles then restart");
+
+/// nlclient's memory limit with themes or as stock, where the rule has it.
+fn set_up_nlclient_memory(tree: &mut Tree, theme: bool) -> Result<()> {
+    let (stock, themed) = NLCLIENT_MEMORY;
+    let rule = text(tree, NLCLIENT_MONIT)?;
+    let set = if theme { rule.replace(stock, themed) } else { rule.replace(themed, stock) };
+    if set != rule {
+        put(tree, NLCLIENT_MONIT, set);
+    }
+    Ok(())
+}
+
 /// nlclient started with the local cloud library on a unit running
 /// nestlocal, and the theme preload too with `theme`; as stock without.
 fn set_up_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()> {
@@ -672,8 +690,11 @@ pub fn set_up_owned(
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
     }
-    if options.theme.is_some() && target != Device::Diamond3 {
-        return device("customizable home screen themes are for the gen 3");
+    if options.theme.is_some() && !matches!(target, Device::J49 | Device::Diamond3) {
+        return device("customizable home screen themes are for the gen 2 and gen 3");
+    }
+    if options.theme.is_some() && !on_scratch {
+        return device("customizable home screen themes need the unit's scratch volume");
     }
     let public_key = options.ssh_public_key.as_deref().map(|key| ssh_public_key(key.as_bytes())).transpose()?;
     // What patch_root0.check_source asks of an extracted tree: here, that the
@@ -887,6 +908,10 @@ pub fn set_up_owned(
             return device("nestlocal needs the local cloud library for nlclient");
         }
         tree.insert(LOCAL_CLOUD.into(), (std::mem::take(&mut options.local_cloud), 0o755));
+    }
+    fetch(volume, &mut tree, &mut originals, &[NLCLIENT_MONIT], false, true)?;
+    if tree.contains_key(NLCLIENT_MONIT) {
+        set_up_nlclient_memory(&mut tree, options.theme.is_some())?;
     }
     if tree.contains_key(NESTLABS) {
         set_up_local_cloud(&mut tree, overlay.is_some(), options.theme.is_some())?;
@@ -1819,9 +1844,9 @@ mod tests {
         );
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
         let error =
-            set_up_on_device(&mut volume, Device::J49, &on, b"ARMV7", &mut no_pki, true, &|_, _| unreachable!())
+            set_up_on_device(&mut volume, Device::Diamond, &on, b"ARMV7", &mut no_pki, true, &|_, _| unreachable!())
                 .unwrap_err();
-        assert!(error.to_string().contains("gen 3"), "{error}");
+        assert!(error.to_string().contains("gen 2 and gen 3"), "{error}");
     }
 
     #[test]
@@ -1969,6 +1994,23 @@ mod tests {
             assert!(!volume.text(nestlocal::OPTIONS).contains("-external-temperature"));
             assert_eq!(volume.files[scratch::name(crate::nlclient::ORIGINAL)].2, source);
         }
+    }
+
+    #[test]
+    fn themes_raise_nlclients_28_mb_memory_limit_and_put_it_back() {
+        let limited =
+            "check process nlclient matching /nestlabs/sbin/nlclient\n  if mem > 28000 KB for 2 cycles then restart\n";
+        let higher =
+            "check process nlclient matching /nestlabs/sbin/nlclient\n  if mem > 160000 KB for 2 cycles then restart\n";
+        let mut tree = Tree::from([(NLCLIENT_MONIT.to_string(), (limited.as_bytes().to_vec(), 0o600))]);
+        set_up_nlclient_memory(&mut tree, true).unwrap();
+        assert!(text(&tree, NLCLIENT_MONIT).unwrap().contains("if mem > 44000 KB"));
+        assert_eq!(tree[NLCLIENT_MONIT].1, 0o600);
+        set_up_nlclient_memory(&mut tree, false).unwrap();
+        assert_eq!(text(&tree, NLCLIENT_MONIT).unwrap(), limited);
+        let mut tree = Tree::from([(NLCLIENT_MONIT.to_string(), (higher.as_bytes().to_vec(), 0o600))]);
+        set_up_nlclient_memory(&mut tree, true).unwrap();
+        assert_eq!(text(&tree, NLCLIENT_MONIT).unwrap(), higher);
     }
 
     #[test]

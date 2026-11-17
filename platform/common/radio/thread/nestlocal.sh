@@ -11,7 +11,7 @@
 # nestlocal for Matter, builds here too, into build/wakefilter, and so does
 # liblocalcloud.so (platform/common/localcloud), preloaded into nlclient
 # beside nestlocal, into build/localcloud, and what draws customizable themes
-# on the gen 3 (platform/common/theme) into build/theme. Run inside the build
+# on the gen 2 and gen 3 (platform/common/theme) into build/theme. Run inside the build
 # image, with the repository mounted at its host path.
 set -eu
 thread_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)
