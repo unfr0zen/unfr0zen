@@ -352,6 +352,12 @@ fn run(
         if dry_run { " (dry run: nothing written)" } else { ", verified on flash" }
     );
     if !dry_run {
+        // The themes are installed anew and the restart that follows is no
+        // crash: the guard counts their starts from none.
+        match fs::remove_file(root.join(scratch::THEME_GUARD)) {
+            Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
         let mut env = env.to_vec();
         env.push(("UNFR0ZEN_CHANGES", changes.len().to_string()));
         script_data(&post_setup, bundle::POST_SETUP, out, &env)?;

@@ -52,7 +52,8 @@ the dial to the library's diagnostic (the target, the theme and its error);
 the library itself failing draws stock until nestlocal publishes a new
 `theme.native.json`, when it is tried again. A theme nlclient does not survive
 3 starts in a row is refused until it is picked again
-(`/media/scratch/.unfr0zen/theme.guard`).
+(`/media/scratch/.unfr0zen/theme.guard`), or until a setup or update, which
+installs the themes anew, forgets the count.
 
 Redraws go through nlclient's event queue as a handler returning nlClient's
 redraw result (1), which draws only while the display is lit: never the

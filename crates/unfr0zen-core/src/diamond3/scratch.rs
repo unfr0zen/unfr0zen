@@ -20,6 +20,9 @@ pub const DIR: &str = "media/scratch/.unfr0zen";
 pub const MANIFEST: &str = "media/scratch/.unfr0zen/manifest";
 /// The Lua themes, one directory each (nestlocal's themes/).
 pub const THEMES: &str = "media/scratch/.unfr0zen/themes";
+/// The theme library's crash-loop guard: the starts in a row of a theme
+/// nlclient did not survive (nestlocal-theme's engine::guard).
+pub const THEME_GUARD: &str = "media/scratch/.unfr0zen/theme.guard";
 
 /// What the gen 3 keeps on scratch, by the name it has on the root volume
 /// of the gen 2 and of units set up before.
