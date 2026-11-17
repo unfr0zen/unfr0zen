@@ -1,3 +1,0 @@
-ignored:
-  # Debian's packages move within a release; the images pin their base instead.
-  - DL3008
