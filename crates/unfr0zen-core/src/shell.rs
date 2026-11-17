@@ -80,6 +80,21 @@ pub fn sha256_hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The SHA-256 of what `reader` holds, hashed as it is read: a 64 MB unit
+/// cannot hold its largest files beside the setup's.
+pub fn sha256_hex_of(mut reader: impl std::io::Read) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 16384];
+    loop {
+        match reader.read(&mut buffer)? {
+            0 => break,
+            n => hash.update(&buffer[..n]),
+        }
+    }
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// A path as one single-quoted shell word.
 fn quote(path: &str) -> String {
     format!("'{}'", path.replace('\'', r"'\''"))

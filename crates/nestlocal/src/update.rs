@@ -34,8 +34,10 @@ fn engine() -> &'static str {
 const VERSION_FILE: &str = "/etc/unfr0zen/version";
 /// The latest release, as GitHub's API describes it.
 pub const RELEASES: &str = "https://api.github.com/repos/unfr0zen/unfr0zen/releases/latest";
-/// Where a downloaded bundle waits for the engine: tmpfs, gone at restart.
-const DOWNLOAD: &str = "/tmp/unfr0zen-update.tgz";
+/// Where a downloaded bundle waits for the engine, written as it arrives: on
+/// the scratch volume, as a 64 MB unit (the gen 1 and gen 2) needs all of
+/// its RAM, tmpfs included, for the setup.
+const DOWNLOAD: &str = "/media/scratch/.unfr0zen/update.tgz";
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// After a check that got no answer: a network can drop one.
@@ -160,6 +162,8 @@ pub fn release(description: &Value, device: &str) -> Option<Release> {
 
 impl Updates {
     pub fn new(device: &'static str, releases: &str, store: &Path) -> Arc<Updates> {
+        // A download a restart cut short.
+        let _ = std::fs::remove_file(DOWNLOAD);
         Arc::new(Updates {
             device,
             installed: std::fs::read_to_string(VERSION_FILE).ok().as_deref().and_then(installed),
@@ -270,7 +274,16 @@ impl Updates {
                 Ok(()) => {
                     logf!("update: {what} installed; restarting");
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    let _ = std::process::Command::new("reboot").status();
+                    match std::process::Command::new("reboot").status() {
+                        Ok(status) if status.success() => {}
+                        result => {
+                            logf!("update: the restart failed ({result:?}): restart the unit to run {what}");
+                            // The engine leaves nlclient stopped for the restart.
+                            let _ = std::process::Command::new("monit").args(["start", "nlclient"]).status();
+                            updates.installing.store(false, Ordering::Relaxed);
+                            updates.changed();
+                        }
+                    }
                 }
                 Err(e) => {
                     logf!("update: {e}");
@@ -283,14 +296,13 @@ impl Updates {
 
     async fn install_from(&self, url: &str) -> Result<(), String> {
         logf!("update: downloading {url}");
-        let data = crate::fetch::get(url, BUNDLE_LIMIT, Duration::from_secs(600)).await?;
-        std::fs::write(DOWNLOAD, &data).map_err(|e| format!("{DOWNLOAD}: {e}"))?;
+        crate::fetch::download(url, Path::new(DOWNLOAD), BUNDLE_LIMIT, Duration::from_secs(600)).await?;
         let output =
             tokio::task::spawn_blocking(|| std::process::Command::new(engine()).args(["update", DOWNLOAD]).output())
                 .await
-                .map_err(|e| e.to_string())?
-                .map_err(|e| format!("{}: {e}", engine()))?;
+                .map_err(|e| e.to_string());
         let _ = std::fs::remove_file(DOWNLOAD);
+        let output = output?.map_err(|e| format!("{}: {e}", engine()))?;
         for line in
             String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines())
         {

@@ -35,8 +35,15 @@ fn with_port(server: &str) -> String {
     }
 }
 
+/// How long an NTP server has to answer.
+const SERVER_ANSWER: Duration = Duration::from_secs(5);
+
 /// Asks server (host or host:port) for the time.
 pub async fn sntp(server: &str) -> std::io::Result<SystemTime> {
+    sntp_within(server, SERVER_ANSWER).await
+}
+
+async fn sntp_within(server: &str, answer: Duration) -> std::io::Result<SystemTime> {
     let server = with_port(server);
     let addr = tokio::net::lookup_host(&server)
         .await?
@@ -49,7 +56,7 @@ pub async fn sntp(server: &str) -> std::io::Result<SystemTime> {
     let sent = SystemTime::now();
     socket.send(&request).await?;
     let mut response = [0u8; 48];
-    let n = tokio::time::timeout(Duration::from_secs(5), socket.recv(&mut response))
+    let n = tokio::time::timeout(answer, socket.recv(&mut response))
         .await
         .map_err(|_| std::io::Error::other(format!("{server}: no answer")))??;
     let rtt = SystemTime::now().duration_since(sent).unwrap_or_default();
@@ -137,6 +144,13 @@ pub fn set_clock(t: SystemTime, from: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A loopback server's answer, given time: a host firewall (LuLu on
+    /// macOS) can hold a process's first datagram while it checks the test
+    /// binary's signature, seconds for one this size.
+    async fn sntp(server: &str) -> std::io::Result<SystemTime> {
+        sntp_within(server, Duration::from_secs(60)).await
+    }
 
     #[tokio::test]
     async fn sntp_answer() {

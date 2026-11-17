@@ -1,16 +1,19 @@
 //! The HTTP(S) GETs nestlocal makes itself: the release check and an
-//! update's download. The unit's CA store holds Nest's roots alone, so TLS
+//! update's download, which goes to a file as it arrives. The unit's CA store holds Nest's roots alone, so TLS
 //! trusts Mozilla's (webpki-roots).
 
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Limited};
+use hyper::body::Incoming;
 use hyper::header::{ACCEPT, HOST, LOCATION, USER_AGENT};
-use hyper::{Request, StatusCode, Uri};
+use hyper::{Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
+use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
@@ -29,25 +32,72 @@ fn tls() -> Arc<rustls::ClientConfig> {
 
 /// The body of url, following redirects, at most limit bytes, within timeout.
 pub async fn get(url: &str, limit: usize, timeout: Duration) -> Result<Vec<u8>, String> {
-    tokio::time::timeout(timeout, follow(url, limit))
+    within(url, timeout, async {
+        let (url, response) = follow(url).await?;
+        Ok(Limited::new(response.into_body(), limit)
+            .collect()
+            .await
+            .map_err(|e| format!("{url}: body: {e}"))?
+            .to_bytes()
+            .to_vec())
+    })
+    .await
+}
+
+/// The body of url written to path as it arrives, as get takes it; path is
+/// removed when the download fails.
+pub async fn download(url: &str, path: &Path, limit: usize, timeout: Duration) -> Result<(), String> {
+    let result = within(url, timeout, async {
+        let (url, response) = follow(url).await?;
+        let mut file = tokio::fs::File::create(path).await.map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut body = response.into_body();
+        let mut written = 0;
+        while let Some(frame) = body.frame().await {
+            let Ok(data) = frame.map_err(|e| format!("{url}: body: {e}"))?.into_data() else {
+                continue;
+            };
+            written += data.len();
+            if written > limit {
+                return Err(format!("{url}: body: more than {limit} bytes"));
+            }
+            file.write_all(&data).await.map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        file.sync_all().await.map_err(|e| format!("{}: {e}", path.display()))
+    })
+    .await;
+    if result.is_err() {
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
+async fn within<T>(
+    url: &str,
+    timeout: Duration,
+    request: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::time::timeout(timeout, request)
         .await
         .unwrap_or_else(|_| Err(format!("{url}: no answer within {}", crate::logger::duration(timeout))))
 }
 
-async fn follow(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+/// The answer to url once its redirects are followed, and the URL that gave it.
+async fn follow(url: &str) -> Result<(String, Response<Incoming>), String> {
     let mut url = url.to_string();
     for _ in 0..=REDIRECTS {
         let uri: Uri = url.parse().map_err(|e| format!("{url}: {e}"))?;
-        let (status, location, body) = once(&uri, limit).await.map_err(|e| format!("{url}: {e}"))?;
+        let response = once(&uri).await.map_err(|e| format!("{url}: {e}"))?;
+        let status = response.status();
         if status.is_redirection() {
+            let location = response.headers().get(LOCATION).and_then(|v| v.to_str().ok());
             let location = location.ok_or_else(|| format!("{url}: {status} without a location"))?;
-            url = resolve(&uri, &location);
+            url = resolve(&uri, location);
             continue;
         }
         if !status.is_success() {
             return Err(format!("{url}: {status}"));
         }
-        return Ok(body);
+        return Ok((url, response));
     }
     Err(format!("{url}: more than {REDIRECTS} redirects"))
 }
@@ -65,7 +115,7 @@ fn resolve(base: &Uri, location: &str) -> String {
     }
 }
 
-async fn once(uri: &Uri, limit: usize) -> Result<(StatusCode, Option<String>, Vec<u8>), String> {
+async fn once(uri: &Uri) -> Result<Response<Incoming>, String> {
     let host = uri.host().ok_or("no host")?.to_string();
     let https = match uri.scheme_str() {
         Some("https") => true,
@@ -83,30 +133,20 @@ async fn once(uri: &Uri, limit: usize) -> Result<(StatusCode, Option<String>, Ve
     if https {
         let name = ServerName::try_from(host).map_err(|e| e.to_string())?;
         let stream = tokio_rustls::TlsConnector::from(tls()).connect(name, tcp).await.map_err(|e| e.to_string())?;
-        send(stream, request, limit).await
+        send(stream, request).await
     } else {
-        send(tcp, request, limit).await
+        send(tcp, request).await
     }
 }
 
 async fn send(
     stream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     request: Request<Empty<Bytes>>,
-    limit: usize,
-) -> Result<(StatusCode, Option<String>, Vec<u8>), String> {
+) -> Result<Response<Incoming>, String> {
     let (mut sender, connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(stream)).await.map_err(|e| e.to_string())?;
     tokio::spawn(connection);
-    let response = sender.send_request(request).await.map_err(|e| e.to_string())?;
-    let status = response.status();
-    let location = response.headers().get(LOCATION).and_then(|v| v.to_str().ok()).map(str::to_string);
-    let body = Limited::new(response.into_body(), limit)
-        .collect()
-        .await
-        .map_err(|e| format!("body: {e}"))?
-        .to_bytes()
-        .to_vec();
-    Ok((status, location, body))
+    sender.send_request(request).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -158,5 +198,24 @@ mod tests {
         assert_eq!(get(&format!("{base}/release"), 100, timeout).await.unwrap(), b"hello");
         assert!(get(&base, 4, timeout).await.unwrap_err().contains("body"));
         assert!(get(&base, 100, timeout).await.unwrap_err().contains("404"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_download_lands_in_its_file_and_one_over_the_limit_leaves_none() {
+        let base = serve(vec![
+            "HTTP/1.1 302 Found\r\nLocation: /asset\r\nContent-Length: 0\r\n\r\n".into(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
+        ])
+        .await;
+        let dir = std::env::temp_dir().join(format!("nestlocal-download-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bundle.tgz");
+        let timeout = Duration::from_secs(30);
+        download(&format!("{base}/release"), &path, 100, timeout).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+        assert!(download(&base, &path, 4, timeout).await.unwrap_err().contains("body"));
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

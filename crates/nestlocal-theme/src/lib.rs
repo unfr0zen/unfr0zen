@@ -180,7 +180,6 @@ struct Engine {
     name: String,
     picked: u64,
     broken: Option<Broken>,
-    guarded: Option<Instant>,
     started: Instant,
     motion: Motion,
     target: f32,
@@ -348,7 +347,6 @@ impl Engine {
             name: String::new(),
             picked: 0,
             broken: None,
-            guarded: None,
             started: Instant::now(),
             motion: Motion::default(),
             target: f32::NAN,
@@ -364,7 +362,7 @@ impl Engine {
         })
     }
     /// Loads the theme `name` and its fonts, counted by the crash-loop guard
-    /// until it has run for GUARD_WINDOW (draw) or failed here.
+    /// until it has run for GUARD_WINDOW (guard::watch) or failed here.
     fn load(&mut self, name: &str) -> Result<Theme, String> {
         guard::enter(Path::new(GUARD), name)?;
         let loaded = Theme::load(&Path::new(THEMES).join(name)).and_then(|theme| {
@@ -372,7 +370,7 @@ impl Engine {
             Ok(theme)
         });
         match &loaded {
-            Ok(_) => self.guarded = Some(Instant::now()),
+            Ok(_) => guard::watch(Path::new(GUARD), GUARD_WINDOW),
             Err(_) => guard::leave(Path::new(GUARD)),
         }
         loaded
@@ -420,7 +418,8 @@ impl Engine {
             if !self.name.is_empty() {
                 guard::leave(Path::new(GUARD));
             }
-            (self.theme, self.broken, self.guarded) = (None, None, None);
+            guard::unwatch();
+            (self.theme, self.broken) = (None, None);
             self.name = name.into();
             self.picked = picked;
             self.previous = None;
@@ -437,10 +436,6 @@ impl Engine {
                     self.broken = Some(Broken { error, frame: false });
                 }
             }
-        }
-        if self.guarded.is_some_and(|loaded| loaded.elapsed() > GUARD_WINDOW) {
-            guard::leave(Path::new(GUARD));
-            self.guarded = None;
         }
         let design = self.theme.as_ref().map_or(480.0, |theme| theme.design);
         let now = self.started.elapsed().as_secs_f64();
@@ -586,6 +581,7 @@ pub extern "C" fn nestlocal_theme_next() -> f32 {
 #[no_mangle]
 pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, image: u32, target: f32) -> u32 {
     SCREEN.store(framebuffer, Ordering::Relaxed);
+    guard::drawing(true);
     let result = std::panic::catch_unwind(|| {
         ENGINE.with(|slot| {
             let mut engine = slot.borrow_mut();
@@ -595,6 +591,7 @@ pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, 
             engine.as_mut().unwrap().draw(image != 0, target)
         })
     });
+    guard::drawing(false);
     match result {
         Ok(Ok(texture)) => texture,
         Ok(Err(error)) => {
