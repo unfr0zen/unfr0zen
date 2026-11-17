@@ -1967,7 +1967,7 @@ mod tests {
             run(&mut volume, &off, false).unwrap();
             assert_eq!(volume.files[crate::nlclient::BINARY].2, screen);
             assert!(!volume.text(nestlocal::OPTIONS).contains("-external-temperature"));
-            assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, source);
+            assert_eq!(volume.files[scratch::name(crate::nlclient::ORIGINAL)].2, source);
         }
     }
 
