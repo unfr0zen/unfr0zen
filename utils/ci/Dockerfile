@@ -79,12 +79,13 @@ COPY --from=macos-sdk /MacOSX.sdk /opt/MacOSX.sdk
 # from the system, and libudev.so for each other Linux architecture comes from
 # its multiarch package. For the arm64 Windows target (aarch64-pc-windows-gnullvm)
 # winresource runs llvm-windres, which needs the target named, and zig's
-# MinGW has no libsynchronization.a, so its import library is made here.
+# MinGW has no libsynchronization.a, so its import library is made here;
+# Rust's unwinding there needs libunwind, which zig builds when asked (-lunwind).
 # zig targets macOS 13 at the oldest, and leaves no room for a code signature in
 # x86_64 Mach-O binaries unless asked to pad the header (it signs arm64 itself).
 ENV CFLAGS_x86_64_unknown_linux_gnu="-isystem /opt/libudev" \
     CFLAGS_aarch64_unknown_linux_gnu="-isystem /opt/libudev" \
-    CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_RUSTFLAGS="-L native=/opt/windows-arm64" \
+    CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_RUSTFLAGS="-L native=/opt/windows-arm64 -C link-arg=-lunwind" \
     CFLAGS_riscv64gc_unknown_linux_gnu="-isystem /opt/libudev" \
     PKG_CONFIG_ALLOW_CROSS=1 \
     PKG_CONFIG_LIBDIR_x86_64_unknown_linux_gnu=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig \
