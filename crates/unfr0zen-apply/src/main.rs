@@ -15,8 +15,10 @@
 //! unfr0zen-apply on the scratch volume) taking a new bundle: it checks it against its manifest and the release key, and
 //! refuses one older than the unit runs, unless the unit was set up to allow
 //! unsigned updates, then runs the bundle's engine --live on / with the
-//! unit's options.json. The caller restarts the
-//! unit.
+//! unit's options.json, its OUT /media/scratch/.unfr0zen/update-run, removed
+//! once the run succeeds. A gen 1 or gen 2 stops nlclient before reading the
+//! bundle and leaves it stopped for the caller, which restarts the unit; a
+//! failed update starts it again.
 //!
 //! The log goes to stderr. Exits non-zero with the reason on stderr when the
 //! run fails.

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::nestlocal::{Matter, Mqtt, Overlay, Pki};
 use crate::setup::Options;
-use crate::shell::sha256_hex;
+use crate::shell::{sha256_hex, sha256_hex_of};
 use crate::{device, Device, Error, Result};
 
 pub const FORMAT: u32 = 1;
@@ -68,6 +68,7 @@ pub struct Manifest {
 }
 
 /// An unpacked bundle, every file checked against the manifest.
+#[derive(Clone)]
 pub struct Bundle {
     pub manifest: Manifest,
     manifest_bytes: Vec<u8>,
@@ -138,47 +139,33 @@ impl Bundle {
     /// Unpacks a bundle and checks its files against its manifest: every one
     /// listed, present, and unchanged. The signature is checked by verify.
     pub fn unpack(data: &[u8]) -> Result<Bundle> {
-        // Read from the stream: the 64 MB OMAP units cannot hold the tar beside its members.
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(data));
-        let mut members = Files::new();
+        Bundle::read(data)
+    }
+
+    /// Unpacks a bundle as it is read, from a file, say: the 64 MB OMAP
+    /// units cannot hold the compressed bundle beside its files.
+    pub fn read(source: impl Read) -> Result<Bundle> {
+        Bundle::read_some(source, |_| true)
+    }
+
+    /// Unpacks a bundle as it is read, keeping only the files `keep` names:
+    /// every file is still checked against the manifest, the rest dropped as
+    /// they are hashed, which a 64 MB unit needs.
+    pub fn read_some(source: impl Read, keep: impl Fn(&str) -> bool) -> Result<Bundle> {
+        read_limited(source, keep, EXPANDED_LIMIT)
+    }
+
+    /// The manifest the bundle starts with, unchecked: what a run needs to
+    /// know before it reads the bundle itself (read checks it).
+    pub fn read_manifest(source: impl Read) -> Result<Manifest> {
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(source));
         for entry in archive.entries().map_err(|e| Error::Device(format!("bundle: {e}")))? {
-            let mut entry = entry.map_err(|e| Error::Device(format!("bundle: {e}")))?;
-            if entry.header().entry_type() != tar::EntryType::Regular {
-                return device("bundle: a member is not a regular file");
-            }
-            let name = entry.path().map_err(|e| Error::Device(format!("bundle: {e}")))?.to_string_lossy().into_owned();
-            let mode = entry.header().mode().map_err(|e| Error::Device(format!("bundle: {name}: {e}")))?;
-            // Sized from the header: growing as it reads would double the largest.
-            let mut contents = Vec::with_capacity(usize::try_from(entry.size()).unwrap_or(0));
-            entry.read_to_end(&mut contents)?;
-            if members.insert(name.clone(), (mode, contents)).is_some() {
-                return device(format!("bundle: {name} appears twice"));
+            let entry = entry.map_err(|e| Error::Device(format!("bundle: {e}")))?;
+            if entry.path().map_err(|e| Error::Device(format!("bundle: {e}")))?.to_str() == Some(MANIFEST) {
+                return parse_manifest(&read_small(entry, MANIFEST)?);
             }
         }
-        let (_, manifest_bytes) = members.remove(MANIFEST).map_or_else(|| device("bundle: no manifest.json"), Ok)?;
-        let signature = members
-            .remove(SIGNATURE)
-            .map(|(_, text)| {
-                STANDARD
-                    .decode(String::from_utf8_lossy(&text).trim())
-                    .map_err(|_| Error::Device("bundle: manifest.sig is not base64".into()))
-            })
-            .transpose()?;
-        let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
-            .map_err(|e| Error::Device(format!("bundle: manifest.json: {e}")))?;
-        if manifest.format != FORMAT {
-            return device(format!("bundle format {} is not {FORMAT}", manifest.format));
-        }
-        if manifest.files.keys().ne(members.keys()) {
-            return device("bundle: its files are not the ones its manifest lists");
-        }
-        for (name, member) in &manifest.files {
-            let (mode, data) = &members[name];
-            if sha256_hex(data) != member.sha256 || *mode != member.mode {
-                return device(format!("bundle: {name} does not match its manifest"));
-            }
-        }
-        Ok(Bundle { manifest, manifest_bytes, signature, files: members })
+        device("bundle: no manifest.json")
     }
 
     /// Checks the manifest's signature against a trusted key.
@@ -193,32 +180,138 @@ impl Bundle {
         self.files.get(name).map(|(_, data)| data.as_slice()).map_or_else(|| device(format!("bundle: no {name}")), Ok)
     }
 
-    /// The overlay under overlays/NAME/, if the bundle holds one.
-    fn optional_overlay(&self, name: &str) -> Option<Overlay> {
-        self.overlay(name).ok()
+    /// Takes file NAME out of the bundle, if it holds one.
+    pub fn take(&mut self, name: &str) -> Option<Vec<u8>> {
+        self.files.remove(name).map(|(_, data)| data)
+    }
+
+    /// Takes the overlay under overlays/NAME/ out of the bundle.
+    pub fn take_overlay(&mut self, name: &str) -> Result<Overlay> {
+        let overlay = self.overlay_files(name);
+        if overlay.files.is_empty() {
+            return device(format!("bundle: no {name} overlay"));
+        }
+        Ok(overlay)
     }
 
     /// The overlay the bundle holds under overlays/NAME/.
     pub fn overlay(&self, name: &str) -> Result<Overlay> {
+        self.clone().take_overlay(name)
+    }
+
+    /// The overlay under overlays/NAME/, its files taken out of the bundle.
+    fn overlay_files(&mut self, name: &str) -> Overlay {
         let prefix = format!("{OVERLAYS}{name}/");
-        let files: Vec<_> = self
-            .files
-            .iter()
-            .filter_map(|(path, (mode, data))| {
-                path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode, data.clone()))
+        let names: Vec<String> = self.files.keys().filter(|path| path.starts_with(&prefix)).cloned().collect();
+        let files = names
+            .into_iter()
+            .map(|path| {
+                let (mode, data) = self.files.remove(&path).expect("listed");
+                (path[prefix.len()..].to_string(), mode, data)
             })
             .collect();
-        if files.is_empty() {
-            return device(format!("bundle: no {name} overlay"));
-        }
         let directories = self
             .manifest
             .directories
             .iter()
             .filter_map(|(path, mode)| path.strip_prefix(&prefix).map(|path| (path.to_string(), *mode)))
             .collect();
-        Ok(Overlay { files, directories })
+        Overlay { files, directories }
     }
+}
+
+/// The most a bundle's files may hold together, unpacked: its tar headers
+/// say what they like, and a unit has 64 MB.
+const EXPANDED_LIMIT: u64 = 64 << 20;
+/// The most manifest.json or manifest.sig may hold.
+const SMALL_LIMIT: u64 = 1 << 20;
+
+fn read_limited(source: impl Read, keep: impl Fn(&str) -> bool, limit: u64) -> Result<Bundle> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(source));
+    let (mut manifest_bytes, mut signature) = (None, None);
+    // Name: (mode, SHA-256) of every file; the contents of those kept.
+    let mut seen = BTreeMap::new();
+    let mut members = Files::new();
+    let mut left = limit;
+    for entry in archive.entries().map_err(|e| Error::Device(format!("bundle: {e}")))? {
+        let entry = entry.map_err(|e| Error::Device(format!("bundle: {e}")))?;
+        if entry.header().entry_type() != tar::EntryType::Regular {
+            return device("bundle: a member is not a regular file");
+        }
+        let name = entry.path().map_err(|e| Error::Device(format!("bundle: {e}")))?.to_string_lossy().into_owned();
+        let mode = entry.header().mode().map_err(|e| Error::Device(format!("bundle: {name}: {e}")))?;
+        let twice = || device(format!("bundle: {name} appears twice"));
+        if name == MANIFEST {
+            if manifest_bytes.replace(read_small(entry, MANIFEST)?).is_some() {
+                return twice();
+            }
+            continue;
+        }
+        if name == SIGNATURE {
+            if signature.replace(read_small(entry, SIGNATURE)?).is_some() {
+                return twice();
+            }
+            continue;
+        }
+        let size = entry.size();
+        if size > left {
+            return device(format!("bundle: its files hold more than {} MiB", limit >> 20));
+        }
+        left -= size;
+        // Read no further than the header says, whatever follows.
+        let mut entry = entry.take(size);
+        let sha = if keep(&name) {
+            // Sized from the header: growing as it reads would double the largest.
+            let mut contents = Vec::with_capacity(size as usize);
+            entry.read_to_end(&mut contents)?;
+            let sha = sha256_hex(&contents);
+            members.insert(name.clone(), (mode, contents));
+            sha
+        } else {
+            sha256_hex_of(&mut entry)?
+        };
+        if seen.insert(name.clone(), (mode, sha)).is_some() {
+            return twice();
+        }
+    }
+    let manifest_bytes = manifest_bytes.map_or_else(|| device("bundle: no manifest.json"), Ok)?;
+    let signature = signature
+        .map(|text| {
+            STANDARD
+                .decode(String::from_utf8_lossy(&text).trim())
+                .map_err(|_| Error::Device("bundle: manifest.sig is not base64".into()))
+        })
+        .transpose()?;
+    let manifest = parse_manifest(&manifest_bytes)?;
+    if manifest.files.keys().ne(seen.keys()) {
+        return device("bundle: its files are not the ones its manifest lists");
+    }
+    for (name, member) in &manifest.files {
+        let (mode, sha) = &seen[name];
+        if *sha != member.sha256 || *mode != member.mode {
+            return device(format!("bundle: {name} does not match its manifest"));
+        }
+    }
+    Ok(Bundle { manifest, manifest_bytes, signature, files: members })
+}
+
+/// A member that holds a few bytes at most: manifest.json or manifest.sig.
+fn read_small(entry: impl Read, name: &str) -> Result<Vec<u8>> {
+    let mut data = Vec::new();
+    entry.take(SMALL_LIMIT + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > SMALL_LIMIT {
+        return device(format!("bundle: {name} holds more than {} KiB", SMALL_LIMIT >> 10));
+    }
+    Ok(data)
+}
+
+fn parse_manifest(bytes: &[u8]) -> Result<Manifest> {
+    let manifest: Manifest =
+        serde_json::from_slice(bytes).map_err(|e| Error::Device(format!("bundle: manifest.json: {e}")))?;
+    if manifest.format != FORMAT {
+        return device(format!("bundle format {} is not {FORMAT}", manifest.format));
+    }
+    Ok(manifest)
 }
 
 /// Where a version stands among others: vMAJOR.MINOR.PATCH, then a release
@@ -386,6 +479,12 @@ impl Settings {
 
     /// The setup's options: these settings with the bundle's files.
     pub fn options(&self, bundle: &Bundle) -> Result<Options> {
+        self.take_options(&mut bundle.clone())
+    }
+
+    /// The setup's options, the files they need taken out of the bundle: a
+    /// unit cannot hold them twice.
+    pub fn take_options(&self, bundle: &mut Bundle) -> Result<Options> {
         let matter = self.matter.map(|m| Matter { passcode: m.passcode, discriminator: m.discriminator });
         Ok(Options {
             root_hash: self.root_hash.clone(),
@@ -408,17 +507,21 @@ impl Settings {
                 })
                 .transpose()?,
             matter,
-            wake_filter: if matter.is_some() { bundle.file(WAKE_FILTER)?.to_vec() } else { Vec::new() },
-            local_cloud: bundle.file(LOCAL_CLOUD)?.to_vec(),
-            thread: self.thread.then(|| bundle.overlay(THREAD)).transpose()?,
+            wake_filter: if matter.is_some() {
+                bundle.take(WAKE_FILTER).map_or_else(|| device(format!("bundle: no {WAKE_FILTER}")), Ok)?
+            } else {
+                Vec::new()
+            },
+            local_cloud: bundle.take(LOCAL_CLOUD).map_or_else(|| device(format!("bundle: no {LOCAL_CLOUD}")), Ok)?,
+            thread: self.thread.then(|| bundle.take_overlay(THREAD)).transpose()?,
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
-            doom: self.doom.then(|| bundle.overlay(DOOM)).transpose()?,
-            theme: self.theme.then(|| bundle.overlay(THEME)).transpose()?,
+            doom: self.doom.then(|| bundle.take_overlay(DOOM)).transpose()?,
+            theme: self.theme.then(|| bundle.take_overlay(THEME)).transpose()?,
             external_temperature: self.external_temperature,
             // Only the gen 2's bundle has these: the gen 3 needs neither.
             external_temperature_screen: if self.external_temperature {
-                bundle.files.get(RCS_SCREEN).map(|(_, data)| data.clone()).unwrap_or_default()
+                bundle.take(RCS_SCREEN).unwrap_or_default()
             } else {
                 Vec::new()
             },
@@ -426,14 +529,29 @@ impl Settings {
             ssh: self.ssh,
             ssh_public_key: self.ssh_public_key.clone(),
             ssh_key_only: self.ssh_key_only,
-            ssh_server: if self.ssh { bundle.optional_overlay(SSH) } else { None },
+            ssh_server: if self.ssh { bundle.take_overlay(SSH).ok() } else { None },
             unsigned_updates: self.unsigned_updates,
             // The gen 3's bundle has its engine; the gen 1's and gen 2's none.
-            apply: bundle.files.get(APPLY).map(|(_, data)| data.clone()).unwrap_or_default(),
+            apply: bundle.take(APPLY).unwrap_or_default(),
             record: self.record(),
             usb_shell: self.usb_shell,
             device_name: self.device_name.clone(),
         })
+    }
+
+    /// Whether a run with these settings uses the bundle's file NAME: every
+    /// file but those of the overlays it leaves out.
+    pub fn wants(&self, name: &str) -> bool {
+        let Some(overlay) = name.strip_prefix(OVERLAYS).and_then(|path| path.split('/').next()) else {
+            return true;
+        };
+        match overlay {
+            THREAD => self.thread,
+            DOOM => self.doom,
+            THEME => self.theme,
+            SSH => self.ssh,
+            _ => true,
+        }
     }
 
     /// These settings as the unit keeps them: without the key set, which the
@@ -647,5 +765,57 @@ mod tests {
         assert_eq!(asked.ssh_server.unwrap().files[0].0, "usr/sbin/dropbearmulti");
         let not = Settings::default().options(&bundle).unwrap();
         assert!(not.external_temperature_screen.is_empty() && not.ssh_server.is_none());
+    }
+
+    #[test]
+    fn a_bundle_read_in_part_keeps_the_files_asked_for_and_checks_them_all() {
+        let (files, directories) = contents();
+        let data = pack(Device::J49, "1", &files, &directories, Some(&key(1)));
+        let bundle = Bundle::read_some(&data[..], |name| name == APPLY).unwrap();
+        assert_eq!(bundle.files.keys().collect::<Vec<_>>(), [APPLY]);
+        assert_eq!(bundle.manifest.files.len(), files.len());
+        bundle.verify(&key(1).verifying_key()).unwrap();
+        assert_eq!(Bundle::read_manifest(&data[..]).unwrap(), bundle.manifest);
+
+        let manifest = serde_json::to_vec(&Manifest {
+            format: FORMAT,
+            device: "j49".into(),
+            version: "1".into(),
+            files: BTreeMap::from([
+                ("a".to_string(), Member { sha256: sha256_hex(b"a"), mode: 0o644 }),
+                ("b".to_string(), Member { sha256: sha256_hex(b"b"), mode: 0o644 }),
+            ]),
+            directories: BTreeMap::new(),
+        })
+        .unwrap();
+        let tampered = raw(&[(MANIFEST, 0o644, &manifest), ("a", 0o644, b"a"), ("b", 0o644, b"c")]);
+        let error = Bundle::read_some(&tampered[..], |name| name == "a").err().unwrap().to_string();
+        assert!(error.contains("b does not match"), "{error}");
+    }
+
+    #[test]
+    fn a_bundle_whose_files_hold_more_than_the_limit_is_refused() {
+        let manifest = serde_json::to_vec(&Manifest {
+            format: FORMAT,
+            device: "j49".into(),
+            version: "1".into(),
+            files: BTreeMap::from([("a".to_string(), Member { sha256: sha256_hex(b"aa"), mode: 0o644 })]),
+            directories: BTreeMap::new(),
+        })
+        .unwrap();
+        let data = raw(&[(MANIFEST, 0o644, &manifest), ("a", 0o644, b"aa")]);
+        read_limited(&data[..], |_| true, 2).unwrap();
+        let error = read_limited(&data[..], |_| true, 1).err().unwrap().to_string();
+        assert!(error.contains("hold more than"), "{error}");
+    }
+
+    #[test]
+    fn a_run_wants_the_overlays_it_asks_for_and_every_other_file() {
+        let settings = Settings { doom: true, ..Settings::default() };
+        assert!(settings.wants(APPLY) && settings.wants(NESTLOCAL) && settings.wants(PRE_SETUP));
+        assert!(settings.wants("overlays/doom/usr/share/doom/doom1.wad"));
+        assert!(!settings.wants("overlays/thread/nestlabs/sbin/ot-daemon"));
+        assert!(!settings.wants("overlays/ssh/usr/sbin/dropbearmulti"));
+        assert!(!settings.wants("overlays/theme/x"));
     }
 }

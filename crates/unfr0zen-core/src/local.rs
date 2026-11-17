@@ -7,7 +7,7 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::shell::{sha256_hex, Digests, File, Volume};
+use crate::shell::{sha256_hex_of, Digests, File, Volume};
 use crate::{device, Error, Result};
 
 const DROP_CACHES: &str = "/proc/sys/vm/drop_caches";
@@ -100,7 +100,7 @@ impl Volume for LocalVolume {
         let Some((owner, mode, path)) = self.header(name)? else {
             return Ok(None);
         };
-        Ok(Some((owner, mode, sha256_hex(&fs::read(path)?))))
+        Ok(Some((owner, mode, sha256_hex_of(fs::File::open(path)?)?)))
     }
 
     fn file_size(&mut self, name: &str) -> Result<u64> {
@@ -208,7 +208,7 @@ impl Volume for LocalVolume {
             .iter()
             .map(|name| {
                 let path = self.path(name);
-                let sha = fs::read(&path).ok().map(|data| sha256_hex(&data));
+                let sha = fs::File::open(&path).and_then(sha256_hex_of).ok();
                 let owner_mode =
                     fs::metadata(&path).ok().map(|m| format!("{}:{} {:o}", m.uid(), m.gid(), m.mode() & 0o7777));
                 Ok((name.clone(), (sha, owner_mode)))
@@ -220,6 +220,7 @@ impl Volume for LocalVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::sha256_hex;
 
     /// The test's own user and group, which own the files it makes.
     fn owner() -> String {

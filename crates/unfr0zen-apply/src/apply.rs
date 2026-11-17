@@ -1,10 +1,12 @@
 use std::cell::RefCell;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command;
 
 use serde_json::json;
 use unfr0zen_core::bundle::{self, Bundle, Settings};
+use unfr0zen_core::diamond3::scratch;
 use unfr0zen_core::local::LocalVolume;
 use unfr0zen_core::{nestlocal, nlclient, setup, Device, Error, Result};
 
@@ -120,8 +122,14 @@ fn read_settings(path: &Path) -> Result<Settings> {
 
 /// Checks a new bundle and runs its own engine on the running unit.
 fn update(path: &Path) -> Result<()> {
-    let data = fs::read(path)?;
-    let bundle = Bundle::unpack(&data)?;
+    // A gen 1 or gen 2 gives the update nlclient's memory before either
+    // engine reads the bundle: the setup reads, patches and writes nlclient
+    // too, and with nlclient's own memory in use the kernel panics on running
+    // out (Nest's kernel sets panic_on_oom).
+    let target = device(&Bundle::read_manifest(fs::File::open(path)?)?.device)?;
+    let nlclient = matches!(target, Device::J49 | Device::Diamond).then(NlclientStopped::stop).transpose()?;
+    // This engine keeps only the update's engine, which reads the bundle again.
+    let mut bundle = Bundle::read_some(fs::File::open(path)?, |name| name == bundle::APPLY)?;
     device(&bundle.manifest.device)?;
     log::info!("Update to {} for the {}", bundle.manifest.version, bundle.manifest.device);
     let options = Path::new("/").join(setup::RECORD);
@@ -146,21 +154,81 @@ fn update(path: &Path) -> Result<()> {
         (None, None) => {}
         (None, Some(_)) => return Err(failure(format!("{new} is not a version to compare with {installed}"))),
     }
-    let status = run_from_memory(bundle.file(bundle::APPLY)?, |engine| {
-        Command::new(engine).arg(path).arg(&options).arg("/").arg("/tmp/unfr0zen-update").arg("--live").status()
+    let engine =
+        bundle.take(bundle::APPLY).map_or_else(|| Err(failure(format!("bundle: no {}", bundle::APPLY))), Ok)?;
+    drop(bundle);
+    // The run's output, on scratch as tmpfs is the unit's memory: a failed
+    // run's stays for its diagnosis until the next update.
+    let out = Path::new("/").join(scratch::DIR).join("update-run");
+    match fs::remove_dir_all(&out) {
+        Err(error) if error.kind() != ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
+    }
+    let status = run_from_memory(engine, |engine| {
+        Command::new(engine).arg(path).arg(&options).arg("/").arg(&out).arg("--live").status()
     })?;
     if !status.success() {
         return Err(failure(format!("the update's engine failed ({status})")));
     }
+    let _ = fs::remove_dir_all(&out);
+    // The caller restarts the unit into the new setup.
+    if let Some(nlclient) = nlclient {
+        nlclient.leave_stopped();
+    }
     Ok(())
+}
+
+/// nlclient stopped while a 64 MB unit (the gen 1 and gen 2) updates itself
+/// as it runs. Started again when this is dropped, as the update failed,
+/// unless left stopped for the restart into the new setup.
+struct NlclientStopped;
+
+impl NlclientStopped {
+    /// Fails, nlclient started again, when it does not stop: the update would
+    /// run out of memory beside it.
+    fn stop() -> Result<NlclientStopped> {
+        let stopped = NlclientStopped;
+        let status = Command::new("monit").args(["stop", "nlclient"]).status()?;
+        if !status.success() {
+            return Err(failure(format!("monit could not stop nlclient ({status})")));
+        }
+        // monit stops it in the background: wait for it to be gone.
+        for _ in 0..60 {
+            if !Command::new("pidof").arg("nlclient").output()?.status.success() {
+                log::info!("nlclient stopped for the update");
+                return Ok(stopped);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        Err(failure("nlclient still runs 30 s after monit stopped it"))
+    }
+
+    fn leave_stopped(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for NlclientStopped {
+    fn drop(&mut self) {
+        // monit refuses an action while the stop is still its own business
+        // ("Other action already in progress"): asked again until it takes it.
+        for _ in 0..60 {
+            if Command::new("monit").args(["start", "nlclient"]).status().is_ok_and(|s| s.success()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        log::error!("monit would not start nlclient again: restart the unit");
+    }
 }
 
 /// Runs an executable held in memory: /tmp and the unit's other writable
 /// places are noexec. run gets the path to execute it by. A kernel without
 /// memfd_create (the gen 1's and gen 2's 2.6.37) runs it from beside this
-/// engine instead, on their scratch volume, which allows executables.
+/// engine instead, on their scratch volume, which allows executables. The
+/// copy in this process's memory is freed before it runs.
 #[cfg(target_os = "linux")]
-fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
+fn run_from_memory<T>(executable: Vec<u8>, run: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
     use std::io::Write;
     use std::os::fd::FromRawFd;
     // SAFETY: the name is NUL-terminated; a failed call returns -1, checked.
@@ -171,7 +239,8 @@ fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Resu
             return Err(error.into());
         }
         let path = std::env::current_exe()?.with_file_name("unfr0zen-apply.update");
-        fs::write(&path, executable)?;
+        fs::write(&path, &executable)?;
+        drop(executable);
         fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
         let ran = run(&path.display().to_string());
         let _ = fs::remove_file(&path);
@@ -179,12 +248,13 @@ fn run_from_memory<T>(executable: &[u8], run: impl FnOnce(&str) -> std::io::Resu
     }
     // SAFETY: fd was just created and nothing else owns it.
     let mut file = unsafe { fs::File::from_raw_fd(fd) };
-    file.write_all(executable)?;
+    file.write_all(&executable)?;
+    drop(executable);
     Ok(run(&format!("/proc/self/fd/{fd}"))?)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_from_memory<T>(_: &[u8], _: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
+fn run_from_memory<T>(_: Vec<u8>, _: impl FnOnce(&str) -> std::io::Result<T>) -> Result<T> {
     Err(failure("updates install on the unit"))
 }
 
@@ -200,7 +270,10 @@ fn run(
     generation: Option<&str>,
 ) -> Result<()> {
     fs::create_dir_all(out)?;
-    let mut bundle = Bundle::unpack(&fs::read(bundle)?)?;
+    let mut settings = read_settings(options)?;
+    // The overlays this run leaves out are only checked: a 64 MB unit cannot
+    // hold them beside the rest.
+    let mut bundle = Bundle::read_some(fs::File::open(bundle)?, |name| settings.wants(name))?;
     let target = match (device(&bundle.manifest.device)?, generation.map(device).transpose()?) {
         (Device::J49 | Device::Diamond, Some(unit @ (Device::J49 | Device::Diamond))) => unit,
         (bundled, None) => bundled,
@@ -209,12 +282,11 @@ fn run(
         }
     };
     log::info!("Bundle {} for the {}", bundle.manifest.version, bundle.manifest.device);
-    let mut settings = read_settings(options)?;
     if live {
         // The unit's settings are the last run's: this run installs this bundle.
         settings.version = bundle.manifest.version.clone();
     }
-    let options = settings.options(&bundle)?;
+    let options = settings.take_options(&mut bundle)?;
     let pki = settings.pki()?;
     let env = [
         ("UNFR0ZEN_ROOT", root.display().to_string()),
