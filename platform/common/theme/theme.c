@@ -933,8 +933,6 @@ static int draw(void *layer, void *ctx) {
     int showing = owns_home(PTR(layer, LAYER_GLOBALS)) && selected();
     if (!atomic_exchange(&rendering, showing) && showing)
         kick();
-    if (!showing)
-        atomic_store(&showing_home, 0);
     if (nested(ctx))
         return selected() ? 0 : original_draw(layer, ctx);
     int themed = theming(layer, ctx);
@@ -962,12 +960,14 @@ static int draw(void *layer, void *ctx) {
         .range = WORD(layer, RANGE_STATE_OFFSET),
     };
     native_write_state(&state);
-    /* Home is entered once it shows, not as the dial fades out to the menu. */
-    if (showing && !atomic_exchange(&showing_home, 1))
+    uint32_t alpha = WORD(layer, LAYER_ALPHA);
+    /* Home is entered as the dial starts to show, at the start of its way in
+     * from the menu or settings, so that a theme's entrance plays as it comes
+     * in; not as it fades out to the menu. */
+    if (alpha && !atomic_exchange(&showing_home, 1))
         home();
     if (!theme_image && !load_marker())
         return original_draw(layer, ctx);
-    uint32_t alpha = WORD(layer, LAYER_ALPHA);
     float scale = FLOAT(layer, LAYER_SCALE);
     float scaled_menu = NATIVE(float_fn, menu_scale)(g);
     full_theme = alpha == 255 && scale == 1.0f && scaled_menu == 1.0f;
@@ -975,6 +975,7 @@ static int draw(void *layer, void *ctx) {
     if (alpha == 0) {
         /* Faded out under the menu: the dial's own draw, unseen, alone. */
         atomic_store(&dial_themed, 0);
+        atomic_store(&showing_home, 0);
         return original_draw(layer, ctx);
     }
     if (!full_theme) {
@@ -1068,10 +1069,8 @@ static int redraw(struct handler *h, void *event) {
         }
     }
     atomic_store(&rendering, owns_home(h->globals) && selected());
-    if (!atomic_load(&rendering)) {
+    if (!atomic_load(&rendering))
         atomic_store(&pending, 0);
-        atomic_store(&showing_home, 0);
-    }
     NATIVE(void_fn, delete_native)(h);
     return RESULT_REDRAW;
 }
