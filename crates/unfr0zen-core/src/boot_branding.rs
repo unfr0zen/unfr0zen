@@ -1,4 +1,5 @@
-//! Recolor recognized Google boot artwork without changing shapes or frame data.
+//! The ice-palette recoloring of Google boot artwork: the setup recognizes
+//! recolored files by it and restores their saved originals.
 use crate::{device, shell::sha256_hex, Result};
 use std::collections::BTreeMap;
 

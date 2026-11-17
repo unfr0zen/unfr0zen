@@ -1,7 +1,6 @@
 //! Build the native account-screen replacement from the unit's own ELF.
 //! Keep hash-guarded byte edits as an undo journal for rollback and upgrades.
 mod arm;
-mod branding;
 pub mod builder;
 pub mod dark_theme;
 pub mod discovery;

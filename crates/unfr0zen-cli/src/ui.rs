@@ -67,7 +67,7 @@ pub fn help(error: clap::Error) -> ! {
     std::process::exit(0);
 }
 
-/// The icy house in its original colours beside a large name and build version.
+/// The snowflake icon in its original colours beside a large name and build version.
 pub fn logo() {
     const WORDMARK: [&str; 4] = [
         r"            __      __",

@@ -121,9 +121,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
             output[at..at + 4].copy_from_slice(&w.to_le_bytes());
         }
     }
-    let boot_branding = super::branding::recolor(source, &mut output)?;
     let manifest = serde_json::json!({
-        "boot_branding":boot_branding,
         "status":discovery.validation,"reviewed":discovery.variant.is_some(),"stock_sha256":discovery.stock_sha256,
         "source_size":source.len(),"program_header_offset":phoff,"original_program_headers":hex(original_headers),
         "output_sha256":sha256_hex(&output),
