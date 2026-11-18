@@ -49,6 +49,8 @@
 //   39  cool stage 3            Binary Input (Y3 wired)
 //   40  screen timeout          Analog Output, seconds the screen stays lit after the last touch, 10-600
 //   41  screen always on        Binary Output
+//   42  screen brightness       Analog Output, %, 0-100; writing it turns 43 off
+//   43  screen brightness auto  Binary Output
 //
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
