@@ -66,6 +66,26 @@ jobs:
           paths:
             - .work/release/id
 
+  # The setup bundles the x86_64 Linux app packed, signed apart from every
+  # build: the bundle-signing context's key is readable in this job alone,
+  # which runs no code compiled from the workspace's dependencies.
+  sign-bundles:
+    executor: tools
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Sign the setup bundles
+          command: |
+            set -- dist/unfr0zen-ota-*.tgz
+            [ -f "$1" ] || { echo "no setup bundles in dist/" >&2; exit 1; }
+            sh utils/bundle/sign.sh utils/bundle/release.pub signed "$@"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - signed
+
   # Every app built and tested: into the draft, which is then published.
   release-publish:
     executor: tools
@@ -79,6 +99,12 @@ jobs:
           command: |
             id=$(cat .work/release/id)
             for file in dist/*; do
+              # A setup bundle goes out as sign-bundles signed it.
+              case $(basename "$file") in
+                unfr0zen-ota-*)
+                  file=signed/$(basename "$file")
+                  [ -f "$file" ] || { echo "$file: no signed copy" >&2; exit 1; } ;;
+              esac
               curl -fsS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Accept: application/vnd.github+json' \
                 -H 'Content-Type: application/octet-stream' --data-binary "@$file" \
                 "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$id/assets?name=$(basename "$file")" > /dev/null
@@ -165,12 +191,17 @@ workflows:
               nestlocal,
               release-draft,
             ]
-          # bundle-signing: the setup bundles' key, readable by tag pipelines alone.
-          context: [docker-hub, bundle-signing]
+          context: docker-hub
+          filters: *release-tags
+      # bundle-signing: the setup bundles' key, readable by tag pipelines alone.
+      - sign-bundles:
+          requires: [app-linux-x86_64]
+          context: bundle-signing
           filters: *release-tags
       - release-publish:
           requires:
             [
+              sign-bundles,
               test,
               clippy,
               app-linux-x86_64,
