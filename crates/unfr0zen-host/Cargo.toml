@@ -37,7 +37,7 @@ windows-sys = { version = "0.52", features = [
 [dev-dependencies]
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 flate2 = "1"
