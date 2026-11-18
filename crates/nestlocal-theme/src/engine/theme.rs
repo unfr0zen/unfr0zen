@@ -1300,7 +1300,7 @@ pub fn diagnostic(painter: &mut dyn Painter, ui: &Ui, theme: &str, error: &str) 
     for (i, text) in wrapped(&reason(error), 36, 4).iter().enumerate() {
         line(text, 0.615 + 0.042 * i as f32, 0.03, grey(0.75));
     }
-    line("Settings > UNFR0ZEN > Themes", 0.84, 0.03, grey(0.5));
+    line("Settings > Themes", 0.84, 0.03, grey(0.5));
 }
 
 /// An error as one line: its first, without the kind Lua's errors open with.

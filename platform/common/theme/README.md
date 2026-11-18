@@ -1,16 +1,17 @@
 # Customizable home screen themes
 
-With `--themes` (the app's **Customizable home screen themes**), the UNFR0ZEN
-screen's **Themes** page picks how the home screen's dial is drawn: Stock
+With `--themes` (the app's **Customizable home screen themes**), **Settings →
+Themes** on the thermostat picks how the home screen's dial is drawn: Stock
 (nlclient's own) or one of nestlocal's Lua themes (`crates/nestlocal/themes`).
-A theme draws in nlclient's own GLES2 context, on the GPU, at the panel's
-rate while it moves, or on the CPU where nlclient draws there. nlclient keeps the ring, the button, the menus and the setpoints.
+A theme draws in nlclient's own GLES2 context, on the GPU, at the panel's rate
+while it moves, or on the CPU where nlclient draws there. nlclient keeps the
+ring, the button, the menus and the setpoints.
 
 | Part                                               | What it does                                                                                                                                                                                                                                                                                         |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `theme.c` → `/nestlabs/lib/libunfr0zen-theme.so`   | Preloaded into nlclient beside `liblocalcloud.so`. Hooks the dial's, its figures', the background's and the thermostat screen's vtable slots, replaces the dial's draw with the theme's, and asks nlclient for a redraw each frame while the theme moves, about once a second while it stands still. |
 | `crates/nestlocal-theme` → `libnestlocal_theme.so` | The theme host and painters (femtovg and batched quads on the GPU, tiny-skia on the CPU; LuaJIT), loaded by the preload on nlclient's UI thread.                                                                                                                                                     |
-| `crates/nestlocal/src/theme.rs` (`-themes`)        | Offers the installed themes on the Themes page, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets, the fields of MQTT's state topic and Home Assistant's weather.                                                                |
+| `crates/nestlocal/src/theme.rs` (`-themes`)        | Offers the installed themes in Settings → Themes, keeps the choice in `/media/data/nestlocal.theme`, and hands the library the theme with the device and shared buckets, the fields of MQTT's state topic and Home Assistant's weather.                                                              |
 | `unfr0zen-core`'s `nlclient::theme`                | Writes `/etc/unfr0zen/theme.bindings` for the unit's stock nlclient at setup.                                                                                                                                                                                                                        |
 
 ## How the theme is drawn

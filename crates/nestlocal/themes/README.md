@@ -342,7 +342,7 @@ It writes one PNG for each scene (`mytheme-heating.png`, `mytheme-rain-f.png`,
 unit. Check the unit itself for speed and for anything that moves.
 
 To ship a theme with unfr0zen, add its folder here; on a unit, add it under
-`/media/scratch/.unfr0zen/themes`. The Themes page lists
+`/media/scratch/.unfr0zen/themes`. Settings → Themes lists
 Stock, then every theme folder in the order the directory lists them, by
 the `name` in its `theme.lua` (keep it on one line: `name = "My Theme",`);
 `cargo test -p nestlocal-theme` loads and draws every theme folder in every

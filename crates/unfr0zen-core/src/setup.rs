@@ -2636,7 +2636,7 @@ mod tests {
         use crate::nlclient::{BINARY, GLYPH, ICON, JOURNAL, ORIGINAL};
         let backup = crate::diamond3::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
-        let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
+        let output = [&build.stock()[..], b"settings screens"].concat();
         let journal = build.makes(&output);
         let mut volume = with_nlclient(build.stock());
         let changes = build.set_up(&mut volume, &options(), true).unwrap();
@@ -2661,7 +2661,7 @@ mod tests {
         let (google, _) = CHECK_URLS;
         let connmand = [&b"\x7fELF connmand\0"[..], google, b"%s"].concat();
         let build = FakeBuild::new();
-        let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
+        let output = [&build.stock()[..], b"settings screens"].concat();
         build.makes(&output);
         // A unit an older setup left with everything on its root volume.
         let mut volume = with_nlclient(build.stock());
@@ -2733,7 +2733,7 @@ mod tests {
     fn native_screen_names_the_app_version_and_a_newer_app_rewrites_only_that() {
         use crate::nlclient::VERSION;
         let build = FakeBuild::new();
-        build.makes(&[&build.stock()[..], b"UNFR0ZEN screen"].concat());
+        build.makes(&[&build.stock()[..], b"settings screens"].concat());
         let mut volume = with_nlclient(build.stock());
         let first = Options { version: "v1.2-3-gabc1234".into(), ..options() };
         build.set_up(&mut volume, &first, false).unwrap();
@@ -2750,7 +2750,7 @@ mod tests {
         let backup = scratch::name(CONNMAND_ORIGINAL);
         let connmand = [&b"\x7fELF connmand\0"[..], google, b"%s"].concat();
         let build = FakeBuild::new();
-        let output = [&build.stock()[..], b"UNFR0ZEN screen"].concat();
+        let output = [&build.stock()[..], b"settings screens"].concat();
         build.makes(&output);
         let mut volume = with_nlclient(build.stock());
         volume.files.insert(CONNMAND.into(), ("0:0".into(), 0o755, connmand.clone()));
