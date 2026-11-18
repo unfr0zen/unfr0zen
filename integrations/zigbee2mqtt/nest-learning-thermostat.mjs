@@ -53,7 +53,8 @@
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
 //
-// The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
+// The Thermostat cluster's weekly schedule is the unit's schedule (weekly_schedule): Set and Get Weekly
+// Schedule, and Clear Weekly Schedule, which clears it.
 //
 // Home Assistant gets the entities unfr0zen's MQTT relay announces, under
 // the same names: the climate has one target in heat or cool and the range
@@ -493,6 +494,7 @@ const definition = {
   icon: PICTURE,
   fromZigbee: [
     fz.thermostat,
+    fz.thermostat_weekly_schedule,
     fz.fan,
     fz.humidity,
     fz.battery,
@@ -515,6 +517,7 @@ const definition = {
     tz.thermostat_running_state,
     tz.fan_mode,
     tz.thermostat_temperature_display_mode,
+    tz.thermostat_weekly_schedule,
     set.preset,
     set.outputs,
     set.clear_schedule,
@@ -542,7 +545,8 @@ const definition = {
       .withSetpoint("occupied_cooling_setpoint", 9, 32, 0.5)
       .withSystemMode(modes)
       .withRunningState(["idle", "heat", "cool", "fan_only"])
-      .withPreset(["none", "eco"], "Eco: the eco temperatures apply");
+      .withPreset(["none", "eco"], "Eco: the eco temperatures apply")
+      .withWeeklySchedule([...(canHeat ? ["heat"] : []), ...(canCool ? ["cool"] : [])]);
     if (has(device, THERMOSTAT, "hvacFanCtrl")) {
       climate.withFanMode(["on", "auto"]);
     }

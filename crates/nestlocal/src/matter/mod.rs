@@ -15,6 +15,7 @@ mod ble;
 mod extras;
 mod netifs;
 mod pairing;
+mod schedule;
 mod srp;
 mod thermostat;
 mod thread;
@@ -126,6 +127,11 @@ impl Nest {
         let sh = buckets.get("shared").cloned().unwrap_or_default();
         let state = bridge::state(&dev, &sh);
         View { dev, sh, state }
+    }
+
+    /// One of the unit's buckets (schedule, say), as of now.
+    pub fn bucket(&self, name: &str) -> Option<crate::json::Fields> {
+        self.bridge.buckets().get(name).cloned()
     }
 
     /// Runs a command, as MQTT's set/<name> would.
@@ -337,7 +343,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         &matter,
         &crypto,
         &buffers,
-        data_model(node, rand, nest.clone(), switches, &controller, settings.thread),
+        data_model(node, rand, nest.clone(), switches, &controller, settings.thread, settings.storage.clone()),
         &kv,
         &controller,
         &state,
@@ -615,6 +621,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
     switches: Vec<Switch>,
     controller: &'a C,
     thread: bool,
+    storage: PathBuf,
 ) -> impl DataModel + 'a {
     use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut names = vec![
@@ -648,7 +655,11 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Thermostat::CLUSTER.id,
-                Async(thermostat_cluster::HandlerAdaptor(Thermostat::new(Dataver::new_rand(&mut rand), nest.clone()))),
+                Async(thermostat_cluster::HandlerAdaptor(Thermostat::new(
+                    Dataver::new_rand(&mut rand),
+                    nest.clone(),
+                    Some(storage),
+                ))),
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Humidity::CLUSTER.id,

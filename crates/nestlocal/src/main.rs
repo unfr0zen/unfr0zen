@@ -24,6 +24,7 @@ mod mqtttls;
 mod naming;
 mod nlsettings;
 mod occupancy;
+mod schedule;
 mod scratch;
 mod screen;
 mod sensor;

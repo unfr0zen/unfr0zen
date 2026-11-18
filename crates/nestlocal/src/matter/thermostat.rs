@@ -5,20 +5,28 @@
 //! cluster advertises heating, cooling and auto on every unit; which of them
 //! the unit's equipment can do goes in ControlSequenceOfOperation, which is
 //! what controllers read the modes from. Eco is the one preset (PRES), and
-//! the eco temperatures are also the unoccupied setpoints (OCC).
+//! the eco temperatures are also the unoccupied setpoints (OCC). The unit's
+//! own schedule is the active Matter schedule (MSCH, schedule.rs).
 
 use std::sync::Arc;
 
+use rs_matter::dm::clusters::decl::globals::AtomicRequestTypeEnum;
 use rs_matter::dm::clusters::decl::thermostat::{
     self, ClusterHandler, ControlSequenceOfOperationEnum, OccupancyBitmap, PresetScenarioEnum,
     PresetStructArrayBuilder, PresetStructBuilder, PresetTypeFeaturesBitmap, PresetTypeStructArrayBuilder,
-    PresetTypeStructBuilder, RelayStateBitmap, SetpointRaiseLowerModeEnum, SystemModeEnum,
+    PresetTypeStructBuilder, RelayStateBitmap, ScheduleDayOfWeekBitmap, ScheduleStructArrayBuilder,
+    ScheduleStructBuilder, ScheduleTypeFeaturesBitmap, ScheduleTypeStructArrayBuilder, ScheduleTypeStructBuilder,
+    SetpointRaiseLowerModeEnum, SystemModeEnum,
 };
-use rs_matter::dm::{ArrayAttributeRead, Cluster, Dataver, InvokeContext, ReadContext, WriteContext};
+use rs_matter::dm::{
+    ArrayAttributeRead, ArrayAttributeWrite, Cluster, Dataver, InvokeContext, OperationContext, ReadContext,
+    WriteContext,
+};
 use rs_matter::error::{Error, ErrorCode};
-use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVBuilderParent};
+use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVArray, TLVBuilderParent};
 use rs_matter::with;
 
+use super::schedule::{self, Mode, Owner, Schedules, Transition};
 use super::{centi, failed, Nest};
 
 /// The unit's setpoint range, as the MQTT climate entity has it.
@@ -35,11 +43,36 @@ const ECO: &[u8] = b"eco";
 pub struct Thermostat {
     dataver: Dataver,
     nest: Arc<Nest>,
+    schedules: Schedules,
 }
 
 impl Thermostat {
-    pub fn new(dataver: Dataver, nest: Arc<Nest>) -> Self {
-        Self { dataver, nest }
+    /// `storage`: where the schedules other than the unit's are kept.
+    pub fn new(dataver: Dataver, nest: Arc<Nest>, storage: Option<std::path::PathBuf>) -> Self {
+        Self { dataver, nest, schedules: Schedules::open(storage.map(|s| s.join("schedules.json"))) }
+    }
+
+    /// The system modes a schedule can have: the ones the equipment runs.
+    fn schedule_modes(&self) -> Vec<Mode> {
+        match self.sequence() {
+            ControlSequenceOfOperationEnum::HeatingOnly => vec![Mode::Heat],
+            ControlSequenceOfOperationEnum::CoolingOnly => vec![Mode::Cool],
+            _ => vec![Mode::Heat, Mode::Cool, Mode::Auto],
+        }
+    }
+
+    fn limits(&self) -> schedule::Limits {
+        schedule::Limits { modes: self.schedule_modes(), min: MIN, max: MAX, dead_band: i16::from(DEAD_BAND) * 10 }
+    }
+
+    /// Writes the schedule bucket, as MQTT's set/raw/schedule would.
+    fn write_schedule(&self, fields: crate::json::Fields) -> Result<(), String> {
+        self.nest.apply("raw/schedule", &serde_json::Value::Object(fields).to_string())
+    }
+
+    fn changed(&self, ctx: &impl OperationContext) {
+        self.dataver.changed();
+        ctx.notify_own_cluster_changed();
     }
 
     /// The setpoint a heating (or cooling) write changes, for the unit's mode.
@@ -89,7 +122,8 @@ impl ClusterHandler for Thermostat {
                 | thermostat::Feature::COOLING.bits()
                 | thermostat::Feature::AUTO_MODE.bits()
                 | thermostat::Feature::OCCUPANCY.bits()
-                | thermostat::Feature::PRESETS.bits(),
+                | thermostat::Feature::PRESETS.bits()
+                | thermostat::Feature::MATTER_SCHEDULE_CONFIGURATION.bits(),
         )
         // `required` is only what every thermostat has: what the features
         // make mandatory is listed too.
@@ -106,6 +140,12 @@ impl ClusterHandler for Thermostat {
                 | thermostat::AttributeId::NumberOfPresets
                 | thermostat::AttributeId::ActivePresetHandle
                 | thermostat::AttributeId::Presets
+                | thermostat::AttributeId::ScheduleTypes
+                | thermostat::AttributeId::NumberOfSchedules
+                | thermostat::AttributeId::NumberOfScheduleTransitions
+                | thermostat::AttributeId::NumberOfScheduleTransitionPerDay
+                | thermostat::AttributeId::ActiveScheduleHandle
+                | thermostat::AttributeId::Schedules
                 | thermostat::AttributeId::AbsMinHeatSetpointLimit
                 | thermostat::AttributeId::AbsMaxHeatSetpointLimit
                 | thermostat::AttributeId::AbsMinCoolSetpointLimit
@@ -116,7 +156,12 @@ impl ClusterHandler for Thermostat {
                 | thermostat::AttributeId::MaxCoolSetpointLimit
                 | thermostat::AttributeId::ThermostatRunningState
         ))
-        .with_cmds(with!(thermostat::CommandId::SetpointRaiseLower | thermostat::CommandId::SetActivePresetRequest));
+        .with_cmds(with!(
+            thermostat::CommandId::SetpointRaiseLower
+                | thermostat::CommandId::SetActivePresetRequest
+                | thermostat::CommandId::SetActiveScheduleRequest
+                | thermostat::CommandId::AtomicRequest
+        ));
 
     fn dataver(&self) -> u32 {
         self.dataver.get()
@@ -291,6 +336,118 @@ impl ClusterHandler for Thermostat {
         }
     }
 
+    fn schedule_types<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<ScheduleTypeStructArrayBuilder<P>, ScheduleTypeStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        let modes = self.schedule_modes();
+        macro_rules! one {
+            ($b:expr, $mode:expr) => {
+                $b.system_mode(system_mode($mode))?
+                    .number_of_schedules(schedule::NUMBER_OF_SCHEDULES)?
+                    .schedule_type_features(
+                        ScheduleTypeFeaturesBitmap::SUPPORTS_SETPOINTS | ScheduleTypeFeaturesBitmap::SUPPORTS_NAMES,
+                    )?
+                    .end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for mode in modes {
+                    array = one!(array.push()?, mode)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => match modes.get(usize::from(i)) {
+                Some(mode) => one!(item, *mode),
+                None => Err(ErrorCode::ConstraintError.into()),
+            },
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn number_of_schedules(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        Ok(schedule::NUMBER_OF_SCHEDULES)
+    }
+
+    fn number_of_schedule_transitions(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        Ok(schedule::TRANSITIONS)
+    }
+
+    fn number_of_schedule_transition_per_day(&self, _ctx: impl ReadContext) -> Result<Nullable<u8>, Error> {
+        Ok(Nullable::some(schedule::PER_DAY))
+    }
+
+    fn active_schedule_handle<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: NullableBuilder<P, OctetsBuilder<P>>,
+    ) -> Result<P, Error> {
+        match self.schedules.list(self.nest.bucket("schedule").as_ref()).1 {
+            Some(handle) => builder.non_null()?.set(Octets(&handle)),
+            None => builder.null(),
+        }
+    }
+
+    fn schedules<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<ScheduleStructArrayBuilder<P>, ScheduleStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        let (list, _) = self.schedules.list(self.nest.bucket("schedule").as_ref());
+        fn one<P: TLVBuilderParent>(b: ScheduleStructBuilder<P>, s: &schedule::Schedule) -> Result<P, Error> {
+            let mut transitions = b
+                .schedule_handle(Nullable::new(s.handle.as_deref().map(Octets)))?
+                .system_mode(system_mode(s.mode))?
+                .name(s.name.as_deref())?
+                .preset_handle(None)?
+                .transitions()?;
+            for t in &s.transitions {
+                transitions = transitions
+                    .push()?
+                    .day_of_week(ScheduleDayOfWeekBitmap::from_bits_retain(t.days))?
+                    .transition_time(t.minutes)?
+                    .preset_handle(None)?
+                    .system_mode(None)?
+                    .cooling_setpoint(t.cool)?
+                    .heating_setpoint(t.heat)?
+                    .end()?;
+            }
+            transitions.end()?.built_in(Nullable::some(false))?.end()
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for s in &list {
+                    array = one(array.push()?, s)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => match list.get(usize::from(i)) {
+                Some(s) => one(item, s),
+                None => Err(ErrorCode::ConstraintError.into()),
+            },
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn set_schedules(
+        &self,
+        ctx: impl WriteContext,
+        value: ArrayAttributeWrite<TLVArray<'_, thermostat::ScheduleStruct<'_>>, thermostat::ScheduleStruct<'_>>,
+    ) -> Result<(), Error> {
+        let write = match value {
+            ArrayAttributeWrite::Replace(list) => schedule::Write::Replace(
+                list.iter().map(|s| s.and_then(|s| parse_schedule(&s))).collect::<Result<_, _>>()?,
+            ),
+            ArrayAttributeWrite::Add(s) => schedule::Write::Add(parse_schedule(&s)?),
+            ArrayAttributeWrite::Update(..) | ArrayAttributeWrite::Remove(_) => {
+                return Err(ErrorCode::InvalidAction.into())
+            }
+        };
+        self.schedules.write(owner(&ctx)?, write).map_err(error)
+    }
+
     fn set_system_mode(&self, _ctx: impl WriteContext, value: SystemModeEnum) -> Result<(), Error> {
         use ControlSequenceOfOperationEnum::{CoolingAndHeating, CoolingOnly, HeatingOnly};
         // Only the modes the control sequence allows.
@@ -412,10 +569,15 @@ impl ClusterHandler for Thermostat {
 
     fn handle_set_active_schedule_request(
         &self,
-        _ctx: impl InvokeContext,
-        _request: thermostat::SetActiveScheduleRequestRequest<'_>,
+        ctx: impl InvokeContext,
+        request: thermostat::SetActiveScheduleRequestRequest<'_>,
     ) -> Result<(), Error> {
-        Err(ErrorCode::CommandNotFound.into())
+        let handle = request.schedule_handle()?;
+        self.schedules
+            .activate(handle.0, self.nest.bucket("schedule").as_ref(), |f| self.write_schedule(f))
+            .map_err(error)?;
+        self.changed(&ctx);
+        Ok(())
     }
 
     fn handle_add_thermostat_suggestion<P: TLVBuilderParent>(
@@ -437,13 +599,97 @@ impl ClusterHandler for Thermostat {
 
     fn handle_atomic_request<P: TLVBuilderParent>(
         &self,
-        _ctx: impl InvokeContext,
-        _request: thermostat::AtomicRequestRequest<'_>,
-        _response: thermostat::AtomicResponseBuilder<P>,
+        ctx: impl InvokeContext,
+        request: thermostat::AtomicRequestRequest<'_>,
+        response: thermostat::AtomicResponseBuilder<P>,
     ) -> Result<P, Error> {
-        // The one preset is built in; there is nothing to edit atomically.
-        Err(ErrorCode::CommandNotFound.into())
+        // Schedules only: the one preset is built in.
+        let owner = owner(&ctx)?;
+        let bucket = self.nest.bucket("schedule");
+        let outcome = match request.request_type()? {
+            AtomicRequestTypeEnum::BeginWrite => {
+                let attributes = request.attribute_requests()?.iter().collect::<Result<Vec<u32>, _>>()?;
+                self.schedules.begin(owner, &attributes, request.timeout()?, bucket.as_ref())
+            }
+            AtomicRequestTypeEnum::CommitWrite => {
+                let outcome = self.schedules.commit(owner, bucket.as_ref(), &self.limits(), |f| self.write_schedule(f));
+                if outcome.as_ref().is_ok_and(|o| o.status == schedule::status::SUCCESS) {
+                    self.changed(&ctx);
+                }
+                outcome
+            }
+            AtomicRequestTypeEnum::RollbackWrite => self.schedules.rollback(owner),
+        }
+        .map_err(error)?;
+        let mut statuses = response.status_code(outcome.status)?.attribute_status()?;
+        for (attribute, status) in outcome.attributes {
+            statuses = statuses.push()?.attribute_id(attribute)?.status_code(status)?.end()?;
+        }
+        statuses.end()?.timeout(outcome.timeout)?.end()
     }
+}
+
+/// Who is writing: their fabric and node.
+fn owner(ctx: &impl OperationContext) -> Result<Owner, Error> {
+    let accessor = ctx.accessor()?;
+    Ok((accessor.fab_idx()?.get(), accessor.peer_node_id().unwrap_or(0)))
+}
+
+/// An interaction model status as the error that answers with it.
+fn error(status: u8) -> Error {
+    use schedule::status::*;
+    match status {
+        BUSY => ErrorCode::Busy,
+        CONSTRAINT_ERROR => ErrorCode::ConstraintError,
+        RESOURCE_EXHAUSTED => ErrorCode::ResourceExhausted,
+        NOT_FOUND => ErrorCode::NotFound,
+        INVALID_IN_STATE => ErrorCode::InvalidInState,
+        schedule::INVALID_COMMAND => ErrorCode::InvalidCommand,
+        _ => ErrorCode::Failure,
+    }
+    .into()
+}
+
+fn system_mode(mode: Mode) -> SystemModeEnum {
+    match mode {
+        Mode::Heat => SystemModeEnum::Heat,
+        Mode::Cool => SystemModeEnum::Cool,
+        Mode::Auto => SystemModeEnum::Auto,
+    }
+}
+
+/// A written schedule, as far as the unit can run it: setpoints alone, no
+/// presets, no built-in ones.
+fn parse_schedule(s: &thermostat::ScheduleStruct<'_>) -> Result<schedule::Schedule, Error> {
+    let constraint = || Error::from(ErrorCode::ConstraintError);
+    let mode = match s.system_mode()? {
+        SystemModeEnum::Heat => Mode::Heat,
+        SystemModeEnum::Cool => Mode::Cool,
+        SystemModeEnum::Auto => Mode::Auto,
+        _ => return Err(constraint()),
+    };
+    if s.preset_handle()?.is_some() || s.built_in()?.into_option() == Some(true) {
+        return Err(constraint());
+    }
+    let mut transitions = Vec::new();
+    for t in s.transitions()?.iter() {
+        let t = t?;
+        if t.preset_handle()?.is_some() || t.system_mode()?.is_some_and(|m| m != system_mode(mode)) {
+            return Err(constraint());
+        }
+        transitions.push(Transition {
+            days: t.day_of_week()?.bits(),
+            minutes: t.transition_time()?,
+            heat: t.heating_setpoint()?,
+            cool: t.cooling_setpoint()?,
+        });
+    }
+    Ok(schedule::Schedule {
+        handle: s.schedule_handle()?.into_option().map(|h| h.0.to_vec()),
+        mode,
+        name: s.name()?.map(str::to_string),
+        transitions,
+    })
 }
 
 /// A Matter temperature as the °C argument the commands take.
@@ -461,7 +707,7 @@ mod tests {
     use serde_json::json;
 
     fn thermostat(dev: crate::json::Fields, sh: crate::json::Fields) -> Thermostat {
-        Thermostat::new(Dataver::new(0), nest(dev, sh))
+        Thermostat::new(Dataver::new(0), nest(dev, sh), None)
     }
 
     fn code(result: Result<(), Error>) -> ErrorCode {
@@ -698,7 +944,7 @@ mod tests {
     #[test]
     fn writes_before_the_unit_reported_are_refused() {
         let bridge = crate::bridge::tests::test_bridge();
-        let t = Thermostat::new(Dataver::new(0), std::sync::Arc::new(Nest { bridge }));
+        let t = Thermostat::new(Dataver::new(0), std::sync::Arc::new(Nest { bridge }), None);
         assert_eq!(code(t.set_system_mode(ctx(1), SystemModeEnum::Heat)), ErrorCode::ConstraintError);
         assert_eq!(code(t.set_occupied_heating_setpoint(ctx(1), 2000)), ErrorCode::ConstraintError);
     }

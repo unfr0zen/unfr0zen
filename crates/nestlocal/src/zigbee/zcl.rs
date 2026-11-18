@@ -21,6 +21,8 @@ pub mod status {
     pub const INVALID_FIELD: u8 = 0x85;
     pub const UNSUPPORTED_ATTRIBUTE: u8 = 0x86;
     pub const INVALID_VALUE: u8 = 0x87;
+    pub const INSUFFICIENT_SPACE: u8 = 0x89;
+    pub const NOT_FOUND: u8 = 0x8B;
     pub const READ_ONLY: u8 = 0x88;
     pub const INVALID_DATA_TYPE: u8 = 0x8D;
     pub const UNSUPPORTED_CLUSTER: u8 = 0xC3;
@@ -127,6 +129,10 @@ impl Value {
     }
 }
 
+/// The response commands a command is answered with, each its command ID
+/// and payload, or the status a default response carries.
+pub type Responses = Result<Vec<(u8, Vec<u8>)>, u8>;
+
 /// The attributes and commands of a node's server clusters, by endpoint.
 pub trait Clusters {
     /// The endpoint's clusters, and in each its attribute IDs, ascending.
@@ -138,6 +144,39 @@ pub trait Clusters {
     fn write(&self, endpoint: u8, cluster: u16, attribute: u16, value: Value) -> u8;
     /// A cluster-specific command: a ZCL status.
     fn command(&self, endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> u8;
+    /// A cluster-specific command answered by response commands (Get Weekly
+    /// Schedule); None for the commands `command` takes.
+    fn command_responses(&self, _endpoint: u8, _cluster: u16, _command: u8, _payload: &[u8]) -> Option<Responses> {
+        None
+    }
+}
+
+/// Every answer due to a ZCL frame: serve's, or the response commands of
+/// a command that has them (Clusters::command_responses).
+pub fn serve_all(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8]) -> Vec<Vec<u8>> {
+    let responses = || -> Option<Vec<Vec<u8>>> {
+        let (&control, rest) = frame.split_first()?;
+        if control & (TO_CLIENT | MANUFACTURER_SPECIFIC) != 0 || control & CLUSTER_SPECIFIC == 0 {
+            return None;
+        }
+        let (&sequence, rest) = rest.split_first()?;
+        let (&cmd, payload) = rest.split_first()?;
+        clusters.attributes(endpoint, cluster)?;
+        Some(match clusters.command_responses(endpoint, cluster, cmd, payload)? {
+            Ok(list) => list
+                .into_iter()
+                .map(|(id, p)| frame_out(CLUSTER_SPECIFIC | TO_CLIENT | NO_DEFAULT_RESPONSE, None, sequence, id, &p))
+                .collect(),
+            Err(status) => vec![frame_out(
+                TO_CLIENT | NO_DEFAULT_RESPONSE,
+                None,
+                sequence,
+                command::DEFAULT_RESPONSE,
+                &[cmd, status],
+            )],
+        })
+    };
+    responses().unwrap_or_else(|| serve(clusters, endpoint, cluster, frame).into_iter().collect())
 }
 
 /// The answer to a ZCL frame for an endpoint's `cluster`, if one is due.
