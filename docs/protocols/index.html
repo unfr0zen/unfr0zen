@@ -447,7 +447,7 @@ done</code></pre>
                 <li>Presets: one, handle <code>eco</code> (the eco temperatures). SetActivePresetRequest with <code>eco</code> turns eco on, with null back to the schedule. ActivePresetHandle is <code>eco</code> or null.</li>
                 <li>Commands: SetpointRaiseLower and SetActivePresetRequest. No weekly schedule. SetpointRaiseLower stops at the limits and the dead band; outside Auto it moves the target whichever side it names.</li>
             </ul>
-            <p>Not on Matter: the indicators (Leaf, Early-On and Sunblock active, safety shutoff, filter replacement, hot water, humidifier and dehumidifier running), which of the other HVAC stages runs (W3, aux, alt and emergency heat, Y3), the target humidity, time to temperature, filter runtime, clearing the schedule, and sending the weather or the time: OutdoorTemperature only reads what MQTT or Zigbee supplied. Use MQTT or Zigbee for those.</p>
+            <p>Not on Matter: the indicators (Leaf, Early-On and Sunblock active, safety shutoff, filter replacement, hot water, humidifier and dehumidifier running), which of the other HVAC stages runs (W3, aux, alt and emergency heat, Y3), the target humidity, time to temperature, filter runtime, clearing the schedule, the screen's timeout, always-on, brightness and auto brightness, and sending the weather or the time: OutdoorTemperature only reads what MQTT or Zigbee supplied. Use MQTT or Zigbee for those.</p>
         </div>
     </section>
 </main>
