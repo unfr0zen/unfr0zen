@@ -48,7 +48,7 @@
                 <li><a href="#matter">Matter</a></li>
             </ul>
             <p class="lede">What nestlocal, the service unfr0zen installs on the thermostat, speaks on MQTT, Zigbee and Matter: enough to write an integration for any home automation system. To set the integrations up with Home Assistant, see <a href="/integrations/">Integrations</a>.</p>
-            <p>All three protocols read the same state and run the same commands, though <code>raw/</code>, <code>eco_mode</code>, <code>fan_timer_end</code>, <code>rssi</code>, <code>local_ip</code>, <code>hot_water_boiling_state</code> and <code>heatpump_ready</code> are MQTT's alone, and Matter takes neither the weather nor the time. A command changes the unit's settings; the state then shows what the unit did, not what was asked. A setpoint the unit adjusts or refuses comes back as the unit has it.</p>
+            <p>All three protocols read the same state and run the same commands, though <code>raw/</code>, <code>eco_mode</code>, <code>fan_timer_end</code>, <code>rssi</code>, <code>local_ip</code>, <code>mqtt_reconnects</code>, <code>mqtt_last_disconnect</code>, <code>wakes</code>, <code>hot_water_boiling_state</code> and <code>heatpump_ready</code> are MQTT's alone, and Matter takes neither the weather nor the time. A command changes the unit's settings; the state then shows what the unit did, not what was asked. A setpoint the unit adjusts or refuses comes back as the unit has it.</p>
 
             <h2 id="conventions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>Conventions</h2>
             <ul>
@@ -184,6 +184,9 @@ mosquitto_pub -h broker.lan -t 'nestlocal/&lt;serial&gt;/set/target' -m 21.5</co
                         <tr><td data-label="Field"><code>battery_level</code></td><td data-label="Type">V</td><td data-label="Meaning">The display's battery voltage.</td></tr>
                         <tr><td data-label="Field"><code>rssi</code></td><td data-label="Type">number</td><td data-label="Meaning">Wi-Fi signal.</td></tr>
                         <tr><td data-label="Field"><code>local_ip</code></td><td data-label="Type">string</td><td data-label="Meaning">The unit's IP address.</td></tr>
+                        <tr><td data-label="Field"><code>mqtt_reconnects</code></td><td data-label="Type">number</td><td data-label="Meaning">Connections to the broker made again since nestlocal started.</td></tr>
+                        <tr><td data-label="Field"><code>mqtt_last_disconnect</code></td><td data-label="Type">string or null</td><td data-label="Meaning">Why the last connection ended or the last dial failed, as nestlocal logs it; null when none has.</td></tr>
+                        <tr><td data-label="Field"><code>wakes</code></td><td data-label="Type">number</td><td data-label="Meaning">The unit's wakes since nestlocal started, as of the last state published.</td></tr>
                         <tr><td data-label="Field"><code>current_version</code></td><td data-label="Type">string</td><td data-label="Meaning">Nest firmware version.</td></tr>
                         <tr><td data-label="Field"><code>external_temperature</code></td><td data-label="Type">°C or null</td><td data-label="Meaning">The latest reading while it counts. With the external temperature option only.</td></tr>
                         <tr><td data-label="Field"><code>temperature_source</code></td><td data-label="Type">string</td><td data-label="Meaning"><code>external</code> or <code>backplate</code>: what the unit regulates from. With the external temperature option only.</td></tr>

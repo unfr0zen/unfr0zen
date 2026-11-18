@@ -111,6 +111,16 @@ pub struct Client {
     pinged: Arc<AtomicU64>,
     awake: Arc<AtomicBool>,
     dial_now: Arc<Notify>,
+    stats: Arc<Stats>,
+}
+
+/// What the connection has been through since nestlocal started, for the
+/// diagnostic entities.
+#[derive(Default)]
+struct Stats {
+    connects: AtomicU64,
+    /// Why the last session ended, or the last dial failed.
+    last_end: std::sync::Mutex<Option<String>>,
 }
 
 pub struct Connection {
@@ -133,6 +143,7 @@ pub struct Connection {
     awake: Arc<AtomicBool>,
     /// A wake while disconnected: dial without waiting out RETRY.
     dial_now: Arc<Notify>,
+    stats: Arc<Stats>,
     /// The session ended on a Redial: no RETRY wait.
     redial: bool,
 }
@@ -151,6 +162,7 @@ impl Client {
         let pinged = Arc::new(AtomicU64::new(0));
         let awake = Arc::new(AtomicBool::new(false));
         let dial_now = Arc::new(Notify::new());
+        let stats = Arc::new(Stats::default());
         (
             Client {
                 tx,
@@ -160,8 +172,9 @@ impl Client {
                 pinged: pinged.clone(),
                 awake: awake.clone(),
                 dial_now: dial_now.clone(),
+                stats: stats.clone(),
             },
-            Connection { broker, options, rx, connected, sent, heard, pinged, awake, dial_now, redial: false },
+            Connection { broker, options, rx, connected, sent, heard, pinged, awake, dial_now, stats, redial: false },
         )
     }
 
@@ -172,6 +185,13 @@ impl Client {
     /// Whether the connection needs the unit awake for now (wake.rs).
     pub fn holds_awake(&self) -> bool {
         self.awake.load(Ordering::Relaxed)
+    }
+
+    /// Connections made again since nestlocal started, and why the last
+    /// session ended or dial failed.
+    pub fn diagnostics(&self) -> (u64, Option<String>) {
+        let connects = self.stats.connects.load(Ordering::Relaxed);
+        (connects.saturating_sub(1), self.stats.last_end.lock().unwrap().clone())
     }
 
     pub fn publish(&self, topic: &str, payload: &[u8], qos: u8, retain: bool) {
@@ -229,6 +249,7 @@ impl Connection {
             if let Err(e) = result {
                 // Once per streak of the same failure, and every 10 minutes.
                 let e = e.to_string();
+                *self.stats.last_end.lock().unwrap() = Some(e.clone());
                 if e != last_error || logged.elapsed() >= Duration::from_secs(600) {
                     logf!("mqtt: {}: {e}", self.broker.url);
                     last_error = e;
@@ -285,6 +306,7 @@ impl Connection {
         self.heard.store(unix_now(), Ordering::Relaxed);
         self.connected.store(true, Ordering::Relaxed);
         self.awake.store(false, Ordering::Relaxed);
+        self.stats.connects.fetch_add(1, Ordering::Relaxed);
         handler.connected();
 
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE, KEEPALIVE);
@@ -784,6 +806,27 @@ pub mod tests {
         let _broker = accept(&listener, &mut buf).await;
         assert!(started.elapsed() < RETRY / 2, "dialled on the wake, not after RETRY");
         until_connected(&client).await;
+    }
+
+    #[tokio::test]
+    async fn the_diagnostics_count_reconnections_and_say_why_the_last_ended() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let broker = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+        assert_eq!(client.diagnostics(), (0, None));
+
+        drop(broker);
+        while client.is_connected() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        client.woke();
+        let mut buf = BytesMut::new();
+        let _broker = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+        assert_eq!(client.diagnostics(), (1, Some("connection closed by the broker".into())));
     }
 
     #[tokio::test]

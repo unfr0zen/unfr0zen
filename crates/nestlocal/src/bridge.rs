@@ -18,7 +18,7 @@
 //!                                      http(s) URL, the bundle there
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -61,6 +61,8 @@ pub struct Bridge {
     /// The screen brightness the unit shows (brightness.rs).
     pub brightness: Arc<crate::brightness::Watch>,
     mqtt: OnceLock<mqtt::Client>,
+    /// The unit's wakes since nestlocal started (wake.rs).
+    wakes: AtomicU64,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
     naming: Mutex<Naming>,
     /// The entities are removed, waiting out RENAME_WAIT.
@@ -97,6 +99,7 @@ impl Bridge {
             occupancy: Arc::new(Occupancy::default()),
             brightness: Arc::new(crate::brightness::Watch::default()),
             mqtt: OnceLock::new(),
+            wakes: AtomicU64::new(0),
             announced: Mutex::new(None),
             naming: Mutex::new(naming),
             renaming: AtomicBool::new(false),
@@ -274,6 +277,7 @@ impl Bridge {
 
     /// The unit woke (wake.rs): the connection checks its keepalive.
     pub fn woke(&self) {
+        self.wakes.fetch_add(1, Ordering::Relaxed);
         if let Some(c) = self.mqtt.get() {
             c.woke();
         }
@@ -353,6 +357,12 @@ impl Bridge {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
             shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
         }
+        // How the connection fares, since nestlocal started: in the state a
+        // reconnection publishes, so a drop shows at once.
+        let (reconnects, last_end) = self.mqtt.get().map(mqtt::Client::diagnostics).unwrap_or_default();
+        shown.insert("mqtt_reconnects".into(), reconnects.into());
+        shown.insert("mqtt_last_disconnect".into(), last_end.map_or(Value::Null, Value::from));
+        shown.insert("wakes".into(), self.wakes.load(Ordering::Relaxed).into());
         shown
     }
 
@@ -513,6 +523,22 @@ impl Bridge {
             "local_ip",
             "IP address",
             fields! {"value_template" => tmpl("local_ip"), "entity_category" => "diagnostic", "icon" => "mdi:ip-network"},
+        );
+        for (key, name, icon) in
+            [("mqtt_reconnects", "MQTT reconnects", "mdi:connection"), ("wakes", "Wakes", "mdi:sleep-off")]
+        {
+            add(
+                "sensor",
+                key,
+                name,
+                fields! {"value_template" => tmpl(key), "state_class" => "total_increasing", "entity_category" => "diagnostic", "icon" => icon},
+            );
+        }
+        add(
+            "sensor",
+            "mqtt_last_disconnect",
+            "MQTT last disconnect",
+            fields! {"value_template" => tmpl("mqtt_last_disconnect"), "entity_category" => "diagnostic", "icon" => "mdi:lan-disconnect"},
         );
         if truthy(dev.get("has_air_filter")) {
             sensor(
