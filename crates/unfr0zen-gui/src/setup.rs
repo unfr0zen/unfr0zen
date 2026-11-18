@@ -454,7 +454,8 @@ impl App {
                 }
                 if let Some(error) = &error {
                     ui.add_space(8.0);
-                    ui.add(egui::Label::new(egui::RichText::new(error).color(BAD)).wrap());
+                    // Selectable, unlike the rest of the app's text: it goes into bug reports.
+                    ui.add(egui::Label::new(egui::RichText::new(error).color(BAD)).wrap().selectable(true));
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {

@@ -455,7 +455,7 @@ impl Updates {
             }
             UpdateState::Failed(ref error, ref release) => {
                 ui.label(egui::RichText::new(tr!("update.failed")).font(display(22.0)).color(WARN));
-                ui.label(error.as_str());
+                ui.add(egui::Label::new(error.as_str()).selectable(true));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if setup::page_button(ui, tr!("update.retry"), Look::Primary, true).clicked() {
@@ -2234,7 +2234,8 @@ impl App {
                     Ok(message) => egui::RichText::new(message).color(OK).strong(),
                     Err(message) => egui::RichText::new(message).color(BAD),
                 };
-                ui.add(egui::Label::new(text).wrap());
+                // A failure's text can be copied, for a bug report.
+                ui.add(egui::Label::new(text).wrap().selectable(outcome.is_err()));
             });
         }
     }
@@ -2797,6 +2798,75 @@ mod tests {
 
     fn commands(output: &egui::FullOutput) -> &[egui::ViewportCommand] {
         output.viewport_output.get(&egui::ViewportId::ROOT).map_or(&[], |o| o.commands.as_slice())
+    }
+
+    #[test]
+    fn a_failed_runs_error_can_be_selected_and_copied() {
+        const ERROR: &str = "no application root volume found";
+        let context = egui::Context::default();
+        install_fonts(&context);
+        // The app's style, which leaves the rest of its text unselectable.
+        install_style(&context);
+        let mut app = App {
+            bus: on_usb(Device::Diamond3),
+            step: setup::Step::Review,
+            page: Page::SetUp,
+            flow_run: true,
+            task: Some(Task::SetUp),
+            ..App::default()
+        };
+        app.logs.outcome = Some(Err(ERROR.into()));
+        let mut time = 0.0;
+        let mut frame = |app: &mut App, events: Vec<egui::Event>| {
+            time += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            context.run_ui(input, |ui| app.frame_ui(ui))
+        };
+        frame(&mut app, Vec::new());
+        let output = frame(&mut app, Vec::new());
+        // The middle of the error's first word, wherever it is drawn.
+        let places: Vec<egui::Pos2> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == ERROR => {
+                    Some(text.pos + egui::vec2(6.0, text.galley.size().y / 2.0))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!places.is_empty(), "the error is shown");
+        for at in places {
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(&mut app, vec![egui::Event::PointerMoved(at)]);
+            for _ in 0..2 {
+                frame(&mut app, vec![press(true)]);
+                frame(&mut app, vec![press(false)]);
+            }
+            let output = frame(&mut app, vec![egui::Event::Copy]);
+            let copied: Vec<_> = output
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(copied, ["no"], "at {at:?}: a double click selects the first word, which copies");
+            // Away from it again, which clears the selection.
+            frame(&mut app, vec![egui::Event::PointerGone]);
+        }
     }
 
     #[test]
