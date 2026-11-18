@@ -2,8 +2,9 @@ version: 2.1
 
 # The formatters and linters, on every push: each hook of .pre-commit-config.yaml
 # over every file, failing on any change a formatter makes or any finding, then
-# PSScriptAnalyzer over the PowerShell, which no hook covers. pre-commit keeps
-# the tools it installs in ~/.cache/pre-commit, cached under the config's hash.
+# PSScriptAnalyzer over the PowerShell, which no hook covers, and cargo-deny
+# over the dependencies (deny.toml). pre-commit keeps the tools it installs in
+# ~/.cache/pre-commit, cached under the config's hash.
 
 parameters:
   lint:
@@ -21,6 +22,8 @@ jobs:
       PSSCRIPTANALYZER_SHA256: 14e634c828eb98efb9f40b2918ba90f139ed5eccdf663a2a747736d996995d60
       POWERSHELL_VERSION: 7.7.0
       POWERSHELL_SHA256: c89d9c682d2c403dfe726f3df948e359675235a5bd6fab535776de69729ca0cb
+      CARGO_DENY_VERSION: 0.21.0
+      CARGO_DENY_SHA256: a2170b854ff697e79e39c4c538981c9c1bdd803addbae6719a4cb66b4585a903
     steps:
       - checkout
       - run:
@@ -65,6 +68,15 @@ jobs:
                 if ((Invoke-Formatter -ScriptDefinition $text) -cne $text) { "${file}: not formatted (Invoke-Formatter)"; $failed = $true }
               }
               if ($failed) { exit 1 }'
+      - run:
+          name: cargo-deny
+          command: |
+            name=cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl
+            curl -fsSL -o /tmp/cargo-deny.tar.gz \
+              "https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$name.tar.gz"
+            echo "$CARGO_DENY_SHA256  /tmp/cargo-deny.tar.gz" | sha256sum -c
+            tar xzf /tmp/cargo-deny.tar.gz -C /tmp
+            /tmp/$name/cargo-deny check advisories sources
 
 workflows:
   lint:

@@ -1,0 +1,30 @@
+# cargo-deny, run by the lint workflow (.circleci/lint.yml): the workspace's
+# dependencies against the RustSec advisory database, and where they come
+# from.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every advisory fails the check, an unmaintained crate included. One that
+# does not apply, or has no release to move to, is listed with the reason.
+ignore = [
+  # rsa 0.9's timing leak (Marvin): unfr0zen-core makes and checks
+  # nestlocal's certificates with it, on the host or the unit, never where
+  # a peer can time it. The fix is rsa 0.10.
+  { id = "RUSTSEC-2023-0071", reason = "local signing only; fixed in rsa 0.10" },
+  # Unmaintained, with no maintained release to move to.
+  { id = "RUSTSEC-2026-0543", reason = "chrono: used directly by nestlocal, nestlocal-theme and the app's crates" },
+  { id = "RUSTSEC-2024-0436", reason = "paste: through rs-matter's pinned-init" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz: through femtovg (nestlocal-theme)" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: through femtovg and fontdue (nestlocal-theme)" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: through egui's AccessKit on Linux" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: through egui's AccessKit on Linux" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: through egui's AccessKit on Linux" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# rs-matter, pinned to a commit in crates/nestlocal/Cargo.toml.
+allow-git = ["https://github.com/project-chip/rs-matter"]
