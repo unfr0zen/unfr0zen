@@ -291,8 +291,10 @@ fn open(failed_install: &mut Option<Instant>) -> Result<(Ezsp, u16), String> {
         return Err(e);
     }
     logf!("zigbee: {e}");
-    radio::install()?;
-    ours().inspect(|_| *failed_install = None).inspect_err(|_| *failed_install = Some(Instant::now()))
+    radio::install()
+        .and_then(|()| ours())
+        .inspect(|_| *failed_install = None)
+        .inspect_err(|_| *failed_install = Some(Instant::now()))
 }
 
 /// The radio, if it runs this nestlocal's firmware (or any, when it carries none).
