@@ -139,7 +139,7 @@ data:
             </div>
             <p>Works alone or beside MQTT; needs Wi-Fi. The device name, shared with MQTT, is the name controllers show: Matter's node label, at most 32 bytes, <code>&lt;serial&gt;</code> standing for the serial. An install that gives a new one sets it; a name changed in the controller stays until then.</p>
             <h3>Pairing</h3>
-            <p>Pairing code <code>0347-100-5534</code>, or one of your own with a valid check digit; <code>--matter-code</code> turns on Matter. The first pairing window opens by itself: <b>Settings → Matter</b> shows <b>Ready to pair</b> with the QR and code, then <b>Paired</b>.</p>
+            <p>Pairing code <code>0347-100-5534</code>, or one of your own with a valid check digit; <code>--matter-code</code> turns on Matter. The first pairing window opens by itself when the unit starts unpaired, for 15 minutes; the unit stays awake while it is open. <b>Settings → Matter</b> shows the QR and code, then <b>Paired</b>. After that, <b>Enable pairing → Forget and pair</b> (below) opens another.</p>
             <ol class="steps">
                 <li>Home Assistant: Settings → Devices &amp; services → Add integration → Matter.</li>
                 <li>Add the device with the pairing code, or scan the QR shown on the thermostat.</li>

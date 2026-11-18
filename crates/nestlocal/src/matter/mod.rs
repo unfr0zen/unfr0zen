@@ -419,6 +419,10 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let mut commissionable = pin!(async {
         let mut thread_cleared = false;
         let mut ble_ready = false;
+        // An unpaired unit opens for commissioning by itself once a start, for
+        // the window's 15 minutes: an open window keeps it awake. After that
+        // the settings menu opens it, as for a paired unit.
+        let mut first = true;
         loop {
             if ble_ready != ble::ready() {
                 ble_ready = ble::ready();
@@ -483,7 +487,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
             if requested {
                 matter.close_comm_window(&im)?;
             }
-            if (reset || requested || !matter.has_fabrics())
+            if (reset || requested || (std::mem::take(&mut first) && !matter.has_fabrics()))
                 && matches!(matter.comm_window_state(), CommWindowState::Closed)
             {
                 matter.open_basic_comm_window(MAX_COMM_WINDOW_TIMEOUT_SECS, &crypto, &im)?;
