@@ -565,6 +565,9 @@ pub fn overlay(
         String::from_utf8(data).or_else(|_| device(format!("{name} is not text")))
     };
     let mode = |name: &str, default: u32| stock(name).map_or(default, |(_, mode)| mode);
+    if binary.is_empty() {
+        return device("the nestlocal binary is empty");
+    }
     let seed = match stock(RANDOM_SEED) {
         Some((seed, _)) if seed.len() == 64 => seed,
         Some(_) => return device("nestlocal random-seed must contain 64 bytes"),
@@ -975,6 +978,18 @@ mod tests {
             files.insert(RANDOM_SEED.into(), vec![0; size]);
             assert!(make(&files).is_err());
         }
+    }
+
+    #[test]
+    fn an_empty_binary_is_refused_rather_than_installed() {
+        let (pki, _) = pkis();
+        let files = stock();
+        let error =
+            overlay(|name| files.get(name).map(|data| (data.clone(), 0o644)), None, None, false, None, vec![], pki)
+                .err()
+                .unwrap()
+                .to_string();
+        assert!(error.contains("binary is empty"), "{error}");
     }
 
     #[test]

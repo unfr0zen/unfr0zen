@@ -296,20 +296,14 @@ fn run(
     ];
     script(&bundle, bundle::PRE_SETUP, out, &env)?;
 
-    let nestlocal_binary = if options.mqtt.is_some()
-        || options.matter.is_some()
-        || options.zigbee
-        || options.doom.is_some()
-        || options.theme.is_some()
-    {
-        bundle
-            .files
-            .remove(bundle::NESTLOCAL)
-            .map(|(_, data)| data)
-            .ok_or_else(|| failure(format!("bundle: no {}", bundle::NESTLOCAL)))?
-    } else {
-        Vec::new()
-    };
+    // Setup decides whether nestlocal is written: a run with no integration
+    // still rewrites an installed one. Moved out of the bundle, it costs no
+    // more memory than a run with an integration.
+    let nestlocal_binary = bundle
+        .files
+        .remove(bundle::NESTLOCAL)
+        .map(|(_, data)| data)
+        .ok_or_else(|| failure(format!("bundle: no {}", bundle::NESTLOCAL)))?;
     let screen = &bundle.file(bundle::SCREEN)?.to_vec();
     // The rest is in options now: the 64 MB OMAP units cannot hold a second copy.
     let post_setup = bundle.file(bundle::POST_SETUP)?.to_vec();

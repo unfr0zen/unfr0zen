@@ -324,12 +324,9 @@ fn set_up_in_memory(
     let options = &Settings::new(&config.options, None).options(&bundle)?;
     let raw = stage_with(progress, &format!("Read {slot} over USB"), |progress| read_slot(nand, progress, slot))?;
     let mut volume = stage(progress, &format!("Scan {slot}'s JFFS2"), || jffs2::Slot::load(raw.clone()))?;
-    let nestlocal_binary =
-        if options.mqtt.is_some() || options.matter.is_some() || options.zigbee || options.doom.is_some() {
-            bundle.file(unfr0zen_core::bundle::NESTLOCAL)?.to_vec()
-        } else {
-            Vec::new()
-        };
+    // Setup decides whether nestlocal is written: a run with no integration
+    // still rewrites an installed one.
+    let nestlocal_binary = bundle.file(unfr0zen_core::bundle::NESTLOCAL)?.to_vec();
     // The set-up volume is built in memory, then written.
     progress.phase(Phase::Prepare);
     let label = format!("Set up {slot}");
