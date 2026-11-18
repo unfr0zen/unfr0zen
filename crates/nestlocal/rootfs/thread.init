@@ -26,6 +26,25 @@ stop() {
     rm -f /run/nestlocal-thread-sleep /run/nestlocal-thread-wake.sock /run/nestlocal-thread-alarm.sock
 }
 alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
+# Writes the radio's Thread image, stopped after LOAD_LIMIT seconds: rcS
+# waits on this start before nlclient, which runs the heating, so a loader
+# that hangs must not hold it back.
+LOAD_LIMIT=150
+load() {
+    /nestlabs/bin/zb-loader --app-easyload "$IMAGE" >/tmp/nestlocal-thread-loader.log 2>&1 &
+    loader=$!
+    count=0
+    while kill -0 "$loader" 2>/dev/null; do
+        if [ "$count" -ge "$LOAD_LIMIT" ]; then
+            kill "$loader" 2>/dev/null || true
+            echo "zb-loader: stopped after $LOAD_LIMIT s" >>/tmp/nestlocal-thread-loader.log
+            break
+        fi
+        sleep 1
+        count=$((count + 1))
+    done
+    wait "$loader" 2>/dev/null || true
+}
 case "${1:-}" in
     start)
         # Only nestlocal's options choose Thread; otherwise the radio is Zigbee's or Nest's.
@@ -41,7 +60,7 @@ case "${1:-}" in
         # wpantund must be disabled by the installer before either process owns SPI.
         [ -z "$(pidof wpantund)" ] && [ -z "$(pidof spi-server)" ] || exit 1
         if ! "$BIN/thread-rcp" --identity "$IDENTITY" --probe >/dev/null 2>&1; then
-            /nestlabs/bin/zb-loader --app-easyload "$IMAGE" >/tmp/nestlocal-thread-loader.log 2>&1 || true
+            load
             "$BIN/thread-rcp" --identity "$IDENTITY" --probe >/dev/null 2>&1 || exit 1
         fi
         trap stop EXIT
