@@ -1,7 +1,7 @@
 //! The Set up page's form: the options the run offers, as the person types
 //! them, and the [`Config`] they build.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -143,6 +143,123 @@ impl Form {
     /// step's backup first.
     pub fn new() -> Self {
         Form { backup_first: true, ..Form::default() }
+    }
+}
+
+/// The choices a setup run was started with that the next launch fills in
+/// again: none of the secrets (passwords, the Matter pairing code), and of
+/// the developer options only the backplate simulator and unsigned updates,
+/// which a test unit keeps from run to run. A field the file lacks, from an
+/// older app, keeps the new form's.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Remembered {
+    block_cloud: bool,
+    ntp: Option<String>,
+    mqtt: Option<String>,
+    mqtt_user: String,
+    mqtt_tls: bool,
+    mqtt_ca: Option<PathBuf>,
+    device_name: String,
+    ha_entity_root: String,
+    matter: bool,
+    matter_thread: bool,
+    zigbee: bool,
+    wwn_boiler: bool,
+    ssh: bool,
+    ssh_password_login: bool,
+    ssh_key: Option<PathBuf>,
+    usb_shell: bool,
+    themes: bool,
+    doom: bool,
+    external_temperature: bool,
+    dark_theme: bool,
+    backup_first: bool,
+    backplate_sim: bool,
+    allow_unsigned_updates: bool,
+}
+
+impl Default for Remembered {
+    fn default() -> Self {
+        Form::new().remembered()
+    }
+}
+
+/// Where the choices are kept between launches.
+pub fn remembered_path() -> PathBuf {
+    default_data_dir().join("setup.json")
+}
+
+impl Form {
+    fn remembered(&self) -> Remembered {
+        let toggle = |t: &Toggle| t.on.then(|| t.value.clone());
+        Remembered {
+            block_cloud: self.block_cloud,
+            ntp: toggle(&self.ntp),
+            mqtt: toggle(&self.mqtt),
+            mqtt_user: self.mqtt_user.clone(),
+            mqtt_tls: self.mqtt_tls,
+            mqtt_ca: self.mqtt_ca.path.clone(),
+            device_name: self.device_name.clone(),
+            ha_entity_root: self.ha_entity_root.clone(),
+            matter: self.matter.on,
+            matter_thread: self.matter_thread,
+            zigbee: self.zigbee,
+            wwn_boiler: self.wwn_boiler,
+            ssh: self.ssh,
+            ssh_password_login: self.ssh_password_login,
+            ssh_key: self.ssh_key.path.clone(),
+            usb_shell: self.usb_shell,
+            themes: self.themes,
+            doom: self.doom,
+            external_temperature: self.external_temperature,
+            dark_theme: self.dark_theme,
+            backup_first: self.backup_first,
+            backplate_sim: self.backplate_sim,
+            allow_unsigned_updates: self.allow_unsigned_updates,
+        }
+    }
+
+    /// The form the last setup run was started with, as `path` keeps it;
+    /// a new one when there is none or it cannot be read.
+    pub fn recalled(path: &Path) -> Form {
+        let mut form = Form::new();
+        let Some(r) = std::fs::read(path).ok().and_then(|data| serde_json::from_slice::<Remembered>(&data).ok()) else {
+            return form;
+        };
+        let toggle = |value: Option<String>| Toggle { on: value.is_some(), value: value.unwrap_or_default() };
+        form.block_cloud = r.block_cloud;
+        form.ntp = toggle(r.ntp);
+        form.mqtt = toggle(r.mqtt);
+        form.mqtt_user = r.mqtt_user;
+        form.mqtt_tls = r.mqtt_tls;
+        form.mqtt_ca.path = r.mqtt_ca;
+        form.device_name = r.device_name;
+        form.ha_entity_root = r.ha_entity_root;
+        form.matter.on = r.matter;
+        form.matter_thread = r.matter_thread;
+        form.zigbee = r.zigbee;
+        form.wwn_boiler = r.wwn_boiler;
+        form.ssh = r.ssh;
+        form.ssh_password_login = r.ssh_password_login;
+        form.ssh_key.path = r.ssh_key;
+        form.usb_shell = r.usb_shell;
+        form.themes = r.themes;
+        form.doom = r.doom;
+        form.external_temperature = r.external_temperature;
+        form.dark_theme = r.dark_theme;
+        form.backup_first = r.backup_first;
+        form.backplate_sim = r.backplate_sim;
+        form.allow_unsigned_updates = r.allow_unsigned_updates;
+        form
+    }
+
+    /// Keeps the form's choices at `path` for the next launch.
+    pub fn remember(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(&self.remembered()).map_err(std::io::Error::other)?)
     }
 }
 
@@ -1259,6 +1376,53 @@ mod tests {
         assert!(form.config().err().unwrap().contains("cannot share the radio"));
         form.matter.on = false;
         assert!(form.config().unwrap().options.thread.is_none());
+    }
+
+    #[test]
+    fn a_setups_choices_come_back_at_the_next_launch_without_its_secrets() {
+        let dir = std::env::temp_dir().join(format!("unfr0zen-remember-{}", std::process::id()));
+        let path = dir.join("setup.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Form::recalled(&path).backup_first, "no file: a new form");
+
+        let mut form = Form {
+            mqtt: Toggle { on: true, value: "broker.lan".into() },
+            mqtt_user: "ha".into(),
+            mqtt_password: "s3cret".into(),
+            root_password: "r00t".into(),
+            device_name: "Hall".into(),
+            zigbee: true,
+            themes: true,
+            backplate_sim: true,
+            allow_unsigned_updates: true,
+            device: Some(Device::J49),
+            backup_first: false,
+            ..Form::new()
+        };
+        form.matter = MatterCode { on: true, code: "1559-813-5763".into() };
+        form.remember(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        for secret in ["s3cret", "r00t", "1559-813-5763"] {
+            assert!(!text.contains(secret), "{secret} written: {text}");
+        }
+
+        let back = Form::recalled(&path);
+        assert_eq!((back.mqtt.on, back.mqtt.value.as_str(), back.mqtt_user.as_str()), (true, "broker.lan", "ha"));
+        assert_eq!(back.device_name, "Hall");
+        assert!(back.zigbee && back.themes && back.matter.on && !back.backup_first);
+        assert!(back.mqtt_password.is_empty() && back.root_password.is_empty());
+        assert_eq!(back.matter.code, DEFAULT_MATTER_CODE, "the code is typed again");
+        assert!(back.backplate_sim && back.allow_unsigned_updates, "kept from run to run");
+        assert!(back.device.is_none(), "the device override is per run");
+
+        // An older app's file, with fewer fields: the rest as a new form has them.
+        std::fs::write(&path, r#"{"zigbee": true}"#).unwrap();
+        let old = Form::recalled(&path);
+        assert!(old.zigbee && old.backup_first && !old.mqtt.on);
+        // Unreadable: a new form.
+        std::fs::write(&path, "not json").unwrap();
+        assert!(!Form::recalled(&path).zigbee);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
