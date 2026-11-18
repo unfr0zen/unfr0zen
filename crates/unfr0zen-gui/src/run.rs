@@ -1,6 +1,8 @@
 //! Running the recovery flow or a NAND job off the UI thread. A [`Run`] spawns
 //! it and streams its progress back as [`Event`]s the window drains each frame.
 
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -113,7 +115,12 @@ impl Run {
         let flag = cancel.clone();
         let worker = thread::spawn(move || {
             let mut progress = ChannelProgress { tx: tx.clone() };
-            let result = job(&mut progress, tx.clone(), flag).map_err(|e| e.to_string());
+            // A panic still ends the run, so the window never waits on a
+            // worker that is gone.
+            let result = match panic::catch_unwind(AssertUnwindSafe(|| job(&mut progress, tx.clone(), flag))) {
+                Ok(result) => result.map_err(|e| e.to_string()),
+                Err(payload) => Err(panic_text(payload.as_ref())),
+            };
             let _ = tx.send(Event::Done(result));
         });
         Run { events, cancel, _worker: worker }
@@ -122,5 +129,34 @@ impl Run {
     /// Every event that has arrived since the last call.
     pub fn events(&self) -> Vec<Event> {
         self.events.try_iter().collect()
+    }
+}
+
+/// The error a panicking job ends its run with.
+fn panic_text(payload: &(dyn Any + Send)) -> String {
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    format!("internal error: {message}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_job_still_ends_its_run_with_the_panic_as_its_error() {
+        let run = Run::task(|_| panic!("boom"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(Event::Done(result)) = run.events().into_iter().find(|e| matches!(e, Event::Done(_))) {
+                assert_eq!(result.unwrap_err(), "internal error: boom");
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "the run never ended");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
