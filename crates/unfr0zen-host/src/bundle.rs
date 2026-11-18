@@ -53,6 +53,7 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     bundle::add_overlay(&mut files, &mut directories, bundle::THREAD, &thread);
     bundle::add_overlay(&mut files, &mut directories, bundle::DOOM, &assets::doom());
     bundle::add_overlay(&mut files, &mut directories, bundle::SSH, &crate::j49::assets::ssh_server());
+    bundle::add_overlay(&mut files, &mut directories, bundle::THEME, &assets::theme());
     (files, directories)
 }
 
@@ -129,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gen_2_bundle_brings_its_thread_image_ssh_server_sensors_view_and_engine() {
+    fn the_gen_2_bundle_brings_its_thread_image_ssh_server_sensors_view_themes_and_engine() {
         let bundle = assemble(Device::J49, "1.0.0").unwrap();
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
         assert_eq!(bundle.file(bundle::PRE_SETUP).unwrap(), crate::j49::assets::PRE_SETUP);
@@ -137,11 +138,15 @@ mod tests {
             thread: true,
             ssh: true,
             external_temperature: true,
+            theme: true,
             matter: Some(bundle::MatterSettings { passcode: 20202021, discriminator: 3840 }),
             ..Settings::default()
         };
         let options = settings.options(&bundle).unwrap();
         assert_eq!(options.external_temperature_screen, assets::J49_RCS_SCREEN);
+        let theme = options.theme.unwrap();
+        assert!(theme.files.iter().any(|(name, _, data)| name.ends_with(".so") && data.starts_with(b"\x7fELF")));
+        assert!(theme.files.iter().any(|(name, _, _)| name.ends_with("/theme.lua")));
         assert!(options.ssh_server.unwrap().files.iter().any(|(name, _, _)| name == "usr/sbin/dropbearmulti"));
         let thread = options.thread.unwrap();
         let (_, _, image) =

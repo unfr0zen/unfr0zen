@@ -16,7 +16,7 @@ before device writes. No firmware hash selects native addresses.
 
 The settings menu has one entry per section: **ZIGBEE**, **MATTER**,
 **THEMES** and **DOOM** right after its first entry, each only when that
-feature was installed (`--zigbee`, `--matter`, `--themes` on the gen 3,
+feature was installed (`--zigbee`, `--matter`, `--themes`,
 `--doom`), and **UNFR0ZEN** in Legal Info's place, just before Reset. Each
 tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
 `G_unfr0zen_glyph_80px.png`) above its name. An entry opens its page
@@ -133,7 +133,7 @@ unit shows is in `screen.brightness.state`, which nestlocal reports.
 
 ## The dial's theme
 
-With customizable themes installed (gen 3), nestlocal's options carry
+With customizable themes installed, nestlocal's options carry
 `-themes` and the settings menu has a THEMES entry: its choices are
 `/var/run/unfr0zen/theme.catalog` (`id<TAB>label` lines), the current one
 `theme.status`, and a choice is written to `theme.request` for nestlocal,

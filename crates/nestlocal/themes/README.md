@@ -1,9 +1,9 @@
 # Home screen themes
 
-A theme redraws the gen 3's home screen: the dial nlclient shows when no
-menu is open. It is a folder of Lua that the theme engine
-(`crates/nestlocal-theme`) runs inside nlclient, drawing straight into its
-GPU context at up to 60 frames a second. Everything else stays stock:
+A theme redraws the home screen: the dial nlclient shows when no menu is
+open. It is a folder of Lua that the theme engine (`crates/nestlocal-theme`)
+runs inside nlclient, drawing straight into its GPU context at up to 60
+frames a second, or, where nlclient draws on the CPU, on the CPU at up to 30. Everything else stays stock:
 the ring and the button, the menus, the setpoints and the HVAC control. A
 theme only reads the thermostat's state and draws it.
 
@@ -109,7 +109,7 @@ from 12 o'clock.
 - `tr(text)`: the text in the language in use, for the theme's own words.
 - `log(...)`, `print(...)`: to nlclient's debug log.
 - `clock()`: seconds on a monotonic clock, to time the theme's own work.
-- Loading the theme, and drawing one frame, may each take at most 250 ms;
+- Loading the theme, and drawing one frame, may each take at most 500 ms;
   past that the theme fails.
 
 ## Limits
@@ -284,8 +284,8 @@ something moves every frame.
 
 ## Making it fast
 
-The unit's GPU is small, and a theme shares nlclient's thread and frame
-budget:
+A theme draws on a small GPU or on the CPU, and shares nlclient's thread and
+frame budget:
 
 - **Cache what does not change in layers.** A face, a scale, a block of text:
   draw them once into a layer keyed by what they show, and paint the layer
@@ -342,7 +342,7 @@ It writes one PNG for each scene (`mytheme-heating.png`, `mytheme-rain-f.png`,
 unit. Check the unit itself for speed and for anything that moves.
 
 To ship a theme with unfr0zen, add its folder here; on a unit, add it under
-`/media/scratch/.unfr0zen/themes`. The Themes page lists
+`/media/scratch/.unfr0zen/themes`. Settings → Themes lists
 Stock, then every theme folder in the order the directory lists them, by
 the `name` in its `theme.lua` (keep it on one line: `name = "My Theme",`);
 `cargo test -p nestlocal-theme` loads and draws every theme folder in every

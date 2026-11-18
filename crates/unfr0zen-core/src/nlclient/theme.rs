@@ -1,6 +1,6 @@
 //! The bindings of the theme preload (platform/common/theme), which draws
-//! customizable home screen themes in nlclient's own GPU context: where, in
-//! the unit's stock nlclient, the dial, its figures, the background layer
+//! customizable home screen themes in nlclient, in its GPU context or on the
+//! CPU: where, in the unit's stock nlclient, the dial, its figures, the background layer
 //! and the natives the preload calls are. Discovery finds the dial and the
 //! natives in any build; the rest comes from the builds reviewed by hand.
 //! The setup writes them to BINDINGS as `name value` lines (hexadecimal
@@ -14,7 +14,23 @@ use crate::{device, Result};
 /// Where the setup puts the bindings for the preload.
 pub const BINDINGS: &str = "etc/unfr0zen/theme.bindings";
 
-/// What discovery does not find, from each reviewed gen 3 build.
+/// The globals' vtable slots of the native control model's getters:
+/// setpoints (Celsius 16.16), the unit and the mode; where the mode is the
+/// schedule's, the system off and eco apart from it (0 for none).
+struct Globals {
+    target: u32,
+    fahrenheit: u32,
+    low: u32,
+    high: u32,
+    mode: u32,
+    off: u32,
+    eco: u32,
+}
+/// 6.x's, the same in both reviewed builds.
+const V6_GLOBALS: Globals =
+    Globals { target: 0xa8, fahrenheit: 0xa0, low: 0xf0, high: 0xe8, mode: 0x138, off: 0, eco: 0 };
+
+/// What discovery does not find, from each reviewed build.
 struct Reviewed {
     stock_sha256: &'static str,
     /// nlBackgroundLayer's draw: its vtable slot and the stock method (it
@@ -35,6 +51,11 @@ struct Reviewed {
     current_temperature: u32,
     current_humidity: u32,
     leaf_slot: u32,
+    globals: Globals,
+    /// The dial's size in pixels, and whether nlclient draws on the CPU
+    /// (into the framebuffer) rather than in GLES2.
+    dial_size: u32,
+    software: bool,
 }
 
 const REVIEWED: &[Reviewed] = &[
@@ -51,6 +72,9 @@ const REVIEWED: &[Reviewed] = &[
         current_temperature: 0xae050,
         current_humidity: 0xae068,
         leaf_slot: 0x34c,
+        globals: V6_GLOBALS,
+        dial_size: 480,
+        software: false,
     },
     // 6.5-14
     Reviewed {
@@ -65,6 +89,26 @@ const REVIEWED: &[Reviewed] = &[
         current_temperature: 0xad880,
         current_humidity: 0xad898,
         leaf_slot: 0x364,
+        globals: V6_GLOBALS,
+        dial_size: 480,
+        software: false,
+    },
+    // 5.9.4-5, whose globals' vtable is laid out apart from 6.x's.
+    Reviewed {
+        stock_sha256: "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
+        background_slot: 0x3f5b58,
+        background_draw: 0x17d6d4,
+        brightness_manager: 0x51940,
+        read_als: 0x1831cc,
+        settings_view: 0x3d6908,
+        thermostat_view: 0x3e3270,
+        view_offset: 0x100,
+        current_temperature: 0x55174,
+        current_humidity: 0x5522c,
+        leaf_slot: 0x2f8,
+        globals: Globals { target: 0x84, fahrenheit: 0x7c, low: 0xc8, high: 0xc0, mode: 0x10c, off: 0xb8, eco: 0x5c },
+        dial_size: 320,
+        software: true,
     },
 ];
 
@@ -116,6 +160,15 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
         ("current_temperature", reviewed.current_temperature),
         ("current_humidity", reviewed.current_humidity),
         ("leaf_slot", reviewed.leaf_slot),
+        ("target_slot", reviewed.globals.target),
+        ("fahrenheit_slot", reviewed.globals.fahrenheit),
+        ("low_slot", reviewed.globals.low),
+        ("high_slot", reviewed.globals.high),
+        ("mode_slot", reviewed.globals.mode),
+        ("off_slot", reviewed.globals.off),
+        ("eco_slot", reviewed.globals.eco),
+        ("dial_size", reviewed.dial_size),
+        ("software", u32::from(reviewed.software)),
     ];
     for name in NATIVES {
         let Some(&address) = found.native_api.get(*name) else {
@@ -157,6 +210,15 @@ mod tests {
             "current_temperature",
             "current_humidity",
             "leaf_slot",
+            "target_slot",
+            "fahrenheit_slot",
+            "low_slot",
+            "high_slot",
+            "mode_slot",
+            "off_slot",
+            "eco_slot",
+            "dial_size",
+            "software",
         ]
         .iter()
         .copied()
@@ -169,13 +231,13 @@ mod tests {
     #[test]
     fn reviewed_builds_bind_every_name() {
         let firmware = std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware");
-        for sample in ["nlclient-gen3-2025", "nlclient-gen3-6.5-14"] {
+        for sample in ["nlclient-gen3-2025", "nlclient-gen3-6.5-14", "nlclient-gen2-2019"] {
             let Ok(stock) = std::fs::read(firmware.join(sample)) else {
                 assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");
                 continue;
             };
             let text = String::from_utf8(bindings(&stock).unwrap()).unwrap();
-            assert_eq!(text.lines().count(), 16 + NATIVES.len(), "{sample}");
+            assert_eq!(text.lines().count(), 25 + NATIVES.len(), "{sample}");
             assert!(text.lines().all(|l| l.split_once(" 0x").is_some()), "{sample}");
         }
     }

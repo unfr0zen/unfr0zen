@@ -1,9 +1,11 @@
-//! The gen 3's customizable home screen themes, drawn: nestlocal's Lua themes
+//! Customizable home screen themes, drawn: nestlocal's Lua themes
 //! (crates/nestlocal/themes, which the setup installs under
-//! /media/scratch/.unfr0zen/themes) in nlclient's own GLES2 context. The theme preload
-//! (platform/common/theme) loads this library into nlclient and calls
-//! nestlocal_theme_draw for each frame of the dial; the theme, with the device
-//! and shared buckets, comes from nestlocal (theme.native.json), the live
+//! /media/scratch/.unfr0zen/themes). The theme preload (platform/common/theme)
+//! loads this library into nlclient and asks it for each frame of the dial:
+//! in nlclient's own GLES2 context (nestlocal_theme_draw), or, where nlclient
+//! draws on the CPU, into the pixels of its page or of the image it draws in
+//! the dial's place (nestlocal_theme_draw_pixels). The theme, with the device and
+//! shared buckets, comes from nestlocal (theme.native.json), the live
 //! setpoints, mode and heat-cool pick from the native control model through
 //! the preload (nestlocal_native_theme_v1).
 //!
@@ -20,7 +22,6 @@ mod engine {
     pub mod gpu;
     pub mod guard;
     pub mod paint;
-    #[cfg(test)]
     pub mod soft;
     pub mod theme;
     pub mod typeset;
@@ -29,6 +30,8 @@ use engine::{
     display::Geometry,
     gpu::{quads::Quads, render::Renderer},
     guard,
+    paint::Painter,
+    soft,
     theme::{diagnostic, Clock, Nest, Theme, ThermostatView, Ui},
 };
 use serde_json::Value;
@@ -46,6 +49,12 @@ const THEMES: &str = "/media/scratch/.unfr0zen/themes";
 /// outlives a reboot. A theme that has run this long has survived its start.
 const GUARD: &str = "/media/scratch/.unfr0zen/theme.guard";
 const GUARD_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// While this file is there when the library starts, the CPU painter times
+/// each of its operations and reports them with its frame times.
+const PROFILE: &str = "/media/scratch/.unfr0zen/theme.profile";
+/// Frames between the reports of where the time went.
+const REPORT_FRAMES: u32 = 60;
 
 /// Why the chosen theme does not draw, shown in its place.
 struct Broken {
@@ -118,7 +127,7 @@ impl Motion {
 
 #[repr(C)]
 #[derive(Default)]
-struct NativeState {
+pub struct NativeState {
     target: f32,
     current: f32,
     low: f32,
@@ -173,9 +182,32 @@ impl NativeState {
 }
 type NativeReader = unsafe extern "C" fn(*mut NativeState);
 type Loader = unsafe extern "C" fn(*const c_char) -> *const c_void;
+/// What paints the theme: femtovg in nlclient's GLES2 context, or tiny-skia
+/// on the CPU into a pixmap the dial's size.
+enum Painting {
+    Gpu(Box<Renderer>),
+    Soft(Box<soft::Renderer>),
+}
+impl Painting {
+    fn use_fonts(&mut self, fonts: &[(String, std::path::PathBuf)]) -> Result<(), String> {
+        match self {
+            Painting::Gpu(renderer) => renderer.use_fonts(fonts),
+            Painting::Soft(renderer) => renderer.use_fonts(fonts),
+        }
+    }
+}
+/// What the frame prepared from nestlocal's state and the native model shows.
+struct Prepared {
+    ui: Ui,
+    /// The frame's state without the time, to tell an unchanged frame.
+    state: Ui,
+    now: f64,
+    design: f32,
+    start: Instant,
+}
 struct Engine {
     native: Option<NativeReader>,
-    renderer: Renderer,
+    painting: Painting,
     theme: Option<Theme>,
     name: String,
     picked: u64,
@@ -340,9 +372,17 @@ impl Engine {
         let native = address("nestlocal_native_theme_v1");
         let native =
             if native.is_null() { None } else { Some(std::mem::transmute::<*const c_void, NativeReader>(native)) };
-        Ok(Self {
+        Ok(Self::with(Painting::Gpu(Box::new(renderer)), native))
+    }
+    /// The engine painting on the CPU, `size` pixels square.
+    fn new_soft(native: Option<NativeReader>, size: u32) -> Result<Self, String> {
+        soft::PROFILING.store(Path::new(PROFILE).exists(), Ordering::Relaxed);
+        Ok(Self::with(Painting::Soft(Box::new(soft::Renderer::new(size, size)?)), native))
+    }
+    fn with(painting: Painting, native: Option<NativeReader>) -> Self {
+        Self {
             native,
-            renderer,
+            painting,
             theme: None,
             name: String::new(),
             picked: 0,
@@ -359,14 +399,28 @@ impl Engine {
             wake: None,
             retained: false,
             stencil: false,
-        })
+        }
+    }
+    /// The GPU's painter, which nestlocal_theme_draw's engine has.
+    fn gpu(&mut self) -> Result<&mut Renderer, String> {
+        match &mut self.painting {
+            Painting::Gpu(renderer) => Ok(renderer),
+            Painting::Soft(_) => Err("the engine paints on the CPU".into()),
+        }
+    }
+    /// The CPU's painter, which nestlocal_theme_draw_pixels's engine has.
+    fn soft(&mut self) -> Result<&mut soft::Renderer, String> {
+        match &mut self.painting {
+            Painting::Soft(renderer) => Ok(renderer),
+            Painting::Gpu(_) => Err("the engine paints on the GPU".into()),
+        }
     }
     /// Loads the theme `name` and its fonts, counted by the crash-loop guard
     /// until it has run for GUARD_WINDOW (guard::watch) or failed here.
     fn load(&mut self, name: &str) -> Result<Theme, String> {
         guard::enter(Path::new(GUARD), name)?;
         let loaded = Theme::load(&Path::new(THEMES).join(name)).and_then(|theme| {
-            self.renderer.use_fonts(&theme.fonts)?;
+            self.painting.use_fonts(&theme.fonts)?;
             Ok(theme)
         });
         match &loaded {
@@ -379,18 +433,36 @@ impl Engine {
     /// Paints the frame begun: the theme's, or the diagnostic's while the
     /// theme is broken.
     fn paint(&mut self, ui: &Ui, now: f64) -> Result<(), String> {
+        let dir = match (&self.broken, &self.theme) {
+            (Some(_), _) => Path::new(""),
+            (None, Some(theme)) => theme.dir.as_path(),
+            (None, None) => return Err("no theme loaded".into()),
+        };
+        let (mut gpu, mut cpu);
+        let painter: &mut dyn Painter = match &mut self.painting {
+            Painting::Gpu(renderer) => {
+                gpu = renderer.painter(dir);
+                &mut gpu
+            }
+            Painting::Soft(renderer) => {
+                cpu = renderer.painter(dir);
+                &mut cpu
+            }
+        };
         if let Some(broken) = &self.broken {
-            diagnostic(&mut self.renderer.painter(Path::new("")), ui, &self.name, &broken.error);
+            diagnostic(painter, ui, &self.name, &broken.error);
             (self.animating, self.wake) = (false, None);
             return Ok(());
         }
         let theme = self.theme.as_ref().ok_or("no theme loaded")?;
-        self.animating = theme.draw(&mut self.renderer.painter(&theme.dir), ui)?;
+        self.animating = theme.draw(painter, ui)?;
         self.wake = theme.wake().map(|delay| now + delay.as_secs_f64());
         Ok(())
     }
 
-    fn draw(&mut self, image: bool, target: f32) -> Result<u32, String> {
+    /// The frame's view: nestlocal's state read anew when it changed, the
+    /// theme (re)loaded when another is picked, the native model applied.
+    fn prepare(&mut self, target: f32) -> Result<Prepared, String> {
         let start = Instant::now();
         let path = "/var/run/unfr0zen/theme.native.json";
         let revision = std::fs::metadata(path).and_then(|m| m.modified()).map_err(|e| e.to_string())?;
@@ -432,7 +504,7 @@ impl Engine {
                 Err(error) => {
                     eprintln!("THEME Lua theme={name}: {error}");
                     // The theme shown before leaves nothing behind.
-                    self.renderer.use_fonts(&[])?;
+                    self.painting.use_fonts(&[])?;
                     self.broken = Some(Broken { error, frame: false });
                 }
             }
@@ -472,17 +544,25 @@ impl Engine {
         let mut state = Ui { now: 0.0, ..ui.clone() };
         state.clock.second = 0;
         state.clock.epoch -= state.clock.epoch.rem_euclid(60);
-        let decoded = self.renderer.take_decoded();
+        Ok(Prepared { ui, state, now, design, start })
+    }
+
+    /// The GPU's frame: into the framebuffer bound, or with `image` into the
+    /// frame texture, whose name it gives.
+    fn draw(&mut self, image: bool, target: f32) -> Result<u32, String> {
+        let Prepared { ui, state, now, design, start } = self.prepare(target)?;
+        let decoded = self.gpu()?.take_decoded();
         if self.retained
             && !self.animating
             && !decoded
             && self.previous.as_ref() == Some(&state)
             && self.wake.is_none_or(|wake| now < wake)
         {
+            let renderer = self.gpu()?;
             if image {
-                return self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into());
+                return renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into());
             }
-            self.renderer.present_retained();
+            renderer.present_retained();
             return Ok(1);
         }
         self.previous = Some(state);
@@ -490,24 +570,25 @@ impl Engine {
         geometry.quarter_turns = 1;
         let prepared = Instant::now();
         let mut direct = self.broken.is_none() && self.animating && !image && !self.stencil;
-        self.renderer.use_external_target(direct);
-        self.renderer.begin(&geometry, design);
+        self.gpu()?.use_external_target(direct);
+        self.gpu()?.begin(&geometry, design);
         let begun = Instant::now();
         STENCIL_USED.store(false, Ordering::Relaxed);
         if let Err(error) = self.paint(&ui, now) {
             // The theme's frame failed: what it drew is finished where it
             // went, and the diagnostic drawn over all of it.
             eprintln!("THEME Lua theme={}: {error}", self.name);
-            self.renderer.finish_texture();
-            self.renderer.abandon();
+            let renderer = self.gpu()?;
+            renderer.finish_texture();
+            renderer.abandon();
+            renderer.use_external_target(false);
+            renderer.begin(&geometry, design);
             self.broken = Some(Broken { error, frame: true });
             direct = false;
-            self.renderer.use_external_target(false);
-            self.renderer.begin(&geometry, design);
             self.paint(&ui, now)?;
         }
         let drawn = Instant::now();
-        self.renderer.finish_texture();
+        self.gpu()?.finish_texture();
         if direct && STENCIL_USED.load(Ordering::Relaxed) {
             // The theme needs the stencil the framebuffer lacks: this frame
             // again, and the theme's later ones, through the frame texture,
@@ -515,14 +596,14 @@ impl Engine {
             eprintln!("THEME Lua theme={} uses the stencil; frames drawn off-screen", self.name);
             self.stencil = true;
             direct = false;
-            self.renderer.use_external_target(false);
-            self.renderer.begin(&geometry, design);
+            self.gpu()?.use_external_target(false);
+            self.gpu()?.begin(&geometry, design);
             self.paint(&ui, now)?;
-            self.renderer.finish_texture();
+            self.gpu()?.finish_texture();
         }
         self.retained = !direct;
         if !direct && !image {
-            self.renderer.present_retained();
+            self.gpu()?.present_retained();
         }
         self.frames += 1;
         for (total, duration) in
@@ -531,19 +612,76 @@ impl Engine {
             *total += duration.as_secs_f64();
         }
         if self.frames == 120 {
-            eprintln!("THEME painter state_ms={:.3} begin_ms={:.3} lua_ms={:.3} finish_ms={:.3} shapes={} flushes={} layers={} painting_ms={:.3}", self.timing[0]*1000.0/120.0, self.timing[1]*1000.0/120.0, self.timing[2]*1000.0/120.0, self.timing[3]*1000.0/120.0, self.renderer.shapes/120, self.renderer.flushes/120, self.renderer.layers_drawn, self.renderer.painting.as_secs_f64()*1000.0/120.0);
+            let timing = std::mem::take(&mut self.timing);
             self.frames = 0;
-            self.timing = [0.0; 4];
-            self.renderer.shapes = 0;
-            self.renderer.flushes = 0;
-            self.renderer.layers_drawn = 0;
-            self.renderer.painting = std::time::Duration::ZERO;
+            let r = self.gpu()?;
+            eprintln!("THEME painter state_ms={:.3} begin_ms={:.3} lua_ms={:.3} finish_ms={:.3} shapes={} flushes={} layers={} painting_ms={:.3}", timing[0]*1000.0/120.0, timing[1]*1000.0/120.0, timing[2]*1000.0/120.0, timing[3]*1000.0/120.0, r.shapes/120, r.flushes/120, r.layers_drawn, r.painting.as_secs_f64()*1000.0/120.0);
+            r.shapes = 0;
+            r.flushes = 0;
+            r.layers_drawn = 0;
+            r.painting = std::time::Duration::ZERO;
         }
         if image {
-            self.renderer.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into())
+            self.gpu()?.retained_texture().map(|t| t.0.get()).ok_or("no retained texture".into())
         } else {
             Ok(1)
         }
+    }
+
+    /// The CPU's frame, into `pixels`: the dial's size squared, as ARGB
+    /// words. An unchanged frame is not painted again, only copied out:
+    /// `pixels` may be either of the framebuffer's pages.
+    fn draw_pixels(&mut self, pixels: &mut [u32], size: u32, target: f32) -> Result<(), String> {
+        let Prepared { mut ui, state, now, design, start } = self.prepare(target)?;
+        ui.dial_px = size as f32;
+        if !self.animating && self.previous.as_ref() == Some(&state) && self.wake.is_none_or(|wake| now < wake) {
+            copy_out(&self.soft()?.pixmap, pixels);
+            return Ok(());
+        }
+        self.previous = Some(state);
+        self.soft()?.begin(size as f32, design);
+        let begun = Instant::now();
+        if let Err(error) = self.paint(&ui, now) {
+            eprintln!("THEME Lua theme={}: {error}", self.name);
+            self.broken = Some(Broken { error, frame: true });
+            self.soft()?.begin(size as f32, design);
+            self.paint(&ui, now)?;
+        }
+        let drawn = Instant::now();
+        copy_out(&self.soft()?.pixmap, pixels);
+        self.frames += 1;
+        for (total, duration) in self.timing.iter_mut().zip([begun - start, drawn - begun, drawn.elapsed()]) {
+            *total += duration.as_secs_f64();
+        }
+        if self.frames == REPORT_FRAMES {
+            let timing = std::mem::take(&mut self.timing);
+            self.frames = 0;
+            let r = self.soft()?;
+            let per_frame = |seconds: f64| seconds * 1000.0 / f64::from(REPORT_FRAMES);
+            let mut operations: Vec<_> = std::mem::take(&mut r.profile).into_iter().collect();
+            operations.sort_by_key(|a| std::cmp::Reverse(a.1 .1));
+            let operations: String = operations
+                .iter()
+                .map(|(name, (count, took))| {
+                    format!(
+                        " [{name} {:.2}ms x{:.1}]",
+                        per_frame(took.as_secs_f64()),
+                        f64::from(*count) / f64::from(REPORT_FRAMES)
+                    )
+                })
+                .collect();
+            eprintln!(
+                "THEME soft state_ms={:.2} lua_ms={:.2} copy_ms={:.2} shapes={} painting_ms={:.2}{operations}",
+                per_frame(timing[0]),
+                per_frame(timing[1]),
+                per_frame(timing[2]),
+                r.shapes / REPORT_FRAMES,
+                per_frame(r.painting.as_secs_f64())
+            );
+            r.shapes = 0;
+            r.painting = std::time::Duration::ZERO;
+        }
+        Ok(())
     }
 
     /// Seconds until the theme needs another frame: 0 while it moves, the
@@ -555,6 +693,16 @@ impl Engine {
         self.wake.map_or(f32::INFINITY, |wake| (wake - self.started.elapsed().as_secs_f64()).max(0.0) as f32)
     }
 }
+/// The CPU's frame as ARGB words. The pixmap is opaque (begin fills it
+/// black), so premultiplied is plain: RGBA bytes to ARGB words is red and
+/// blue swapped, word by word.
+fn copy_out(pixmap: &tiny_skia::Pixmap, pixels: &mut [u32]) {
+    for (out, px) in pixels.iter_mut().zip(pixmap.data().as_chunks::<4>().0) {
+        let v = u32::from_le_bytes(*px);
+        *out = 0xff00_0000 | (v & 0x0000_ff00) | (v & 0xff) << 16 | (v >> 16) & 0xff;
+    }
+}
+
 /// Native wheel notification, consumed by the GL thread on its next frame.
 #[no_mangle]
 pub extern "C" fn nestlocal_theme_input() {
@@ -594,6 +742,48 @@ pub unsafe extern "C" fn nestlocal_theme_draw(loader: Loader, framebuffer: u32, 
     guard::drawing(false);
     match result {
         Ok(Ok(texture)) => texture,
+        Ok(Err(error)) => {
+            eprintln!("THEME Lua: {error}");
+            0
+        }
+        Err(_) => {
+            eprintln!("THEME Lua renderer panicked");
+            0
+        }
+    }
+}
+
+/// Draws the dial's frame on the CPU into `pixels`, `size` pixels square, as
+/// ARGB words (nlclient's page, or the image it draws in the dial's place);
+/// `native` reads the native control model. Called only on nlclient's UI
+/// thread; 1 when drawn (or unchanged and copied out again), 0 when not.
+///
+/// # Safety
+/// `pixels` must hold `size` squared words, and `native` must be callable.
+#[no_mangle]
+pub unsafe extern "C" fn nestlocal_theme_draw_pixels(
+    native: Option<NativeReader>,
+    pixels: *mut u32,
+    size: u32,
+    target: f32,
+) -> u32 {
+    if pixels.is_null() || size == 0 {
+        return 0;
+    }
+    let pixels = std::slice::from_raw_parts_mut(pixels, (size * size) as usize);
+    guard::drawing(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ENGINE.with(|slot| {
+            let mut engine = slot.borrow_mut();
+            if engine.is_none() {
+                *engine = Some(Engine::new_soft(native, size)?);
+            }
+            engine.as_mut().unwrap().draw_pixels(pixels, size, target)
+        })
+    }));
+    guard::drawing(false);
+    match result {
+        Ok(Ok(())) => 1,
         Ok(Err(error)) => {
             eprintln!("THEME Lua: {error}");
             0

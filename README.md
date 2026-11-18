@@ -172,7 +172,7 @@ Common options:
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
   --zigbee              Join a Zigbee network as a router (replaces Heat Link)
   --external-temperature  Regulate from temperatures sent to it (turns off the 3rd generation's Bluetooth)
-  --doom                Install Doom, launched from UNFR0ZEN → Doom
+  --doom                Install Doom, launched from Settings → Doom
   --ssh                 Run an SSH server on the unit
   --block-cloud         Cut the unit off from Nest's and Google's servers
 ```

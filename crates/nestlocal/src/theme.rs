@@ -1,7 +1,7 @@
-//! Customizable home screen themes (-themes, gen 3): the themes (themes/,
-//! which the setup installs in THEMES on the scratch volume) draw the home
-//! screen's dial inside nlclient, on its GPU, through the theme preload
-//! (platform/common/theme) and the theme library (theme_plugin.rs). This side
+//! Customizable home screen themes (-themes): the themes (themes/, which the
+//! setup installs in THEMES on the scratch volume) draw the home screen's dial
+//! inside nlclient, on the GPU or the CPU as nlclient draws, through the theme preload (platform/common/theme) and the theme
+//! library (crates/nestlocal-theme). This side
 //! offers them in the settings menu's THEMES entry, keeps the choice, and
 //! hands the library the chosen theme with the device and shared buckets.
 //! Themes are added by hand too: the catalog follows the folder as it
@@ -15,9 +15,10 @@
 //! `picked`: how many times a theme has been picked since nestlocal started, the
 //! device and shared buckets as `dev` and `shared`, `state` as MQTT's state
 //! topic has it, and `weather`: Home Assistant's outdoor readings, conditions
-//! and forecast, weather::Outdoor::known), theme-marker.png (480 pixels square, every one RGBA
-//! 12 34 56 ff) for the preload to mark the theme's place in nlclient's
-//! drawing with, and theme.native.ready once all of these are written.
+//! and forecast, weather::Outdoor::known), theme-marker.png (the display's
+//! size square, every pixel RGBA 12 34 56 ff) for the preload to mark the
+//! theme's place in nlclient's drawing with, and theme.native.ready once all
+//! of these are written.
 //!
 //! theme.rs, paint.rs, soft.rs, typeset.rs, display.rs and gpu/ are
 //! client-ng's theme host and painters, built into the theme library only.
@@ -118,14 +119,16 @@ fn catalog(root: &Path, listed: &[(String, Option<std::time::SystemTime>)]) -> S
 /// How often the themes' folder is looked at for the catalog.
 const CATALOG_EVERY: Duration = Duration::from_secs(2);
 
-/// The marker image: the theme's size, in a colour the preload knows it by.
+/// The marker image: the theme's size (the display's), in a colour the
+/// preload knows it by.
 fn marker() -> Result<Vec<u8>, String> {
+    let size = crate::device::current().display;
     let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, 480, 480);
+    let mut encoder = png::Encoder::new(&mut out, size as u32, size as u32);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    writer.write_image_data(&[0x12, 0x34, 0x56, 0xff].repeat(480 * 480)).map_err(|e| e.to_string())?;
+    writer.write_image_data(&[0x12, 0x34, 0x56, 0xff].repeat(size * size)).map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| e.to_string())?;
     Ok(out)
 }

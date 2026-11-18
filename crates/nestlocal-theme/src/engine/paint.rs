@@ -65,6 +65,32 @@ pub struct TextStyle {
     pub snap: bool,
 }
 
+/// A gradient arc as one arc for every 3 degrees, each in its middle's
+/// colour and overlapping the next.
+#[allow(clippy::too_many_arguments)]
+pub fn gradient_arcs<P: Painter + ?Sized>(
+    p: &mut P,
+    x: f32,
+    y: f32,
+    r: f32,
+    from: f32,
+    to: f32,
+    start: Color,
+    end: Color,
+    width: f32,
+) {
+    let n = ((to - from).abs() / 3.0_f32.to_radians()).ceil().max(2.0) as usize;
+    for i in 0..n {
+        let a = (i as f32 + 0.5) / n as f32;
+        let mix = |v: f32, w: f32| v + (w - v) * a;
+        let color =
+            Color { r: mix(start.r, end.r), g: mix(start.g, end.g), b: mix(start.b, end.b), a: mix(start.a, end.a) };
+        let b0 = from + (to - from) * i as f32 / n as f32;
+        let b1 = from + (to - from) * (i + 1) as f32 / n as f32;
+        p.arc(x, y, r, b0.min(b1) - 0.3_f32.to_radians(), b0.max(b1) + 0.3_f32.to_radians(), color, width);
+    }
+}
+
 /// Everything a theme draws goes through this, in its design units.
 #[allow(clippy::too_many_arguments)]
 pub trait Painter {
@@ -74,20 +100,7 @@ pub trait Painter {
     fn arc(&mut self, x: f32, y: f32, r: f32, from: f32, to: f32, color: Color, width: f32);
     /// A colour that moves from `start` to `end` along an arc.
     fn gradient_arc(&mut self, x: f32, y: f32, r: f32, from: f32, to: f32, start: Color, end: Color, width: f32) {
-        let n = ((to - from).abs() / 3.0_f32.to_radians()).ceil().max(2.0) as usize;
-        for i in 0..n {
-            let a = (i as f32 + 0.5) / n as f32;
-            let mix = |v: f32, w: f32| v + (w - v) * a;
-            let color = Color {
-                r: mix(start.r, end.r),
-                g: mix(start.g, end.g),
-                b: mix(start.b, end.b),
-                a: mix(start.a, end.a),
-            };
-            let b0 = from + (to - from) * i as f32 / n as f32;
-            let b1 = from + (to - from) * (i + 1) as f32 / n as f32;
-            self.arc(x, y, r, b0.min(b1) - 0.3_f32.to_radians(), b0.max(b1) + 0.3_f32.to_radians(), color, width);
-        }
+        gradient_arcs(self, x, y, r, from, to, start, end, width);
     }
     /// A white glow whose faint discs build toward the centre.
     fn radial_glow(&mut self, x: f32, y: f32, radius: f32, steps: u32) {

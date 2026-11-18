@@ -41,7 +41,7 @@ RUN for arch in amd64 arm64 riscv64; do [ "$arch" = "$TARGETARCH" ] || dpkg --ad
         ziglang==0.16.0 cargo-zigbuild==0.23.4 unicorn==2.1.4 pyelftools==0.33 \
     && rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu \
         aarch64-apple-darwin x86_64-apple-darwin armv7-unknown-linux-musleabihf armv7-unknown-linux-gnueabihf \
-        riscv64gc-unknown-linux-gnu aarch64-pc-windows-gnullvm \
+        thumbv7neon-unknown-linux-gnueabihf riscv64gc-unknown-linux-gnu aarch64-pc-windows-gnullvm \
     && printf '#!/bin/sh\nexec /usr/lib/llvm-19/bin/llvm-windres --target=aarch64-w64-mingw32 "$@"\n' \
         > /usr/local/bin/llvm-windres && chmod +x /usr/local/bin/llvm-windres \
     && mkdir /opt/windows-arm64 \
