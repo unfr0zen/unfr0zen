@@ -518,6 +518,11 @@ pub fn discover(data: &[u8]) -> Result<Discovery> {
 /// targets of calls, so this holds a reviewed build too. A review of a new
 /// build starts from the findings whatever the objection.
 pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
+    survey_with(data, brightness)
+}
+
+/// survey, with the brightness manager found by `find_brightness`.
+fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> Result<(Discovery, Option<String>)> {
     let elf = Elf::parse(data)?;
     let flags = word(data, 36)?;
     require(
@@ -769,8 +774,10 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     layout.insert("SLEEP_ACTIVE_OFFSET".into(), sleep_active);
     // Without the brightness manager's shape the screen code never calls
     // its natives (BRIGHTNESS_MODE_OFFSET 0); they are bound to the screen
-    // initializer so the payload still links.
-    let bright = brightness(&elf);
+    // initializer so the payload still links, and are no natives of the
+    // build's own: no fingerprint, no evidence.
+    let bright = find_brightness(&elf);
+    let aliases: &[&str] = if bright.is_none() { &["native_set_brightness", "native_apply_brightness"] } else { &[] };
     for (key, value) in [
         ("BRIGHTNESS_GLOBALS_OFFSET", bright.as_ref().map_or(0, |b| b.globals)),
         ("BRIGHTNESS_MODE_OFFSET", bright.as_ref().map_or(0, |b| b.mode)),
@@ -802,7 +809,11 @@ pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     let mut fingerprints = BTreeMap::new();
     let mut evidence = BTreeMap::new();
     for (name, &address) in api.iter().chain(&anchors) {
-        if by_address.contains_key(&address) || name == "native_screen_vtable" || name.ends_with("_slot") {
+        if by_address.contains_key(&address)
+            || name == "native_screen_vtable"
+            || name.ends_with("_slot")
+            || aliases.contains(&name.as_str())
+        {
             continue;
         }
         fingerprints.insert(name.clone(), arm.fingerprint(address)?);
@@ -1314,4 +1325,33 @@ fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
         }
     }
     Ok(unique(offsets, "nlGlobals timer field")?.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A private nlclient sample, when this checkout has one (see
+    /// tests/nlclient_golden.rs).
+    fn sample() -> Option<Vec<u8>> {
+        let dir = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
+        std::fs::read(dir.join("nlclient-gen3-2019")).ok()
+    }
+
+    #[test]
+    fn a_build_without_the_brightness_managers_shape_is_still_set_up() {
+        let Some(data) = sample() else {
+            eprintln!("No private nlclient sample");
+            return;
+        };
+        let (found, objection) = survey_with(&data, |_| None).unwrap();
+        assert_eq!(objection, None);
+        assert_eq!(found.layout["BRIGHTNESS_MODE_OFFSET"], 0);
+        assert_eq!(found.native_api["native_set_brightness"], found.native_api["native_screen_init"]);
+        for name in ["native_set_brightness", "native_apply_brightness"] {
+            assert!(!found.evidence.contains_key(name) && !found.fingerprints.contains_key(name), "{name}");
+        }
+    }
 }
