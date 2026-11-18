@@ -152,11 +152,6 @@ impl Form {
         self.device.or(self.last_device)
     }
 
-    /// Whether the themes switch is offered: for a unit known to take them.
-    fn offers_themes(&self) -> bool {
-        matches!(self.unit(), Some(Device::Diamond | Device::J49 | Device::Diamond3))
-    }
-
     /// Whether the dark theme switch is offered: for a gen 1 or gen 2.
     fn offers_dark_theme(&self) -> bool {
         matches!(self.unit(), Some(Device::Diamond | Device::J49))
@@ -192,7 +187,7 @@ impl Form {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
             entry_point: self.entry_point,
-            themes: self.themes && self.offers_themes(),
+            themes: self.themes,
             doom: self.doom,
             external_temperature: self.external_temperature && self.external_temperature_enabled(),
             dark_theme: self.dark_theme && self.offers_dark_theme(),
@@ -597,9 +592,7 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
-        if self.offers_themes() {
-            crate::toggle_card(ui, &mut self.themes, true, crate::tr!("form.themes"), crate::tr!("setup.themes_about"));
-        }
+        crate::toggle_card(ui, &mut self.themes, true, crate::tr!("form.themes"), crate::tr!("setup.themes_about"));
         if self.offers_dark_theme() {
             crate::toggle_card(
                 ui,
@@ -1123,9 +1116,11 @@ mod tests {
         assert!(!form.inputs().external_temperature);
         assert!(!reviewed(&form).contains(crate::tr!("form.external_temperature")));
         assert!(form.config().is_ok(), "the run is not refused for it: {:?}", form.config().err());
-        // Themes and the dark theme: only for a unit they are offered for.
+        // Themes go with any unit, known or not; the dark theme only with
+        // the gen 1 and gen 2 it is offered for.
         form.themes = true;
         form.dark_theme = true;
+        assert!(form.inputs().themes && !form.inputs().dark_theme);
         form.last_device = Some(Device::Diamond3);
         assert!(form.inputs().themes && !form.inputs().dark_theme);
         form.last_device = Some(Device::J49);
