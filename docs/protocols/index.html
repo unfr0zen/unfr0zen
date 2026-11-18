@@ -67,7 +67,7 @@
                     <thead><tr><th>Connection</th><th>Value</th></tr></thead>
                     <tbody>
                         <tr><td data-label="Connection">Client ID</td><td data-label="Value"><code>nestlocal-&lt;serial&gt;</code></td></tr>
-                        <tr><td data-label="Connection">Session</td><td data-label="Value">Clean session</td></tr>
+                        <tr><td data-label="Connection">Session</td><td data-label="Value">Kept by the broker (no clean session): commands sent at QoS 1 while the unit is offline are delivered, in order, when it connects again. Home Assistant's entities send at QoS 1; a command sent at QoS 0 is dropped while the unit is away.</td></tr>
                         <tr><td data-label="Connection">Keepalive</td><td data-label="Value">3600 s, so the broker drops the connection after 90 minutes without a packet. The unit sleeps, and its pings with it; left alone it wakes about every 30 minutes, and a wake pings the broker when nothing went to it for 10 minutes.</td></tr>
                         <tr><td data-label="Connection">Will</td><td data-label="Value"><code>offline</code> on <code>nestlocal/&lt;serial&gt;/availability</code>, retained, QoS 1</td></tr>
                         <tr><td data-label="Connection">Subscriptions</td><td data-label="Value"><code>nestlocal/&lt;serial&gt;/set/#</code> and <code>homeassistant/status</code>, QoS 1</td></tr>
