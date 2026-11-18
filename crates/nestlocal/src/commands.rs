@@ -104,8 +104,7 @@ impl Bridge {
         if changes.iter().any(|(key, fields)| self.display_change(key, fields)) {
             // Publish before notifying held subscribes: nlclient consumes the
             // request when its bucket parser has applied the new settings.
-            let expires = (chrono::Utc::now().timestamp() as u32 + 10).to_le_bytes();
-            if let Err(e) = crate::settings_ui::publish("display.request", &expires) {
+            if let Err(e) = crate::settings_ui::request_wake() {
                 logf!("display wake: {e}");
             }
         }

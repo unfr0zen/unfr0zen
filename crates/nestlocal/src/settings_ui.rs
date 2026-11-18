@@ -23,6 +23,17 @@ pub fn status(protocol: &str, text: &str) {
     }
 }
 
+/// Seconds a display wake request stays current (custom_screen.c's
+/// WAKE_EXPIRY): a later bucket commit does not light the display for it.
+const WAKE_EXPIRY: u32 = 10;
+
+/// Asks nlclient to light the display, as for a command from Home
+/// Assistant: it takes the request at its next bucket commit.
+pub fn request_wake() -> std::io::Result<()> {
+    let expires = chrono::Utc::now().timestamp() as u32 + WAKE_EXPIRY;
+    publish("display.request", &expires.to_le_bytes())
+}
+
 pub fn take_request(protocol: &str) -> bool {
     take_request_age(protocol).is_some()
 }

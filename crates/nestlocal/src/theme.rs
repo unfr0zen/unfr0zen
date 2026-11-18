@@ -28,6 +28,7 @@
 //! client-ng's theme host and painters, built into the theme library only.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -132,6 +133,8 @@ pub struct Catalog {
     /// The themes offered, as id and label, and the id of the one shown.
     state: Mutex<(Vec<(String, String)>, String)>,
     on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// The next pick lights the display once it is shown (pick).
+    wake: AtomicBool,
 }
 
 impl Catalog {
@@ -175,12 +178,16 @@ impl Catalog {
             .map(|(id, _)| id.clone())
     }
 
-    /// Shows the theme `name`, an id or a label, as the THEMES page picks it.
+    /// Shows the theme `name`, an id or a label, as the THEMES page picks
+    /// it, and lights the display for it as a command from Home Assistant
+    /// does: once the theme is in place, so the display does not light on
+    /// the one before.
     pub fn pick(&self, name: &str) -> Result<(), String> {
         let id = self.find(name.trim()).ok_or_else(|| {
             let offered: Vec<_> = self.offered().into_iter().map(|(_, label)| label).collect();
             format!("no theme {name:?}; installed: {}", offered.join(", "))
         })?;
+        self.wake.store(true, Ordering::SeqCst);
         settings_ui::publish("theme.request", id.as_bytes()).map_err(|e| e.to_string())
     }
 }
@@ -313,6 +320,15 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) -> Arc<Ca
                     }
                     logf!("theme: {}", label(root, &theme));
                     kept.set(entries(root, &offered), &theme);
+                    // A pick from MQTT lights the display now that the theme
+                    // is in place: nlclient takes the request as it commits
+                    // the device bucket sent again.
+                    if kept.wake.swap(false, Ordering::SeqCst) {
+                        if let Err(e) = settings_ui::request_wake() {
+                            logf!("display wake: {e}");
+                        }
+                        store.resend(&device);
+                    }
                     changed = true;
                 }
             }
