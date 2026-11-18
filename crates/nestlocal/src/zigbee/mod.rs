@@ -57,6 +57,11 @@ const INSTALL_RETRY: Duration = Duration::from_secs(3600);
 const FULL_REPORT: Duration = Duration::from_secs(600);
 const FIRST_REPORT: Duration = Duration::from_secs(10);
 const JOIN_RETRY: Duration = Duration::from_secs(30);
+/// How long a unit on no network looks for one by itself, from when Zigbee
+/// starts or the unit leaves its network: after that only a pairing request
+/// from the settings menu looks again, so a unit left unpaired neither
+/// scans for good nor joins whatever network next permits joining.
+const JOIN_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// The coordinator can learn of a leave seconds after it (Zigbee2MQTT reports
 /// it about 5 s later) and removes the device then, a rejoin included.
 const REJOIN_AFTER_LEAVE: Duration = Duration::from_secs(10);
@@ -68,19 +73,33 @@ const NO_TIME: u32 = 0xFFFF_FFFF;
 
 #[derive(Default)]
 struct PairingAttempt {
+    /// A menu request's end.
     deadline: Option<Instant>,
+    /// The end of looking for a network unasked (JOIN_WINDOW).
+    unasked: Option<Instant>,
     stopped: bool,
 }
 impl PairingAttempt {
     fn begin(&mut self, now: Instant, request_age: Duration) {
         self.deadline = Some(now + Duration::from_secs(30).saturating_sub(request_age));
+        self.unasked = None;
+        self.stopped = false;
+    }
+    /// Looks for a network unasked, for JOIN_WINDOW from `now`.
+    fn look(&mut self, now: Instant) {
+        self.unasked = Some(now + JOIN_WINDOW);
         self.stopped = false;
     }
     fn expired(&self, now: Instant) -> bool {
         self.deadline.is_some_and(|end| now >= end)
     }
+    /// The window for looking unasked has passed, with no request since.
+    fn looked_long_enough(&self, now: Instant) -> bool {
+        self.deadline.is_none() && self.unasked.is_some_and(|end| now >= end)
+    }
     fn timeout(&mut self) {
         self.deadline = None;
+        self.unasked = None;
         self.stopped = true;
     }
 }
@@ -107,6 +126,7 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         nest.bridge.brightness.on_change(move || flag.store(true, Ordering::Relaxed));
         let mut failed_install = None;
         let mut attempt = PairingAttempt::default();
+        attempt.look(Instant::now());
         loop {
             if let Err(e) = run(&nest, &store, &changed, &mut failed_install, &mut attempt) {
                 logf!("zigbee: {e}");
@@ -189,6 +209,12 @@ fn run(
             continue;
         }
         if !up {
+            if attempt.looked_long_enough(Instant::now()) {
+                attempt.timeout();
+                logf!("zigbee: no network found; pairing from the settings menu looks again");
+                crate::settings_ui::status("zigbee", "Not paired. Permit joining, then enable pairing.");
+                continue;
+            }
             if attempt.expired(Instant::now()) {
                 // End the actual radio attempt, not just its loading screen.
                 leave(&mut ezsp)?;
@@ -232,6 +258,7 @@ fn run(
                         network::forget(store);
                         up = false;
                         asked = false;
+                        attempt.look(Instant::now());
                         crate::settings_ui::status("zigbee", "Network disconnected");
                     }
                     _ => server.callback(&mut ezsp, nest, callback)?,
@@ -659,10 +686,18 @@ mod pairing_tests {
     }
 
     #[test]
-    fn without_a_menu_request_joining_neither_expires_nor_stops() {
-        let attempt = PairingAttempt::default();
-        assert!(!attempt.expired(Instant::now() + Duration::from_secs(3600)));
-        assert!(!attempt.stopped);
+    fn unasked_a_unit_looks_for_a_network_for_its_window_only() {
+        let now = Instant::now();
+        let mut attempt = PairingAttempt::default();
+        attempt.look(now);
+        assert!(!attempt.expired(now + Duration::from_secs(3600)), "no menu deadline");
+        assert!(!attempt.looked_long_enough(now + JOIN_WINDOW - Duration::from_secs(1)));
+        assert!(attempt.looked_long_enough(now + JOIN_WINDOW));
+        attempt.timeout();
+        assert!(attempt.stopped && !attempt.looked_long_enough(now + JOIN_WINDOW * 2));
+        // A menu request looks again, on its own deadline.
+        attempt.begin(now + JOIN_WINDOW * 2, Duration::ZERO);
+        assert!(!attempt.stopped && !attempt.looked_long_enough(now + JOIN_WINDOW * 3));
     }
 
     #[test]

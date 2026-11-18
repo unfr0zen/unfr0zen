@@ -201,7 +201,7 @@ data:
             <p>Any Zigbee 3.0 coordinator works: standard clusters, so ZHA needs no quirk (its switches need zha 0.0.61, June 2025, or later). Zigbee2MQTT with the converter is recommended: it names every entity and carries the weather.</p>
             <ol class="steps">
                 <li>Zigbee2MQTT 2.12.1 or later: copy <a href="https://github.com/unfr0zen/unfr0zen/blob/main/integrations/zigbee2mqtt/nest-learning-thermostat.mjs" target="_blank" rel="noopener"><code>nest-learning-thermostat.mjs</code></a> to <code>data/external_converters/</code> and restart Zigbee2MQTT.</li>
-                <li>Permit join on the coordinator. The thermostat joins the strongest network permitting joins, on any channel, and keeps it across restarts.</li>
+                <li>Permit join on the coordinator. The thermostat joins the strongest network permitting joins, on any channel, and keeps it across restarts. Unpaired, it looks for one by itself for 15 minutes after nestlocal starts; after that, <b>Settings → Zigbee → Enable pairing</b> looks again.</li>
                 <li>After updating the converter, re-interview the device to refresh its generation-specific model, then Reconfigure it so Home Assistant gets the new entities.</li>
             </ol>
             <p>The switches are Binary Output clusters, so ZHA names them. A thermostat paired on an older release has to be paired again in ZHA, or re-interviewed in Zigbee2MQTT with the updated converter; delete the old switch entities.</p>
