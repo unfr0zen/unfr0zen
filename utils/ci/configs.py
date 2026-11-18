@@ -106,7 +106,7 @@ MODULES = {
     "thread": {"paths": ["platform/common/radio/thread"]},
     "doom": {"paths": ["platform/common/doom"]},
     # Its job also runs the screen's host tests.
-    "nlclient": {"paths": ["platform/common/nlclient/src", "platform/common/nlclient/tests"]},
+    "nlclient": {"paths": ["platform/common/nlclient"]},
     # The radio module brings nestlocal.sh and the Makefile nestlocal reads;
     # nestlocal.sh also builds the wake pattern and local cloud libraries the
     # app installs, and the theme preload with nestlocal's theme library. Its job
