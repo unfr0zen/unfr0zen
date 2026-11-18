@@ -388,6 +388,9 @@ impl Bridge {
                 "device" => Value::Object(device.clone()),
                 "availability_topic" => format!("{}/availability", self.base),
                 "state_topic" => st.clone(),
+                // Commands at QoS 1, which the broker queues for the unit's
+                // session while it is away; at 0 they would be dropped.
+                "qos" => 1,
             };
             for (k, v) in extra {
                 if v.is_null() {
@@ -1353,6 +1356,7 @@ pub mod tests {
             let key = id.strip_prefix("nestlocal_s_").unwrap_or_else(|| panic!("{topic}: unique_id {id}"));
             assert!(topic.ends_with(&format!("/nestlocal_s/{key}/config")), "{topic}");
             assert_eq!(c["availability_topic"], json!("nestlocal/S/availability"), "{topic}");
+            assert_eq!(c["qos"], json!(1), "{topic}: commands the broker queues while the unit is away");
             assert_eq!(c["device"]["identifiers"], json!(["nestlocal_s"]), "{topic}");
             for (k, v) in c.as_object().unwrap() {
                 let Some(v) = v.as_str() else { continue };
