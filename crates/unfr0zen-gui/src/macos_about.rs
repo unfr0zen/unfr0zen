@@ -11,10 +11,10 @@ define_class!(
     // NSObject has no subclassing requirements; this class owns no instances.
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
-    #[name = "Unfr0zenAboutMenu"]
-    struct AboutMenu;
+    #[name = "Unfr0zenAppMenu"]
+    struct AppMenu;
 
-    impl AboutMenu {
+    impl AppMenu {
         #[unsafe(method(showAbout:))]
         fn show_about(_sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::new().expect("AppKit menu actions run on the main thread");
@@ -22,6 +22,18 @@ define_class!(
             let icon = app.applicationIconImage().expect("eframe sets the application icon");
             // Each option has the type required by AppKit's standard About panel.
             unsafe { app.orderFrontStandardAboutPanelWithOptions(&options(&icon)) };
+        }
+
+        /// Quit closes the window rather than ending the process, so the
+        /// window can hold a close back while a run writes to the unit.
+        #[unsafe(method(quit:))]
+        fn quit(_sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::new().expect("AppKit menu actions run on the main thread");
+            let app = NSApplication::sharedApplication(mtm);
+            match app.mainWindow() {
+                Some(window) => window.performClose(None),
+                None => app.terminate(None),
+            }
         }
     }
 );
@@ -35,15 +47,19 @@ pub fn install() {
         .and_then(|item| item.submenu())
         .expect("winit creates the application menu before the app");
     for item in menu.itemArray() {
-        if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
+        let action = if item.action() == Some(sel!(orderFrontStandardAboutPanel:)) {
             item.setTitle(&NSString::from_str(&crate::tr!("about.native_title", app = "unfr0zen")));
-            // The class object lives for the process lifetime and implements
-            // this action with AppKit's target/action signature.
-            unsafe {
-                item.setTarget(Some(AboutMenu::class().as_ref()));
-                item.setAction(Some(sel!(showAbout:)));
-            }
-            break;
+            sel!(showAbout:)
+        } else if item.action() == Some(sel!(terminate:)) {
+            sel!(quit:)
+        } else {
+            continue;
+        };
+        // The class object lives for the process lifetime and implements
+        // these actions with AppKit's target/action signature.
+        unsafe {
+            item.setTarget(Some(AppMenu::class().as_ref()));
+            item.setAction(Some(action));
         }
     }
 }

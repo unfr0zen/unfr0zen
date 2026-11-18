@@ -397,7 +397,8 @@ impl Updates {
     }
 
     /// The update dialog, shown as a modal.
-    fn dialog(&mut self, ctx: &egui::Context) {
+    /// `running`: a run writes to the unit, so a restart has to wait.
+    fn dialog(&mut self, ctx: &egui::Context, running: bool) {
         if self.auto_open.swap(false, Ordering::Relaxed) {
             self.dialog_open = true;
         }
@@ -443,7 +444,8 @@ impl Updates {
                 ui.label(tr!("update.restart_description"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if setup::page_button(ui, tr!("update.restart"), Look::Primary, true).clicked() {
+                    let restart = setup::page_button(ui, tr!("update.restart"), Look::Primary, !running);
+                    if restart.on_disabled_hover_text(tr!("update.restart_after_run")).clicked() {
                         self.restart.store(true, Ordering::Relaxed);
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -684,6 +686,10 @@ struct App {
     /// the Logs page does not list it.
     logged: bool,
     updates: Updates,
+    /// A close arrived while a run writes to the unit: ask before quitting.
+    quit_asked: bool,
+    /// The person chose to quit mid-run; the next close goes through.
+    quit_anyway: bool,
 }
 
 impl Default for App {
@@ -722,6 +728,8 @@ impl Default for App {
             cancelled: false,
             logged: false,
             updates: Updates::default(),
+            quit_asked: false,
+            quit_anyway: false,
         }
     }
 }
@@ -1071,6 +1079,7 @@ impl App {
     /// One frame: the shell around the page shown, then the dialogs.
     fn frame_ui(&mut self, ui: &mut egui::Ui) {
         self.drain();
+        self.hold_close(ui.ctx());
         self.drain_image_dialog();
         self.form.track_device(&self.bus.current());
         if self.running() || self.pending_image.is_some() || self.form.dialog_pending() {
@@ -1098,7 +1107,9 @@ impl App {
         // One popup at a time: what needs an answer before the run's card,
         // and the update offer once the others have gone.
         let ctx = ui.ctx();
-        if self.confirm.is_some() {
+        if self.quit_asked {
+            self.quit_ui(ctx);
+        } else if self.confirm.is_some() {
             self.confirm_ui(ctx);
         } else if self.sdp_wait.is_some() {
             self.sdp_ui(ctx);
@@ -1107,7 +1118,8 @@ impl App {
         } else if self.delete_logs {
             self.delete_logs_ui(ctx);
         } else if !self.run_popup(ctx) {
-            self.updates.dialog(ctx);
+            let running = self.running();
+            self.updates.dialog(ctx, running);
         }
         let window = ui.ctx().content_rect();
         let between_bars = egui::Rect::from_min_max(
@@ -2072,6 +2084,45 @@ impl App {
         }
     }
 
+    /// Holds a close back while a run writes to the unit, until the person
+    /// chooses: quitting mid-write can leave the thermostat unable to start.
+    fn hold_close(&mut self, ctx: &egui::Context) {
+        if !self.running() {
+            self.quit_asked = false;
+        } else if ctx.input(|i| i.viewport().close_requested()) && !self.quit_anyway {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_asked = true;
+        }
+    }
+
+    fn quit_ui(&mut self, ctx: &egui::Context) {
+        let response = backdrop::modal(ctx, "confirm_quit").show(ctx, |ui| {
+            ui.set_max_width(340.0);
+            dialog_title(ui, tr!("quit.title"));
+            ui.add(egui::Label::new(tr!("quit.description")).wrap());
+            let mut answer = None;
+            ui.horizontal(|ui| {
+                if setup::page_button(ui, tr!("quit.keep_running"), Look::Secondary, true).clicked() {
+                    answer = Some(false);
+                }
+                if setup::page_button(ui, tr!("quit.anyway"), Look::Danger, true).clicked() {
+                    answer = Some(true);
+                }
+            });
+            answer
+        });
+        match response.inner {
+            Some(true) => {
+                self.quit_anyway = true;
+                self.quit_asked = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(false) => self.quit_asked = false,
+            None if response.should_close() => self.quit_asked = false,
+            None => {}
+        }
+    }
+
     fn confirm_ui(&mut self, ctx: &egui::Context) {
         let Some((question, _)) = &self.confirm else { return };
         let question = question.clone();
@@ -2732,6 +2783,42 @@ mod tests {
             ));
         }
         output.unwrap()
+    }
+
+    /// One frame on `context` with the window's close button pressed.
+    fn close_frame(app: &mut App, context: &egui::Context) -> egui::FullOutput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+            ..Default::default()
+        };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        context.run_ui(input, |ui| app.frame_ui(ui))
+    }
+
+    fn commands(output: &egui::FullOutput) -> &[egui::ViewportCommand] {
+        output.viewport_output.get(&egui::ViewportId::ROOT).map_or(&[], |o| o.commands.as_slice())
+    }
+
+    #[test]
+    fn closing_mid_run_asks_first_and_closing_when_idle_does_not() {
+        let context = egui::Context::default();
+        install_fonts(&context);
+        let mut app = App { task: Some(Task::SetUp), page: Page::SetUp, ..App::default() };
+        let output = close_frame(&mut app, &context);
+        assert!(!commands(&output).contains(&egui::ViewportCommand::CancelClose), "nothing runs: it closes");
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(600));
+            Ok(String::new())
+        }));
+        let output = close_frame(&mut app, &context);
+        assert!(commands(&output).contains(&egui::ViewportCommand::CancelClose));
+        assert!(app.quit_asked);
+        let shown = texts(&render_frames(&mut app, WINDOW, 2));
+        assert!(shown.iter().any(|t| t == tr!("quit.title")), "{shown:?}");
+        // Quit anyway: the next close goes through.
+        app.quit_anyway = true;
+        let output = close_frame(&mut app, &context);
+        assert!(!commands(&output).contains(&egui::ViewportCommand::CancelClose));
     }
 
     fn texts(output: &egui::FullOutput) -> Vec<String> {
