@@ -27,6 +27,9 @@ pub const KEEPALIVE: Duration = Duration::from_secs(60 * 60);
 /// wake of a unit left alone tells the broker it is there.
 const WAKE_PING: Duration = Duration::from_secs(10 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest packet taken from the broker, far above any command or
+/// weather reading: a bigger one ends the session before it is buffered.
+const MAX_PACKET: usize = 256 << 10;
 const RETRY: Duration = Duration::from_secs(10);
 /// A ping sent on a wake and still unanswered this long after, by the wall
 /// clock, means the connection is gone: the answer takes milliseconds and
@@ -395,6 +398,9 @@ fn split_packet(buf: &mut BytesMut) -> std::io::Result<Option<(u8, Vec<u8>)>> {
             return Err(std::io::Error::other("malformed packet length"));
         }
     }
+    if len > MAX_PACKET {
+        return Err(std::io::Error::other(format!("a packet of {len} bytes, over {MAX_PACKET}")));
+    }
     if buf.len() < at + len {
         return Ok(None);
     }
@@ -490,7 +496,7 @@ pub mod tests {
 
     #[test]
     fn remaining_lengths_at_every_width() {
-        for (len, width) in [(0, 1), (127, 1), (128, 2), (16_383, 2), (16_384, 3), (2_097_151, 3), (2_097_152, 4)] {
+        for (len, width) in [(0, 1), (127, 1), (128, 2), (16_383, 2), (16_384, 3), (MAX_PACKET, 3)] {
             let p = packet(0x30, vec![7; len]);
             assert_eq!(p.len(), 1 + width + len, "{len}");
             // Every byte but the last: the length's bytes still arriving.
@@ -500,6 +506,12 @@ pub mod tests {
             let (header, body) = split_packet(&mut buf).unwrap().unwrap();
             assert_eq!((header, body.len(), buf.len()), (0x30, len, 0), "{len}");
         }
+        // Too big: refused from its length alone, before its body arrives.
+        let big = packet(0x30, vec![7; MAX_PACKET + 1]);
+        assert!(split_packet(&mut BytesMut::from(&big[..4])).is_err());
+        let big = packet(0x30, vec![7; 2_097_152]);
+        assert_eq!(big.len(), 1 + 4 + 2_097_152);
+        assert!(split_packet(&mut BytesMut::from(&big[..5])).is_err());
         // Five length bytes is no MQTT packet.
         assert!(split_packet(&mut BytesMut::from(&[0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0x01][..])).is_err());
         // Packets back to back come out one at a time; a PINGRESP has no body.
