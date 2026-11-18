@@ -57,6 +57,7 @@ mode: single
 triggers:
   - trigger: time_pattern
     minutes: /15
+    id: quarter
   - trigger: homeassistant
     event: start
   - trigger: state
@@ -101,6 +102,10 @@ actions:
         {%- endif -%}
         {%- set outdoor_humidity = (states(humidity) if humidity else state_attr(weather, 'humidity')) | float(none) -%}
         {{ {"outdoor_temperature": outdoor, "outdoor_humidity": outdoor_humidity} | to_json }}
+  # The forecast, most of what the unit is sent, once an hour: on the
+  # quarter-hourly runs only in the first quarter.
+  - condition: template
+    value_template: "{{ trigger.id != 'quarter' or now().minute < 15 }}"
   - action: weather.get_forecasts
     target:
       entity_id: "{{ weather }}"
