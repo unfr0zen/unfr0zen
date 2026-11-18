@@ -86,34 +86,45 @@ CONFIGS = {
 
 
 ZBWAKE_SOURCES = [
+    "platform/diamond3/zbwake/.circleci/config.yml",
     "platform/diamond3/zbwake/build.sh",
     "platform/diamond3/zbwake/zbwake.c",
     "platform/diamond3/zbwake/Kbuild",
 ]
 
-# module: its sources as git paths, the modules it takes, and whether it
-# builds in the build image. Each is the job of that name.
+# module: its sources as git paths, the config defining its job among them,
+# the modules it takes, and whether it builds in the build image. Each is the
+# job of that name.
 MODULES = {
-    "recovery": {"paths": ["platform/diamond3/bootstrap", "platform/diamond3/uboot"]},
+    "recovery": {
+        "paths": ["platform/diamond3/.circleci/config.yml", "platform/diamond3/bootstrap", "platform/diamond3/uboot"]
+    },
     "j49": {"paths": ["platform/j49"]},
     "j49-kernel": {
-        "paths": ["platform/j49/kernel.sh", "platform/j49/xloader.sh", "platform/j49/zbwake"],
+        "paths": [
+            "platform/j49/.circleci/config.yml",
+            "platform/j49/kernel.sh",
+            "platform/j49/xloader.sh",
+            "platform/j49/zbwake",
+        ],
         "image": False,
     },
     "diamond-xloader": {"paths": ["platform/diamond"], "image": False},
     "zbwake": {"paths": ZBWAKE_SOURCES + [ZBWAKE_RELEASES]},
     "radio": {"paths": ["platform/common/radio"]},
-    "thread": {"paths": ["platform/common/radio/thread"]},
+    "thread": {"paths": ["platform/common/radio/.circleci/config.yml", "platform/common/radio/thread"]},
     "doom": {"paths": ["platform/common/doom"]},
     # Its job also runs the screen's host tests.
     "nlclient": {"paths": ["platform/common/nlclient"]},
     # The radio module brings nestlocal.sh and the Makefile nestlocal reads;
     # nestlocal.sh also builds the wake pattern and local cloud libraries the
     # app installs, and the theme preload with nestlocal's theme library. Its job
-    # builds unfr0zen-apply as well, the setup engine on unfr0zen-core.
+    # builds unfr0zen-apply as well, the setup engine on unfr0zen-core, which
+    # embeds the settings screen's images.
     "nestlocal": {
         "paths": [
             "crates/nestlocal",
+            "platform/common/nlclient/assets",
             "crates/nestlocal-theme",
             "crates/unfr0zen-apply",
             "crates/unfr0zen-core",
@@ -164,8 +175,9 @@ def inputs():
 
 
 def key(name, table, keys):
-    """The job's key: a hash of its name and image, its sources' git ids and
-    its modules' keys, and of SALT for a job FORCE names."""
+    """The job's key: a hash of its name and image, the git ids of COMMON's
+    commands and of its sources, its modules' keys, and of SALT for a job
+    FORCE names."""
     if name not in keys:
         job = table[name]
         force = os.environ.get("FORCE", "").split()
@@ -174,7 +186,7 @@ def key(name, table, keys):
             subprocess.run(
                 ["git", "rev-parse", f"HEAD:{path}"], check=True, capture_output=True, text=True
             ).stdout.strip()
-            for path in job["paths"]
+            for path in [COMMON, *job["paths"]]
         ]
         lines += [key(need, table, keys) for need in job.get("needs", [])]
         if "all" in force or name in force or job.get("of") in force:
