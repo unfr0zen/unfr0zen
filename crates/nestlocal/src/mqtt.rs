@@ -216,6 +216,7 @@ impl Connection {
     }
 
     async fn connect(&self) -> std::io::Result<Box<dyn Stream>> {
+        crate::network::up().await;
         if self.broker.tls && self.options.tls.is_none() {
             return Err(std::io::Error::other("TLS broker, but no TLS configuration"));
         }

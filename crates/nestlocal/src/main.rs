@@ -22,6 +22,7 @@ mod matter;
 mod mqtt;
 mod mqtttls;
 mod naming;
+mod network;
 mod nlsettings;
 mod occupancy;
 mod scratch;
@@ -253,6 +254,9 @@ async fn run(config: flags::Config) {
         brightness::republish(&store, &config.serial);
         let _ = std::fs::write(std::path::Path::new(settings_ui::DIR).join(NLCLIENT_MAY_START), b"");
     }
+    // Before anything looks a name up: until it has read connman's services,
+    // network::up() does not wait.
+    network::start().await;
     if !config.ntp_server.is_empty() {
         tokio::spawn(clock::keep_clock(config.ntp_server.clone()));
     }
