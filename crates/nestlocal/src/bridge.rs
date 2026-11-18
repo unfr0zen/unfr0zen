@@ -16,6 +16,8 @@
 //!                                      versions (retained, update.rs)
 //!   <prefix>/<serial>/set/update       install installs the latest; an
 //!                                      http(s) URL, the bundle there
+//!   <prefix>/<serial>/set/theme        the home screen theme to show, by its
+//!                                      id or label (with -themes, theme.rs)
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -54,6 +56,8 @@ pub struct Bridge {
     wwn_boiler: bool,
     /// The stand-in sensor, with -external-temperature (sensor/).
     pub sensor: OnceLock<Arc<crate::sensor::Sensor>>,
+    /// The home screen themes, with -themes (theme.rs).
+    themes: OnceLock<Arc<crate::theme::Catalog>>,
     /// unfr0zen's versions and updates (update.rs).
     updates: OnceLock<Arc<crate::update::Updates>>,
     /// Motion seen lately, from nlclient's event log (occupancy.rs).
@@ -95,6 +99,7 @@ impl Bridge {
             live,
             wwn_boiler,
             sensor: OnceLock::new(),
+            themes: OnceLock::new(),
             updates: OnceLock::new(),
             occupancy: Arc::new(Occupancy::default()),
             brightness: Arc::new(crate::brightness::Watch::default()),
@@ -146,6 +151,18 @@ impl Bridge {
         if let Some(updates) = self.updates.get() {
             self.publish(&format!("{}/update", self.base), true, updates.state().to_string().as_bytes());
         }
+    }
+
+    /// Publishes the themes on offer and the one shown, again as they
+    /// change, and takes set/theme.
+    pub fn attach_themes(self: &Arc<Self>, themes: Arc<crate::theme::Catalog>) {
+        let bridge = Arc::downgrade(self);
+        themes.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_state();
+            }
+        });
+        let _ = self.themes.set(themes);
     }
 
     pub fn attach_sensor(self: &Arc<Self>, sensor: Arc<crate::sensor::Sensor>) {
@@ -270,6 +287,16 @@ impl Bridge {
                 (Some(updates), Some(request)) => updates.install(request),
                 _ => logf!("mqtt: update {text:?}: install, or a bundle's http(s) URL"),
             }
+        } else if topic == format!("{}/set/theme", self.base) {
+            let name = String::from_utf8_lossy(payload);
+            match self.themes.get() {
+                Some(themes) => {
+                    if let Err(e) = themes.pick(&name) {
+                        logf!("mqtt: theme: {e}");
+                    }
+                }
+                None => logf!("mqtt: theme {name:?}: themes are not installed (-themes)"),
+            }
         } else if topic.starts_with(&format!("{}/set/", self.base)) {
             self.command(topic, payload);
         }
@@ -359,6 +386,11 @@ impl Bridge {
         }
         // How the connection fares, since nestlocal started: in the state a
         // reconnection publishes, so a drop shows at once.
+        if let Some(themes) = self.themes.get() {
+            shown.insert("theme".into(), themes.shown().into());
+            let offered = themes.offered().into_iter().map(|(id, label)| serde_json::json!({"id": id, "label": label}));
+            shown.insert("themes".into(), Value::Array(offered.collect()));
+        }
         let (reconnects, last_end) = self.mqtt.get().map(mqtt::Client::diagnostics).unwrap_or_default();
         shown.insert("mqtt_reconnects".into(), reconnects.into());
         shown.insert("mqtt_last_disconnect".into(), last_end.map_or(Value::Null, Value::from));
@@ -798,6 +830,23 @@ impl Bridge {
                 "icon" => "mdi:calendar-remove",
             },
         );
+        if let Some(themes) = self.themes.get() {
+            // Its options follow the themes folder: a theme added or removed
+            // announces it again.
+            let options: Vec<Value> = themes.offered().into_iter().map(|(_, label)| label.into()).collect();
+            add(
+                "select",
+                "theme",
+                "Home screen theme",
+                fields! {
+                    "value_template" => tmpl("theme"),
+                    "command_topic" => format!("{set}theme"),
+                    "options" => Value::Array(options),
+                    "entity_category" => "config",
+                    "icon" => "mdi:palette",
+                },
+            );
+        }
         if let Some(updates) = self.updates.get() {
             // Install only on a unit that installs updates itself.
             add(
@@ -1429,6 +1478,39 @@ pub mod tests {
             assert!(options.contains(&s[name]), "{topic}: state {}", s[name]);
         }
         assert_eq!(s["filter_runtime_h"], json!(2));
+    }
+
+    #[test]
+    fn the_themes_are_a_select_whose_options_follow_the_folder() {
+        let b = test_bridge();
+        let (dev, sh) = everything();
+        let themes = Arc::new(crate::theme::Catalog::default());
+        b.attach_themes(themes.clone());
+        let select = |b: &Bridge| -> Value {
+            *b.announced.lock().unwrap() = None;
+            b.announce(&dev, &sh);
+            let configs = b.announced.lock().unwrap().clone().unwrap();
+            serde_json::from_str(&configs["homeassistant/select/nestlocal_s/theme/config"]).unwrap()
+        };
+        assert_eq!(select(&b)["options"], json!([]), "none known before the theme thread reports");
+        // The test catalog is filled as the theme thread fills it.
+        let offered = |extra: bool| {
+            let mut v = vec![("stock".to_string(), "Stock".to_string()), ("lcd".to_string(), "LCD".to_string())];
+            if extra {
+                v.push(("analog".to_string(), "Analog".to_string()));
+            }
+            v
+        };
+        crate::theme::tests::set(&themes, offered(false), "lcd");
+        let config = select(&b);
+        assert_eq!(config["options"], json!(["Stock", "LCD"]));
+        assert_eq!(config["command_topic"], json!("nestlocal/S/set/theme"));
+        let s = b.shown(&dev, &sh);
+        assert_eq!(s["theme"], json!("LCD"));
+        assert_eq!(s["themes"], json!([{"id": "stock", "label": "Stock"}, {"id": "lcd", "label": "LCD"}]));
+        assert!(config["options"].as_array().unwrap().contains(&s["theme"]));
+        crate::theme::tests::set(&themes, offered(true), "lcd");
+        assert_eq!(select(&b)["options"], json!(["Stock", "LCD", "Analog"]), "a theme added is offered");
     }
 
     #[test]

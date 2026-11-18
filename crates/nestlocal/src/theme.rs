@@ -20,11 +20,15 @@
 //! theme's place in nlclient's drawing with, and theme.native.ready once all
 //! of these are written.
 //!
+//! The same themes and choice go to MQTT (bridge.rs) through a Catalog: the
+//! themes on offer as the folder has them, the one shown, and a pick by id
+//! or label, which goes through theme.request as the THEMES page's does.
+//!
 //! theme.rs, paint.rs, soft.rs, typeset.rs, display.rs and gpu/ are
 //! client-ng's theme host and painters, built into the theme library only.
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -111,9 +115,74 @@ fn listed(root: &Path) -> Vec<(String, Option<std::time::SystemTime>)> {
         .collect()
 }
 
+/// The themes offered, each as its id and label.
+fn entries(root: &Path, listed: &[(String, Option<std::time::SystemTime>)]) -> Vec<(String, String)> {
+    listed.iter().map(|(id, _)| (id.clone(), label(root, id))).collect()
+}
+
 /// theme.catalog: an `id<TAB>label` line for each theme offered.
 fn catalog(root: &Path, listed: &[(String, Option<std::time::SystemTime>)]) -> String {
-    listed.iter().map(|(id, _)| format!("{id}\t{}\n", label(root, id))).collect()
+    entries(root, listed).iter().map(|(id, label)| format!("{id}\t{label}\n")).collect()
+}
+
+/// The themes on offer and the one shown, for MQTT, kept as the theme
+/// thread finds them.
+#[derive(Default)]
+pub struct Catalog {
+    /// The themes offered, as id and label, and the id of the one shown.
+    state: Mutex<(Vec<(String, String)>, String)>,
+    on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl Catalog {
+    /// The themes offered, as id and label, stock first.
+    pub fn offered(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().0.clone()
+    }
+
+    /// The label of the theme shown.
+    pub fn shown(&self) -> String {
+        let (offered, chosen) = &*self.state.lock().unwrap();
+        offered.iter().find(|(id, _)| id == chosen).map_or_else(|| chosen.clone(), |(_, label)| label.clone())
+    }
+
+    /// Runs `f` whenever the themes offered or the one shown change.
+    pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
+        let _ = self.on_change.set(Box::new(f));
+    }
+
+    fn set(&self, offered: Vec<(String, String)>, chosen: &str) {
+        let changed = {
+            let mut state = self.state.lock().unwrap();
+            let changed = state.0 != offered || state.1 != chosen;
+            *state = (offered, chosen.to_string());
+            changed
+        };
+        if changed {
+            if let Some(f) = self.on_change.get() {
+                f();
+            }
+        }
+    }
+
+    /// The id of the theme offered as `name`: its id, else its label.
+    fn find(&self, name: &str) -> Option<String> {
+        let offered = &self.state.lock().unwrap().0;
+        offered
+            .iter()
+            .find(|(id, _)| id == name)
+            .or_else(|| offered.iter().find(|(_, label)| label == name))
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Shows the theme `name`, an id or a label, as the THEMES page picks it.
+    pub fn pick(&self, name: &str) -> Result<(), String> {
+        let id = self.find(name.trim()).ok_or_else(|| {
+            let offered: Vec<_> = self.offered().into_iter().map(|(_, label)| label).collect();
+            format!("no theme {name:?}; installed: {}", offered.join(", "))
+        })?;
+        settings_ui::publish("theme.request", id.as_bytes()).map_err(|e| e.to_string())
+    }
 }
 
 /// How often the themes' folder is looked at for the catalog.
@@ -160,8 +229,11 @@ fn select(root: &Path, name: &str) -> std::io::Result<()> {
 }
 
 /// Offers the themes and serves the chosen one, from the buckets of the
-/// unit `serial` and the weather in `outdoor`.
-pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
+/// unit `serial` and the weather in `outdoor`; the catalog returned follows
+/// them.
+pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) -> Arc<Catalog> {
+    let shared_catalog = Arc::new(Catalog::default());
+    let kept = shared_catalog.clone();
     let (tx, rx) = mpsc::channel::<()>();
     let (device, shared) = (format!("device.{serial}"), format!("shared.{serial}"));
     let watched = (device.clone(), shared.clone());
@@ -197,6 +269,7 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
         if let Err(e) = ready {
             return logf!("theme: {e}");
         }
+        kept.set(entries(root, &offered), &theme);
         logf!("theme: {}", label(root, &theme));
         loop {
             let mut changed = match rx.recv_timeout(Duration::from_millis(250)) {
@@ -220,6 +293,7 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
                     if let Err(e) = settings_ui::publish("theme.catalog", catalog(root, &offered).as_bytes()) {
                         logf!("theme: {e}");
                     }
+                    kept.set(entries(root, &offered), &theme);
                 }
             }
             let request = Path::new(settings_ui::DIR).join("theme.request");
@@ -238,6 +312,7 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
                         logf!("theme: {e}");
                     }
                     logf!("theme: {}", label(root, &theme));
+                    kept.set(entries(root, &offered), &theme);
                     changed = true;
                 }
             }
@@ -251,11 +326,17 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) {
     if let Err(e) = spawned {
         logf!("theme: {e}");
     }
+    shared_catalog
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
+
+    /// Fills `catalog` as the theme thread does.
+    pub fn set(catalog: &Catalog, offered: Vec<(String, String)>, chosen: &str) {
+        catalog.set(offered, chosen);
+    }
 
     #[test]
     fn stock_comes_first_then_every_theme_folder_as_listed() {
@@ -323,6 +404,33 @@ mod tests {
         std::fs::remove_dir_all(root.join("added")).unwrap();
         assert_eq!(listed(&root).len(), before.len());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_catalog_says_when_it_changes_and_picks_by_id_then_label() {
+        let catalog = Catalog::default();
+        let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = changes.clone();
+        catalog.on_change(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let offered = vec![
+            ("stock".to_string(), "Stock".to_string()),
+            ("lcd".to_string(), "LCD".to_string()),
+            ("analog".to_string(), "lcd".to_string()),
+        ];
+        catalog.set(offered.clone(), "lcd");
+        catalog.set(offered.clone(), "lcd");
+        assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst), 1, "only a change is told");
+        assert_eq!(catalog.shown(), "LCD");
+        catalog.set(offered[..2].to_vec(), "lcd");
+        assert_eq!(changes.load(std::sync::atomic::Ordering::SeqCst), 2, "a theme removed is a change");
+        catalog.set(offered, "lcd");
+        assert_eq!(catalog.find("lcd").as_deref(), Some("lcd"), "an id before a label");
+        assert_eq!(catalog.find("Stock").as_deref(), Some("stock"));
+        assert_eq!(catalog.find("missing"), None);
+        let error = catalog.pick("missing").unwrap_err();
+        assert!(error.contains("installed: Stock, LCD, lcd"), "{error}");
     }
 
     #[test]
