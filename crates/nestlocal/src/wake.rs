@@ -25,7 +25,9 @@
 //!   it calls WakeUp and counts nestlocal as holding the unit awake until it
 //!   calls ReleaseResource, which nestlocal does after a few seconds: time
 //!   for nlclient to fetch a change and for the answers to go out. Each wake
-//!   also lets the bridge send to the broker if its keepalive is due.
+//!   also lets the bridge send to the broker if its keepalive is due, and
+//!   the unit stays awake while the connection waits on the broker: a
+//!   ping's answer (mqtt.rs).
 //!
 //! svcConnected stays 0: with it 1 the chip also keeps the connection alive
 //! with TCP keepalives, and the gen 1 and gen 2, whose nlscpm works the same
@@ -179,13 +181,14 @@ impl Wake {
 /// Starts waking the unit for the broker on `broker_port`, if any, watching
 /// `iface`, registering UDP wake filters if `matter`, and keeping it awake while
 /// the Zigbee radio has something to say if `zigbee`; `on_wake` runs on each
-/// wake, before the hold.
+/// wake, before the hold, and the unit stays awake while `holding` says so.
 pub fn start(
     broker_port: Option<u16>,
     matter: bool,
     zigbee: bool,
     iface: String,
     on_wake: impl Fn() + Send + Sync + 'static,
+    holding: impl Fn() -> bool + Send + Sync + 'static,
 ) {
     if broker_port.is_none() && !matter && !zigbee {
         return;
@@ -194,7 +197,16 @@ pub fn start(
     if let Some(wake) = &wake {
         capture::start(iface, wake.clone());
     }
+    let _ = HOLDING.set(Box::new(holding));
     tokio::spawn(run(wake, matter, zigbee, Arc::new(on_wake)));
+}
+
+/// What else holds the unit awake: the MQTT connection, for now (start).
+type Holding = Box<dyn Fn() -> bool + Send + Sync>;
+static HOLDING: std::sync::OnceLock<Holding> = std::sync::OnceLock::new();
+
+fn holding() -> bool {
+    HOLDING.get().is_some_and(|holding| holding())
 }
 
 /// Serves the sniffer and the sleep entity and keeps the registration up;
@@ -344,7 +356,7 @@ fn release_when_idle(bus: zbus::Connection, matter: bool, ready: Arc<AtomicBool>
             if !ready.load(Ordering::SeqCst) {
                 return;
             }
-            if !sleep_blocked(matter, true, crate::matter::sleep_blocked()) {
+            if !sleep_blocked(matter, true, crate::matter::sleep_blocked()) && !holding() {
                 release(&bus).await;
                 return;
             }
@@ -431,6 +443,7 @@ impl SleepClient {
     #[zbus(name = "RequestSleep")]
     async fn request_sleep(&self) -> (String, bool) {
         if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked())
+            || holding()
             || (self.zigbee && crate::zigbee::wakeup::pending())
             || crate::thread_sleep::blocked()
         {

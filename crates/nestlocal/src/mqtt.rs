@@ -3,8 +3,9 @@
 //! subscriptions, a keepalive ping, and a reconnect every 10 s while the
 //! broker cannot be reached. The unit sleeps, and the ping timer and TCP's
 //! retransmissions stop with it, so a broker that dropped the connection
-//! while the unit slept is found out on a wake, by the wall clock (woke). Publishes made while disconnected are dropped:
-//! on each connection the bridge publishes its whole state again.
+//! while the unit slept is found out on a wake (woke): by the wall clock, or
+//! by a ping the unit stays awake for. Publishes made while disconnected are
+//! dropped: on each connection the bridge publishes its whole state again.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -31,10 +32,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// weather reading: a bigger one ends the session before it is buffered.
 const MAX_PACKET: usize = 256 << 10;
 const RETRY: Duration = Duration::from_secs(10);
-/// A ping sent on a wake and still unanswered this long after, by the wall
-/// clock, means the connection is gone: the answer takes milliseconds and
-/// wakes the unit.
-const PING_ANSWER: Duration = Duration::from_secs(30);
+/// A ping sent on a wake and still unanswered after this long awake means
+/// the connection is gone: the unit stays awake for the answer, which takes
+/// milliseconds, or longer behind a retransmission.
+const PING_ANSWER: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 30 });
 
 /// What a connection calls back into.
 pub trait Handler: Send + Sync + 'static {
@@ -107,6 +108,7 @@ pub struct Client {
     sent: Arc<AtomicU64>,
     heard: Arc<AtomicU64>,
     pinged: Arc<AtomicU64>,
+    awake: Arc<AtomicBool>,
 }
 
 pub struct Connection {
@@ -122,6 +124,9 @@ pub struct Connection {
     /// When a ping from woke went out, in Unix seconds, until a packet comes
     /// back; 0 when none is outstanding.
     pinged: Arc<AtomicU64>,
+    /// The connection needs the unit awake: a ping from woke awaits its
+    /// answer, for PING_ANSWER at most.
+    awake: Arc<AtomicBool>,
     /// The session ended on a Redial: no RETRY wait.
     redial: bool,
 }
@@ -138,6 +143,7 @@ impl Client {
         let sent = Arc::new(AtomicU64::new(0));
         let heard = Arc::new(AtomicU64::new(0));
         let pinged = Arc::new(AtomicU64::new(0));
+        let awake = Arc::new(AtomicBool::new(false));
         (
             Client {
                 tx,
@@ -145,13 +151,19 @@ impl Client {
                 sent: sent.clone(),
                 heard: heard.clone(),
                 pinged: pinged.clone(),
+                awake: awake.clone(),
             },
-            Connection { broker, options, rx, connected, sent, heard, pinged, redial: false },
+            Connection { broker, options, rx, connected, sent, heard, pinged, awake, redial: false },
         )
     }
 
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    /// Whether the connection needs the unit awake for now (wake.rs).
+    pub fn holds_awake(&self) -> bool {
+        self.awake.load(Ordering::Relaxed)
     }
 
     pub fn publish(&self, topic: &str, payload: &[u8], qos: u8, retain: bool) {
@@ -170,22 +182,20 @@ impl Client {
     }
 
     /// The unit woke. Dials again when the broker has surely dropped the
-    /// connection (nothing sent for 1.5 keepalives) or let a ping from an
-    /// earlier wake go unanswered. Pings when nothing went to the broker for
-    /// WAKE_PING, which is what its keepalive counts, or nothing came from it
-    /// for half the keepalive: packets sent prove nothing, on a connection the
-    /// broker dropped unheard they go nowhere.
+    /// connection (nothing sent for 1.5 keepalives). Pings when nothing went to the broker for WAKE_PING,
+    /// which is what its keepalive counts, or nothing came from it for half
+    /// a keepalive: the session then holds the unit awake for the answer,
+    /// and dials again if none comes within PING_ANSWER.
     pub fn woke(&self) {
         if !self.is_connected() {
             return;
         }
-        let pinged = self.pinged.load(Ordering::Relaxed);
         let unheard = unix_now().saturating_sub(self.heard.load(Ordering::Relaxed));
         if self.idle() > KEEPALIVE * 3 / 2 {
             let _ = self.tx.try_send(Request::Redial("nothing sent for 1.5 keepalives"));
-        } else if pinged != 0 && unix_now().saturating_sub(pinged) >= PING_ANSWER.as_secs() {
-            let _ = self.tx.try_send(Request::Redial("no answer to the ping sent on a wake"));
-        } else if pinged == 0 && (self.idle() > WAKE_PING || unheard > KEEPALIVE.as_secs() / 2) {
+        } else if self.pinged.load(Ordering::Relaxed) == 0
+            && (self.idle() > WAKE_PING || unheard > KEEPALIVE.as_secs() / 2)
+        {
             let _ = self.tx.try_send(Request::Ping);
         }
     }
@@ -200,7 +210,9 @@ impl Connection {
         let mut last_error = String::new();
         let mut logged = Instant::now();
         loop {
-            if let Err(e) = self.session(&*handler).await {
+            let result = self.session(&*handler).await;
+            self.awake.store(false, Ordering::Relaxed);
+            if let Err(e) = result {
                 // Once per streak of the same failure, and every 10 minutes.
                 let e = e.to_string();
                 if e != last_error || logged.elapsed() >= Duration::from_secs(600) {
@@ -255,6 +267,8 @@ impl Connection {
 
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE, KEEPALIVE);
         let mut awaiting_pong = false;
+        // A ping from woke's answer is due by then, the unit held awake for it.
+        let mut answer_due: Option<tokio::time::Instant> = None;
         let mut next_id: u16 = 0;
         loop {
             tokio::select! {
@@ -265,8 +279,10 @@ impl Connection {
                             return Err(std::io::Error::other(why));
                         }
                         Request::Ping => {
+                            self.awake.store(true, Ordering::Relaxed);
                             wr.write_all(&[0xC0, 0]).await?;
                             self.pinged.store(unix_now(), Ordering::Relaxed);
+                            answer_due = Some(tokio::time::Instant::now() + PING_ANSWER);
                         }
                         request => {
                             next_id = next_id.wrapping_add(1).max(1);
@@ -283,6 +299,8 @@ impl Connection {
                         awaiting_pong = false;
                         self.heard.store(unix_now(), Ordering::Relaxed);
                         self.pinged.store(0, Ordering::Relaxed);
+                        answer_due = None;
+                        self.awake.store(false, Ordering::Relaxed);
                         if header >> 4 == 3 {
                             let (topic, payload, id) = parse_publish(header, &body)?;
                             if let Some(id) = id {
@@ -292,6 +310,10 @@ impl Connection {
                             handler.message(&topic, &payload);
                         }
                     }
+                }
+                _ = tokio::time::sleep_until(answer_due.unwrap_or_else(tokio::time::Instant::now)), if answer_due.is_some() => {
+                    self.redial = true;
+                    return Err(std::io::Error::other("no answer to the ping sent on a wake"));
                 }
                 _ = ping.tick() => {
                     if awaiting_pong {
@@ -679,18 +701,20 @@ pub mod tests {
         slept(&client, KEEPALIVE / 2 + Duration::from_secs(1));
         client.woke();
         assert_eq!(next_packet(&mut broker, &mut buf).await.unwrap(), (0xC0, vec![]));
+        assert!(client.holds_awake(), "awake for the answer");
         broker.write_all(&[0xD0, 0]).await.unwrap();
         while client.pinged.load(Ordering::Relaxed) != 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        slept(&client, PING_ANSWER);
+        assert!(!client.holds_awake(), "answered: free to sleep");
+        tokio::time::sleep(PING_ANSWER).await;
         client.woke();
         assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "no redial");
         assert!(client.is_connected());
     }
 
     #[tokio::test]
-    async fn a_ping_unanswered_by_the_next_wake_redials_at_once() {
+    async fn an_unanswered_wake_ping_holds_the_unit_awake_then_dials_again() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (client, conn) = connection(listener.local_addr().unwrap().port());
         tokio::spawn(conn.run(Arc::new(Recorder::default())));
@@ -701,18 +725,20 @@ pub mod tests {
 
         slept(&client, KEEPALIVE / 2 + Duration::from_secs(1));
         client.woke();
+        let pinged = Instant::now();
         assert_eq!(next_packet(&mut gone, &mut buf).await.unwrap(), (0xC0, vec![]));
+        assert!(client.holds_awake(), "awake for the answer");
         // A wake soon after waits for the answer.
         client.woke();
         assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
 
-        slept(&client, PING_ANSWER);
-        client.woke();
-        let started = Instant::now();
+        // No answer within PING_ANSWER awake: dialled again by itself, at once.
         let mut buf = BytesMut::new();
         let _broker = accept(&listener, &mut buf).await;
-        assert!(started.elapsed() < RETRY / 2, "dialled again without the retry wait");
+        let waited = pinged.elapsed();
+        assert!(waited >= PING_ANSWER && waited < PING_ANSWER + RETRY / 2, "{waited:?}");
         until_connected(&client).await;
+        assert!(!client.holds_awake());
     }
 
     #[tokio::test]
