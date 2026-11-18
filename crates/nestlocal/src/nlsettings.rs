@@ -71,12 +71,9 @@ pub fn remove(b: &[u8], key: &str) -> Vec<u8> {
     out
 }
 
-/// Replaces the file at path with b, through a sibling and a rename.
+/// Replaces the file at path with b, whole even across a power cut.
 pub fn write(path: &Path, b: &[u8]) -> io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".nestlocal");
-    std::fs::write(&tmp, b)?;
-    std::fs::rename(&tmp, path)
+    crate::durable::replace(path, b, 0o644)
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

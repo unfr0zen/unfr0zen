@@ -124,7 +124,8 @@ impl Naming {
             unconfirmed: self.unconfirmed,
             matter_label: self.matter_label.clone(),
         };
-        if let Err(e) = std::fs::write(&self.store, serde_json::to_vec(&saved).unwrap()) {
+        let bytes = serde_json::to_vec(&saved).unwrap();
+        if let Err(e) = crate::durable::replace(std::path::Path::new(&self.store), &bytes, 0o644) {
             logf!("mqtt: {}: {e}", self.store);
         }
     }

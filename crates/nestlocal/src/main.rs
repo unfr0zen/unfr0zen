@@ -11,6 +11,7 @@ mod cloud;
 mod commands;
 use nestlocal::device;
 mod doom;
+mod durable;
 mod entropy;
 mod fetch;
 mod flags;

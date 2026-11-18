@@ -167,22 +167,8 @@ impl Store {
         let mut ser =
             serde_json::Serializer::with_formatter(&mut bytes, serde_json::ser::PrettyFormatter::with_indent(b" "));
         objects.serialize(&mut ser).map_err(std::io::Error::other)?;
-        let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
-        write_private(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.path)
+        crate::durable::replace(&self.path, &bytes, 0o600)
     }
-}
-
-#[cfg(unix)]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?.write_all(bytes)
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, bytes)
 }
 
 #[cfg(test)]
@@ -235,7 +221,7 @@ pub mod tests {
         let again = Store::new(s.path.clone());
         let o = again.get("device.S").unwrap();
         assert_eq!((o.revision, o.timestamp, o.value["t"].clone()), (3, 99, json!(19.5)));
-        assert!(!PathBuf::from(format!("{}.tmp", s.path.display())).exists(), "the temporary file is left behind");
+        assert!(!PathBuf::from(format!("{}.partial", s.path.display())).exists(), "the temporary file is left behind");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
