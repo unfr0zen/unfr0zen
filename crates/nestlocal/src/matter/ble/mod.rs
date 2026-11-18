@@ -45,8 +45,8 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
     use std::io::{Error, ErrorKind};
     let mut uart = uart::Uart::open()?;
     let info = rs_matter::dm::clusters::basic_info::BasicInfoConfig {
-        vid: rs_matter::dm::devices::test::TEST_VID,
-        pid: rs_matter::dm::devices::test::TEST_PID,
+        vid: matter.dev_det().vid,
+        pid: matter.dev_det().pid,
         ..rs_matter::dm::clusters::basic_info::BasicInfoConfig::new()
     };
     let service: Vec<u8> = AdvData::new(&info, comm.discriminator).service_iter().collect();

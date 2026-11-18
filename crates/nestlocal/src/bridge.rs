@@ -147,6 +147,10 @@ impl Bridge {
         let _ = self.updates.set(updates);
     }
 
+    pub fn updates(&self) -> Option<&Arc<crate::update::Updates>> {
+        self.updates.get()
+    }
+
     fn publish_update(&self) {
         if let Some(updates) = self.updates.get() {
             self.publish(&format!("{}/update", self.base), true, updates.state().to_string().as_bytes());

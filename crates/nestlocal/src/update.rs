@@ -1,17 +1,22 @@
 //! unfr0zen's updates: the version the unit runs, the latest release when
 //! the internet is there to ask, and installing it when Home Assistant says
 //! so (bridge.rs: an update entity on <base>/update, install on
-//! <base>/set/update), or a bundle at a URL given instead, for a unit that
+//! <base>/set/update), or a package at a URL given instead, for a unit that
 //! cannot reach GitHub: a copy on the LAN.
 //!
-//! A release's setup bundle (unfr0zen-ota-<device>-<tag>.tgz) goes to the
-//! engine the setup left on the unit (unfr0zen-apply update), which checks
-//! it against its manifest and the release key before running it; the unit
-//! then restarts into it. A unit with no engine (gen 1 and gen 2, set up
-//! from the host) reports versions only.
+//! A release's package for this device (package.rs:
+//! unfr0zen-ota-<device>-<tag>.ota) is unwrapped as it downloads, and its
+//! setup bundle goes to the engine the setup left on the unit
+//! (unfr0zen-apply update), which checks it against its manifest and the
+//! release key before running it; the unit then restarts into it. A bare
+//! bundle (.tgz) at a URL installs too. A unit with no engine (set up from
+//! the host) reports versions only.
 //!
 //! The last answer about the latest release is kept (-update-store), so a
 //! restart shows it at once instead of unknown until the next check.
+//!
+//! Matter's OTA requestor (matter/ota.rs) installs through the same engine:
+//! it claims it, unwraps the package to DOWNLOAD itself, then applies it.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::logf;
+use crate::package;
 
 /// The engine the setup keeps on a unit that installs updates: on the
 /// scratch volume, else where a unit set up before has it.
@@ -37,21 +43,21 @@ pub const RELEASES: &str = "https://api.github.com/repos/unfr0zen/unfr0zen/relea
 /// Where a downloaded bundle waits for the engine, written as it arrives: on
 /// the scratch volume, as a 64 MB unit (the gen 1 and gen 2) needs all of
 /// its RAM, tmpfs included, for the setup.
-const DOWNLOAD: &str = "/media/scratch/.unfr0zen/update.tgz";
+pub const DOWNLOAD: &str = "/media/scratch/.unfr0zen/update.tgz";
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// After a check that got no answer: a network can drop one.
 const RETRY: Duration = Duration::from_secs(300);
-/// The release description; a bundle is a few MB, well under the second.
+/// The release description; a package is a few MB, well under the second.
 const API_LIMIT: usize = 1 << 20;
-const BUNDLE_LIMIT: usize = 64 << 20;
+pub const BUNDLE_LIMIT: usize = 64 << 20;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Release {
     pub version: String,
     /// The release's page.
     pub url: Option<String>,
-    /// This device's bundle, if the release has one.
+    /// This device's package, if the release has one.
     pub bundle: Option<String>,
 }
 
@@ -94,6 +100,25 @@ fn order(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     Some((major, minor, patch, kind, n))
 }
 
+/// A version as Matter's u32 SoftwareVersion, in release order: MAJOR,
+/// MINOR and PATCH a byte each, then -rcN as N, the release as 128 and
+/// git describe's -N-gHASH builds as 128 + N (each N up to 127). 0 for
+/// another form. utils/bundle/matter-ota.py numbers images the same way.
+pub fn matter_version(version: &str) -> u32 {
+    let Some((major, minor, patch, kind, n)) = order(version) else {
+        return 0;
+    };
+    if major > 255 || minor > 255 || patch > 255 {
+        return 0;
+    }
+    let last = match kind {
+        0 => n.min(127),
+        1 => 128,
+        _ => 128 + n.min(127),
+    };
+    (major << 24 | minor << 16 | patch << 8 | last) as u32
+}
+
 /// The latest version to report: the installed one when it is later than
 /// the release (a developer's build), since Home Assistant ranks v0.4.2
 /// above v0.4.2-16-gHASH and would offer the older release as an update.
@@ -109,7 +134,7 @@ fn latest_version(installed: Option<&str>, release: &str) -> String {
 pub enum Request {
     /// "install": the latest release.
     Latest,
-    /// An http:// or https:// URL: the bundle there.
+    /// An http:// or https:// URL: the package, or bare bundle, there.
     Url(String),
 }
 
@@ -146,17 +171,21 @@ fn save(store: &Path, release: Option<&Release>) {
     }
 }
 
-/// The release in GitHub's description of it, with this device's bundle.
+/// The release in GitHub's description of it, with this device's package,
+/// or its bare bundle in a release made before packages.
 pub fn release(description: &Value, device: &str) -> Option<Release> {
     let version = description["tag_name"].as_str()?.to_string();
-    let wanted = format!("unfr0zen-ota-{device}-{version}.tgz");
-    let bundle = description["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|asset| asset["name"].as_str() == Some(wanted.as_str()))
-        .and_then(|asset| asset["browser_download_url"].as_str())
-        .map(str::to_string);
+    let asset = |extension: &str| {
+        let wanted = format!("unfr0zen-ota-{device}-{version}.{extension}");
+        description["assets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|asset| asset["name"].as_str() == Some(wanted.as_str()))
+            .and_then(|asset| asset["browser_download_url"].as_str())
+            .map(str::to_string)
+    };
+    let bundle = asset("ota").or_else(|| asset("tgz"));
     Some(Release { version, url: description["html_url"].as_str().map(str::to_string), bundle })
 }
 
@@ -180,6 +209,11 @@ impl Updates {
     /// Whether this unit installs updates itself.
     pub fn can_install(&self) -> bool {
         self.can_install
+    }
+
+    /// The version the unit runs.
+    pub fn installed(&self) -> Option<&str> {
+        self.installed.as_deref()
     }
 
     /// What to call when the state changes.
@@ -246,73 +280,112 @@ impl Updates {
         true
     }
 
-    /// Installs the latest release, or the bundle at the request's URL: the
-    /// unit's engine checks it either way.
+    /// Installs the latest release, or the package at the request's URL: the
+    /// unit's engine checks its bundle either way.
     pub fn install(self: &Arc<Self>, request: Request) {
         if !self.can_install {
             return logf!("update: this unit has no update engine ({}): set it up with unfr0zen", engine());
         }
-        let (bundle, what) = match request {
-            Request::Url(url) => (url.clone(), format!("the bundle at {url}")),
+        let (bundle, what, version) = match request {
+            Request::Url(url) => (url.clone(), format!("the package at {url}"), None),
             Request::Latest => {
                 let Some(release) = self.latest.lock().unwrap().clone() else {
                     return logf!("update: no release known to install");
                 };
                 let Some(bundle) = release.bundle else {
-                    return logf!("update: release {} has no bundle for this unit", release.version);
+                    return logf!("update: release {} has no package for this unit", release.version);
                 };
-                (bundle, release.version)
+                let version = Some(matter_version(&release.version)).filter(|&v| v != 0);
+                (bundle, release.version, version)
             }
         };
-        if self.installing.swap(true, Ordering::Relaxed) {
+        if !self.claim() {
             return logf!("update: already installing");
         }
-        self.changed();
         let updates = self.clone();
         tokio::spawn(async move {
-            match updates.install_from(&bundle).await {
+            logf!("update: downloading {bundle}");
+            match updates.download(&bundle, version).await {
                 Ok(()) => {
-                    logf!("update: {what} installed; restarting");
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    match std::process::Command::new("reboot").status() {
-                        Ok(status) if status.success() => {}
-                        result => {
-                            logf!("update: the restart failed ({result:?}): restart the unit to run {what}");
-                            // The engine leaves nlclient stopped for the restart.
-                            let _ = std::process::Command::new("monit").args(["start", "nlclient"]).status();
-                            updates.installing.store(false, Ordering::Relaxed);
-                            updates.changed();
-                        }
-                    }
+                    let _ = tokio::task::spawn_blocking(move || updates.apply(&what)).await;
                 }
                 Err(e) => {
                     logf!("update: {e}");
-                    updates.installing.store(false, Ordering::Relaxed);
-                    updates.changed();
+                    updates.release();
                 }
             }
         });
     }
 
-    async fn install_from(&self, url: &str) -> Result<(), String> {
-        logf!("update: downloading {url}");
-        crate::fetch::download(url, Path::new(DOWNLOAD), BUNDLE_LIMIT, Duration::from_secs(600)).await?;
-        let output =
-            tokio::task::spawn_blocking(|| std::process::Command::new(engine()).args(["update", DOWNLOAD]).output())
-                .await
-                .map_err(|e| e.to_string());
-        let _ = std::fs::remove_file(DOWNLOAD);
-        let output = output?.map_err(|e| format!("{}: {e}", engine()))?;
-        for line in
-            String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines())
-        {
-            logf!("update: {line}");
+    /// The package at url unwrapped to DOWNLOAD, or why not; DOWNLOAD is
+    /// removed when it fails.
+    async fn download(&self, url: &str, version: Option<u32>) -> Result<(), String> {
+        let file = std::fs::File::create(DOWNLOAD).map_err(|e| format!("{DOWNLOAD}: {e}"))?;
+        let expected = package::Expected { product: package::product(self.device), version, bare: true };
+        let mut unwrap = package::Unwrap::new(expected, std::io::BufWriter::new(&file));
+        let result = crate::fetch::stream(url, BUNDLE_LIMIT, Duration::from_secs(600), |data| unwrap.feed(data))
+            .await
+            .and_then(|()| unwrap.finish())
+            .and_then(|()| file.sync_all().map_err(|e| format!("{DOWNLOAD}: {e}")))
+            .map_err(|e| format!("{url}: {e}"));
+        if result.is_err() {
+            let _ = std::fs::remove_file(DOWNLOAD);
         }
-        if !output.status.success() {
-            return Err(format!("the update was not installed ({})", output.status));
-        }
-        Ok(())
+        result
     }
+
+    /// Claims the engine for one install, reported as in progress: false
+    /// while another holds it.
+    pub fn claim(&self) -> bool {
+        if self.installing.swap(true, Ordering::Relaxed) {
+            return false;
+        }
+        self.changed();
+        true
+    }
+
+    /// Gives up a claim that installed nothing.
+    pub fn release(&self) {
+        let _ = std::fs::remove_file(DOWNLOAD);
+        self.installing.store(false, Ordering::Relaxed);
+        self.changed();
+    }
+
+    /// Runs the engine on the bundle at DOWNLOAD, under a claim, and
+    /// restarts the unit into it: Ok once the restart is under way. Blocks.
+    pub fn apply(&self, what: &str) -> Result<(), String> {
+        let result = run_engine().and_then(|()| {
+            logf!("update: {what} installed; restarting");
+            std::thread::sleep(Duration::from_secs(2));
+            match std::process::Command::new("reboot").status() {
+                Ok(status) if status.success() => Ok(()),
+                result => {
+                    // The engine leaves nlclient stopped for the restart.
+                    let _ = std::process::Command::new("monit").args(["start", "nlclient"]).status();
+                    Err(format!("the restart failed ({result:?}): restart the unit to run {what}"))
+                }
+            }
+        });
+        if let Err(e) = &result {
+            logf!("update: {e}");
+            self.release();
+        }
+        result
+    }
+}
+
+/// The engine run on the bundle at DOWNLOAD, which it leaves removed.
+fn run_engine() -> Result<(), String> {
+    let output = std::process::Command::new(engine()).args(["update", DOWNLOAD]).output();
+    let _ = std::fs::remove_file(DOWNLOAD);
+    let output = output.map_err(|e| format!("{}: {e}", engine()))?;
+    for line in String::from_utf8_lossy(&output.stderr).lines().chain(String::from_utf8_lossy(&output.stdout).lines()) {
+        logf!("update: {line}");
+    }
+    if !output.status.success() {
+        return Err(format!("the update was not installed ({})", output.status));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -343,6 +416,18 @@ mod tests {
     }
 
     #[test]
+    fn matter_versions_keep_release_order() {
+        let versions =
+            ["v0.4.2-rc1", "v0.4.2-rc2", "v0.4.2", "v0.4.2-16-g980d4b5-dirty", "v0.4.3-rc1", "v0.5.0", "v1.0.0"];
+        let numbers: Vec<u32> = versions.iter().map(|v| matter_version(v)).collect();
+        assert!(numbers.windows(2).all(|w| w[0] < w[1]), "{numbers:x?}");
+        assert_eq!(matter_version("v0.5.1"), 0x0005_0180);
+        assert_eq!(matter_version("v0.5.1-46-g8955e215"), 0x0005_01ae);
+        assert_eq!(matter_version("custom"), 0);
+        assert_eq!(matter_version("v256.0.0"), 0);
+    }
+
+    #[test]
     fn the_installed_version_comes_from_the_setups_version_file() {
         assert_eq!(installed("unfr0zen v0.4.3\n").as_deref(), Some("v0.4.3"));
         assert_eq!(installed("\n"), None);
@@ -369,17 +454,23 @@ mod tests {
     }
 
     #[test]
-    fn a_release_names_this_devices_bundle_when_it_has_one() {
+    fn a_release_names_this_devices_package_when_it_has_one() {
         let description = json!({
             "tag_name": "v0.5.0", "html_url": "https://github.com/unfr0zen/unfr0zen/releases/tag/v0.5.0",
             "assets": [
                 {"name": "unfr0zen-macos-universal-v0.5.0.zip", "browser_download_url": "https://x/app.zip"},
                 {"name": "unfr0zen-ota-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"},
+                {"name": "unfr0zen-ota-diamond3-v0.5.0.ota", "browser_download_url": "https://x/diamond3.ota"},
             ],
         });
         let gen3 = release(&description, "diamond3").unwrap();
-        assert_eq!((gen3.version.as_str(), gen3.bundle.as_deref()), ("v0.5.0", Some("https://x/diamond3.tgz")));
+        assert_eq!((gen3.version.as_str(), gen3.bundle.as_deref()), ("v0.5.0", Some("https://x/diamond3.ota")));
         assert_eq!(release(&description, "j49").unwrap().bundle, None);
+        let before_packages = json!({
+            "tag_name": "v0.5.0",
+            "assets": [{"name": "unfr0zen-ota-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"}],
+        });
+        assert_eq!(release(&before_packages, "diamond3").unwrap().bundle.as_deref(), Some("https://x/diamond3.tgz"));
         assert_eq!(release(&json!({"message": "Not Found"}), "diamond3"), None);
     }
 }

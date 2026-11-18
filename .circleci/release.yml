@@ -68,7 +68,9 @@ jobs:
 
   # The setup bundles the x86_64 Linux app packed, signed apart from every
   # build: the bundle-signing context's key is readable in this job alone,
-  # which runs no code compiled from the workspace's dependencies.
+  # which runs no code compiled from the workspace's dependencies. Then each
+  # one wrapped in the package units install over MQTT and Matter (.ota);
+  # the bare bundles stay for units on releases before packages.
   sign-bundles:
     executor: tools
     steps:
@@ -81,6 +83,7 @@ jobs:
             set -- dist/unfr0zen-ota-*.tgz
             [ -f "$1" ] || { echo "no setup bundles in dist/" >&2; exit 1; }
             sh utils/bundle/sign.sh utils/bundle/release.pub signed "$@"
+            python3 utils/bundle/matter-ota.py signed/unfr0zen-ota-*.tgz
       - persist_to_workspace:
           root: .
           paths:
@@ -98,8 +101,8 @@ jobs:
           name: Publish the release
           command: |
             id=$(cat .work/release/id)
-            for file in dist/*; do
-              # A setup bundle goes out as sign-bundles signed it.
+            for file in dist/* signed/unfr0zen-ota-*.ota; do
+              # A setup bundle, and its package, go out as sign-bundles made them.
               case $(basename "$file") in
                 unfr0zen-ota-*)
                   file=signed/$(basename "$file")
