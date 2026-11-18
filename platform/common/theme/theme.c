@@ -713,6 +713,42 @@ static void gl_restore(const struct gl_state *s) {
     }
 }
 
+/* The library's first frame in this nlclient: its loading, its GPU set-up
+ * and the theme's first draw, which the library's own guard does not all
+ * count. One that took nlclient down leaves ATTEMPT behind, and the next
+ * nlclient keeps the stock dial instead of faulting at every restart. A
+ * reboot clears /var/run and tries again. */
+#define ATTEMPT "/var/run/unfr0zen/theme.attempt"
+static int first_drawn;
+/* Whether the first frame may be tried: false, the theme failed, when the
+ * last nlclient died in its own. */
+static int attempt_begin(void) {
+    static int checked, refused;
+    if (first_drawn)
+        return 1;
+    if (!checked) {
+        checked = 1;
+        refused = access(ATTEMPT, F_OK) == 0;
+        if (refused)
+            fprintf(stderr, "theme: the last start died in its first frame; stock until a reboot\n");
+    }
+    if (refused) {
+        fail();
+        return 0;
+    }
+    int fd = open(ATTEMPT, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0)
+        close(fd);
+    return 1;
+}
+/* The first frame came back, drawn or failed: nlclient survived it. */
+static void attempt_end(void) {
+    if (!first_drawn) {
+        first_drawn = 1;
+        unlink(ATTEMPT);
+    }
+}
+
 /* The theme's library, loaded on its first frame; false when it cannot be. */
 static int load_library(void) {
     if (software ? render_pixels != 0 : render != 0)
@@ -750,13 +786,14 @@ static void plan_next(void) {
  * framebuffer nlclient has bound. The library shares nlclient's context,
  * so every piece of state it can touch is saved and restored. */
 static void draw_theme(unsigned image) {
-    if (!load_library())
+    if (!attempt_begin() || !load_library())
         return;
     struct gl_state saved;
     gl_save(&saved);
     glColorMask(1, 1, 1, 1);
     destination = (unsigned)saved.ints[SAVED_FRAMEBUFFER];
     unsigned result = render(proc, destination, image != 0, atomic_load(&native_target));
+    attempt_end();
     if (!result)
         fail();
     else {
@@ -1006,9 +1043,11 @@ static int load_marker(void) {
 /* Paints the theme's frame on the CPU into `into`, the dial's size squared:
  * false (the theme failed) when it cannot be drawn. */
 static int paint_pixels(uint32_t *into) {
-    if (!load_library())
+    if (!attempt_begin() || !load_library())
         return 0;
-    if (!render_pixels(native_read_state, into, (unsigned)dial_size, atomic_load(&native_target))) {
+    unsigned drawn = render_pixels(native_read_state, into, (unsigned)dial_size, atomic_load(&native_target));
+    attempt_end();
+    if (!drawn) {
         fail();
         return 0;
     }
