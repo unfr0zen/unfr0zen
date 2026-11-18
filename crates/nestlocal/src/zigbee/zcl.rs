@@ -9,6 +9,9 @@
 /// proprietary-device quirks.
 pub const MANUFACTURER_CODE: u16 = 0x10D6;
 const MANUFACTURER_CLUSTERS: u16 = 0xFC00;
+/// The most an answer's ZCL frame may hold: one unfragmented APS message
+/// under network security. The radio refuses a longer one.
+pub const MAX_FRAME: usize = 82;
 
 /// ZCL status codes.
 pub mod status {
@@ -162,6 +165,8 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
     let default = |status: u8| {
         (!quiet || status != status::SUCCESS).then(|| answer(command::DEFAULT_RESPONSE, &[cmd, status])).flatten()
     };
+    // What an answer's records have room for after its header.
+    let room = MAX_FRAME - if manufacturer.is_some() { 5 } else { 3 };
     let specific = control & CLUSTER_SPECIFIC != 0;
     if manufacturer.is_some_and(|code| code != MANUFACTURER_CODE || cluster < MANUFACTURER_CLUSTERS) {
         return default(if specific {
@@ -180,14 +185,19 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
         command::READ => {
             let mut out = Vec::new();
             for id in payload.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)) {
-                out.extend(id.to_le_bytes());
+                let mut record = id.to_le_bytes().to_vec();
                 match ids.contains(&id).then(|| clusters.read(endpoint, cluster, id)).flatten() {
                     Some(value) => {
-                        out.extend([status::SUCCESS, value.type_id()]);
-                        value.write(&mut out);
+                        record.extend([status::SUCCESS, value.type_id()]);
+                        value.write(&mut record);
                     }
-                    None => out.push(status::UNSUPPORTED_ATTRIBUTE),
+                    None => record.push(status::UNSUPPORTED_ATTRIBUTE),
                 }
+                // The records that fit: the client reads the rest again.
+                if out.len() + record.len() > room {
+                    break;
+                }
+                out.extend(record);
             }
             answer(command::READ_RESPONSE, &out)
         }
@@ -228,6 +238,8 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
                 .filter(|&&id| id >= start)
                 .filter_map(|&id| clusters.read(endpoint, cluster, id).map(|v| (id, v)))
                 .collect();
+            // A record is 3 bytes, after the complete flag.
+            let max = max.min((room - 1) / 3);
             let mut out = vec![u8::from(found.len() <= max)];
             for (id, value) in found.iter().take(max) {
                 out.extend(id.to_le_bytes());
@@ -538,6 +550,50 @@ mod tests {
         );
         // Past the last attribute: complete and empty.
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 3, 0x0C, 0x13, 0x00, 5]).unwrap(), [0x18, 3, 0x0D, 0x01]);
+    }
+
+    /// One cluster, 0x0201, with 40 int16 attributes.
+    struct Many;
+
+    impl Clusters for Many {
+        fn attributes(&self, _endpoint: u8, _cluster: u16) -> Option<&'static [u16]> {
+            const IDS: [u16; 40] = {
+                let mut ids = [0; 40];
+                let mut i = 0;
+                while i < 40 {
+                    ids[i] = i as u16;
+                    i += 1;
+                }
+                ids
+            };
+            Some(&IDS)
+        }
+        fn read(&self, _endpoint: u8, _cluster: u16, attribute: u16) -> Option<Value> {
+            Some(Value::I16(attribute as i16))
+        }
+        fn write(&self, _endpoint: u8, _cluster: u16, _attribute: u16, _value: Value) -> u8 {
+            status::READ_ONLY
+        }
+        fn command(&self, _endpoint: u8, _cluster: u16, _command: u8, _payload: &[u8]) -> u8 {
+            status::UNSUP_CLUSTER_COMMAND
+        }
+    }
+
+    #[test]
+    fn answers_fit_a_frame_with_whole_records() {
+        // Read all 40: 6-byte records, 13 of them after the 3-byte header.
+        let mut read = vec![0x00, 1, 0x00];
+        read.extend((0..40u16).flat_map(u16::to_le_bytes));
+        let out = serve(&Many, 1, 0x0201, &read).unwrap();
+        assert_eq!(out.len(), 3 + 13 * 6);
+        assert_eq!(&out[out.len() - 6..], [12, 0x00, 0x00, 0x29, 12, 0x00], "the 13th, whole");
+        // Discover all of them, asking for up to 255: 26 of 3 bytes, not complete.
+        let out = serve(&Many, 1, 0x0201, &[0x00, 2, 0x0C, 0x00, 0x00, 255]).unwrap();
+        assert_eq!(out.len(), 3 + 1 + 26 * 3);
+        assert_eq!(out[3], 0x00, "more to discover");
+        // A manufacturer-specific frame has two bytes less room.
+        let out = serve(&Many, 1, 0xFC00, &[0x04, 0xD6, 0x10, 3, 0x0C, 0x00, 0x00, 255]).unwrap();
+        assert!(out.len() <= MAX_FRAME, "{}", out.len());
     }
 
     #[test]
