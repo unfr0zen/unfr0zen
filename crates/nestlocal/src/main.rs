@@ -98,6 +98,15 @@ fn server_tls(cert: &str, key: &str) -> Result<Arc<rustls::ServerConfig>, String
     Ok(Arc::new(config))
 }
 
+/// Ends nestlocal on a panic on any thread, logged, for monit to start it
+/// again: otherwise a Zigbee or Matter thread gone leaves it running without it.
+fn exit_on_panic() {
+    std::panic::set_hook(Box::new(|info| {
+        logf!("nestlocal: thread {}: {info}", std::thread::current().name().unwrap_or("unnamed"));
+        std::process::exit(101);
+    }));
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut config = match flags::parse(&args) {
@@ -122,6 +131,7 @@ fn main() {
             }
         }
     }
+    exit_on_panic();
     if config.serial.is_empty() {
         config.serial = hostname().unwrap_or_else(|e| fatal!("{e}"));
     }
@@ -361,4 +371,25 @@ async fn run(config: flags::Config) {
     });
     let stopped = cloud.serve(&config.listen, tls).await;
     fatal!("{stopped}");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_panic_on_any_thread_ends_the_process() {
+        if std::env::var_os("NESTLOCAL_PANIC_CHILD").is_some() {
+            super::exit_on_panic();
+            let _ = std::thread::Builder::new().name("zigbee".into()).spawn(|| panic!("boom")).unwrap().join();
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            std::process::exit(0);
+        }
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::a_panic_on_any_thread_ends_the_process", "--test-threads=1"])
+            .env("NESTLOCAL_PANIC_CHILD", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(101));
+    }
 }
