@@ -3,7 +3,7 @@
 local home = require("home")
 
 return {
-  name = "Lcd",
+  name = "LCD",
   api = 1,
   design = 480,
   fonts = {
