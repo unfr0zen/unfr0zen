@@ -159,6 +159,8 @@
   "form.mqtt.user": "User",
   "form.ntp": "Custom NTP server",
   "form.ntp_hint": "Use your chosen NTP server to keep the thermostat's clock in sync",
+  "form.password_hide": "Hide the password",
+  "form.password_show": "Show the password",
   "form.root_password": "Root password",
   "form.root_password_hint": "Set the root login password; leave blank to use unfr0zen",
   "form.start_disabled": "Finish the current operation, close any file picker, and disconnect any open console before starting a run",

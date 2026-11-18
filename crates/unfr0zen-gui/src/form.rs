@@ -318,12 +318,11 @@ impl Form {
                         egui::TextEdit::singleline(&mut self.mqtt_user).hint_text(crate::tr!("setup.optional")),
                         half,
                     );
-                    crate::field(
+                    crate::setup::password_field(
                         ui,
                         crate::tr!("form.mqtt.password"),
-                        egui::TextEdit::singleline(&mut self.mqtt_password)
-                            .password(true)
-                            .hint_text(crate::tr!("setup.optional")),
+                        &mut self.mqtt_password,
+                        crate::tr!("setup.optional"),
                         half,
                     );
                 });
@@ -783,13 +782,8 @@ fn radio_warning(ui: &mut egui::Ui) {
 
 /// Root's password, shared by SSH and the USB console.
 fn root_password_field(ui: &mut egui::Ui, password: &mut String) {
-    crate::field(
-        ui,
-        crate::tr!("form.root_password"),
-        egui::TextEdit::singleline(password).password(true).hint_text("unfr0zen"),
-        FIELD_WIDTH,
-    )
-    .on_hover_text(crate::tr!("form.root_password_hint"));
+    crate::setup::password_field(ui, crate::tr!("form.root_password"), password, "unfr0zen", FIELD_WIDTH)
+        .on_hover_text(crate::tr!("form.root_password_hint"));
 }
 
 /// Root's password where SSH takes it: warned of while it is the public

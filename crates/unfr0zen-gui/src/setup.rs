@@ -690,16 +690,49 @@ pub(crate) fn checked_field(
 /// A text field as a rounded box `width` wide: its edge red while what it
 /// holds is refused, else lit while it is typed in.
 fn checked_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool) -> egui::Response {
-    sized_box(ui, edit, width, invalid, false)
+    sized_box(ui, edit, width, invalid, false, None)
+}
+
+/// A password field as [`field`] draws it, with an eye at its end that
+/// shows what is typed while it is on.
+pub(crate) fn password_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    password: &mut String,
+    hint: &str,
+    width: f32,
+) -> egui::Response {
+    let id = ui.id().with(("password shown", label));
+    let mut shown = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let response = ui
+        .vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 5.0;
+            ui.label(egui::RichText::new(label).size(12.5).color(LABEL));
+            let edit = egui::TextEdit::singleline(password).password(!shown).hint_text(hint);
+            sized_box(ui, edit, width, false, false, Some(&mut shown))
+        })
+        .inner;
+    ui.data_mut(|d| d.insert_temp(id, shown));
+    response
 }
 
 /// A text field as a rounded box `width` wide whose edge lights while it
 /// is typed in, at the compact size of the Logs page's controls.
 pub(crate) fn small_boxed(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32) -> egui::Response {
-    sized_box(ui, edit, width, false, true)
+    sized_box(ui, edit, width, false, true, None)
 }
 
-fn sized_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: bool, small: bool) -> egui::Response {
+/// The eye's square at a password field's end.
+const EYE: f32 = 18.0;
+
+fn sized_box(
+    ui: &mut egui::Ui,
+    edit: egui::TextEdit<'_>,
+    width: f32,
+    invalid: bool,
+    small: bool,
+    shown: Option<&mut bool>,
+) -> egui::Response {
     let (margin, font) =
         if small { (egui::Margin::symmetric(9, 4), 12.5) } else { (egui::Margin::symmetric(11, 7), 14.0) };
     let frame = egui::Frame::new()
@@ -708,8 +741,21 @@ fn sized_box(ui: &mut egui::Ui, edit: egui::TextEdit<'_>, width: f32, invalid: b
         .corner_radius(if small { 7 } else { 9 })
         .inner_margin(margin);
     let mut prepared = frame.begin(ui);
-    let room = (width - 2.0 * margin.left as f32 - 2.0).max(40.0);
-    let response = prepared.content_ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(font)));
+    let mut room = (width - 2.0 * margin.left as f32 - 2.0).max(40.0);
+    if shown.is_some() {
+        room -= EYE + 6.0;
+    }
+    let response = prepared
+        .content_ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let response = ui.add(edit.frame(egui::Frame::NONE).desired_width(room).font(medium(font)));
+            if let Some(shown) = shown {
+                eye_toggle(ui, shown);
+            }
+            response
+        })
+        .inner;
     if invalid {
         prepared.frame = prepared.frame.stroke(egui::Stroke::new(1.0, BAD));
     } else if response.has_focus() {
@@ -1056,6 +1102,36 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
 }
 
 /// A USB plug, pointing up, its cable trailing down, centred on `c`.
+/// An eye that shows a password while on, struck through while off.
+fn eye_toggle(ui: &mut egui::Ui, shown: &mut bool) {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(EYE, EYE), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(if *shown {
+        tr!("form.password_hide")
+    } else {
+        tr!("form.password_show")
+    });
+    if response.clicked() {
+        *shown = !*shown;
+    }
+    let color = if response.hovered() { TEXT } else { MUTED };
+    let stroke = egui::Stroke::new(1.5, color);
+    let (c, w, h) = (rect.center(), 8.0, 4.5);
+    // The lids: two arcs from corner to corner.
+    for side in [-1.0, 1.0] {
+        let points: Vec<egui::Pos2> = (0..=12)
+            .map(|i| {
+                let t = i as f32 / 12.0 * 2.0 - 1.0;
+                c + egui::vec2(t * w, side * h * (1.0 - t * t))
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(points, stroke));
+    }
+    ui.painter().circle_stroke(c, 2.2, stroke);
+    if !*shown {
+        ui.painter().line_segment([c + egui::vec2(-6.5, 6.5), c + egui::vec2(6.5, -6.5)], stroke);
+    }
+}
+
 fn plug_icon(painter: &egui::Painter, c: egui::Pos2, color: egui::Color32) {
     let stroke = egui::Stroke::new(1.8, color);
     let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.0), egui::vec2(16.0, 14.0));
@@ -1321,4 +1397,47 @@ fn next_card(ui: &mut egui::Ui, number: usize, title: &str, about: &str) {
             ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_password_shows_only_while_its_eye_is_on() {
+        let context = egui::Context::default();
+        crate::install_fonts(&context);
+        let mut password = "hunter2".to_string();
+        // Its texts, and where the field's text sits.
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut field = egui::Rect::NOTHING;
+            let output = context.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                field = password_field(ui, "Password", &mut password, "", 240.0).rect;
+            });
+            let texts: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            (texts, field)
+        };
+        let (shown, field) = frame(Vec::new());
+        assert!(!shown.iter().any(|t| t.contains("hunter2")), "masked at first: {shown:?}");
+        // The eye sits just past the text.
+        let at = field.right_center() + egui::vec2(6.0 + EYE / 2.0, 0.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(true)]);
+        frame(vec![press(false)]);
+        let (shown, _) = frame(Vec::new());
+        assert!(shown.iter().any(|t| t == "hunter2"), "shown once clicked: {shown:?}");
+    }
 }
