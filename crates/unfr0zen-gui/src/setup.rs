@@ -187,8 +187,7 @@ impl App {
                 }
                 Step::Features => {
                     heading(ui, tr!("setup.features_title"), tr!("setup.features_about"));
-                    let bus = self.bus.current();
-                    self.form.features_ui(ui, &bus);
+                    self.form.features_ui(ui);
                 }
                 Step::Review => self.review_step(ui),
             }

@@ -147,11 +147,29 @@ impl Form {
 }
 
 impl Form {
+    /// The unit the options are for: the one chosen, else the last on USB.
+    fn unit(&self) -> Option<Device> {
+        self.device.or(self.last_device)
+    }
+
+    /// Whether the themes switch is offered: for a unit known to take them.
+    fn offers_themes(&self) -> bool {
+        matches!(self.unit(), Some(Device::Diamond | Device::J49 | Device::Diamond3))
+    }
+
+    /// Whether the dark theme switch is offered: for a gen 1 or gen 2.
+    fn offers_dark_theme(&self) -> bool {
+        matches!(self.unit(), Some(Device::Diamond | Device::J49))
+    }
+
     /// Whether nestlocal takes the radio from a Heat Link.
     fn holds_radio(&self) -> bool {
         self.zigbee || (self.matter.on && self.matter_thread)
     }
 
+    /// What the run is given: each option as its switch stands, and off
+    /// where its switch is not offered or greyed out. The Review step lists
+    /// these, so it shows what runs.
     pub fn inputs(&self) -> SetupInputs {
         let text = |s: &str| (!s.is_empty()).then(|| s.to_string());
         SetupInputs {
@@ -174,14 +192,10 @@ impl Form {
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
             entry_point: self.entry_point,
-            // Only for a device the switch was offered for.
-            themes: self.themes
-                && matches!(self.device.or(self.last_device), Some(Device::Diamond | Device::J49 | Device::Diamond3)),
+            themes: self.themes && self.offers_themes(),
             doom: self.doom,
-            external_temperature: self.external_temperature && self.supports_external_temperature(),
-            // Only for the gen 1 or gen 2 the checkbox was offered for.
-            dark_theme: self.dark_theme
-                && matches!(self.device.or(self.last_device), Some(Device::Diamond | Device::J49)),
+            external_temperature: self.external_temperature && self.external_temperature_enabled(),
+            dark_theme: self.dark_theme && self.offers_dark_theme(),
             ssh: self.ssh,
             ssh_public_key: self.ssh.then(|| self.ssh_key.path.clone()).flatten(),
             ssh_key_only: self.ssh && !self.ssh_password_login,
@@ -458,7 +472,7 @@ impl Form {
     }
 
     /// The features step: privacy, heating, remote access, and the extras.
-    pub fn features_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
+    pub fn features_ui(&mut self, ui: &mut egui::Ui) {
         self.drain_dialogs();
         crate::group(ui, crate::tr!("setup.group.privacy"));
         let block = crate::option_card(
@@ -583,12 +597,10 @@ impl Form {
         }
 
         crate::group(ui, crate::tr!("setup.group.extras"));
-        // Offered only with a device they support chosen or on the bus.
-        if matches!(self.known_device(bus), Some(Device::Diamond | Device::J49 | Device::Diamond3)) {
+        if self.offers_themes() {
             crate::toggle_card(ui, &mut self.themes, true, crate::tr!("form.themes"), crate::tr!("setup.themes_about"));
         }
-        // Offered only with a gen 1 or gen 2 chosen or on the bus.
-        if matches!(self.known_device(bus), Some(Device::Diamond | Device::J49)) {
+        if self.offers_dark_theme() {
             crate::toggle_card(
                 ui,
                 &mut self.dark_theme,
@@ -605,49 +617,41 @@ impl Form {
     pub fn summary(&self) -> Vec<(&'static str, String, crate::setup::Step)> {
         use crate::setup::Step;
         let on_off = |on: bool| if on { crate::tr!("setup.on") } else { crate::tr!("setup.off") }.to_string();
-        let mut rows = vec![(
-            crate::tr!("setup.mqtt"),
-            if self.mqtt.on { self.mqtt.value.trim().to_string() } else { on_off(false) },
-            Step::Integrations,
-        )];
+        let sent = self.inputs();
+        let mut rows =
+            vec![(crate::tr!("setup.mqtt"), sent.mqtt.clone().unwrap_or_else(|| on_off(false)), Step::Integrations)];
         let mut radio: Vec<&str> = Vec::new();
-        if self.matter.on {
-            radio.push(if self.matter_thread {
+        if sent.matter {
+            radio.push(if sent.matter_thread {
                 crate::tr!("setup.matter_thread_short")
             } else {
                 crate::tr!("form.matter")
             });
         }
-        if self.zigbee {
+        if sent.zigbee {
             radio.push(crate::tr!("setup.zigbee"));
         }
-        if self.inputs().external_temperature && self.external_temperature_enabled() {
+        if sent.external_temperature {
             radio.push(crate::tr!("form.external_temperature"));
         }
         rows.push((crate::tr!("setup.other_integrations"), joined(&radio), Step::Integrations));
-        rows.push((crate::tr!("form.block_cloud"), on_off(self.block_cloud), Step::Features));
-        if self.ntp.on {
-            rows.push((crate::tr!("setup.time_server"), self.ntp.value.clone(), Step::Features));
+        rows.push((crate::tr!("form.block_cloud"), on_off(sent.block_cloud), Step::Features));
+        if let Some(server) = &sent.ntp_server {
+            rows.push((crate::tr!("setup.time_server"), server.clone(), Step::Features));
         }
         if self.holds_radio() {
-            rows.push((crate::tr!("form.wwn_boiler"), on_off(self.wwn_boiler), Step::Features));
+            rows.push((crate::tr!("form.wwn_boiler"), on_off(sent.wwn_boiler), Step::Features));
         }
-        let mut extras: Vec<&str> = Vec::new();
-        if self.ssh {
-            extras.push(crate::tr!("setup.ssh"));
-        }
-        if self.usb_shell {
-            extras.push(crate::tr!("setup.usb_console"));
-        }
-        if self.inputs().themes {
-            extras.push(crate::tr!("form.themes"));
-        }
-        if self.inputs().dark_theme {
-            extras.push(crate::tr!("form.dark_theme"));
-        }
-        if self.doom {
-            extras.push(crate::tr!("form.doom"));
-        }
+        let extras: Vec<&str> = [
+            (sent.ssh, crate::tr!("setup.ssh")),
+            (sent.usb_shell, crate::tr!("setup.usb_console")),
+            (sent.themes, crate::tr!("form.themes")),
+            (sent.dark_theme, crate::tr!("form.dark_theme")),
+            (sent.doom, crate::tr!("form.doom")),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
         rows.push((crate::tr!("setup.extras"), joined(&extras), Step::Features));
         rows
     }
@@ -655,7 +659,7 @@ impl Form {
     /// Whether the external temperature option applies: to every generation,
     /// and to any unit while none is known.
     fn supports_external_temperature(&self) -> bool {
-        matches!(self.device.or(self.last_device), None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
+        matches!(self.unit(), None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
     }
 
     /// Whether the external temperature switch can be turned on: a unit that
@@ -947,7 +951,7 @@ mod tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 2000.0))),
                     ..Default::default()
                 },
-                |ui| form.features_ui(ui, &Bus::Nothing),
+                |ui| form.features_ui(ui),
             );
             let count = output
                 .shapes
@@ -1102,6 +1106,30 @@ mod tests {
             };
             assert_eq!(form.inputs().external_temperature, sent, "{device:?}");
         }
+    }
+
+    #[test]
+    fn a_greyed_out_option_is_neither_sent_nor_reviewed() {
+        let mut form =
+            Form { mqtt: Toggle { on: true, value: "broker".into() }, external_temperature: true, ..Form::default() };
+        let reviewed =
+            |form: &Form| form.summary().into_iter().map(|(_, value, _)| value).collect::<Vec<_>>().join(" ");
+        assert!(form.inputs().external_temperature);
+        assert!(reviewed(&form).contains(crate::tr!("form.external_temperature")));
+        // MQTT off: no integration to send readings through, so the switch
+        // greys out, still on.
+        form.mqtt.on = false;
+        assert!(form.external_temperature && !form.external_temperature_enabled());
+        assert!(!form.inputs().external_temperature);
+        assert!(!reviewed(&form).contains(crate::tr!("form.external_temperature")));
+        assert!(form.config().is_ok(), "the run is not refused for it: {:?}", form.config().err());
+        // Themes and the dark theme: only for a unit they are offered for.
+        form.themes = true;
+        form.dark_theme = true;
+        form.last_device = Some(Device::Diamond3);
+        assert!(form.inputs().themes && !form.inputs().dark_theme);
+        form.last_device = Some(Device::J49);
+        assert!(form.inputs().themes && form.inputs().dark_theme);
     }
 
     #[test]
