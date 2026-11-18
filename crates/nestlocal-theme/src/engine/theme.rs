@@ -45,7 +45,7 @@ pub const API: i64 = 1;
 /// How long a theme may run at once: loading, or drawing one frame. Past
 /// it the theme fails and the engine draws without it, so a looping theme
 /// cannot stop the UI (and with it the heartbeat the watchdog needs).
-const TIME_LIMIT: Duration = Duration::from_millis(250);
+const TIME_LIMIT: Duration = Duration::from_millis(500);
 
 /// How much memory a theme's Lua may hold: past it an allocation fails, and
 /// the theme with it, rather than nlclient.

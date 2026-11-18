@@ -109,7 +109,7 @@ from 12 o'clock.
 - `tr(text)`: the text in the language in use, for the theme's own words.
 - `log(...)`, `print(...)`: to nlclient's debug log.
 - `clock()`: seconds on a monotonic clock, to time the theme's own work.
-- Loading the theme, and drawing one frame, may each take at most 250 ms;
+- Loading the theme, and drawing one frame, may each take at most 500 ms;
   past that the theme fails.
 
 ## Limits
