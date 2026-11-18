@@ -18,7 +18,9 @@
 //! and forecast, weather::Outdoor::known), theme-marker.png (the display's
 //! size square, every pixel RGBA 12 34 56 ff) for the preload to mark the
 //! theme's place in nlclient's drawing with, and theme.native.ready once all
-//! of these are written.
+//! of these are written. theme.hold, before the display lights for a theme
+//! picked over MQTT, has the preload keep the backlight off until the new
+//! theme's first frame is in.
 //!
 //! The same themes and choice go to MQTT (bridge.rs) through a Catalog: the
 //! themes on offer as the folder has them, the one shown, and a pick by id
@@ -324,6 +326,11 @@ pub fn start(store: Arc<Store>, serial: String, outdoor: Arc<Outdoor>) -> Arc<Ca
                     // is in place: nlclient takes the request as it commits
                     // the device bucket sent again.
                     if kept.wake.swap(false, Ordering::SeqCst) {
+                        // Stock is nlclient's own, which the preload does not draw.
+                        let held = theme == STOCK || settings_ui::publish("theme.hold", b"1").is_ok();
+                        if !held {
+                            logf!("theme: the display may light on the theme before");
+                        }
                         if let Err(e) = settings_ui::request_wake() {
                             logf!("display wake: {e}");
                         }
