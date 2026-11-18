@@ -6258,6 +6258,7 @@ dependencies = [
  "png 0.18.1",
  "pollster",
  "rfd",
+ "serde",
  "serde_json",
  "single-instance",
  "unfr0zen-cli",

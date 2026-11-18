@@ -773,7 +773,12 @@ struct Row {
 
 impl App {
     fn new(ctx: &egui::Context, restart: Arc<AtomicBool>) -> App {
-        let mut app = App { updates: Updates::check(ctx, restart), bus: Watcher::start(ctx.clone()), ..App::default() };
+        let mut app = App {
+            updates: Updates::check(ctx, restart),
+            bus: Watcher::start(ctx.clone()),
+            form: Form::recalled(&form::remembered_path()),
+            ..App::default()
+        };
         app.library.refresh();
         app
     }
@@ -864,7 +869,15 @@ impl App {
         self.history_selected = None;
         self.log_text = None;
         match run {
-            Ok(run) => self.run = Some(run),
+            Ok(run) => {
+                // What a setup started with is filled in at the next launch.
+                if self.task.as_ref().is_some_and(|t| matches!(t, Task::SetUp | Task::BackupSetUp(_))) {
+                    if let Err(e) = self.form.remember(&form::remembered_path()) {
+                        log::warn!("{}: {e}", form::remembered_path().display());
+                    }
+                }
+                self.run = Some(run);
+            }
             Err(message) => self.logs.outcome = Some(Err(message)),
         }
     }
