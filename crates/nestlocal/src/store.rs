@@ -132,6 +132,25 @@ impl Store {
         (object, changed)
     }
 
+    /// Sends the bucket `key` to the held subscribes again, unchanged but for
+    /// a new revision: nlclient commits it, which is when it takes a display
+    /// wake request (settings_ui::request_wake). False when there is none.
+    pub fn resend(&self, key: &str) -> bool {
+        let (object, subs) = {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(o) = inner.objects.get_mut(key) else { return false };
+            o.revision += 1;
+            o.timestamp = now_ms();
+            let object = o.clone();
+            (object, inner.subs.values().cloned().collect::<Vec<_>>())
+        };
+        self.dirty.notify_one();
+        for sub in subs {
+            let _ = sub.try_send(vec![object.clone()]);
+        }
+        true
+    }
+
     /// Server-side changes, for a held subscribe, until the subscription is
     /// dropped.
     pub fn subscribe(self: &Arc<Self>) -> (mpsc::Receiver<Vec<Object>>, Subscription) {
@@ -209,6 +228,18 @@ pub mod tests {
         assert!(rx.try_recv().is_err());
         s.merge("device.S", &fields! {"a" => 2}, 0, 0, false);
         assert_eq!(rx.try_recv().unwrap()[0].value["a"], json!(2));
+    }
+
+    #[test]
+    fn a_bucket_resent_reaches_a_held_subscribe_unchanged_with_a_new_revision() {
+        let s = temp_store();
+        let (mut rx, _sub) = s.subscribe();
+        let (before, _) = s.merge("device.S", &fields! {"a" => 1}, 7, 0, true);
+        assert!(rx.try_recv().is_err());
+        assert!(s.resend("device.S"));
+        let resent = rx.try_recv().unwrap().remove(0);
+        assert_eq!((resent.value, resent.revision), (before.value, before.revision + 1));
+        assert!(!s.resend("device.missing"), "nothing to send");
     }
 
     #[test]

@@ -20,6 +20,7 @@
  * unit's own nlclient (unfr0zen-core's nlclient::theme); nothing is hooked
  * unless the vtable slots hold the stock methods it names. */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -45,6 +46,9 @@
 #define MARKER            "/var/run/unfr0zen/theme-marker.png"
 #define ENABLED           "/var/run/unfr0zen/theme.native.enabled"
 #define STATE             "/var/run/unfr0zen/theme.native.json"
+/* Left by nestlocal before it lights the display for a theme picked over
+ * MQTT (crates/nestlocal/src/theme.rs): see hold_backlight. */
+#define HOLD              "/var/run/unfr0zen/theme.hold"
 /* Measurement, on the scratch volume so that it lasts until removed, read as
  * nlclient starts: PROFILE has the library's reports and the frames' times
  * (below) logged to LOG; BENCH keeps the display lit and replays the theme's
@@ -713,6 +717,129 @@ static void gl_restore(const struct gl_state *s) {
     }
 }
 
+/* --- The backlight held for a new theme ------------------------------------
+ * nlclient lights the display before it draws, and while dark draws nothing:
+ * lit for a theme picked over MQTT, the panel would show the frame the theme
+ * before left behind until the new one has loaded (a few hundred ms). So
+ * nlclient's write lighting the backlight while HOLD is there is kept, not
+ * written (the backlight's own ramp would have the old frame show as it
+ * starts), or, the display already lit, the first frame that finds HOLD sets
+ * the backlight to 0 as it starts; nlclient's level is put back once that
+ * frame is swapped in (painted, on the CPU), the new theme with it. HOLD_MAX
+ * bounds the hold whatever happens. */
+#define HOLD_MAX_NS 3000000000LL
+static char backlight[128];
+static atomic_int held_level = -1;
+static long long held_at;
+/* The backlight's brightness file, the first under /sys/class/backlight. */
+static const char *backlight_file(void) {
+    if (backlight[0])
+        return backlight;
+    DIR *dir = opendir("/sys/class/backlight");
+    struct dirent *entry;
+    while (dir && (entry = readdir(dir)))
+        if (entry->d_name[0] != '.') {
+            snprintf(backlight, sizeof(backlight), "/sys/class/backlight/%s/brightness", entry->d_name);
+            break;
+        }
+    if (dir)
+        closedir(dir);
+    return backlight[0] ? backlight : 0;
+}
+static int backlight_level(void) {
+    const char *path = backlight_file();
+    char text[16] = {0};
+    int fd = path ? open(path, O_RDONLY) : -1;
+    if (fd < 0)
+        return -1;
+    ssize_t n = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    return n > 0 ? atoi(text) : -1;
+}
+static void set_backlight(int level) {
+    const char *path = backlight_file();
+    int fd = path ? open(path, O_WRONLY) : -1;
+    if (fd < 0)
+        return;
+    char text[16];
+    int n = snprintf(text, sizeof(text), "%d", level);
+    if (write(fd, text, (size_t)n) < 0)
+        fprintf(stderr, "theme: backlight: %s\n", strerror(errno));
+    close(fd);
+}
+/* nlclient's level back: the new theme's frame is in. */
+static void release_backlight(void) {
+    int level = atomic_exchange(&held_level, -1);
+    if (level >= 0)
+        set_backlight(level);
+}
+static void expire_hold(void) {
+    if (atomic_load(&held_level) >= 0 && monotonic_ns() - held_at > HOLD_MAX_NS)
+        release_backlight();
+}
+/* As a frame starts: the backlight off until it is in, when HOLD asks. */
+static void hold_backlight(void) {
+    expire_hold();
+    if (atomic_load(&held_level) >= 0 || unlink(HOLD) != 0)
+        return;
+    int level = backlight_level();
+    if (level <= 0)
+        return;
+    held_at = monotonic_ns();
+    atomic_store(&held_level, level);
+    set_backlight(0);
+}
+
+/* nlclient writes the backlight's level through NSPR, opening the brightness
+ * file for each write. */
+static void *brightness_fd;
+static int is_backlight(const char *name) {
+    static char ours[PATH_MAX];
+    char opened[PATH_MAX];
+    const char *slash = strrchr(name, '/');
+    if (!slash || strcmp(slash, "/brightness") != 0 || !backlight_file())
+        return 0;
+    if (!ours[0] && !realpath(backlight_file(), ours))
+        return 0;
+    return realpath(name, opened) && strcmp(opened, ours) == 0;
+}
+void *PR_Open(const char *name, int flags, int mode) {
+    static void *(*real)(const char *, int, int);
+    void *fd = NEXT(real, "PR_Open")(name, flags, mode);
+    if (fd && name && is_backlight(name))
+        brightness_fd = fd;
+    return fd;
+}
+int PR_Close(void *fd) {
+    static int (*real)(void *);
+    if (fd && fd == brightness_fd)
+        brightness_fd = 0;
+    return NEXT(real, "PR_Close")(fd);
+}
+/* A level nlclient writes while held is kept for the release; one lighting
+ * the backlight while HOLD is there starts the hold. */
+int PR_Write(void *fd, const void *buf, int amount) {
+    static int (*real)(void *, const void *, int);
+    if (fd && fd == brightness_fd && amount > 0 && amount < 16) {
+        char text[16];
+        memcpy(text, buf, (size_t)amount);
+        text[amount] = 0;
+        int level = atoi(text);
+        expire_hold();
+        int held = atomic_load(&held_level);
+        while (held >= 0 && !atomic_compare_exchange_weak(&held_level, &held, level))
+            ;
+        if (held >= 0)
+            return amount;
+        if (level > 0 && unlink(HOLD) == 0) {
+            held_at = monotonic_ns();
+            atomic_store(&held_level, level);
+            return amount;
+        }
+    }
+    return NEXT(real, "PR_Write")(fd, buf, amount);
+}
+
 /* The library's first frame in this nlclient: its loading, its GPU set-up
  * and the theme's first draw, which the library's own guard does not all
  * count. One that took nlclient down leaves ATTEMPT behind, and the next
@@ -786,6 +913,7 @@ static void plan_next(void) {
  * framebuffer nlclient has bound. The library shares nlclient's context,
  * so every piece of state it can touch is saved and restored. */
 static void draw_theme(unsigned image) {
+    hold_backlight();
     if (!attempt_begin() || !load_library())
         return;
     struct gl_state saved;
@@ -1043,10 +1171,15 @@ static int load_marker(void) {
 /* Paints the theme's frame on the CPU into `into`, the dial's size squared:
  * false (the theme failed) when it cannot be drawn. */
 static int paint_pixels(uint32_t *into) {
-    if (!attempt_begin() || !load_library())
+    hold_backlight();
+    if (!attempt_begin() || !load_library()) {
+        release_backlight();
         return 0;
+    }
     unsigned drawn = render_pixels(native_read_state, into, (unsigned)dial_size, atomic_load(&native_target));
     attempt_end();
+    /* nlclient shows the page at once: the light comes back with it. */
+    release_backlight();
     if (!drawn) {
         fail();
         return 0;
@@ -1446,6 +1579,7 @@ unsigned eglSwapBuffers(void *display, void *surface) {
         real = dlsym(RTLD_NEXT, "eglSwapBuffers");
     atomic_store(&pending, 0);
     unsigned result = real(display, surface);
+    release_backlight();
     start_ticker();
     return result;
 }
