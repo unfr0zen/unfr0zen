@@ -223,6 +223,12 @@ impl Glyphs {
     }
 }
 
+/// The most pixels a run may cover, four screens: a theme's text and
+/// spacing within their own limits can still ask for hundreds of megabytes,
+/// and a refused allocation aborts nlclient, which no unwind catches. A
+/// bigger run is drawn as nothing.
+const MAX_RUN: usize = 4 * 480 * 480;
+
 #[cfg(test)]
 pub fn rasterize(font: &Font, text: &str, px: f32, spacing: f32) -> Run {
     rasterize_with(&mut Glyphs::default(), font, None, text, px, spacing)
@@ -264,6 +270,9 @@ pub fn rasterize_at(
     let bottom = glyphs.iter().map(|(_, t, m, _)| t - m.height as i32).min().unwrap_or(0);
     // One column more on the right for the smear.
     let (width, height) = ((right - left) as usize + 1, (top - bottom) as usize);
+    if width.saturating_mul(height) > MAX_RUN {
+        return Run { width: 0, height: 0, left: 0, top: 0, advance, alpha: Vec::new() };
+    }
     let mut alpha = vec![0u8; width * height];
     for (x, t, m, glyph) in &glyphs {
         let (ox, oy) = ((x - left) as usize, (top - t) as usize);
@@ -305,6 +314,9 @@ fn set_like_stock(cache: &mut Glyphs, pens: &[(char, f32, &Font)], px: f32, adva
     let top = glyphs.iter().map(|(_, _, y)| y.floor() as i32).min().unwrap_or(0);
     let bottom = glyphs.iter().map(|(g, _, y)| y.floor() as i32 + g.rows as i32 + 1).max().unwrap_or(top);
     let (width, height) = ((right - left) as usize, (bottom - top) as usize);
+    if width.saturating_mul(height) > MAX_RUN {
+        return Run { width: 0, height: 0, left: 0, top: 0, advance, alpha: Vec::new() };
+    }
     let mut cover = vec![0f32; width * height];
     let mut glyph = Vec::new();
     for (g, x, y) in &glyphs {
@@ -391,6 +403,13 @@ mod tests {
         assert_eq!(spaced.width, run.width + 10);
         assert!((spaced.advance - run.advance - 10.0).abs() < 1e-3);
         assert_eq!(advance(&mut Glyphs::default(), &f, None, "HI", 40.0, 0.0), run.advance);
+    }
+
+    #[test]
+    fn a_run_bigger_than_its_budget_is_drawn_as_nothing() {
+        let run = rasterize(&font(), &"I".repeat(1024), 120.0, 480.0);
+        assert_eq!((run.width, run.height, run.alpha.len()), (0, 0, 0));
+        assert!(run.advance > 1024.0 * 480.0, "it still takes its room: {}", run.advance);
     }
 
     #[test]
