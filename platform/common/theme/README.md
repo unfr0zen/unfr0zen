@@ -19,12 +19,29 @@ The dial's draw places a marker image the dial's size (`dial_size` in the
 bindings; `/var/run/unfr0zen/theme-marker.png`, every pixel
 RGBA `12 34 56 ff`) where the dial would show.
 
-On the gen 1 and gen 2 nlclient draws on the CPU into the framebuffer's pages. The
-library paints the theme's frame with tiny-skia straight into the marker
-image's pixels (`nestlocal_theme_draw_pixels`), which nlclient's software
-context then draws as the dial would be: placed, and scaled and faded into
-the menus, where the frame drawn last moves with the dial. A frame nothing
-changed is not painted again: the image keeps it.
+Where nlclient draws on the CPU (`software` in the bindings), it draws into
+the framebuffer's pages. The library paints the theme's frame with tiny-skia
+(`nestlocal_theme_draw_pixels`): at full size straight into the page nlclient
+is drawing, and scaled and faded into the menus into the marker image's
+pixels, which nlclient's software context then draws as the dial would be. A
+frame nothing changed is not painted again, only copied out. The painter
+blends a layer only where it is not clear, tints it as it is copied, and draws
+a glow's discs and a gradient arc in one pass each. While the theme shows, the
+processor runs at 800 MHz when its own speed is slower (Nest keeps it at 300
+MHz; 1 GHz is not stable), back to its own speed, as nlclient first found it
+since the unit started, two seconds after the theme's last frame and whenever
+nlclient starts; while the theme moves, a frame is asked for a frame period
+(30 a second) after the last one started, as long before as nlclient takes to
+handle the request: by the dial's own draw when it is due by then, so that the
+request waits in nlclient's queue while it finishes that frame.
+
+Two files on the scratch volume, read as nlclient starts, measure this:
+`/media/scratch/.unfr0zen/theme.profile` logs, to
+`/var/run/unfr0zen/theme.log`, the frames' rate and where their time goes
+(the library's painting by operation, nlclient's own work, and how long a
+redraw waits for it); `/media/scratch/.unfr0zen/theme.bench` keeps the
+display lit and replays the theme's entrance every 3 seconds, for frames to
+measure without a hand on the unit.
 
 In GLES2 the preload tracks the texture nlclient uploads the marker into;
 at full size that texture's draw becomes the theme's, straight into the

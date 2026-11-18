@@ -541,7 +541,7 @@ pub struct Options {
     pub wwn_boiler: bool,
     /// Doom's files: the DOOM settings entry offers it and nestlocal launches it.
     pub doom: Option<Overlay>,
-    /// Customizable home screen themes (the gen 3): the theme preload and
+    /// Customizable home screen themes: the theme preload and
     /// nestlocal's theme library (THEME_PRELOAD, THEME_LIBRARY), preloaded into
     /// nlclient, bound to the unit's nlclient (nlclient::theme), and offered
     /// by nestlocal in the THEMES settings entry.

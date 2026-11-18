@@ -50,6 +50,12 @@ const THEMES: &str = "/media/scratch/.unfr0zen/themes";
 const GUARD: &str = "/media/scratch/.unfr0zen/theme.guard";
 const GUARD_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// While this file is there when the library starts, the CPU painter times
+/// each of its operations and reports them with its frame times.
+const PROFILE: &str = "/media/scratch/.unfr0zen/theme.profile";
+/// Frames between the reports of where the time went.
+const REPORT_FRAMES: u32 = 60;
+
 /// Why the chosen theme does not draw, shown in its place.
 struct Broken {
     error: String,
@@ -370,6 +376,7 @@ impl Engine {
     }
     /// The engine painting on the CPU, `size` pixels square.
     fn new_soft(native: Option<NativeReader>, size: u32) -> Result<Self, String> {
+        soft::PROFILING.store(Path::new(PROFILE).exists(), Ordering::Relaxed);
         Ok(Self::with(Painting::Soft(Box::new(soft::Renderer::new(size, size)?)), native))
     }
     fn with(painting: Painting, native: Option<NativeReader>) -> Self {
@@ -622,11 +629,13 @@ impl Engine {
     }
 
     /// The CPU's frame, into `pixels`: the dial's size squared, as ARGB
-    /// words. An unchanged frame is not drawn again: `pixels` keeps it.
+    /// words. An unchanged frame is not painted again, only copied out:
+    /// `pixels` may be either of the framebuffer's pages.
     fn draw_pixels(&mut self, pixels: &mut [u32], size: u32, target: f32) -> Result<(), String> {
         let Prepared { mut ui, state, now, design, start } = self.prepare(target)?;
         ui.dial_px = size as f32;
         if !self.animating && self.previous.as_ref() == Some(&state) && self.wake.is_none_or(|wake| now < wake) {
+            copy_out(&self.soft()?.pixmap, pixels);
             return Ok(());
         }
         self.previous = Some(state);
@@ -639,25 +648,35 @@ impl Engine {
             self.paint(&ui, now)?;
         }
         let drawn = Instant::now();
-        // The pixmap is opaque (begin fills it black): premultiplied is plain.
-        for (out, px) in pixels.iter_mut().zip(self.soft()?.pixmap.pixels()) {
-            *out = 0xff00_0000 | u32::from(px.red()) << 16 | u32::from(px.green()) << 8 | u32::from(px.blue());
-        }
+        copy_out(&self.soft()?.pixmap, pixels);
         self.frames += 1;
         for (total, duration) in self.timing.iter_mut().zip([begun - start, drawn - begun, drawn.elapsed()]) {
             *total += duration.as_secs_f64();
         }
-        if self.frames == 120 {
+        if self.frames == REPORT_FRAMES {
             let timing = std::mem::take(&mut self.timing);
             self.frames = 0;
             let r = self.soft()?;
+            let per_frame = |seconds: f64| seconds * 1000.0 / f64::from(REPORT_FRAMES);
+            let mut operations: Vec<_> = std::mem::take(&mut r.profile).into_iter().collect();
+            operations.sort_by_key(|a| std::cmp::Reverse(a.1 .1));
+            let operations: String = operations
+                .iter()
+                .map(|(name, (count, took))| {
+                    format!(
+                        " [{name} {:.2}ms x{:.1}]",
+                        per_frame(took.as_secs_f64()),
+                        f64::from(*count) / f64::from(REPORT_FRAMES)
+                    )
+                })
+                .collect();
             eprintln!(
-                "THEME soft state_ms={:.3} lua_ms={:.3} copy_ms={:.3} shapes={} painting_ms={:.3}",
-                timing[0] * 1000.0 / 120.0,
-                timing[1] * 1000.0 / 120.0,
-                timing[2] * 1000.0 / 120.0,
-                r.shapes / 120,
-                r.painting.as_secs_f64() * 1000.0 / 120.0
+                "THEME soft state_ms={:.2} lua_ms={:.2} copy_ms={:.2} shapes={} painting_ms={:.2}{operations}",
+                per_frame(timing[0]),
+                per_frame(timing[1]),
+                per_frame(timing[2]),
+                r.shapes / REPORT_FRAMES,
+                per_frame(r.painting.as_secs_f64())
             );
             r.shapes = 0;
             r.painting = std::time::Duration::ZERO;
@@ -674,6 +693,16 @@ impl Engine {
         self.wake.map_or(f32::INFINITY, |wake| (wake - self.started.elapsed().as_secs_f64()).max(0.0) as f32)
     }
 }
+/// The CPU's frame as ARGB words. The pixmap is opaque (begin fills it
+/// black), so premultiplied is plain: RGBA bytes to ARGB words is red and
+/// blue swapped, word by word.
+fn copy_out(pixmap: &tiny_skia::Pixmap, pixels: &mut [u32]) {
+    for (out, px) in pixels.iter_mut().zip(pixmap.data().as_chunks::<4>().0) {
+        let v = u32::from_le_bytes(*px);
+        *out = 0xff00_0000 | (v & 0x0000_ff00) | (v & 0xff) << 16 | (v >> 16) & 0xff;
+    }
+}
+
 /// Native wheel notification, consumed by the GL thread on its next frame.
 #[no_mangle]
 pub extern "C" fn nestlocal_theme_input() {

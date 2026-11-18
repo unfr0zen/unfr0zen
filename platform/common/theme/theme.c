@@ -9,11 +9,12 @@
  * texture). Where nlclient draws on the CPU (`software`), the library paints
  * the frame at full size straight into the page being drawn, and scaled into
  * the menus into the marker image's own pixels, which nlclient's software
- * context then draws, placed, scaled and faded as the dial would be. nlclient's native controls stay its
- * own: the theme reads the setpoints, mode and heat-cool pick from the native
- * control model each frame. A redraw is asked of nlclient's event queue at
- * the panel's rate while the theme moves, and about once a second while it
- * stands still, as a redraw that never lights the display.
+ * context then draws, placed, scaled and faded as the dial would be.
+ * nlclient's native controls stay its own: the theme reads the setpoints, mode
+ * and heat-cool pick from the native control model each frame. A redraw is
+ * asked of nlclient's event queue at the panel's rate while the theme moves
+ * (at most 30 a second on the CPU), and about once a second while it stands
+ * still, as a redraw that never lights the display.
  *
  * Where everything is comes from BINDINGS, written by the setup for the
  * unit's own nlclient (unfr0zen-core's nlclient::theme); nothing is hooked
@@ -21,6 +22,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <link.h>
 #include <pthread.h>
@@ -35,14 +37,34 @@
 #include <time.h>
 #include <unistd.h>
 
-#define BINDINGS "/etc/unfr0zen/theme.bindings"
+#define BINDINGS          "/etc/unfr0zen/theme.bindings"
 /* On the scratch volume, with the themes (unfr0zen-core's diamond3::scratch);
  * when it is gone the dial stays stock. */
-#define LIBRARY  "/media/scratch/.unfr0zen/lib/libnestlocal_theme.so"
+#define LIBRARY           "/media/scratch/.unfr0zen/lib/libnestlocal_theme.so"
 /* nestlocal's files (crates/nestlocal/src/theme/mod.rs). */
-#define MARKER   "/var/run/unfr0zen/theme-marker.png"
-#define ENABLED  "/var/run/unfr0zen/theme.native.enabled"
-#define STATE    "/var/run/unfr0zen/theme.native.json"
+#define MARKER            "/var/run/unfr0zen/theme-marker.png"
+#define ENABLED           "/var/run/unfr0zen/theme.native.enabled"
+#define STATE             "/var/run/unfr0zen/theme.native.json"
+/* Measurement, on the scratch volume so that it lasts until removed, read as
+ * nlclient starts: PROFILE has the library's reports and the frames' times
+ * (below) logged to LOG; BENCH keeps the display lit and replays the theme's
+ * entrance every BENCH_ENTRANCE_NS, frames to measure without a hand on the
+ * unit, the thermostat left as it is. */
+#define PROFILE           "/media/scratch/.unfr0zen/theme.profile"
+#define BENCH             "/media/scratch/.unfr0zen/theme.bench"
+#define LOG               "/var/run/unfr0zen/theme.log"
+#define BENCH_ENTRANCE_NS 3000000000LL
+/* On the CPU the processor runs at FAST_KHZ while the theme shows (1 GHz is
+ * not stable), when its own speed is slower: back to its own speed within
+ * BOOST_NS of the theme's last frame and whenever nlclient starts. Its own
+ * speed is the one nlclient first finds, kept in OWN_SPEED until the unit
+ * restarts. */
+#define CPU_SPEED         "/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed"
+#define CPU_NOW           "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+#define OWN_SPEED         "/var/run/unfr0zen/cpu.khz"
+#define FAST_KHZ          800000
+#define BOOST_NS          2000000000LL
+#define BENCH_LIGHT_NS    5000000000LL
 
 #define PTR(p, o)   (*(void **)((char *)(p) + (o)))
 #define WORD(p, o)  (*(uint32_t *)((char *)(p) + (o)))
@@ -65,8 +87,27 @@
 #define SCREEN_ACTIVE_LAYER      0x20
 /* A layer's vptr sits this far into its vtable from the bound dial slot. */
 #define DIAL_SLOT_IN_VTABLE      0x10
-/* An image's pixels. */
+/* An image's size and pixels. */
+#define IMAGE_WIDTH              0x04
+#define IMAGE_HEIGHT             0x08
 #define IMAGE_PIXELS             0x0c
+/* nlclient's software context: its bitmap, and the bitmap's size, its row
+ * length in pixels and the vtable slot giving the page being drawn. */
+#define CONTEXT_BITMAP           0x18
+#define BITMAP_WIDTH             0x04
+#define BITMAP_HEIGHT            0x08
+#define BITMAP_STRIDE            0x10
+#define BITMAP_PIXELS_SLOT       0x10
+/* The software context's clip (left and top, then right and bottom), the
+ * depth of its transform stack, and the stack's first entry: a 16.16 matrix,
+ * then its translation in 16.16. */
+#define CONTEXT_CLIP_LEFT        0x30
+#define CONTEXT_CLIP_TOP         0x34
+#define CONTEXT_CLIP_RIGHT       0x3c
+#define CONTEXT_CLIP_BOTTOM      0x40
+#define CONTEXT_DEPTH            0x44
+#define CONTEXT_MATRIX           0x48
+#define CONTEXT_TRANSLATION      0x5c
 /* The client's globals, which tells the stock client from another queue. */
 #define CLIENT_GLOBALS           0x70
 /* The drawing context: the layer it draws into, where that is itself when
@@ -309,7 +350,7 @@ static atomic_int pending, rendering, ambient_ready, showing_home;
 /* The dial's last draw was the theme's: its marker draws take the theme. */
 static atomic_int dial_themed;
 /* `hooked` once nlclient's vtables carry this library's methods. */
-static int full_theme, in_batch, failed, hooked;
+static int full_theme, in_batch, failed, hooked, profiling, benching;
 static void *preview_figures, *theme_image, *theme_pixels;
 static unsigned generation;
 static _Atomic(float) native_target;
@@ -874,7 +915,58 @@ static int preview(void *ctx, void *g) {
     *opacity = saved;
     return result;
 }
+/* The redraw periods, in ns: the panel's rate while the theme moves; while
+ * it stands still, often enough to follow the clock and what nlclient's
+ * model or nestlocal's state change; until the ambient light is sampled. */
+#define FRAME_NS          16666667
+/* On the CPU, which cannot paint at the panel's rate: half of it. */
+#define SOFTWARE_FRAME_NS 33333333
+#define SETTLED_NS        1000000000
+#define IDLE_NS           100000000
+#define SECOND_NS         1000000000
 static void start_ticker(void);
+/* When the last redraw handler ran and when the pending one was queued, in
+ * CLOCK_MONOTONIC ns (0 once handled). */
+static atomic_llong redrawn_at, queued_at;
+/* How long nlclient takes to handle a queued redraw, averaged: on the CPU the
+ * next redraw is queued that much before the frame is due. */
+static atomic_llong latency;
+/* How long before a frame is due on the CPU its redraw is queued: as long
+ * as nlclient takes to handle one, at most half a frame. */
+static long long lead(void) {
+    long long ahead = atomic_load(&latency);
+    return ahead < 0 ? 0 : ahead > SOFTWARE_FRAME_NS / 2 ? SOFTWARE_FRAME_NS / 2 : ahead;
+}
+/* How long queued redraws waited for nlclient to handle them (profiling). */
+static atomic_llong waited, handled;
+/* The frames drawn on the CPU while profiling: each one's dial draw from its
+ * entry, the painting and nlclient's drawing of the image in it, and what
+ * nlclient does in between (period - draw), reported every PROFILE_FRAMES. */
+#define PROFILE_FRAMES 60
+static void profile_frame(long long entered, long long painted, long long drawn) {
+    static long long last, period, paint, blit, before;
+    static unsigned frames;
+    long long since = last ? entered - last : 0, redrawn = atomic_load(&redrawn_at);
+    last = entered;
+    /* A gap of over a second is the theme standing still, not a frame. */
+    if (!since || since > 1000000000LL)
+        return;
+    period += since;
+    paint += painted - entered;
+    blit += drawn - painted;
+    before += redrawn && redrawn < entered && entered - redrawn < since ? entered - redrawn : 0;
+    if (++frames < PROFILE_FRAMES)
+        return;
+    double n = frames * 1e6;
+    long long queue = atomic_exchange(&waited, 0), count = atomic_exchange(&handled, 0);
+    fprintf(stderr,
+            "THEME frame fps=%.1f period_ms=%.1f paint_ms=%.1f blit_ms=%.1f native_ms=%.1f (before the dial %.1f, "
+            "redraws waited %.1f)\n",
+            frames * 1e9 / (double)period, period / n, paint / n, blit / n, (period - paint - blit) / n, before / n,
+            count ? queue / (count * 1e6) : 0.0);
+    period = paint = blit = before = 0;
+    frames = 0;
+}
 /* The modes the library knows: heat, cool and heat-cool (0 to 2) and eco (4);
  * it shows any other as off. */
 #define MODE_HEAT 0
@@ -901,7 +993,8 @@ static int load_marker(void) {
     if (!image)
         return 0;
     uint32_t *pixels = PTR(image, IMAGE_PIXELS);
-    if (software && (!pixels || pixels[0] != MARKER_PIXEL || pixels[dial_size * dial_size - 1] != MARKER_PIXEL)) {
+    if (software && (WORD(image, IMAGE_WIDTH) != dial_size || WORD(image, IMAGE_HEIGHT) != dial_size || !pixels ||
+                     pixels[0] != MARKER_PIXEL || pixels[dial_size * dial_size - 1] != MARKER_PIXEL)) {
         fprintf(stderr, "theme: the marker's pixels are not nlclient's image's\n");
         fail();
         return 0;
@@ -910,18 +1003,84 @@ static int load_marker(void) {
     theme_pixels = pixels;
     return 1;
 }
-/* Paints the theme's frame on the CPU into the marker's pixels: false (the
- * theme failed) when it cannot be drawn. */
-static int paint_pixels(void) {
+/* Paints the theme's frame on the CPU into `into`, the dial's size squared:
+ * false (the theme failed) when it cannot be drawn. */
+static int paint_pixels(uint32_t *into) {
     if (!load_library())
         return 0;
-    if (!render_pixels(native_read_state, theme_pixels, (unsigned)dial_size, atomic_load(&native_target))) {
+    if (!render_pixels(native_read_state, into, (unsigned)dial_size, atomic_load(&native_target))) {
         fail();
         return 0;
     }
     plan_next();
     return 1;
 }
+/* The page nlclient is drawing, when the dial covers all of it: the theme's
+ * full-size frame goes straight into it, rather than into the marker that
+ * nlclient would then copy, pixel by pixel, to the same place. Only while
+ * the context draws from the page's centre, neither scaled nor clipped. */
+static uint32_t *whole_page(void *ctx) {
+    void *bitmap = PTR(ctx, CONTEXT_BITMAP);
+    if (!bitmap || WORD(bitmap, BITMAP_WIDTH) != dial_size || WORD(bitmap, BITMAP_HEIGHT) != dial_size ||
+        WORD(bitmap, BITMAP_STRIDE) != dial_size)
+        return 0;
+    uint32_t centre = dial_size / 2 * FIXED_ONE;
+    if (WORD(ctx, CONTEXT_CLIP_LEFT) || WORD(ctx, CONTEXT_CLIP_TOP) || WORD(ctx, CONTEXT_CLIP_RIGHT) != dial_size ||
+        WORD(ctx, CONTEXT_CLIP_BOTTOM) != dial_size || WORD(ctx, CONTEXT_DEPTH) ||
+        WORD(ctx, CONTEXT_MATRIX) != FIXED_ONE || WORD(ctx, CONTEXT_MATRIX + 4) || WORD(ctx, CONTEXT_MATRIX + 8) ||
+        WORD(ctx, CONTEXT_MATRIX + 12) != FIXED_ONE || WORD(ctx, CONTEXT_TRANSLATION) != centre ||
+        WORD(ctx, CONTEXT_TRANSLATION + 4) != centre)
+        return 0;
+    return VIRTUAL(pointer_fn, bitmap, BITMAP_PIXELS_SLOT)(bitmap);
+}
+/* The processor's speed, while the theme shows on the CPU (FAST_KHZ), and
+ * its own, 0 when unknown or not slower: then it is left as it is. */
+static atomic_int boosted;
+static atomic_llong shown_at;
+static atomic_uint own_khz;
+/* Whether the ticker runs. */
+static atomic_int ticking;
+/* Sets the processor's speed: false when it cannot be. */
+static int cpu_speed(unsigned khz) {
+    char text[16];
+    int fd = open(CPU_SPEED, O_WRONLY);
+    if (fd < 0)
+        return 0;
+    int length = snprintf(text, sizeof(text), "%u", khz);
+    int done = write(fd, text, (size_t)length) == length;
+    if (!done)
+        fprintf(stderr, "theme: %s: %s\n", CPU_SPEED, strerror(errno));
+    close(fd);
+    return done;
+}
+/* A speed in kHz from a file, 0 when there is none. */
+static unsigned read_khz(const char *path) {
+    char text[16] = {0};
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+    ssize_t length = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    return length > 0 ? (unsigned)strtoul(text, 0, 10) : 0;
+}
+/* The processor's own speed, as nlclient first found it since the unit
+ * started. */
+static unsigned find_own_khz(void) {
+    unsigned khz = read_khz(OWN_SPEED);
+    if (khz)
+        return khz;
+    khz = read_khz(CPU_NOW);
+    FILE *f = khz ? fopen(OWN_SPEED, "w") : 0;
+    if (f) {
+        fprintf(f, "%u\n", khz);
+        fclose(f);
+    }
+    return khz;
+}
+/* When the theme's frame last started, for the ticker to pace the next. */
+static atomic_llong frame_started;
+static void replan(void);
+static int queue_redraw(void *g);
 /* The dial's draw: the native state for the theme, and the marker where the
  * dial would show. */
 static int draw(void *layer, void *ctx) {
@@ -983,16 +1142,51 @@ static int draw(void *layer, void *ctx) {
         result = original_draw(layer, ctx);
         WORD(layer, LAYER_ALPHA) = alpha;
     }
+    long long entered = monotonic_ns(), painted = 0;
     if (software) {
-        /* A frame is being drawn: the ticker may queue the next redraw. */
-        atomic_store(&pending, 0);
-        if (!paint_pixels())
+        /* A frame is being drawn: once the redraw queued for it has been
+         * handled (or never was, within a second), the next may be queued. */
+        long long queued = atomic_load(&queued_at);
+        if (!queued || entered - queued > SETTLED_NS)
+            atomic_store(&pending, 0);
+        atomic_store(&frame_started, entered);
+        atomic_store(&shown_at, entered);
+        /* Faster only while the ticker runs, which brings it back. */
+        if (atomic_load(&own_khz) && atomic_load(&ticking) && !atomic_exchange(&boosted, 1) && !cpu_speed(FAST_KHZ))
+            atomic_store(&own_khz, 0);
+        if (benching && showing) {
+            static long long entrance;
+            if (entered - entrance > BENCH_ENTRANCE_NS) {
+                entrance = entered;
+                home();
+                kick();
+            }
+        }
+        uint32_t *page = full_theme ? whole_page(ctx) : 0;
+        if (!paint_pixels(page ? page : theme_pixels))
             return full_theme ? original_draw(layer, ctx) : result;
+        painted = monotonic_ns();
+        /* While it moves, the next frame is asked for now, from nlclient's own
+         * thread, once it is due: the request waits in its queue through the
+         * rest of this frame (the layers above, the pan, the display's
+         * update) and the next starts as soon as this one is shown. Sooner,
+         * the ticker asks for it when it is due. */
+        if (showing && atomic_load(&theme_due) <= painted && painted >= entered + SOFTWARE_FRAME_NS - lead() &&
+            !atomic_exchange(&pending, 1) && !queue_redraw(PTR(layer, LAYER_GLOBALS)))
+            atomic_store(&pending, 0);
+        replan();
+        if (page) {
+            if (profiling)
+                profile_frame(entered, painted, painted);
+            return result;
+        }
     } else
         generation++;
     int width = (int)((float)dial_size * scale);
     VIRTUAL(draw_scaled_fn, ctx, CONTEXT_DRAW_SCALED_SLOT)(ctx, -width / 2, -width / 2, theme_image,
                                                            (int)(alpha * FIXED_ONE / 255), (int)(scale * FIXED_ONE), 0);
+    if (profiling && software && full_theme)
+        profile_frame(entered, painted, monotonic_ns());
     return result;
 }
 /* The theme owns the home dial's backdrop: native menu clears in the heating
@@ -1056,6 +1250,7 @@ struct handler {
  * lit; 5 would light it first, re-arming the backlight's ramp each time. */
 enum {
     RESULT_REDRAW = 1,
+    RESULT_LIGHT = 5,
 };
 static int redraw(struct handler *h, void *event) {
     (void)event;
@@ -1071,22 +1266,31 @@ static int redraw(struct handler *h, void *event) {
     if (!atomic_load(&rendering))
         atomic_store(&pending, 0);
     NATIVE(void_fn, delete_native)(h);
+    long long at = monotonic_ns(), queued = atomic_exchange(&queued_at, 0);
+    atomic_store(&redrawn_at, at);
+    if (queued && at > queued) {
+        long long took = at - queued, average = atomic_load(&latency);
+        atomic_store(&latency, average + (took - average) / 8);
+        if (profiling) {
+            atomic_fetch_add(&waited, took);
+            atomic_fetch_add(&handled, 1);
+        }
+    }
+    /* Benching, the display is kept lit: lighting it re-arms the
+     * backlight's ramp, so only every few seconds. */
+    static long long lit;
+    if (benching && monotonic_ns() - lit > BENCH_LIGHT_NS) {
+        lit = monotonic_ns();
+        return RESULT_LIGHT;
+    }
     return RESULT_REDRAW;
 }
-/* The redraw periods, in ns: the panel's rate while the theme moves; while
- * it stands still, often enough to follow the clock and what nlclient's
- * model or nestlocal's state change; until the ambient light is sampled. */
-#define FRAME_NS       16666667
-#define SETTLED_NS     1000000000
-#define IDLE_NS        100000000
-#define SECOND_NS      1000000000
 /* The frame periods a queued redraw may go unswapped before the ticker
  * falls back to the settled period: nlclient swaps nothing while the
  * display is off. */
 #define STALLED_FRAMES 30
 static pthread_mutex_t tick_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t tick_cond;
-static atomic_int ticking;
 static int kicked;
 /* Wakes the ticker for a frame now: the ring turned, or the theme shows
  * again. */
@@ -1103,20 +1307,31 @@ static void kick(void) {
 static int wait_tick(long long until) {
     struct timespec t = {(time_t)(until / SECOND_NS), (long)(until % SECOND_NS)};
     pthread_mutex_lock(&tick_lock);
-    while (!kicked) {
+    /* Once: a replan wakes it early, to plan again. */
+    if (!kicked) {
         if (until < 0)
             pthread_cond_wait(&tick_cond, &tick_lock);
-        else if (pthread_cond_timedwait(&tick_cond, &tick_lock, &t) == ETIMEDOUT)
-            break;
+        else
+            pthread_cond_timedwait(&tick_cond, &tick_lock, &t);
     }
     int woken = kicked;
     kicked = 0;
     pthread_mutex_unlock(&tick_lock);
     return woken;
 }
+/* Has the ticker plan again: a frame on the CPU has been drawn, and the
+ * next is paced from its start. */
+static void replan(void) {
+    if (!atomic_load(&ticking))
+        return;
+    pthread_mutex_lock(&tick_lock);
+    pthread_cond_signal(&tick_cond);
+    pthread_mutex_unlock(&tick_lock);
+}
 /* A redraw for nlclient's queue, one at a time (the next only once a frame
- * has been swapped): at the panel's rate while the theme moves, when it
- * asks while it stands still, and not at all while it does not show. */
+ * has been swapped): while the theme moves, at the panel's rate, or on the
+ * CPU a frame after the last one's start; when it asks while it stands
+ * still; and not at all while it does not show. */
 static void *ticker(void *unused) {
     (void)unused;
     long long next = monotonic_ns();
@@ -1124,8 +1339,11 @@ static void *ticker(void *unused) {
     for (;;) {
         long long at = monotonic_ns(), due = atomic_load(&theme_due);
         int showing = atomic_load(&rendering);
-        if (showing && stalled < STALLED_FRAMES && due <= at + FRAME_NS) {
-            next += FRAME_NS;
+        long long frame = software ? SOFTWARE_FRAME_NS : FRAME_NS;
+        if (showing && stalled < STALLED_FRAMES && due <= at + frame) {
+            /* On the CPU, a frame after the last one's start, queued its lead
+             * before; on the GPU, at the panel's rate. */
+            next = software ? atomic_load(&frame_started) + frame - lead() : next + frame;
             if (next < at)
                 next = at;
         } else if (showing) {
@@ -1133,32 +1351,55 @@ static void *ticker(void *unused) {
         } else {
             next = atomic_load(&ambient_ready) ? -1 : at + IDLE_NS;
         }
-        if (wait_tick(next))
-            next = monotonic_ns();
+        /* Back to the processor's own speed once the theme no longer shows. */
+        long long slow = atomic_load(&boosted) ? atomic_load(&shown_at) + BOOST_NS : -1;
+        if (slow >= 0 && (next < 0 || slow < next))
+            next = slow;
+        int woken = wait_tick(next);
+        at = monotonic_ns();
+        if (atomic_load(&boosted) && at - atomic_load(&shown_at) > BOOST_NS && atomic_exchange(&boosted, 0))
+            cpu_speed(atomic_load(&own_khz));
+        if (!woken && (next < 0 || at < next))
+            continue;
+        /* On the CPU a frame may have started while it waited: paced from
+         * that one. */
+        if (!woken && software && atomic_load(&frame_started) + frame - lead() > at)
+            continue;
+        if (woken)
+            next = at;
         void *g = atomic_load(&globals);
         if (!g || (!atomic_load(&rendering) && atomic_load(&ambient_ready)))
             continue;
         if (atomic_exchange(&pending, 1)) {
+            /* A redraw is waiting: retried a frame on, or once the next is
+             * drawn, rather than at once. */
             if (stalled < STALLED_FRAMES)
                 stalled++;
+            wait_tick(monotonic_ns() + frame);
             continue;
         }
         stalled = 0;
-        void *client = NATIVE(pointer_fn, activity_client)(g);
-        if (!client || PTR(client, CLIENT_GLOBALS) != g) {
+        if (!queue_redraw(g))
             atomic_store(&pending, 0);
-            continue;
-        }
-        struct handler *h = NATIVE(new_fn, new_native)(sizeof(*h));
-        void *event = NATIVE(new_fn, new_native)(EVENT_SIZE);
-        h->vtable = &h->handle;
-        h->handle = redraw;
-        h->globals = g;
-        NATIVE(void_fn, activity_ctor)(event);
-        NATIVE(activity_init_fn, activity_init)(event, EVENT_ACTIVITY, 0);
-        NATIVE(enqueue_fn, enqueue)(client, event, h);
     }
     return 0;
+}
+/* Queues a redraw on nlclient's event queue: false when its client is not
+ * the stock one's. */
+static int queue_redraw(void *g) {
+    void *client = NATIVE(pointer_fn, activity_client)(g);
+    if (!client || PTR(client, CLIENT_GLOBALS) != g)
+        return 0;
+    struct handler *h = NATIVE(new_fn, new_native)(sizeof(*h));
+    void *event = NATIVE(new_fn, new_native)(EVENT_SIZE);
+    h->vtable = &h->handle;
+    h->handle = redraw;
+    h->globals = g;
+    NATIVE(void_fn, activity_ctor)(event);
+    NATIVE(activity_init_fn, activity_init)(event, EVENT_ACTIVITY, 0);
+    atomic_store(&queued_at, monotonic_ns());
+    NATIVE(enqueue_fn, enqueue)(client, event, h);
+    return 1;
 }
 unsigned eglSwapBuffers(void *display, void *surface) {
     static unsigned (*real)(void *, void *);
@@ -1293,6 +1534,10 @@ __attribute__((constructor)) static void init(void) {
     if (strcmp(exe, "/nestlabs/sbin/nlclient"))
         return;
     unload_from_children();
+    profiling = access(PROFILE, F_OK) == 0;
+    benching = access(BENCH, F_OK) == 0;
+    if (profiling && freopen(LOG, "a", stderr))
+        setvbuf(stderr, 0, _IOLBF, 0);
     if (!read_bindings()) {
         fprintf(stderr, "theme: no bindings for this nlclient\n");
         return;
@@ -1310,6 +1555,13 @@ __attribute__((constructor)) static void init(void) {
         !writable(3, dial_event_slot)) {
         fprintf(stderr, "theme: nlclient's vtables cannot be written\n");
         return;
+    }
+    /* The processor at its own speed, should nlclient have stopped while
+     * the theme ran it faster. */
+    if (software) {
+        unsigned khz = find_own_khz();
+        if (khz && khz < FAST_KHZ && cpu_speed(khz))
+            atomic_store(&own_khz, khz);
     }
     void *unused;
     patch(background_slot, background, (void **)&original_background);

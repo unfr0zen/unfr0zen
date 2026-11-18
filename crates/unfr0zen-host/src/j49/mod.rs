@@ -418,6 +418,11 @@ fn install_kernel(progress: &mut dyn Progress, config: &Config, slot: Slot, nand
 /// first: whatever stops after it leaves the unit booting the stock kernel,
 /// until the environment names the new one.
 fn route_image(progress: &mut dyn Progress, config: &Config, nand: &mut dyn Nand, run_dir: &Path) -> Result<Outcome> {
+    // The themes live on the scratch volume, which only the unit's own setup
+    // reaches: refused before anything is read.
+    if config.options.theme.is_some() {
+        return Err(failure("customizable home screen themes need the unit's scratch volume"));
+    }
     let Checked { device, slot, .. } = check_unit(progress, config, Device::J49, "image", nand, run_dir)?;
     let mut changed = set_up_in_memory(progress, config, device, slot, nand, run_dir)?;
     changed |= install_kernel(progress, config, slot, nand)?;

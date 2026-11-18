@@ -3,7 +3,7 @@
 //! draws, into a pixmap the size of the framebuffer.
 
 use std::collections::HashMap;
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, TAU};
 use std::path::Path;
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use tiny_skia::{
     Transform,
 };
 
-use super::paint::{square_to_quad, Align, Baseline, Color, Painter, TextStyle};
+use super::paint::{gradient_arcs, square_to_quad, Align, Baseline, Color, Painter, TextStyle};
 use super::typeset;
 use log::{debug, trace};
 
@@ -66,6 +66,40 @@ fn runs(pixmap: &Pixmap) -> Runs {
         .collect()
 }
 
+/// Whether painting is timed, for a profile: reading the clock is a system
+/// call on an ARM kernel without vDSO clocks, which every operation would
+/// make twice.
+pub static PROFILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A span of painting, when profiling: its operation and start.
+type Span = Option<(&'static str, Instant)>;
+fn span(operation: &'static str) -> Span {
+    PROFILING.load(std::sync::atomic::Ordering::Relaxed).then(|| (operation, Instant::now()))
+}
+
+/// atan2 to about a thousandth of a radian, without the library's call.
+fn atan2(y: f32, x: f32) -> f32 {
+    use std::f32::consts::PI;
+    if x == 0.0 && y == 0.0 {
+        return 0.0;
+    }
+    let (ax, ay) = (x.abs(), y.abs());
+    let a = ax.min(ay) / ax.max(ay);
+    let s = a * a;
+    let mut r = ((-0.046_496_47 * s + 0.159_314_22) * s - 0.327_622_76) * s * a + a;
+    if ay > ax {
+        r = FRAC_PI_2 - r;
+    }
+    if x < 0.0 {
+        r = PI - r;
+    }
+    if y < 0.0 {
+        -r
+    } else {
+        r
+    }
+}
+
 /// A run of text as an image, its placement in pixels from the pen.
 struct CachedRun {
     pixmap: Option<Pixmap>,
@@ -94,8 +128,10 @@ pub struct Renderer {
     advances: HashMap<String, f32>,
     /// Shapes filled or stroked since the count was last taken.
     pub shapes: u32,
-    /// Time spent in the painter since last taken.
+    /// Time spent in the painter since last taken, and by operation, while
+    /// profiling.
     pub painting: std::time::Duration,
+    pub profile: std::collections::BTreeMap<&'static str, (u32, std::time::Duration)>,
     /// The frame's design units, pixels to a design unit, and the
     /// transform from design units to the framebuffer.
     design: f32,
@@ -119,6 +155,7 @@ impl Renderer {
             advances: HashMap::new(),
             shapes: 0,
             painting: std::time::Duration::ZERO,
+            profile: std::collections::BTreeMap::new(),
             design: 480.0,
             scale: 1.0,
             base: Transform::identity(),
@@ -162,6 +199,21 @@ impl Renderer {
         self.design = design;
         self.scale = theme / design;
         self.base = Transform::from_scale(self.scale, self.scale);
+    }
+
+    /// Counts a span of painting, when profiling, under its operation or
+    /// `operation` when given.
+    fn timed(&mut self, span: Span) {
+        self.timed_as(span, None);
+    }
+    fn timed_as(&mut self, span: Span, operation: Option<&'static str>) {
+        if let Some((name, started)) = span {
+            let took = started.elapsed();
+            self.painting += took;
+            let total = self.profile.entry(operation.unwrap_or(name)).or_default();
+            total.0 += 1;
+            total.1 += took;
+        }
     }
 
     pub fn painter<'a>(&'a mut self, theme_dir: &'a Path) -> SoftPainter<'a> {
@@ -223,9 +275,7 @@ fn rgba_png(data: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 /// the whole layer whenever a tint changes).
 fn tinted(source: &Pixmap, tint: Color) -> Pixmap {
     let mut out = source.clone();
-    let f = |v: f32| (v.clamp(0.0, 1.0) * 256.0) as u32;
-    let a = f(tint.a);
-    let m = [(f(tint.r) * a) >> 8, (f(tint.g) * a) >> 8, (f(tint.b) * a) >> 8, a];
+    let m = multipliers(tint);
     for px in out.data_mut().as_chunks_mut::<4>().0 {
         if px[3] == 0 {
             continue;
@@ -235,6 +285,14 @@ fn tinted(source: &Pixmap, tint: Color) -> Pixmap {
         }
     }
     out
+}
+
+/// A tint as what each premultiplied channel is multiplied by, out of 256.
+type Multipliers = [u32; 4];
+fn multipliers(tint: Color) -> Multipliers {
+    let f = |v: f32| (v.clamp(0.0, 1.0) * 256.0) as u32;
+    let a = f(tint.a);
+    [(f(tint.r) * a) >> 8, (f(tint.g) * a) >> 8, (f(tint.b) * a) >> 8, a]
 }
 
 /// The cache's key for a run of text at `scale` pixels a design unit.
@@ -257,21 +315,21 @@ impl SoftPainter<'_> {
 
     fn fill(&mut self, path: Option<tiny_skia::Path>, color: Color) {
         let Some(path) = path else { return };
-        let started = Instant::now();
+        let started = span("fill");
         let s = self.state();
         self.r.shapes += 1;
         self.target().fill_path(&path, &paint(color, s.alpha), FillRule::Winding, s.transform, None);
-        self.r.painting += started.elapsed();
+        self.r.timed(started);
     }
 
     fn stroke(&mut self, path: Option<tiny_skia::Path>, color: Color, width: f32, cap: LineCap) {
         let Some(path) = path else { return };
-        let started = Instant::now();
+        let started = span("stroke");
         let s = self.state();
         self.r.shapes += 1;
         let stroke = Stroke { width, line_cap: cap, ..Stroke::default() };
         self.target().stroke_path(&path, &paint(color, s.alpha), &stroke, s.transform, None);
-        self.r.painting += started.elapsed();
+        self.r.timed(started);
     }
 
     fn font(&self, name: &str) -> &typeset::Font {
@@ -367,7 +425,7 @@ impl SoftPainter<'_> {
             .pre_translate(snap(x) + left as f32 / scale, snap(baseline) - top as f32 / scale)
             .pre_scale(1.0 / scale, 1.0 / scale);
         if let Some((x, y)) = whole_pixels(&at) {
-            let started = Instant::now();
+            let started = span("text coverage");
             self.r.shapes += 1;
             let r = &mut *self.r;
             let Some(coverage) = r.runs.get(&key).and_then(|c| c.pixmap.as_ref()) else {
@@ -378,7 +436,7 @@ impl SoftPainter<'_> {
                 None => &mut r.pixmap,
             };
             blit_coverage(target, coverage, x, y, color, s.alpha);
-            r.painting += started.elapsed();
+            r.timed(started);
             return;
         }
         // The white coverage, coloured.
@@ -389,11 +447,11 @@ impl SoftPainter<'_> {
             *px = tiny_skia::PremultipliedColorU8::from_rgba(k(a, color.r), k(a, color.g), k(a, color.b), a)
                 .unwrap_or(*px);
         }
-        let started = Instant::now();
+        let started = span("text smooth");
         self.r.shapes += 1;
         let opacity = color.a * s.alpha;
         blit_smooth(self.target(), &colored, at, opacity);
-        self.r.painting += started.elapsed();
+        self.r.timed(started);
     }
 
     fn set_text(&mut self, text: &str, x: f32, y: f32, style: &TextStyle) -> f32 {
@@ -444,7 +502,7 @@ impl SoftPainter<'_> {
         quality: FilterQuality,
     ) {
         let Some(path) = path else { return };
-        let started = Instant::now();
+        let started = span("image");
         let s = self.state();
         self.r.shapes += 1;
         let r = &mut *self.r;
@@ -460,7 +518,7 @@ impl SoftPainter<'_> {
             None => &mut r.pixmap,
         };
         target.fill_path(&path, &p, FillRule::Winding, s.transform, None);
-        r.painting += started.elapsed();
+        r.timed(started);
     }
 }
 
@@ -470,16 +528,23 @@ impl SoftPainter<'_> {
 fn blit(target: &mut Pixmap, source: &Pixmap, x: i32, y: i32, opacity: f32) {
     let k = (opacity.clamp(0.0, 1.0) * 256.0) as u32;
     for row in y.max(0)..(y + source.height() as i32).min(target.height() as i32) {
-        blit_row(target, source, (x, y), row, (x, x + source.width() as i32), k);
+        blit_row(target, source, (x, y), row, (x, x + source.width() as i32), k, None);
     }
 }
 
-/// `blit` of a layer, only its `runs`.
-fn blit_runs(target: &mut Pixmap, source: &Pixmap, runs: &Runs, x: i32, y: i32, opacity: f32) {
+/// `blit` of a layer, only its `runs`, tinted by `tint` when given.
+fn blit_runs(
+    target: &mut Pixmap,
+    source: &Pixmap,
+    runs: &Runs,
+    (x, y): (i32, i32),
+    opacity: f32,
+    tint: Option<Multipliers>,
+) {
     let k = (opacity.clamp(0.0, 1.0) * 256.0) as u32;
     for row in y.max(0)..(y + source.height() as i32).min(target.height() as i32) {
         for &(from, to) in &runs[(row - y) as usize] {
-            blit_row(target, source, (x, y), row, (x + i32::from(from), x + i32::from(to)), k);
+            blit_row(target, source, (x, y), row, (x + i32::from(from), x + i32::from(to)), k, tint);
         }
     }
 }
@@ -676,8 +741,17 @@ fn blit_warped(target: &mut Pixmap, source: &Pixmap, corners: &[(f32, f32); 4], 
 }
 
 /// One row of `source` over `target`, pixels `span` of the target's row,
-/// the source's top-left corner at (x, y); `k` is the opacity out of 256.
-fn blit_row(target: &mut Pixmap, source: &Pixmap, (x, y): (i32, i32), row: i32, (x0, x1): (i32, i32), k: u32) {
+/// the source's top-left corner at (x, y); `k` is the opacity out of 256,
+/// and `tint`, when given, multiplies the source's pixels as `tinted` does.
+fn blit_row(
+    target: &mut Pixmap,
+    source: &Pixmap,
+    (x, y): (i32, i32),
+    row: i32,
+    (x0, x1): (i32, i32),
+    k: u32,
+    tint: Option<Multipliers>,
+) {
     let (tw, sw) = (target.width() as i32, source.width() as i32);
     let (x0, x1) = (x0.max(x).max(0), x1.min(x + sw).min(tw));
     if x0 >= x1 || row < y.max(0) || row >= (y + source.height() as i32).min(target.height() as i32) {
@@ -685,14 +759,50 @@ fn blit_row(target: &mut Pixmap, source: &Pixmap, (x, y): (i32, i32), row: i32, 
     }
     let s_row = &source.data()[(((row - y) * sw + (x0 - x)) * 4) as usize..][..((x1 - x0) * 4) as usize];
     let d_row = &mut target.data_mut()[((row * tw + x0) * 4) as usize..][..((x1 - x0) * 4) as usize];
-    for (d, s) in d_row.as_chunks_mut::<4>().0.iter_mut().zip(s_row.as_chunks::<4>().0) {
+    if let Some(m) = tint {
+        for (d, s) in d_row.as_chunks_mut::<4>().0.iter_mut().zip(s_row.as_chunks::<4>().0) {
+            if s[3] == 0 {
+                continue;
+            }
+            let s = [0, 1, 2, 3].map(|i| ((u32::from(s[i]) * m[i]) >> 8) as u8);
+            blend(d, &s, k);
+        }
+        return;
+    }
+    if k < 256 {
+        for (d, s) in d_row.as_chunks_mut::<4>().0.iter_mut().zip(s_row.as_chunks::<4>().0) {
+            blend(d, s, k);
+        }
+        return;
+    }
+    // At full opacity, stretches of opaque pixels are copied at once.
+    let (s_px, d_px) = (s_row.as_chunks::<4>().0, d_row.as_chunks_mut::<4>().0);
+    let mut i = 0;
+    while i < s_px.len() {
+        let start = i;
+        while i < s_px.len() && s_px[i][3] == 255 {
+            i += 1;
+        }
+        if i > start {
+            d_px[start..i].copy_from_slice(&s_px[start..i]);
+            continue;
+        }
+        blend(&mut d_px[i], &s_px[i], k);
+        i += 1;
+    }
+}
+
+/// One premultiplied pixel over another at opacity `k` out of 256.
+#[inline(always)]
+fn blend(d: &mut [u8; 4], s: &[u8; 4], k: u32) {
+    {
         let a = (u32::from(s[3]) * k) >> 8;
         if a == 0 {
-            continue;
+            return;
         }
         if a == 255 {
             *d = *s;
-            continue;
+            return;
         }
         let keep = 255 - a;
         for i in 0..4 {
@@ -708,10 +818,10 @@ fn blit_polygon(
     target: &mut Pixmap,
     source: &Pixmap,
     runs: Option<&Runs>,
-    x: i32,
-    y: i32,
+    (x, y): (i32, i32),
     polygon: &[(f32, f32)],
     opacity: f32,
+    tint: Option<Multipliers>,
 ) {
     if polygon.len() < 3 {
         return;
@@ -737,11 +847,11 @@ fn blit_polygon(
                     for &(a, b) in &runs[r] {
                         let (a, b) = (from.max(x + i32::from(a)), to.min(x + i32::from(b)));
                         if a < b {
-                            blit_row(target, source, (x, y), row, (a, b), k);
+                            blit_row(target, source, (x, y), row, (a, b), k, tint);
                         }
                     }
                 }
-                _ => blit_row(target, source, (x, y), row, (from, to), k),
+                _ => blit_row(target, source, (x, y), row, (from, to), k, tint),
             }
         }
     }
@@ -832,6 +942,131 @@ fn rounded_rect(x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<tiny_skia
 }
 
 impl Painter for SoftPainter<'_> {
+    /// The arc's colours at once: each pixel of its band coloured by its
+    /// angle, rather than an arc stroked for every 3 degrees.
+    fn gradient_arc(&mut self, x: f32, y: f32, r: f32, from: f32, to: f32, start: Color, end: Color, width: f32) {
+        let State { transform: t, alpha } = self.state();
+        if t.kx != 0.0 || t.ky != 0.0 || (t.sx - t.sy).abs() > 1e-3 || t.sx <= 0.0 || (to - from).abs() < 1e-6 {
+            return gradient_arcs(self, x, y, r, from, to, start, end, width);
+        }
+        let started = span("gradient_arc");
+        let (cx, cy) = (t.sx * x + t.tx, t.sy * y + t.ty);
+        let (radius, half) = (r * t.sx, width * t.sx / 2.0);
+        let (lo, hi) = (from.min(to), from.max(to));
+        let middle = (lo + hi) / 2.0;
+        let (inner, outer) = ((radius - half - 1.0).max(0.0), radius + half + 1.0);
+        // The arc's box: its ends at both radii, and the outer radius at each
+        // quarter turn it passes.
+        let point = |angle: f32, r: f32| (cx + r * angle.sin(), cy - r * angle.cos());
+        let mut corners = vec![point(lo, inner), point(lo, outer), point(hi, inner), point(hi, outer)];
+        let first_quarter = (lo / FRAC_PI_2).ceil() as i32;
+        let last_quarter = (hi / FRAC_PI_2).floor() as i32;
+        for q in first_quarter..=last_quarter.min(first_quarter + 4) {
+            corners.push(point(q as f32 * FRAC_PI_2, outer));
+        }
+        let (left, right) = corners.iter().fold((f32::MAX, f32::MIN), |(l, r), p| (l.min(p.0), r.max(p.0)));
+        let (top, bottom) = corners.iter().fold((f32::MAX, f32::MIN), |(t, b), p| (t.min(p.1), b.max(p.1)));
+        let target = self.target();
+        let (w, h) = (target.width() as i32, target.height() as i32);
+        let (box_left, box_right) = (((left - 1.0).floor() as i32).max(0), ((right + 1.0).ceil() as i32).min(w));
+        let data = target.data_mut();
+        let rows = ((top - 1.0).floor() as i32).max(0)..((bottom + 1.0).ceil() as i32).min(h);
+        for row in rows {
+            let dy = row as f32 + 0.5 - cy;
+            let span = |r: f32| (r * r - dy * dy).max(0.0).sqrt();
+            let (far, near) = (span(outer), if dy.abs() < inner { span(inner) } else { 0.0 });
+            // The band's two runs in this row: left and right of the hole.
+            // The second starts past the first's last column, which they share
+            // when the row has no hole and the centre is not on a pixel edge.
+            let left_end = ((cx - near).ceil() as i32).min(box_right);
+            for (first, last) in [
+                ((cx - far).floor() as i32, left_end),
+                (((cx + near).floor() as i32).max(left_end), (cx + far).ceil() as i32),
+            ] {
+                for col in first.max(box_left)..last.min(box_right) {
+                    let dx = col as f32 + 0.5 - cx;
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let radial = (half + 0.5 - (d - radius).abs()).clamp(0.0, 1.0);
+                    if radial <= 0.0 {
+                        continue;
+                    }
+                    // Clockwise from 12 o'clock, taken nearest the arc.
+                    let mut angle = atan2(dx, -dy);
+                    angle += TAU * ((middle - angle) / TAU).round();
+                    let ends = (((angle - lo).min(hi - angle)) * d + 0.5).clamp(0.0, 1.0);
+                    let cover = radial * ends;
+                    if cover <= 0.0 {
+                        continue;
+                    }
+                    let k = ((angle - from) / (to - from)).clamp(0.0, 1.0);
+                    let mix = |p: f32, q: f32| p + (q - p) * k;
+                    let a = mix(start.a, end.a) * alpha * cover;
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    let px = &mut data[((row * w + col) * 4) as usize..][..4];
+                    let keep = 1.0 - a;
+                    for (c, v) in
+                        px.iter_mut().zip([mix(start.r, end.r), mix(start.g, end.g), mix(start.b, end.b), 1.0])
+                    {
+                        *c = (255.0 * v * a + f32::from(*c) * keep + 0.5).min(255.0) as u8;
+                    }
+                }
+            }
+        }
+        self.r.timed(started);
+    }
+
+    /// The glow's discs at once: each pixel's alpha from its distance to the
+    /// centre, through the discs' summed coverage, in one pass rather than
+    /// one per disc (which on a slow CPU takes seconds).
+    fn radial_glow(&mut self, x: f32, y: f32, radius: f32, steps: u32) {
+        let State { transform: t, alpha } = self.state();
+        if t.kx != 0.0 || t.ky != 0.0 || (t.sx - t.sy).abs() > 1e-3 || t.sx <= 0.0 {
+            for i in 0..steps {
+                let f = i as f32 / steps as f32;
+                self.fill_circle(x, y, radius * (1.0 - f).powf(1.4), Color { a: 5.0 / 255.0, ..Color::WHITE });
+            }
+            return;
+        }
+        let started = span("radial_glow");
+        let (cx, cy) = (t.sx * x + t.tx, t.sy * y + t.ty);
+        let reach = radius * t.sx;
+        let radii: Vec<f32> = (0..steps).map(|i| reach * (1.0 - i as f32 / steps as f32).powf(1.4)).collect();
+        // The glow's alpha by distance, a sample a quarter pixel apart: a
+        // disc covers a pixel as far as its edge passes the pixel's centre
+        // (the anti-aliased edge a pixel wide).
+        let disc = 5.0 / 255.0 * alpha;
+        let profile: Vec<f32> = (0..=(reach * 4.0).ceil() as usize + 4)
+            .map(|q| {
+                let d = q as f32 / 4.0;
+                1.0 - radii.iter().fold(1.0, |keep, r| keep * (1.0 - disc * (r - d + 0.5).clamp(0.0, 1.0)))
+            })
+            .collect();
+        let target = self.target();
+        let (w, h) = (target.width() as i32, target.height() as i32);
+        let (x0, x1) = (((cx - reach - 1.0).floor() as i32).max(0), ((cx + reach + 1.0).ceil() as i32).min(w));
+        let (y0, y1) = (((cy - reach - 1.0).floor() as i32).max(0), ((cy + reach + 1.0).ceil() as i32).min(h));
+        let data = target.data_mut();
+        for row in y0..y1 {
+            let dy = row as f32 + 0.5 - cy;
+            for col in x0..x1 {
+                let dx = col as f32 + 0.5 - cx;
+                let q = ((dx * dx + dy * dy).sqrt() * 4.0) as usize;
+                let Some(&a) = profile.get(q) else { continue };
+                if a <= 0.0 {
+                    continue;
+                }
+                let px = &mut data[((row * w + col) * 4) as usize..][..4];
+                let keep = 1.0 - a;
+                for c in px.iter_mut() {
+                    *c = (255.0 * a + f32::from(*c) * keep + 0.5).min(255.0) as u8;
+                }
+            }
+        }
+        self.r.timed(started);
+    }
+
     fn fill_circle(&mut self, x: f32, y: f32, r: f32, color: Color) {
         self.fill(PathBuilder::from_circle(x, y, r.max(0.01)), color);
     }
@@ -870,9 +1105,9 @@ impl Painter for SoftPainter<'_> {
     }
 
     fn text(&mut self, text: &str, x: f32, y: f32, style: &TextStyle) -> f32 {
-        let started = Instant::now();
+        let started = span("text");
         let width = self.set_text(text, x, y, style);
-        self.r.painting += started.elapsed();
+        self.r.timed(started);
         width
     }
 
@@ -894,7 +1129,7 @@ impl Painter for SoftPainter<'_> {
         // Upright, the image scaled to its pixels once and copied after.
         let State { transform: t, alpha: faded } = self.state();
         if t.kx == 0.0 && t.ky == 0.0 && t.sx > 0.0 && t.sy > 0.0 {
-            let started = Instant::now();
+            let started = span("text");
             let (dw, dh) = ((w * t.sx).round() as u32, (h * t.sy).round() as u32);
             let r = &mut *self.r;
             let fresh = r.scaled.get(path).is_some_and(|p| (p.width(), p.height()) == (dw, dh));
@@ -927,7 +1162,7 @@ impl Painter for SoftPainter<'_> {
                 (y * t.sy + t.ty).round() as i32,
                 alpha * faded,
             );
-            r.painting += started.elapsed();
+            r.timed(started);
             return Ok(());
         }
         let pattern = Transform::from_translate(x, y).pre_scale(w / iw as f32, h / ih as f32);
@@ -1001,6 +1236,7 @@ impl Painter for SoftPainter<'_> {
         if self.r.layers.get(name).is_some_and(|l| l.key == key && (l.pixmap.width(), l.pixmap.height()) == pixels) {
             return Ok(());
         }
+        let redraw = span("layer redraw");
         let pixmap = Pixmap::new(pixels.0, pixels.1).ok_or_else(|| format!("layer {name}: {pixels:?}"))?;
         if key == name {
             trace!("paint: layer {name} drawn, {}x{} pixels", pixels.0, pixels.1);
@@ -1019,43 +1255,62 @@ impl Painter for SoftPainter<'_> {
         self.stack = outer_stack;
         let runs = runs(&pixmap);
         self.r.layers.insert(name.to_string(), Layer { key: key.to_string(), pixmap, runs, size, tinted: Vec::new() });
+        // The redraw's own operations count twice: in their buckets and in
+        // this one, which takes the whole of it.
+        if let Some((operation, started)) = redraw {
+            let total = self.r.profile.entry(operation).or_default();
+            total.0 += 1;
+            total.1 += started.elapsed();
+        }
         drawn
     }
 
     fn paint_layer(&mut self, name: &str, tint: Color, clip: Option<&[(f32, f32)]>) -> Result<(), String> {
         self.r.used.insert((true, name.to_string()), self.r.frame);
+        let s = self.state();
+        let scale = self.r.scale;
         let Some(layer) = self.r.layers.get_mut(name) else {
             return Err(format!("no layer {name}"));
         };
         let (w, h) = layer.size;
-        // Untinted (white), the layer as drawn; else a tinted copy, kept for
-        // the few tints in use.
-        if tint != Color::WHITE {
+        // Drawn at the panel's pixels: placed one to one, on whole pixels
+        // where the theme is upright. A layer drawn at the frame's scale
+        // takes whole pixels (its size rounded up), so it is one to one
+        // whenever the transform is that scale, however its size rounds.
+        let t = s.transform;
+        let mut at = t.pre_scale(w / layer.pixmap.width() as f32, h / layer.pixmap.height() as f32);
+        let upright = t.kx == 0.0 && t.ky == 0.0;
+        if upright && (t.sx - scale).abs() < 1e-4 && (t.sy - scale).abs() < 1e-4 {
+            at = Transform::from_translate(t.tx.round(), t.ty.round());
+        } else if (at.sx - 1.0).abs() < 1e-3 && (at.sy - 1.0).abs() < 1e-3 && upright {
+            at = Transform::from_translate(at.tx.round(), at.ty.round());
+        }
+        // On whole pixels the tint multiplies the layer as it is copied;
+        // elsewhere a tinted copy is painted, kept for the few tints in use.
+        let whole = whole_pixels(&at);
+        let inline = (tint != Color::WHITE && whole.is_some()).then(|| multipliers(tint));
+        let copied = tint != Color::WHITE && whole.is_none();
+        if copied {
             match layer.tinted.iter().position(|(t, _)| *t == tint) {
                 Some(i) => layer.tinted[..=i].rotate_right(1),
                 None => {
+                    let started = span("tinted copy");
                     layer.tinted.insert(0, (tint, tinted(&layer.pixmap, tint)));
                     layer.tinted.truncate(TINTS);
+                    self.r.timed(started);
                 }
             }
         }
-        let started = Instant::now();
-        let s = self.state();
+        let started = span("paint_layer");
         self.r.shapes += 1;
         let r = &mut *self.r;
         let layer = &r.layers[name];
-        let source = if tint == Color::WHITE { &layer.pixmap } else { &layer.tinted[0].1 };
-        // Drawn at the panel's pixels: placed one to one, on whole pixels
-        // where the theme is upright.
-        let mut at = s.transform.pre_scale(w / source.width() as f32, h / source.height() as f32);
-        if (at.sx - 1.0).abs() < 1e-3 && (at.sy - 1.0).abs() < 1e-3 && at.kx == 0.0 && at.ky == 0.0 {
-            at = Transform::from_translate(at.tx.round(), at.ty.round());
-        }
+        let source = if copied { &layer.tinted[0].1 } else { &layer.pixmap };
         let target = match self.layer.as_mut() {
             Some(l) => l,
             None => &mut r.pixmap,
         };
-        if let (Some(points), Some((x, y))) = (clip, whole_pixels(&at)) {
+        if let (Some(points), Some(at)) = (clip, whole) {
             let device: Vec<(f32, f32)> = points
                 .iter()
                 .map(|&(px, py)| {
@@ -1064,14 +1319,14 @@ impl Painter for SoftPainter<'_> {
                     (p[0].x, p[0].y)
                 })
                 .collect();
-            blit_polygon(target, source, Some(&layer.runs), x, y, &device, s.alpha);
-            r.painting += started.elapsed();
+            blit_polygon(target, source, Some(&layer.runs), at, &device, s.alpha, inline);
+            r.timed_as(started, Some("paint_layer clipped"));
             return Ok(());
         }
-        match clip.and_then(polygon_path) {
+        let path = match (clip.and_then(polygon_path), whole) {
             // Only the clip's pixels: the layer carries its own soft edges,
             // and clips fall between its marks.
-            Some(path) => {
+            (Some(path), _) => {
                 let paint = Paint {
                     shader: Pattern::new(
                         source.as_ref(),
@@ -1084,14 +1339,19 @@ impl Painter for SoftPainter<'_> {
                     ..Paint::default()
                 };
                 target.fill_path(&path, &paint, FillRule::Winding, s.transform, None);
+                "paint_layer pattern"
             }
             // On whole pixels, copied over directly; else through tiny-skia.
-            None if at.sx == 1.0 && at.sy == 1.0 && at.kx == 0.0 && at.ky == 0.0 => {
-                blit_runs(target, source, &layer.runs, at.tx as i32, at.ty as i32, s.alpha);
+            (None, Some(at)) => {
+                blit_runs(target, source, &layer.runs, at, s.alpha, inline);
+                "paint_layer runs"
             }
-            None => blit_transformed(target, source, at, s.alpha),
-        }
-        r.painting += started.elapsed();
+            (None, None) => {
+                blit_transformed(target, source, at, s.alpha);
+                "paint_layer transformed"
+            }
+        };
+        r.timed_as(started, Some(path));
         Ok(())
     }
 
@@ -1100,7 +1360,7 @@ impl Painter for SoftPainter<'_> {
         if !self.r.layers.contains_key(name) {
             return Err(format!("no layer {name}"));
         }
-        let started = Instant::now();
+        let started = span("warp_layer");
         let s = self.state();
         self.r.shapes += 1;
         let device = corners.map(|(x, y)| {
@@ -1114,7 +1374,7 @@ impl Painter for SoftPainter<'_> {
             None => &mut r.pixmap,
         };
         blit_warped(target, &r.layers[name].pixmap, &device, s.alpha);
-        r.painting += started.elapsed();
+        r.timed(started);
         Ok(())
     }
 }
@@ -1122,6 +1382,73 @@ impl Painter for SoftPainter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one-pass gradient arc is the 3-degree arcs' own drawing, but for
+    /// their seams.
+    #[test]
+    fn a_gradient_arc_is_its_arcs_at_once() {
+        let (start, end) = (Color { r: 1.0, g: 0.5, b: 0.2, a: 0.0 }, Color { r: 0.2, g: 0.6, b: 1.0, a: 1.0 });
+        for (from, to) in [(-2.4_f32, -1.2_f32), (1.0, 2.6), (2.6, 1.0), (-0.5, 0.7)] {
+            let mut ours = Renderer::new(160, 160).unwrap();
+            let mut theirs = Renderer::new(160, 160).unwrap();
+            for r in [&mut ours, &mut theirs] {
+                r.begin(160.0, 480.0);
+            }
+            ours.painter(Path::new("")).gradient_arc(240.0, 240.0, 200.0, from, to, start, end, 14.0);
+            gradient_arcs(&mut theirs.painter(Path::new("")), 240.0, 240.0, 200.0, from, to, start, end, 14.0);
+            let diffs: Vec<u8> =
+                ours.pixmap.data().iter().zip(theirs.pixmap.data()).map(|(a, b)| a.abs_diff(*b)).collect();
+            let mean = diffs.iter().map(|&d| f64::from(d)).sum::<f64>() / diffs.len() as f64;
+            let drawn = |r: &Renderer| r.pixmap.data().iter().filter(|&&v| v > 8).count();
+            assert!(mean < 1.0, "from {from} to {to}: {mean:.3} apart on average");
+            let (a, b) = (drawn(&ours), drawn(&theirs));
+            assert!(a.abs_diff(b) * 10 < b, "from {from} to {to}: {a} against {b} drawn");
+        }
+    }
+
+    /// A translucent arc over 12 o'clock is as even across its centre column
+    /// as beside it, wherever its centre falls.
+    #[test]
+    fn a_gradient_arc_blends_each_pixel_once() {
+        let color = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.5 };
+        for centre in [240.0_f32, 241.0, 241.5] {
+            let mut r = Renderer::new(160, 160).unwrap();
+            r.begin(160.0, 480.0);
+            r.painter(Path::new("")).gradient_arc(centre, 240.0, 200.0, -0.5, 0.5, color, color, 14.0);
+            let cx = (centre / 3.0) as u32;
+            let row = 80 - 200 / 3;
+            let level = |x: u32| r.pixmap.pixel(x, row).unwrap().red();
+            assert!(level(cx) > 100, "centre {centre}: nothing drawn");
+            assert!(
+                level(cx).abs_diff(level(cx - 1)) <= 2 && level(cx).abs_diff(level(cx + 1)) <= 2,
+                "centre {centre}"
+            );
+        }
+    }
+
+    /// The one-pass glow is the discs' own drawing, but for rounding.
+    #[test]
+    fn a_glow_is_its_discs_at_once() {
+        let mut ours = Renderer::new(160, 160).unwrap();
+        let mut theirs = Renderer::new(160, 160).unwrap();
+        for r in [&mut ours, &mut theirs] {
+            r.begin(160.0, 480.0);
+        }
+        ours.painter(Path::new("")).radial_glow(240.0, 250.0, 210.0, 120);
+        let mut discs = theirs.painter(Path::new(""));
+        for i in 0..120 {
+            let f = i as f32 / 120.0;
+            discs.fill_circle(240.0, 250.0, 210.0 * (1.0 - f).powf(1.4), Color { a: 5.0 / 255.0, ..Color::WHITE });
+        }
+        // The discs round to whole levels as each is blended, so they lose a
+        // little toward the bright middle; the glow at once does not.
+        let diffs: Vec<u8> = ours.pixmap.data().iter().zip(theirs.pixmap.data()).map(|(a, b)| a.abs_diff(*b)).collect();
+        let mean = diffs.iter().map(|&d| f64::from(d)).sum::<f64>() / diffs.len() as f64;
+        let worst = diffs.iter().max().copied().unwrap_or(0);
+        assert!(mean < 2.0 && worst <= 16, "the glow differs from its discs by {mean:.2} on average, {worst} at most");
+        let centre = |r: &Renderer| r.pixmap.pixel(80, 83).unwrap().red();
+        assert!(centre(&ours) > 200 && centre(&ours).abs_diff(centre(&theirs)) <= 16);
+    }
 
     #[test]
     fn rotated_and_clipped_pixmaps_land_where_tiny_skia_puts_them() {
@@ -1144,7 +1471,7 @@ mod tests {
 
         let clip = [(40.0, 30.0), (200.0, 50.0), (180.0, 125.0), (60.0, 120.0)];
         let mut ours = Pixmap::new(320, 320).unwrap();
-        blit_polygon(&mut ours, &source, None, 20, 10, &clip, 1.0);
+        blit_polygon(&mut ours, &source, None, (20, 10), &clip, 1.0, None);
         let mut theirs = Pixmap::new(320, 320).unwrap();
         let paint = Paint {
             shader: Pattern::new(
