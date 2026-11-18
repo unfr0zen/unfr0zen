@@ -94,10 +94,14 @@ struct Scrollback {
     /// Bytes of an escape sequence or a UTF-8 character still arriving.
     pending: Vec<u8>,
     closed: Option<String>,
+    /// Bumped on every append, so the window builds the text again only then.
+    version: u64,
 }
 
 /// The most text kept; older lines go when it is exceeded.
 const SCROLLBACK: usize = 256 * 1024;
+/// The longest line kept: output with no newline breaks here, as at one.
+const LINE: usize = 4096;
 
 pub struct Terminal {
     /// The identities this terminal lists.
@@ -107,6 +111,8 @@ pub struct Terminal {
     pub chosen: Option<String>,
     connection: Option<Connection>,
     scrollback: Arc<Mutex<Scrollback>>,
+    /// The text as last built, the scrollback version it shows, and the cursor.
+    layout: Option<(u64, egui::text::LayoutJob, usize)>,
     /// A port to connect to as soon as it is listed: the recovery console
     /// once U-Boot is loaded.
     pub auto_connect: Option<Id>,
@@ -124,6 +130,7 @@ impl Terminal {
             chosen: None,
             connection: None,
             scrollback: Arc::default(),
+            layout: None,
             auto_connect: None,
             error: None,
         }
@@ -168,6 +175,7 @@ impl Terminal {
         let (to_port, from_window) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         *self.scrollback.lock().unwrap() = Scrollback::default();
+        self.layout = None;
         thread::spawn({
             let (scrollback, stop) = (self.scrollback.clone(), stop.clone());
             move || pump(port, from_window, scrollback, stop, ctx)
@@ -191,10 +199,18 @@ impl Terminal {
 
     /// The text shown, laid out in its colours, and the cursor's place in
     /// it, in characters.
-    fn job(&self, ui: &egui::Ui) -> (egui::text::LayoutJob, usize) {
-        let font = egui::TextStyle::Monospace.resolve(ui.style());
+    /// The text to lay out and the cursor's cell: built under the lock only
+    /// when something arrived since, so the port's thread seldom waits.
+    fn job(&mut self, ui: &egui::Ui) -> (egui::text::LayoutJob, usize) {
         let scrollback = self.scrollback.lock().unwrap();
-        (scrollback.job(font, ui.visuals().text_color()), scrollback.cursor())
+        if self.layout.as_ref().is_none_or(|(version, _, _)| *version != scrollback.version) {
+            let font = egui::TextStyle::Monospace.resolve(ui.style());
+            let job = scrollback.job(font, ui.visuals().text_color());
+            self.layout = Some((scrollback.version, job, scrollback.cursor()));
+        }
+        drop(scrollback);
+        let (_, job, cursor) = self.layout.as_ref().expect("built above");
+        (job.clone(), *cursor)
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
@@ -517,6 +533,7 @@ impl Scrollback {
     /// Adds the unit's bytes: escape sequences interpreted or dropped,
     /// text decoded as it completes and put at the cursor.
     fn append(&mut self, bytes: &[u8]) {
+        self.version += 1;
         self.pending.extend_from_slice(bytes);
         let bytes = std::mem::take(&mut self.pending);
         let mut i = 0;
@@ -603,6 +620,9 @@ impl Scrollback {
             '\t' => self.put(' '),
             c if c.is_control() => {}
             c => {
+                if self.col >= LINE {
+                    self.put('\n');
+                }
                 let color = self.color.map(|color| if self.bold { brighter(color) } else { color });
                 let cell = Cell { c, color };
                 if self.col < self.line.len() {
@@ -685,6 +705,17 @@ mod tests {
         assert_eq!(s.cursor(), "root@diamond:~# \nls\n".len(), "a carriage return puts it at the line's start");
         s.append(b"\x1b[2J");
         assert_eq!(s.text(), "");
+    }
+
+    #[test]
+    fn a_line_with_no_newline_breaks_at_its_limit_and_each_append_is_a_new_version() {
+        let mut s = Scrollback::default();
+        s.append(&vec![b'x'; LINE + 10]);
+        assert_eq!(s.text(), format!("{}\n{}", "x".repeat(LINE), "x".repeat(10)));
+        // Overwritten after a carriage return, a line stays at its width.
+        s.append(&[b"\r".as_slice(), &[b'y'; 20]].concat());
+        assert_eq!(s.text(), format!("{}\n{}", "x".repeat(LINE), "y".repeat(20)));
+        assert_eq!(s.version, 2);
     }
 
     #[test]
