@@ -4,8 +4,9 @@
 //! broker cannot be reached. The unit sleeps, and the ping timer and TCP's
 //! retransmissions stop with it, so a broker that dropped the connection
 //! while the unit slept is found out on a wake (woke): by the wall clock, or
-//! by a ping the unit stays awake for. Publishes made while disconnected are
-//! dropped: on each connection the bridge publishes its whole state again.
+//! by a ping the unit stays awake for. A wake while disconnected dials at
+//! once. Publishes made while disconnected are dropped: on each connection
+//! the bridge publishes its whole state again.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use std::time::{Duration, Instant};
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::logf;
 
@@ -109,6 +110,7 @@ pub struct Client {
     heard: Arc<AtomicU64>,
     pinged: Arc<AtomicU64>,
     awake: Arc<AtomicBool>,
+    dial_now: Arc<Notify>,
 }
 
 pub struct Connection {
@@ -125,8 +127,12 @@ pub struct Connection {
     /// back; 0 when none is outstanding.
     pinged: Arc<AtomicU64>,
     /// The connection needs the unit awake: a ping from woke awaits its
-    /// answer, for PING_ANSWER at most.
+    /// answer, a dial is under way, or a session just ended and is dialled
+    /// again after RETRY. Each is bounded, so a broker that stays away only
+    /// costs a dial on each wake.
     awake: Arc<AtomicBool>,
+    /// A wake while disconnected: dial without waiting out RETRY.
+    dial_now: Arc<Notify>,
     /// The session ended on a Redial: no RETRY wait.
     redial: bool,
 }
@@ -144,6 +150,7 @@ impl Client {
         let heard = Arc::new(AtomicU64::new(0));
         let pinged = Arc::new(AtomicU64::new(0));
         let awake = Arc::new(AtomicBool::new(false));
+        let dial_now = Arc::new(Notify::new());
         (
             Client {
                 tx,
@@ -152,8 +159,9 @@ impl Client {
                 heard: heard.clone(),
                 pinged: pinged.clone(),
                 awake: awake.clone(),
+                dial_now: dial_now.clone(),
             },
-            Connection { broker, options, rx, connected, sent, heard, pinged, awake, redial: false },
+            Connection { broker, options, rx, connected, sent, heard, pinged, awake, dial_now, redial: false },
         )
     }
 
@@ -181,13 +189,15 @@ impl Client {
         let _ = self.tx.try_send(Request::Subscribe { filter: filter.into() });
     }
 
-    /// The unit woke. Dials again when the broker has surely dropped the
-    /// connection (nothing sent for 1.5 keepalives). Pings when nothing went to the broker for WAKE_PING,
+    /// The unit woke. Dials at once while disconnected, and again when the
+    /// broker has surely dropped the connection (nothing sent for 1.5
+    /// keepalives). Pings when nothing went to the broker for WAKE_PING,
     /// which is what its keepalive counts, or nothing came from it for half
     /// a keepalive: the session then holds the unit awake for the answer,
     /// and dials again if none comes within PING_ANSWER.
     pub fn woke(&self) {
         if !self.is_connected() {
+            self.dial_now.notify_one();
             return;
         }
         let unheard = unix_now().saturating_sub(self.heard.load(Ordering::Relaxed));
@@ -210,8 +220,12 @@ impl Connection {
         let mut last_error = String::new();
         let mut logged = Instant::now();
         loop {
+            self.awake.store(true, Ordering::Relaxed);
             let result = self.session(&*handler).await;
-            self.awake.store(false, Ordering::Relaxed);
+            // A session that was up holds the unit awake through the retry
+            // that follows; a dial that failed lets it sleep until a wake.
+            let was_up = self.connected.load(Ordering::Relaxed);
+            self.awake.store(was_up, Ordering::Relaxed);
             if let Err(e) = result {
                 // Once per streak of the same failure, and every 10 minutes.
                 let e = e.to_string();
@@ -225,7 +239,10 @@ impl Connection {
             self.pinged.store(0, Ordering::Relaxed);
             while self.rx.try_recv().is_ok() {}
             if !std::mem::take(&mut self.redial) {
-                tokio::time::sleep(RETRY).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(RETRY) => {}
+                    _ = self.dial_now.notified() => {}
+                }
             }
         }
     }
@@ -244,7 +261,11 @@ impl Connection {
             return Ok(Box::new(tcp));
         };
         let name = rustls::pki_types::ServerName::try_from(self.broker.host.clone()).map_err(std::io::Error::other)?;
-        Ok(Box::new(tokio_rustls::TlsConnector::from(tls.clone()).connect(name, tcp).await?))
+        let handshake = tokio_rustls::TlsConnector::from(tls.clone()).connect(name, tcp);
+        let tls = tokio::time::timeout(CONNECT_TIMEOUT, handshake)
+            .await
+            .map_err(|_| std::io::Error::other("TLS handshake timed out"))??;
+        Ok(Box::new(tls))
     }
 
     async fn session(&mut self, handler: &impl Handler) -> std::io::Result<()> {
@@ -263,6 +284,7 @@ impl Connection {
         }
         self.heard.store(unix_now(), Ordering::Relaxed);
         self.connected.store(true, Ordering::Relaxed);
+        self.awake.store(false, Ordering::Relaxed);
         handler.connected();
 
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE, KEEPALIVE);
@@ -739,6 +761,39 @@ pub mod tests {
         assert!(waited >= PING_ANSWER && waited < PING_ANSWER + RETRY / 2, "{waited:?}");
         until_connected(&client).await;
         assert!(!client.holds_awake());
+    }
+
+    #[tokio::test]
+    async fn a_dropped_session_holds_the_unit_awake_and_a_wake_dials_at_once() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, conn) = connection(listener.local_addr().unwrap().port());
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        let mut buf = BytesMut::new();
+        let broker = accept(&listener, &mut buf).await;
+        until_connected(&client).await;
+        assert!(!client.holds_awake());
+
+        drop(broker);
+        while client.is_connected() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(client.holds_awake(), "awake through the retry after a drop");
+        let started = Instant::now();
+        client.woke();
+        let mut buf = BytesMut::new();
+        let _broker = accept(&listener, &mut buf).await;
+        assert!(started.elapsed() < RETRY / 2, "dialled on the wake, not after RETRY");
+        until_connected(&client).await;
+    }
+
+    #[tokio::test]
+    async fn a_dial_that_fails_lets_the_unit_sleep_until_a_wake() {
+        // A port nothing listens on: the dial is refused at once.
+        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let (client, conn) = connection(port);
+        tokio::spawn(conn.run(Arc::new(Recorder::default())));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!client.is_connected() && !client.holds_awake());
     }
 
     #[tokio::test]

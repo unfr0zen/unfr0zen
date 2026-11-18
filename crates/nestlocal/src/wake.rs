@@ -27,7 +27,7 @@
 //!   for nlclient to fetch a change and for the answers to go out. Each wake
 //!   also lets the bridge send to the broker if its keepalive is due, and
 //!   the unit stays awake while the connection waits on the broker: a
-//!   ping's answer (mqtt.rs).
+//!   ping's answer, a dial (mqtt.rs).
 //!
 //! svcConnected stays 0: with it 1 the chip also keeps the connection alive
 //! with TCP keepalives, and the gen 1 and gen 2, whose nlscpm works the same
