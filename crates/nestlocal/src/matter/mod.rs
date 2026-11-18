@@ -215,8 +215,13 @@ pub fn sleep_blocked() -> bool {
         || (THREAD_REQUIRED.load(std::sync::atomic::Ordering::SeqCst) && !crate::thread_sleep::ready())
 }
 
+/// The first wait before Matter starts again after stopping, doubled on
+/// each stop in a row up to the last.
+const RESTART_WAIT: Duration = Duration::from_secs(30);
+const RESTART_WAIT_MAX: Duration = Duration::from_secs(10 * 60);
+
 /// Serves the unit over Matter, on a thread of its own, once it has
-/// reported (its equipment decides what it offers).
+/// reported (its equipment decides what it offers); again after it stops.
 pub fn start(settings: Settings, bridge: Arc<Bridge>) {
     THREAD_REQUIRED.store(settings.thread, std::sync::atomic::Ordering::SeqCst);
     let _ = log::set_logger(&LOG).map(|()| log::set_max_level(log::LevelFilter::Info));
@@ -225,10 +230,21 @@ pub fn start(settings: Settings, bridge: Arc<Bridge>) {
         while !nest.reported() {
             std::thread::sleep(Duration::from_secs(5));
         }
-        let result = run(&settings, nest);
-        SLEEP_BLOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Err(e) = result {
-            logf!("matter: stopped: {e:?}");
+        let mut wait = RESTART_WAIT;
+        loop {
+            let started = std::time::Instant::now();
+            let result = run(&settings, nest.clone());
+            // Not operational again until the next run says so.
+            SLEEP_BLOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
+            if started.elapsed() >= RESTART_WAIT_MAX {
+                wait = RESTART_WAIT;
+            }
+            match result {
+                Err(e) => logf!("matter: stopped: {e:?}; again in {} s", wait.as_secs()),
+                Ok(()) => logf!("matter: stopped; again in {} s", wait.as_secs()),
+            }
+            std::thread::sleep(wait);
+            wait = (wait * 2).min(RESTART_WAIT_MAX);
         }
     });
     if let Err(e) = spawned {
