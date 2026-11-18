@@ -147,7 +147,28 @@ data:
             <div class="note">nestlocal uses the Matter test vendor ID (0xFFF1) and test attestation, so controllers treat it as uncertified. Home Assistant's Matter server accepts it only with its test-net DCL option on.</div>
             <p><b>Enable pairing → Forget and pair</b> forgets every Matter controller before opening a new window. This cannot be undone, even if the new pairing fails; Wi-Fi and Zigbee settings are kept.</p>
             <h3>Entities</h3>
-            <p>Home Assistant gets the thermostat (modes, setpoints and range, action, eco as a preset, humidity, outdoor temperature), occupancy, °C/°F, backplate temperature, battery, fan and its timer, the fan schedule's run time, start and end, and switches for Auto-Schedule, Home/Away Assist, Sunblock, Early-On, the eco limits and, with a humidifier or dehumidifier, humidity control, and with hot water control, Hot water boost (30 minutes when on) and Hot water schedule, and with an air filter, the filter reminder and a Filter reset switch that resets the filter when turned on, and with a fan, the fan schedule. The other MQTT entities aren't offered over Matter.</p>
+            <p>Home Assistant gets the thermostat (modes, setpoints and range, action, eco as a preset, humidity, outdoor temperature), occupancy, °C/°F, backplate temperature, battery, fan and its timer, the fan schedule's run time, start and end, and the switches below. The other MQTT entities aren't offered over Matter.</p>
+            <p>The switches are on/off plugs, one per endpoint from 10 up, in this order; a switch the equipment doesn't call for is left out and the ones after it move up. A thermostat has 4 to 12: 5 heating only, 6 heating and cooling, 7 with a fan as well.</p>
+            <div class="table-scroll">
+                <table>
+                    <thead><tr><th>Switch</th><th>Present</th></tr></thead>
+                    <tbody>
+                        <tr><td data-label="Switch">Auto-Schedule</td><td data-label="Present">Always</td></tr>
+                        <tr><td data-label="Switch">Home/Away Assist</td><td data-label="Present">Always</td></tr>
+                        <tr><td data-label="Switch">Sunblock</td><td data-label="Present">Always</td></tr>
+                        <tr><td data-label="Switch">Early-On</td><td data-label="Present">Always</td></tr>
+                        <tr><td data-label="Switch">Eco heat limit</td><td data-label="Present">Heating</td></tr>
+                        <tr><td data-label="Switch">Eco cool limit</td><td data-label="Present">Cooling</td></tr>
+                        <tr><td data-label="Switch">Humidity control</td><td data-label="Present">Humidifier or dehumidifier</td></tr>
+                        <tr><td data-label="Switch">Hot water boost (30 minutes when on)</td><td data-label="Present">Hot water control</td></tr>
+                        <tr><td data-label="Switch">Hot water schedule</td><td data-label="Present">Hot water control</td></tr>
+                        <tr><td data-label="Switch">Filter reminder</td><td data-label="Present">Air filter</td></tr>
+                        <tr><td data-label="Switch">Filter reset (reads off; turning it on resets the filter)</td><td data-label="Present">Air filter</td></tr>
+                        <tr><td data-label="Switch">Fan schedule</td><td data-label="Present">Fan</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="note">The names come from a fixed label only Home Assistant reads. Apple Home, Google Home and Alexa show the switches unnamed, in the order above; rename them there.</div>
             <h3>Bluetooth commissioning</h3>
             <p>3rd generation units with the supported DA14580 Bluetooth firmware also pair over Bluetooth; nestlocal loads the unit's own radio firmware into RAM, the stock image unchanged. Bluetooth advertises only while the pairing window is open; traffic goes over Wi-Fi or Thread. The thermostat's own Bluetooth is turned off for it: real Nest Temperature Sensors stop working, and the Nest app cannot pair with it over Bluetooth. Other units pair over IP.</p>
             <h3>Sleep</h3>
