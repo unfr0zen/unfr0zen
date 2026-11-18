@@ -814,7 +814,7 @@ impl App {
 
     /// Reads the logs folder again; a selection that vanished goes.
     fn refresh_history(&mut self) {
-        self.history = logs::scan(&Self::logs_dir());
+        self.history = logs::scan(&Self::logs_dir(), &self.history);
         self.preselect_latest_run();
     }
 
@@ -1826,13 +1826,18 @@ impl App {
                 .on_hover_text(tr!("logs.filter_hint"));
             });
         });
-        // The log is read once per run shown; the live one again each frame
-        // while it grows.
+        // The log is read once per run shown; the live one's new lines as
+        // they are written.
         let text = match path {
             Some(path) => {
                 let key = path.display().to_string();
-                if live || self.log_text.as_ref().is_none_or(|(k, _)| k != &key) {
-                    self.log_text = Some((key.clone(), std::fs::read_to_string(&path).unwrap_or_default()));
+                match &mut self.log_text {
+                    Some((shown, text)) if *shown == key => {
+                        if live {
+                            logs::read_more(&path, text);
+                        }
+                    }
+                    _ => self.log_text = Some((key, std::fs::read_to_string(&path).unwrap_or_default())),
                 }
                 self.log_text.as_ref().map(|(_, t)| t.clone()).unwrap_or_default()
             }
@@ -4173,7 +4178,7 @@ mod tests {
         )
         .unwrap();
         let mut app = App { page: Page::Logs, ..App::default() };
-        app.history = logs::scan(&dir);
+        app.history = logs::scan(&dir, &[]);
         let shown = texts(&render(&mut app, WINDOW));
         assert!(shown.iter().any(|t| t == "Boot the application"), "{shown:?}");
         assert!(shown.iter().any(|t| t == "Select a run"));

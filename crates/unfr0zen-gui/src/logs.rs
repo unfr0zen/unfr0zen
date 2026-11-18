@@ -28,6 +28,9 @@ pub struct Run {
     pub steps: Vec<Step>,
     /// The error of the step that failed, if one did.
     pub failure: Option<String>,
+    /// The log's length when read: a log only grows, so the same length is
+    /// the same log.
+    pub log_len: u64,
 }
 
 impl Run {
@@ -64,6 +67,7 @@ pub fn parse(stamp: &str, dir: &Path, text: &str) -> Run {
         task: String::new(),
         steps: Vec::new(),
         failure: None,
+        log_len: text.len() as u64,
     };
     for line in text.lines() {
         // "[  12.345] message": the seconds are the process's, not the run's.
@@ -90,8 +94,9 @@ fn seconds(text: &str) -> f32 {
     text.split(')').next().unwrap_or("").trim_end_matches('s').parse().unwrap_or(0.0)
 }
 
-/// Every run in the logs folder, newest first.
-pub fn scan(logs: &Path) -> Vec<Run> {
+/// Every run in the logs folder, newest first. A run in `known` whose log
+/// has not grown since is taken as it is, not read again.
+pub fn scan(logs: &Path, known: &[Run]) -> Vec<Run> {
     let Ok(read) = std::fs::read_dir(logs) else {
         return Vec::new();
     };
@@ -99,7 +104,12 @@ pub fn scan(logs: &Path) -> Vec<Run> {
         .flatten()
         .filter_map(|entry| {
             let dir = entry.path();
-            let text = std::fs::read_to_string(dir.join("unfr0zen.log")).ok()?;
+            let log = dir.join("unfr0zen.log");
+            let len = std::fs::metadata(&log).ok()?.len();
+            if let Some(run) = known.iter().find(|run| run.dir == dir && run.log_len == len) {
+                return Some(run.clone());
+            }
+            let text = std::fs::read_to_string(&log).ok()?;
             let stamp = entry.file_name().to_string_lossy().into_owned();
             let mut run = parse(&stamp, &dir, &text);
             run.started = entry.metadata().and_then(|m| m.modified()).ok();
@@ -108,6 +118,31 @@ pub fn scan(logs: &Path) -> Vec<Run> {
         .collect();
     runs.sort_by(|a, b| b.stamp.cmp(&a.stamp));
     runs
+}
+
+/// Appends to `text` what the log at `path` holds past it: nothing is read
+/// while the log has not grown, and all of it again if it shrank.
+pub fn read_more(path: &Path, text: &mut String) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(len) = std::fs::metadata(path).map(|m| m.len()) else { return };
+    let have = text.len() as u64;
+    if len == have {
+        return;
+    }
+    if len < have {
+        *text = std::fs::read_to_string(path).unwrap_or_default();
+        return;
+    }
+    let mut more = Vec::new();
+    let read = std::fs::File::open(path).and_then(|mut file| {
+        file.seek(SeekFrom::Start(have))?;
+        file.read_to_end(&mut more)
+    });
+    if read.is_ok() {
+        // Up to the last whole character: the rest comes with the next read.
+        let whole = std::str::from_utf8(&more).map_or_else(|e| e.valid_up_to(), str::len);
+        text.push_str(std::str::from_utf8(&more[..whole]).expect("valid up to here"));
+    }
 }
 
 /// Removes the runs older than `age`, except `keep`'s; how many went.
@@ -165,6 +200,43 @@ mod tests {
     }
 
     #[test]
+    fn a_growing_log_is_read_from_where_it_was_left() {
+        let dir = std::env::temp_dir().join(format!("unfr0zen-logs-more-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("unfr0zen.log");
+        std::fs::write(&path, "one\n").unwrap();
+        let mut text = String::new();
+        read_more(&path, &mut text);
+        assert_eq!(text, "one\n");
+        // Half of a two-byte character waits for the rest.
+        std::fs::write(&path, b"one\ntwo \xc2").unwrap();
+        read_more(&path, &mut text);
+        assert_eq!(text, "one\ntwo ");
+        std::fs::write(&path, "one\ntwo °C\n").unwrap();
+        read_more(&path, &mut text);
+        assert_eq!(text, "one\ntwo °C\n");
+        // Shorter than what was read: another log, read whole.
+        std::fs::write(&path, "new\n").unwrap();
+        read_more(&path, &mut text);
+        assert_eq!(text, "new\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_run_whose_log_has_not_grown_is_not_read_again() {
+        let logs = std::env::temp_dir().join(format!("unfr0zen-logs-known-{}", std::process::id()));
+        let dir = logs.join("20261118-101500");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("unfr0zen.log"), LOG).unwrap();
+        let mut known = scan(&logs, &[]);
+        known[0].task = "as known".into();
+        assert_eq!(scan(&logs, &known)[0].task, "as known", "the same length: the known run");
+        std::fs::write(dir.join("unfr0zen.log"), format!("{LOG}[  99.000] more\n")).unwrap();
+        assert_ne!(scan(&logs, &known)[0].task, "as known", "grown: read again");
+        std::fs::remove_dir_all(&logs).unwrap();
+    }
+
+    #[test]
     fn the_folder_is_listed_newest_first_and_old_runs_go() {
         let dir = std::env::temp_dir().join(format!("unfr0zen-logs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -173,10 +245,10 @@ mod tests {
             std::fs::write(dir.join(stamp).join("unfr0zen.log"), LOG).unwrap();
         }
         std::fs::create_dir_all(dir.join("stray")).unwrap();
-        let runs = scan(&dir);
+        let runs = scan(&dir, &[]);
         assert_eq!(runs.iter().map(|r| r.stamp.as_str()).collect::<Vec<_>>(), ["20261104-120000", "20261101-080000"]);
         assert_eq!(delete_older(&runs, Duration::ZERO, Some("20261104-120000")), 1);
-        assert_eq!(scan(&dir).len(), 1);
+        assert_eq!(scan(&dir, &[]).len(), 1);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
