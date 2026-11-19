@@ -154,7 +154,10 @@ pub fn open_acm(id: Id, timeout: Duration) -> Result<Port> {
     while Instant::now() < until {
         if let Some(name) = acm_port(id) {
             match Port::open(&name) {
-                Ok(port) => return Ok(port),
+                Ok(port) => {
+                    log::info!("Opened {name}");
+                    return Ok(port);
+                }
                 Err(error) => {
                     if failed.is_none() {
                         log::info!("{name} not ready yet: {error}");

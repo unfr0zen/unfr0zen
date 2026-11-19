@@ -113,7 +113,8 @@ pub struct InitramfsShell<S: Serial> {
 impl<S: Serial> InitramfsShell<S> {
     /// Waits for the shell to answer after the gadget enumerates. Bytes
     /// written right after the port opens can be lost: settle first, and keep
-    /// asking through whatever a cut-off first line makes the shell say.
+    /// asking through whatever a cut-off first line makes the shell say. A
+    /// port that fails other than by timing out is gone: no retry reaches it.
     pub fn connect(port: S, timeout: Duration) -> Result<Self> {
         std::thread::sleep(Duration::from_millis(500));
         let mut shell = InitramfsShell { port };
@@ -121,6 +122,7 @@ impl<S: Serial> InitramfsShell<S> {
         loop {
             match shell.run_with("true", Duration::from_secs(3), false) {
                 Ok(_) => return Ok(shell),
+                Err(error @ Error::Io(_)) => return Err(error),
                 Err(error) if Instant::now() >= until => return Err(error),
                 Err(error) => log::debug!("initramfs shell not ready: {error}"),
             }
@@ -141,8 +143,13 @@ impl<S: Serial> InitramfsShell<S> {
                                                            // The start marker keeps output a nudge left from an earlier command
                                                            // out of this one's.
         let sent = format!("echo {marker}:begin\n{script}\nunfr0zen_rc=$?; echo; echo {marker}:$unfr0zen_rc\n");
-        let failed =
-            |step: &str, e: std::io::Error| Error::Io(format!("{step} {command:?} ({} bytes): {e}", sent.len()));
+        let failed = |step: &str, e: std::io::Error| {
+            let message = format!("{step} {command:?} ({} bytes): {e}", sent.len());
+            match e.kind() {
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => Error::Timeout(message),
+                _ => Error::Io(message),
+            }
+        };
         self.port.clear_input().map_err(|e| failed("clearing input for", e))?;
         self.port.write_all(sent.as_bytes()).map_err(|e| failed("sending", e))?;
         self.port.flush().map_err(|e| failed("flushing", e))?;
@@ -178,8 +185,10 @@ impl<S: Serial> InitramfsShell<S> {
                 heard.1 = Instant::now();
             }
         }
+        // What did arrive, such as /init's own lines, shows how far the unit got.
+        let heard = if data.is_empty() || quiet { String::new() } else { format!(": {:?}", tail(&data, 300)) };
         Err(Error::Timeout(format!(
-            "initramfs shell did not answer {command:?} ({} bytes received, {nudges} nudges)",
+            "initramfs shell did not answer {command:?} ({} bytes received, {nudges} nudges){heard}",
             data.len()
         )))
     }
@@ -438,6 +447,64 @@ mod tests {
         let error = shell.run("rm -f /x").unwrap_err().to_string();
         assert!(error.starts_with("sending \"rm -f /x\" ("), "{error}");
         assert!(error.contains(" bytes): "), "{error}");
+    }
+
+    /// A port that takes every write and says `said` once, never answering;
+    /// or, `gone`, one whose device has left.
+    struct SilentPort {
+        said: &'static [u8],
+        gone: bool,
+    }
+
+    impl Write for SilentPort {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Read for SilentPort {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.gone {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            match std::mem::take(&mut self.said) {
+                [] => Err(io::ErrorKind::TimedOut.into()),
+                said => {
+                    buffer[..said.len()].copy_from_slice(said);
+                    Ok(said.len())
+                }
+            }
+        }
+    }
+
+    impl Serial for SilentPort {
+        fn clear_input(&mut self) -> io::Result<()> {
+            if self.gone {
+                return Err(io::Error::from_raw_os_error(6)); // ENXIO
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_port_whose_device_left_ends_the_wait_at_once() {
+        let started = Instant::now();
+        let error =
+            InitramfsShell::connect(SilentPort { said: b"", gone: true }, Duration::from_secs(30)).err().unwrap();
+        assert!(matches!(error, Error::Io(_)), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_shell_that_never_answers_shows_what_the_unit_said() {
+        let said = b"unfr0zen initramfs: mounting root0 (mtd5)\n";
+        let mut shell = InitramfsShell { port: SilentPort { said, gone: false } };
+        let error = shell.run_with("true", Duration::from_millis(300), false).unwrap_err();
+        assert!(matches!(error, Error::Timeout(_)), "{error}");
+        assert!(error.to_string().contains("mounting root0 (mtd5)"), "{error}");
     }
 
     #[test]
