@@ -175,8 +175,7 @@ impl View {
         truthy(self.sh.get(key))
     }
 
-    /// A temperature as the unit's screen shows it (to half degrees in °C,
-    /// whole degrees in °F), as MQTT gives it: the computed state's `key`.
+    /// A temperature as MQTT gives it: the computed state's `key`.
     pub fn shown_centi(&self, key: &str) -> Option<i16> {
         number(self.state.get(key)).map(centi)
     }
@@ -1186,18 +1185,15 @@ mod tests {
     }
 
     #[test]
-    fn temperatures_as_the_screen_shows_them() {
-        let dev = crate::fields! {"temperature_scale" => "C", "away_temperature_high" => 24.44443};
-        let sh = crate::fields! {"target_temperature" => 21.38377, "current_temperature" => 18.20557};
-        let view = View { state: bridge::state(&dev, &sh), dev, sh };
-        assert_eq!(view.shown_centi("target"), Some(2150));
-        assert_eq!(view.shown_centi("current_temperature"), Some(1800));
-        assert_eq!(view.shown_centi("away_temperature_high"), Some(2450));
-        // In °F, whole degrees: 70.49 °F shows as 70 °F, 21.11 °C.
-        let dev = crate::fields! {"temperature_scale" => "F"};
-        let sh = crate::fields! {"target_temperature" => 21.38377};
-        let view = View { state: bridge::state(&dev, &sh), dev, sh };
-        assert_eq!(view.shown_centi("target"), Some(2111));
+    fn temperatures_to_hundredths() {
+        for scale in ["C", "F"] {
+            let dev = crate::fields! {"temperature_scale" => scale, "away_temperature_high" => 24.44443};
+            let sh = crate::fields! {"target_temperature" => 21.38377, "current_temperature" => 18.20557};
+            let view = View { state: bridge::state(&dev, &sh), dev, sh };
+            assert_eq!(view.shown_centi("target"), Some(2138));
+            assert_eq!(view.shown_centi("current_temperature"), Some(1821));
+            assert_eq!(view.shown_centi("away_temperature_high"), Some(2444));
+        }
     }
 
     #[test]

@@ -485,7 +485,7 @@ pub mod tests {
         ))
         .unwrap();
         assert_eq!(second["state"]["mode"], "heat");
-        assert_eq!(second["state"]["target"], 20.5);
+        assert_eq!(second["state"]["target"], 20.6);
         assert_eq!(second["state"]["action"], "heating");
         assert_eq!(second["state"]["current_humidity"], 41);
     }

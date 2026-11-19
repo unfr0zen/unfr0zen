@@ -223,7 +223,7 @@ impl View {
         self.state.get("mode").and_then(Json::as_str).unwrap_or("")
     }
 
-    /// A temperature as the unit's screen shows it, as MQTT gives it.
+    /// A temperature as MQTT gives it: the computed state's `key`.
     fn shown(&self, key: &str) -> Option<i16> {
         number(self.state.get(key)).map(centi)
     }
@@ -868,15 +868,15 @@ mod tests {
     }
 
     #[test]
-    fn the_thermostat_as_the_screen_shows_it() {
+    fn the_thermostat_reads_its_temperatures() {
         let n = nest(
             fields! {"temperature_scale" => "C", "current_humidity" => 41, "battery_level" => 3.92,
             "backplate_temperature" => 22.1},
             fields! {"target_temperature_type" => "heat", "target_temperature" => 21.38377,
             "current_temperature" => 18.20557, "can_heat" => true, "hvac_heater_state" => true},
         );
-        assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(1800)));
-        assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(2150)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(1821)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(2138)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x04)));
         assert_eq!(n.read(1, THERMOSTAT, 0x001B), Some(Value::Enum8(0x02)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(SCHEDULE)));
@@ -1002,16 +1002,15 @@ mod tests {
     }
 
     #[test]
-    fn fahrenheit_temperatures_are_the_whole_degrees_the_screen_shows() {
-        // 19.5 °C shows as 67 °F, 22 °C as 72 °F.
+    fn temperatures_read_the_same_in_either_scale() {
         let n = nest(
             fields! {"temperature_scale" => "F"},
             fields! {"target_temperature_type" => "heat", "target_temperature" => 19.5,
             "current_temperature" => 22.0, "can_heat" => true},
         );
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(1)));
-        assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(1944)));
-        assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(2222)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(1950)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0000), Some(Value::I16(2200)));
         assert_eq!(n.write(1, DISPLAY, 0x0000, Value::Enum8(0)), status::SUCCESS);
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(0)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(1950)));
