@@ -877,7 +877,7 @@ mod tests {
         );
         let humidity = Humidity { dataver: Dataver::new(0), nest: unit.clone() };
         assert_eq!(humidity.measured_value(ctx(1)).unwrap(), Nullable::some(4126));
-        // The backplate's own reading, not rounded as the screen shows it.
+        // The backplate's own reading.
         let backplate = Backplate { dataver: Dataver::new(0), nest: unit.clone() };
         assert_eq!(backplate.measured_value(ctx(2)).unwrap(), Nullable::some(2214));
         let battery = Battery { dataver: Dataver::new(0), nest: unit };

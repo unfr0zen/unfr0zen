@@ -483,17 +483,17 @@ mod tests {
     }
 
     #[test]
-    fn a_single_setpoint_mode_reads_as_the_screen_shows_it() {
+    fn a_single_setpoint_mode_reads_its_temperatures() {
         let t = thermostat(
             fields! {"temperature_scale" => "C", "away_temperature_low" => 15.2, "away_temperature_high" => 28.0},
             fields! {"target_temperature_type" => "heat", "target_temperature" => 21.38377, "current_temperature" => 18.2,
             "can_heat" => true, "can_cool" => false, "hvac_heater_state" => true, "hvac_fan_state" => true},
         );
-        assert_eq!(t.local_temperature(ctx(1)).unwrap(), Nullable::some(1800));
+        assert_eq!(t.local_temperature(ctx(1)).unwrap(), Nullable::some(1820));
         // Heating and cooling both show the one target.
-        assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 2150);
-        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2150);
-        assert_eq!(t.unoccupied_heating_setpoint(ctx(1)).unwrap(), 1500);
+        assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 2138);
+        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2138);
+        assert_eq!(t.unoccupied_heating_setpoint(ctx(1)).unwrap(), 1520);
         assert_eq!(t.unoccupied_cooling_setpoint(ctx(1)).unwrap(), 2800);
         assert_eq!(t.system_mode(ctx(1)).unwrap(), SystemModeEnum::Heat);
         assert_eq!(t.control_sequence_of_operation(ctx(1)).unwrap(), ControlSequenceOfOperationEnum::HeatingOnly);
@@ -511,7 +511,7 @@ mod tests {
         );
         t.nest.bridge.occupancy.detected(chrono::Utc::now().timestamp());
         assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 1900);
-        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2400);
+        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2420);
         assert_eq!(t.system_mode(ctx(1)).unwrap(), SystemModeEnum::Auto);
         assert_eq!(t.control_sequence_of_operation(ctx(1)).unwrap(), ControlSequenceOfOperationEnum::CoolingAndHeating);
         assert_eq!(t.thermostat_running_state(ctx(1)).unwrap(), RelayStateBitmap::COOL);
@@ -825,6 +825,6 @@ mod tests {
         assert_eq!(presets.len(), 1);
         assert_eq!(presets[0].preset_handle().unwrap().into_option().map(|h| h.0), Some(ECO));
         assert_eq!(presets[0].heating_setpoint().unwrap(), Some(1500));
-        assert_eq!(presets[0].cooling_setpoint().unwrap(), Some(2850));
+        assert_eq!(presets[0].cooling_setpoint().unwrap(), Some(2840));
     }
 }

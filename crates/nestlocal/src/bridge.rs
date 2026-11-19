@@ -462,15 +462,15 @@ impl Bridge {
         if can_heat && can_cool {
             modes.push("heat_cool");
         }
-        // What the unit's screen shows; Home Assistant takes a step in its own
-        // unit, unconverted.
-        let precision = if sprint(dev.get("temperature_scale")) == "F" { 1.0 } else { 0.5 };
+        // The setpoint step the unit's screen takes; Home Assistant takes a
+        // step in its own unit, unconverted. Its finest precision is 0.1.
+        let step = if sprint(dev.get("temperature_scale")) == "F" { 1.0 } else { 0.5 };
         let mut climate = fields! {
             "state_topic" => Value::Null,
             "modes" => modes,
             "temperature_unit" => "C",
-            "precision" => num(precision),
-            "temp_step" => num(precision),
+            "precision" => num(0.1),
+            "temp_step" => num(step),
             "min_temp" => 9,
             "max_temp" => 32,
             "mode_state_topic" => st.clone(),
@@ -708,7 +708,7 @@ impl Bridge {
                 "Eco heat temperature",
                 ECO_LOW.0,
                 ECO_LOW.1,
-                precision,
+                step,
                 "°C",
                 "temperature",
             );
@@ -720,7 +720,7 @@ impl Bridge {
                 "Eco cool temperature",
                 ECO_HIGH.0,
                 ECO_HIGH.1,
-                precision,
+                step,
                 "°C",
                 "temperature",
             );
@@ -1003,27 +1003,22 @@ pub fn wired_stages(dev: &Fields) -> Vec<(&'static str, &'static str)> {
     out
 }
 
-/// A temperature (°C) as the unit's screen shows it: to half degrees in
-/// Celsius, to whole degrees in Fahrenheit (given back in °C, the unit Home
-/// Assistant is told). The unit stores finer values, such as 19.87 or a
-/// dialled 18.59038, so unrounded they read 19.9 where the unit shows 20.
-/// The raw/ topics keep them exact.
-pub fn shown(v: Option<&Value>, scale: &str) -> Value {
+/// A temperature (°C) to hundredths of a degree, the resolution Matter and
+/// ZCL carry, whatever the unit's scale: 0.01 °C is finer than 0.1 °F. The
+/// raw/ topics keep the unit's values exact.
+pub fn shown(v: Option<&Value>) -> Value {
     let Some(c) = number(v) else {
         return v.cloned().unwrap_or(Value::Null);
     };
-    if scale == "F" {
-        return num(((c * 9.0 / 5.0 + 32.0).round() - 32.0) * 5.0 / 9.0);
-    }
-    num((c * 2.0).round() / 2.0)
+    num((c * 100.0).round() / 100.0)
 }
 
 /// An eco temperature as `shown`, within the range its number entity offers.
 /// Home Assistant refuses a state outside that range, and the unit's limits
 /// in Fahrenheit (40, 70 and 90 °F) fall just outside its Celsius bounds; the
 /// bound itself still shows the same whole degree on the unit's screen.
-fn shown_eco(v: Option<&Value>, scale: &str, (low, high): (f64, f64)) -> Value {
-    let t = shown(v, scale);
+fn shown_eco(v: Option<&Value>, (low, high): (f64, f64)) -> Value {
+    let t = shown(v);
     number(Some(&t)).map_or(t, |c| num(c.clamp(low, high)))
 }
 
@@ -1044,11 +1039,10 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
         _ => "off",
     };
     s.insert("mode".into(), mode.into());
-    let scale = sprint(dev.get("temperature_scale"));
-    s.insert("target".into(), shown(sh.get("target_temperature"), &scale));
-    s.insert("target_low".into(), shown(sh.get("target_temperature_low"), &scale));
-    s.insert("target_high".into(), shown(sh.get("target_temperature_high"), &scale));
-    s.insert("current_temperature".into(), shown(sh.get("current_temperature"), &scale));
+    s.insert("target".into(), shown(sh.get("target_temperature")));
+    s.insert("target_low".into(), shown(sh.get("target_temperature_low")));
+    s.insert("target_high".into(), shown(sh.get("target_temperature_high")));
+    s.insert("current_temperature".into(), shown(sh.get("current_temperature")));
 
     let any = |stages: &[(&str, &str, &str, &str)]| stages.iter().any(|s| truthy(sh.get(s.1)));
     let action = if mode == "off" {
@@ -1115,8 +1109,8 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     ] {
         s.insert(k.into(), dev.get(k).cloned().unwrap_or(Value::Null));
     }
-    s.insert("away_temperature_low".into(), shown_eco(dev.get("away_temperature_low"), &scale, ECO_LOW));
-    s.insert("away_temperature_high".into(), shown_eco(dev.get("away_temperature_high"), &scale, ECO_HIGH));
+    s.insert("away_temperature_low".into(), shown_eco(dev.get("away_temperature_low"), ECO_LOW));
+    s.insert("away_temperature_high".into(), shown_eco(dev.get("away_temperature_high"), ECO_HIGH));
     for k in [
         "leaf",
         "hot_water_active",
@@ -1235,27 +1229,27 @@ pub mod tests {
 
     #[test]
     fn shown_temperatures() {
-        for (input, scale, want) in [
-            (19.87, "C", 20.0),
-            (19.74, "C", 19.5),
-            (19.76, "C", 20.0),
-            (18.59038, "C", 18.5),
-            (22.70377, "C", 22.5),
-            (19.98209, "C", 20.0),
-            (20.0, "C", 20.0),
-            (20.0, "F", 20.0),                          // 68 °F
-            (19.5, "F", (67.0 - 32.0) * 5.0 / 9.0),     // 67.1 °F shows 67
-            (24.44444, "F", (76.0 - 32.0) * 5.0 / 9.0), // an away high set as 76 °F
+        for (input, want) in [
+            (19.87, 19.87),
+            (18.59038, 18.59),
+            (22.70377, 22.7),
+            (19.98209, 19.98),
+            (19.995, 20.0),
+            (20.0, 20.0),
+            (-0.504, -0.5),
+            (24.44444, 24.44), // an away high set as 76 °F
         ] {
-            assert_eq!(shown(Some(&json!(input)), scale), num(want), "shown({input}, {scale})");
+            assert_eq!(shown(Some(&json!(input))), num(want), "shown({input})");
         }
-        assert_eq!(shown(None, "C"), Value::Null);
-        let s = state(
-            &obj(json!({"temperature_scale": "C", "away_temperature_low": 19.98209})),
-            &obj(json!({"current_temperature": 19.87, "target_temperature": 18.59038})),
-        );
-        for (k, want) in [("current_temperature", 20.0), ("target", 18.5), ("away_temperature_low", 20.0)] {
-            assert_eq!(s[k], num(want), "state {k}");
+        assert_eq!(shown(None), Value::Null);
+        for scale in ["C", "F"] {
+            let s = state(
+                &obj(json!({"temperature_scale": scale, "away_temperature_low": 19.98209})),
+                &obj(json!({"current_temperature": 19.87, "target_temperature": 18.59038})),
+            );
+            for (k, want) in [("current_temperature", 19.87), ("target", 18.59), ("away_temperature_low", 19.98)] {
+                assert_eq!(s[k], num(want), "state {k} in {scale}");
+            }
         }
     }
 
@@ -1266,7 +1260,7 @@ pub mod tests {
             ("away_temperature_low", 40.0, ECO_LOW.0),
             ("away_temperature_low", 41.0, 5.0),
             ("away_temperature_low", 70.0, ECO_LOW.1),
-            ("away_temperature_high", 76.0, degrees(76.0)),
+            ("away_temperature_high", 76.0, 24.44),
             ("away_temperature_high", 90.0, ECO_HIGH.1),
         ] {
             let s = state(&obj(json!({"temperature_scale": "F", key: degrees(fahrenheit)})), &obj(json!({})));
@@ -1302,7 +1296,7 @@ pub mod tests {
         let climate: Value =
             serde_json::from_str(&configs["homeassistant/climate/nestlocal_s/thermostat/config"]).unwrap();
         assert_eq!(climate["modes"], json!(["off", "heat"]));
-        assert_eq!(climate["precision"], json!(1));
+        assert_eq!(climate["precision"], json!(0.1));
         assert_eq!(climate["temp_step"], json!(1));
         assert_eq!(climate["name"], Value::Null);
         assert!(climate.get("state_topic").is_none() && climate.get("temperature_low_command_topic").is_none());
