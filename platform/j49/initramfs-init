@@ -12,17 +12,6 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 
-fail() {
-    echo "unfr0zen initramfs: $*" >/dev/kmsg
-    sleep 5
-    reboot -f
-}
-
-slot=$(sed -n 's/.*unfr0zen\.slot=\(root[01]\).*/\1/p' /proc/cmdline)
-[ -n "$slot" ] || fail "no unfr0zen.slot= on the kernel command line"
-mtd=$(awk -F: -v name="\"$slot\"" '$2 ~ name"$" { sub("mtd", "", $1); print $1 }' /proc/mtd)
-[ -n "$mtd" ] || fail "no $slot partition in /proc/mtd"
-mount -t jffs2 -o ro,noatime "/dev/mtdblock$mtd" /mnt || fail "cannot mount $slot (mtd$mtd)"
 tty=/dev/console
 # unfr0zen.console keeps the shell on the console, for a unit driven over its UART.
 grep -q 'unfr0zen\.console' /proc/cmdline ||
@@ -33,9 +22,38 @@ grep -q 'unfr0zen\.console' /proc/cmdline ||
         }
         sleep 1
     done
-echo "unfr0zen initramfs: $slot (mtd$mtd) at /mnt, shell on $tty" >/dev/kmsg
+[ "$tty" = /dev/ttyGS0 ] && stty -F /dev/ttyGS0 raw -echo
+
+# Each step also goes to the host on the gadget, whose run log shows what
+# arrives before the shell answers. In the background: a host that is not
+# reading must not stop /init.
+say() {
+    echo "unfr0zen initramfs: $*" >/dev/kmsg
+    [ "$tty" = /dev/ttyGS0 ] && echo "unfr0zen initramfs: $*" >/dev/ttyGS0 &
+}
+
+fail() {
+    say "$*"
+    [ "$tty" = /dev/ttyGS0 ] && dmesg | tail -n 20 >/dev/ttyGS0 &
+    sleep 5
+    reboot -f
+}
+
+# The board data and panel the kernel chose, and the panel LCD_ID names
+# (1 Samsung, 0 Renesas), which picks it on the Display-2.11 and later.
+board=$(dmesg | sed -n 's/^\[[^]]*\] Machine: \(.*Revision.*\)/\1/p' | head -n 1)
+panel=$(readlink /sys/bus/omapdss/devices/display0/driver)
+echo 105 >/sys/class/gpio/export
+say "${board:-board unknown}, panel ${panel##*/}, LCD_ID $(cat /sys/class/gpio/gpio105/value)"
+
+slot=$(sed -n 's/.*unfr0zen\.slot=\(root[01]\).*/\1/p' /proc/cmdline)
+[ -n "$slot" ] || fail "no unfr0zen.slot= on the kernel command line"
+mtd=$(awk -F: -v name="\"$slot\"" '$2 ~ name"$" { sub("mtd", "", $1); print $1 }' /proc/mtd)
+[ -n "$mtd" ] || fail "no $slot partition in /proc/mtd"
+say "mounting $slot (mtd$mtd)"
+mount -t jffs2 -o ro,noatime "/dev/mtdblock$mtd" /mnt || fail "cannot mount $slot (mtd$mtd)"
+say "$slot (mtd$mtd) at /mnt, shell on $tty"
 if [ "$tty" = /dev/ttyGS0 ]; then
-    stty -F /dev/ttyGS0 raw -echo
     # Through a pipe the shell is not interactive: no prompts in its output.
     while true; do
         cat /dev/ttyGS0 | sh >/dev/ttyGS0 2>&1
