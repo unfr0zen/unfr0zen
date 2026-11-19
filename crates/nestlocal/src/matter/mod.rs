@@ -261,6 +261,28 @@ pub fn start(settings: Settings, bridge: Arc<Bridge>) {
     }
 }
 
+/// When the unit was made, as Matter's YYYYMMDD: its U-Boot environment's
+/// build_date (the gen 3's), else the start of the week its serial gives
+/// (characters 9 to 12, WWYY, week 1 the one with 1 January, from Sunday).
+fn manufacturing_date(serial: &str) -> String {
+    let built = std::process::Command::new("fw_printenv").args(["-n", "build_date"]).output();
+    let built =
+        built.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    built
+        .and_then(|date| chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok())
+        .or_else(|| serial_week(serial))
+        .map_or_else(|| "20150101".to_string(), |date| date.format("%Y%m%d").to_string())
+}
+
+fn serial_week(serial: &str) -> Option<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let week: i64 = serial.get(8..10)?.parse().ok().filter(|w| (1..=53).contains(w))?;
+    let year: i32 = serial.get(10..12)?.parse().ok()?;
+    let first = chrono::NaiveDate::from_ymd_opt(2000 + year, 1, 1)?;
+    let sunday = first - chrono::Duration::days(first.weekday().num_days_from_sunday().into());
+    Some(sunday + chrono::Duration::weeks(week - 1))
+}
+
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -322,7 +344,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         sw_ver: crate::update::matter_version(&installed),
         sw_ver_str: leak(installed),
         serial_no: leak(nest.bridge.serial.clone()),
-        manufacturing_date: "20151201",
+        manufacturing_date: leak(manufacturing_date(&nest.bridge.serial)),
         product_name: "Nest Learning Thermostat",
         vendor_name: "Google Nest",
         device_name: leak(nest.bridge.device_name()),
@@ -1210,6 +1232,16 @@ mod tests {
         assert!(!enabled(Level::Error, "rs_matter::im::busy"));
         assert!(!enabled(Level::Info, "rs_matter::transport"));
         assert!(!enabled(Level::Debug, "rs_matter"));
+    }
+
+    #[test]
+    fn the_serial_gives_the_week_the_unit_was_made() {
+        // The gen 3's: week 25 of 2016, the week of its build_date, 2016-06-18.
+        assert_eq!(serial_week("09AA01AC25160NMZ"), chrono::NaiveDate::from_ymd_opt(2016, 6, 12));
+        // The gen 2's: week 50 of 2012, as its credentials' AB201250 says.
+        assert_eq!(serial_week("02AA01AB501203EQ"), chrono::NaiveDate::from_ymd_opt(2012, 12, 9));
+        assert_eq!(serial_week("02AA01ABQEMU0001"), None);
+        assert_eq!(serial_week("short"), None);
     }
 
     #[test]
