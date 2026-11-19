@@ -314,9 +314,10 @@ impl Bridge {
         }
     }
 
-    /// Whether the connection needs the unit awake for now (wake.rs).
+    /// Whether the connection, or an update it asked for, needs the unit
+    /// awake for now (wake.rs).
     pub fn holds_awake(&self) -> bool {
-        self.mqtt.get().is_some_and(mqtt::Client::holds_awake)
+        self.mqtt.get().is_some_and(mqtt::Client::holds_awake) || self.updates.get().is_some_and(|u| u.installing())
     }
 
     fn publish_availability(&self, alive: bool) {

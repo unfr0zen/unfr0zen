@@ -211,6 +211,11 @@ impl Updates {
         self.can_install
     }
 
+    /// Whether an update is being installed, which keeps the unit awake.
+    pub fn installing(&self) -> bool {
+        self.installing.load(Ordering::Relaxed)
+    }
+
     /// The version the unit runs.
     pub fn installed(&self) -> Option<&str> {
         self.installed.as_deref()
