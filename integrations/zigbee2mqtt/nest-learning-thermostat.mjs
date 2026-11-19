@@ -493,6 +493,9 @@ const definition = {
   vendor: "Google Nest",
   description: "Nest Learning Thermostat, 3rd generation, freed by unfr0zen (nestlocal)",
   icon: PICTURE,
+  // unfr0zen's updates, from the index each release publishes
+  // (unfr0zen-zigbee-ota.json, for zigbee_ota_override_index_location).
+  ota: true,
   fromZigbee: [
     fz.thermostat,
     fz.fan,

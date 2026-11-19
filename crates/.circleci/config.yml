@@ -137,10 +137,10 @@ jobs:
       # Linux binaries in tarballs, which keep them executable; Windows and the
       # signed macOS app bundles (universal, arm64, x86_64) in zips, stored
       # without compression or extra fields so every unzipper reads them. The
-      # x86_64 Linux job adds the setup bundles, which units fetch to update
-      # themselves, unsigned: a release signs them in a job of its own
-      # (.circleci/release.yml), so the key is never where the dependencies
-      # build.
+      # x86_64 Linux job adds the setup bundles, unsigned: a release signs
+      # them in a job of its own (.circleci/release.yml), so the key is never
+      # where the dependencies build, and wraps them in the packages units
+      # update from.
       - run:
           name: Package
           command: |

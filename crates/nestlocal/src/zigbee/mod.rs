@@ -12,15 +12,18 @@
 //! settings menu leaves the previous network and forgets its credentials.
 //! Changes go to the coordinator as attribute reports, whatever reporting it
 //! configured; the unit's clock is set from the coordinator's Time cluster,
-//! which Zigbee2MQTT and ZHA serve (clock.rs has the other sources).
+//! which Zigbee2MQTT and ZHA serve (clock.rs has the other sources). The
+//! coordinator's OTA server installs unfr0zen's updates (ota.rs).
 
 mod beeper;
 mod clusters;
 mod ezsp;
 mod network;
+mod ota;
 mod radio;
 pub use nestlocal::radio_wakeup as wakeup;
 use nestlocal::spi;
+pub use ota::busy as updating;
 mod zcl;
 
 use std::collections::BTreeMap;
@@ -107,6 +110,8 @@ impl PairingAttempt {
 /// Runs the unit on Zigbee, on a thread of its own, once it has reported
 /// (its equipment decides what it offers); again after the radio fails.
 pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
+    // OTA downloads over Wi-Fi run on the caller's runtime.
+    let runtime = tokio::runtime::Handle::try_current().ok();
     let spawned = std::thread::Builder::new().name("zigbee".into()).spawn(move || {
         // The radio starts once nlclient has said what the unit is; until then the
         // settings screen says what Zigbee waits for (liveness logs a long wait).
@@ -116,6 +121,7 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         while !reported(&bridge) {
             std::thread::sleep(Duration::from_secs(5));
         }
+        let mut ota = ota::Ota::new(bridge.updates().cloned(), runtime);
         let nest = Nest::new(bridge);
         let changed = Arc::new(AtomicBool::new(true));
         let flag = changed.clone();
@@ -128,7 +134,8 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         let mut attempt = PairingAttempt::default();
         attempt.look(Instant::now());
         loop {
-            if let Err(e) = run(&nest, &store, &changed, &mut failed_install, &mut attempt) {
+            if let Err(e) = run(&nest, &mut ota, &store, &changed, &mut failed_install, &mut attempt) {
+                ota.offline();
                 logf!("zigbee: {e}");
                 crate::settings_ui::status("zigbee", "Radio unavailable. Try again.");
             }
@@ -147,6 +154,7 @@ fn reported(bridge: &Bridge) -> bool {
 
 fn run(
     nest: &Nest,
+    ota: &mut ota::Ota,
     store: &Path,
     changed: &AtomicBool,
     failed_install: &mut Option<Instant>,
@@ -185,6 +193,9 @@ fn run(
         if up { "Paired" } else { "Not paired. Permit joining, then enable pairing." },
     );
     loop {
+        if !up {
+            ota.offline();
+        }
         let request_age = crate::settings_ui::take_request_age("zigbee");
         if let Some(age) = request_age {
             let now = Instant::now();
@@ -261,7 +272,7 @@ fn run(
                         attempt.look(Instant::now());
                         crate::settings_ui::status("zigbee", "Network disconnected");
                     }
-                    _ => server.callback(&mut ezsp, nest, callback)?,
+                    _ => server.callback(&mut ezsp, nest, ota, callback)?,
                 }
             }
         }
@@ -274,6 +285,9 @@ fn run(
         }
         if up && Instant::now() >= server.next_time {
             server.ask_time(&mut ezsp)?;
+        }
+        if up {
+            ota.poll(&mut ezsp)?;
         }
     }
 }
@@ -367,8 +381,9 @@ fn configure(ezsp: &mut Ezsp, nest: &Nest) -> Result<(), String> {
         ezsp.expect(id::SET_CONFIGURATION_VALUE, &params).map_err(|e| format!("configuration {config:#04x}: {e}"))?;
     }
     for e in &nest.endpoints {
-        // The thermostat's endpoint is the Time client that asks for the time.
-        let clients: &[u16] = if e.id == THERMOSTAT_ENDPOINT { &[TIME] } else { &[] };
+        // The thermostat's endpoint is the Time client that asks for the time,
+        // and the OTA Upgrade client that takes updates.
+        let clients: &[u16] = if e.id == THERMOSTAT_ENDPOINT { &[TIME, ota::CLUSTER] } else { &[] };
         let mut endpoint = vec![e.id];
         endpoint.extend(PROFILE_HA.to_le_bytes());
         endpoint.extend(e.device.to_le_bytes());
@@ -513,8 +528,8 @@ fn wait_for_network_until(ezsp: &mut Ezsp, ui_deadline: Option<Instant>) -> Resu
     Ok(false)
 }
 
-/// The thermostat's ZCL server side: answers, and reports. And its one
-/// client side, the time.
+/// The thermostat's ZCL server side: answers, and reports. And its client
+/// sides: the time, and OTA (ota.rs).
 struct Server {
     sequence: u8,
     /// What was last reported, by endpoint, cluster and attribute.
@@ -530,13 +545,16 @@ struct Server {
 }
 
 impl Server {
-    fn callback(&mut self, ezsp: &mut Ezsp, nest: &Nest, callback: Callback) -> Result<(), String> {
+    fn callback(&mut self, ezsp: &mut Ezsp, nest: &Nest, ota: &mut ota::Ota, callback: Callback) -> Result<(), String> {
         if callback.id != id::INCOMING_MESSAGE_HANDLER {
             return Ok(());
         }
         let message = Incoming::read(&callback.params)?;
         if message.aps.cluster == TIME && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
             self.time_answer(&message.payload);
+        }
+        if message.aps.cluster == ota::CLUSTER && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
+            ota.message(ezsp, (message.sender, message.aps.source_endpoint), &message.payload)?;
         }
         if let Some((endpoint, answer)) = answer(nest, &message) {
             let to = (message.sender, message.aps.source_endpoint);
