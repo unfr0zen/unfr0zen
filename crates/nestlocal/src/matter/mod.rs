@@ -317,8 +317,8 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let info: &'static BasicInfoConfig = Box::leak(Box::new(BasicInfoConfig {
         vid: crate::package::VENDOR,
         pid: attestation.product,
-        hw_ver: 3,
-        hw_ver_str: "3",
+        hw_ver: crate::device::current().generation.into(),
+        hw_ver_str: leak(crate::device::current().generation.to_string()),
         sw_ver: crate::update::matter_version(&installed),
         sw_ver_str: leak(installed),
         serial_no: leak(nest.bridge.serial.clone()),
