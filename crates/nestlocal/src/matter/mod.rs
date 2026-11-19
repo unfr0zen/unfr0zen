@@ -8,12 +8,17 @@
 //! until it has a controller, its commissioning window is kept open. It uses the Matter test vendor and its
 //! test attestation: controllers accept it as an uncertified device.
 //!
+//! It takes unfr0zen's updates from a controller's OTA provider (ota.rs);
+//! its software version is unfr0zen's.
+//!
 //! rs-matter runs on a thread of its own, on its own executor; the store's
 //! watcher wakes it to report changes to subscribed controllers.
 
+mod attestation;
 mod ble;
 mod extras;
 mod netifs;
+mod ota;
 mod pairing;
 mod srp;
 mod thermostat;
@@ -26,7 +31,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use embassy_futures::select::{select3, select4};
+use embassy_futures::select::select4;
 use rs_matter::crypto::{default_crypto, Crypto};
 use rs_matter::dm::clusters::decl::thermostat as thermostat_cluster;
 use rs_matter::dm::clusters::decl::{
@@ -35,7 +40,7 @@ use rs_matter::dm::clusters::decl::{
 };
 use rs_matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter::dm::clusters::identify::{self, IdentifyHandler};
-use rs_matter::dm::devices::test::{DAC_PRIVKEY, TEST_DEV_ATT, TEST_PID, TEST_VID};
+use rs_matter::dm::clusters::ota_req::{ClusterHandler as _, OtaRequestorHandler};
 // Every cluster's handler trait, for their CLUSTER constants.
 use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
 use rs_matter::dm::clusters::decl::fan_control::ClusterHandler as _;
@@ -51,7 +56,10 @@ use rs_matter::dm::clusters::{
     net_comm::{NetCtl, NetCtlStatus, NetworkType, Networks, NetworksAccess},
     thread_diag::ThreadDiag,
 };
-use rs_matter::dm::devices::{DEV_TYPE_FAN, DEV_TYPE_MODE_SELECT, DEV_TYPE_POWER_SOURCE, DEV_TYPE_THERMOSTAT};
+use rs_matter::dm::devices::{
+    DEV_TYPE_FAN, DEV_TYPE_MODE_SELECT, DEV_TYPE_OTA_REQUESTOR, DEV_TYPE_POWER_SOURCE, DEV_TYPE_ROOT_NODE,
+    DEV_TYPE_THERMOSTAT,
+};
 use rs_matter::dm::endpoints;
 use rs_matter::dm::networks::eth::EthNetwork;
 use rs_matter::dm::networks::{wireless::NoopWirelessNetCtl, NetChangeNotif};
@@ -69,7 +77,7 @@ use rs_matter::sc::pase::{
 use rs_matter::transport::exchange::MatterBuffers;
 use rs_matter::transport::MATTER_SOCKET_BIND_ADDR;
 use rs_matter::utils::select::Coalesce;
-use rs_matter::{clusters, devices, root_endpoint, BasicCommData, Matter, MATTER_PORT};
+use rs_matter::{clusters, devices, BasicCommData, Matter, MATTER_PORT};
 use serde_json::Value;
 
 use crate::bridge::{self, Bridge};
@@ -212,6 +220,7 @@ static THREAD_REQUIRED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 pub fn sleep_blocked() -> bool {
     SLEEP_BLOCKED.load(std::sync::atomic::Ordering::SeqCst)
         || ble::sleep_blocked()
+        || ota::busy()
         || (THREAD_REQUIRED.load(std::sync::atomic::Ordering::SeqCst) && !crate::thread_sleep::ready())
 }
 
@@ -250,6 +259,28 @@ pub fn start(settings: Settings, bridge: Arc<Bridge>) {
     if let Err(e) = spawned {
         logf!("matter: {e}");
     }
+}
+
+/// When the unit was made, as Matter's YYYYMMDD: its U-Boot environment's
+/// build_date (the gen 3's), else the start of the week its serial gives
+/// (characters 9 to 12, WWYY, week 1 the one with 1 January, from Sunday).
+fn manufacturing_date(serial: &str) -> String {
+    let built = std::process::Command::new("fw_printenv").args(["-n", "build_date"]).output();
+    let built =
+        built.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    built
+        .and_then(|date| chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").ok())
+        .or_else(|| serial_week(serial))
+        .map_or_else(|| "20150101".to_string(), |date| date.format("%Y%m%d").to_string())
+}
+
+fn serial_week(serial: &str) -> Option<chrono::NaiveDate> {
+    use chrono::Datelike;
+    let week: i64 = serial.get(8..10)?.parse().ok().filter(|w| (1..=53).contains(w))?;
+    let year: i32 = serial.get(10..12)?.parse().ok()?;
+    let first = chrono::NaiveDate::from_ymd_opt(2000 + year, 1, 1)?;
+    let sunday = first - chrono::Duration::days(first.weekday().num_days_from_sunday().into());
+    Some(sunday + chrono::Duration::weeks(week - 1))
 }
 
 fn leak(s: String) -> &'static str {
@@ -303,15 +334,17 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     controller: C,
 ) -> Result<(), Error> {
     let view = nest.view();
+    let attestation = attestation::of(crate::device::current().name);
+    let installed = nest.bridge.updates().and_then(|u| u.installed()).unwrap_or("").to_string();
     let info: &'static BasicInfoConfig = Box::leak(Box::new(BasicInfoConfig {
-        vid: TEST_VID,
-        pid: TEST_PID,
-        hw_ver: 3,
-        hw_ver_str: "3",
-        sw_ver: 1,
-        sw_ver_str: leak(view.device_str("current_version")),
+        vid: crate::package::VENDOR,
+        pid: attestation.product,
+        hw_ver: crate::device::current().generation.into(),
+        hw_ver_str: leak(crate::device::current().generation.to_string()),
+        sw_ver: crate::update::matter_version(&installed),
+        sw_ver_str: leak(installed),
         serial_no: leak(nest.bridge.serial.clone()),
-        manufacturing_date: "20151201",
+        manufacturing_date: leak(manufacturing_date(&nest.bridge.serial)),
         product_name: "Nest Learning Thermostat",
         vendor_name: "Google Nest",
         device_name: leak(nest.bridge.device_name()),
@@ -323,7 +356,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         )),
         discriminator: settings.discriminator,
     };
-    let matter = Matter::new(info, comm.clone(), &TEST_DEV_ATT, MATTER_PORT);
+    let matter = Matter::new(info, comm.clone(), attestation, MATTER_PORT);
     std::fs::create_dir_all(&settings.storage).map_err(|_| ErrorCode::StdIoError)?;
     #[cfg(unix)]
     if settings.thread {
@@ -338,14 +371,16 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
             nest.bridge.matter_labelled();
         }
     }
-    if let Err(e) = crate::settings_ui::matter_codes(&comm, DiscoveryCapabilities::IP) {
+    if let Err(e) = crate::settings_ui::matter_codes(&comm, info.pid, DiscoveryCapabilities::IP) {
         logf!("matter UI: {e}");
     }
 
     let buffers: MatterBuffers = MatterBuffers::new();
     let state: InteractionModelState<N> = InteractionModelState::new(networks);
-    let crypto = default_crypto(rand::rng(), DAC_PRIVKEY);
+    let crypto =
+        default_crypto(rand::rng(), rs_matter::dm::clusters::dev_att::DeviceAttestation::dac_priv_key(attestation));
     let rand = crypto.rand()?;
+    let ota = ota::Ota::new();
     let switches = extras::switches(&nest);
     let node =
         node_for_network(view.device_flag("has_fan"), &switches, settings.thread, nest.bridge.sensor.get().is_some());
@@ -353,7 +388,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         &matter,
         &crypto,
         &buffers,
-        data_model(node, rand, nest.clone(), switches, &controller, settings.thread),
+        data_model(node, rand, nest.clone(), switches, &controller, &ota, settings.thread),
         &kv,
         &controller,
         &state,
@@ -412,6 +447,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         }
         Ok::<(), Error>(())
     });
+    let mut updates = pin!(ota::run(&matter, &crypto, &ota, &im, nest.bridge.updates().cloned(), &settings.storage));
 
     // Initial enrollment is commissionable by default; paired units open on request.
     matter.print_standard_qr_text(DiscoveryCapabilities::IP)?;
@@ -431,7 +467,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
                 } else {
                     DiscoveryCapabilities::IP
                 };
-                if let Err(e) = crate::settings_ui::matter_codes(&comm, capabilities) {
+                if let Err(e) = crate::settings_ui::matter_codes(&comm, info.pid, capabilities) {
                     logf!("matter UI: {e}");
                 }
             }
@@ -526,7 +562,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let all = select4(
         &mut transport,
         &mut mdns,
-        select3(&mut respond, &mut im_job, &mut report).coalesce(),
+        select4(&mut respond, &mut im_job, &mut report, &mut updates).coalesce(),
         &mut commissionable,
     );
     futures_lite::future::block_on(all.coalesce())
@@ -536,12 +572,21 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
 const DEV_TYPE_TEMPERATURE_SENSOR: DeviceType = DeviceType { dtype: 0x0302, drev: 2 };
 const DEV_TYPE_ON_OFF_PLUG_IN_UNIT: DeviceType = DeviceType { dtype: 0x010A, drev: 3 };
 
-/// The root endpoint, for a node already on its network.
-const ROOT: Endpoint<'static> = root_endpoint!(eth);
-const THREAD_ROOT: Endpoint<'static> = Endpoint::new(
+/// The OTA Software Update Provider cluster, which the requestor is a client of.
+const OTA_PROVIDER: u32 = 0x0029;
+
+/// The root endpoint, for a node already on its network; an OTA requestor.
+const ROOT: Endpoint<'static> = Endpoint::new_with_clients(
     endpoints::ROOT_ENDPOINT_ID,
-    devices!(rs_matter::dm::devices::DEV_TYPE_ROOT_NODE),
+    devices!(DEV_TYPE_ROOT_NODE, DEV_TYPE_OTA_REQUESTOR),
+    clusters!(eth; OtaRequestorHandler::CLUSTER),
+    &[OTA_PROVIDER],
+);
+const THREAD_ROOT: Endpoint<'static> = Endpoint::new_with_clients(
+    endpoints::ROOT_ENDPOINT_ID,
+    devices!(DEV_TYPE_ROOT_NODE, DEV_TYPE_OTA_REQUESTOR),
     clusters!(sys;
+        OtaRequestorHandler::CLUSTER,
         NetworkType::Thread.cluster(),
         rs_matter::dm::clusters::thread_diag::FULL_CLUSTER
             .with_features(rs_matter::dm::clusters::thread_diag::Feature::MAC_COUNTS.bits())
@@ -549,6 +594,7 @@ const THREAD_ROOT: Endpoint<'static> = Endpoint::new(
                 || (22..=55).contains(&attr.id))
             .with_cmds(rs_matter::with!()),
     ),
+    &[OTA_PROVIDER],
 );
 
 /// The node: the thermostat, and the endpoints beside it that this unit's
@@ -634,6 +680,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
     nest: Arc<Nest>,
     switches: Vec<Switch>,
     controller: &'a C,
+    ota: &'a ota::Ota,
     thread: bool,
 ) -> impl DataModel + 'a {
     use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
@@ -657,6 +704,10 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             .chain(
                 if thread { |e, _| e == 0 } else { |_, _| false },
                 endpoints::ThreadSysHandlerBuilder::new(controller, controller).netif_diag(&netifs::Netifs).build(rand),
+            )
+            .chain(
+                |e, c| e == ota::ENDPOINT && c == OtaRequestorHandler::CLUSTER.id,
+                Async(OtaRequestorHandler::new(Dataver::new_rand(&mut rand), &ota.providers, &ota.state).adapt()),
             )
             .chain(
                 |e, c| e != 0 && c == desc::DescHandler::CLUSTER.id,
@@ -1181,6 +1232,16 @@ mod tests {
         assert!(!enabled(Level::Error, "rs_matter::im::busy"));
         assert!(!enabled(Level::Info, "rs_matter::transport"));
         assert!(!enabled(Level::Debug, "rs_matter"));
+    }
+
+    #[test]
+    fn the_serial_gives_the_week_the_unit_was_made() {
+        // The gen 3's: week 25 of 2016, the week of its build_date, 2016-06-18.
+        assert_eq!(serial_week("09AA01AC25160NMZ"), chrono::NaiveDate::from_ymd_opt(2016, 6, 12));
+        // The gen 2's: week 50 of 2012, as its credentials' AB201250 says.
+        assert_eq!(serial_week("02AA01AB501203EQ"), chrono::NaiveDate::from_ymd_opt(2012, 12, 9));
+        assert_eq!(serial_week("02AA01ABQEMU0001"), None);
+        assert_eq!(serial_week("short"), None);
     }
 
     #[test]

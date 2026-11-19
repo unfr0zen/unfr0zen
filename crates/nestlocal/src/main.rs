@@ -26,6 +26,7 @@ mod naming;
 mod network;
 mod nlsettings;
 mod occupancy;
+mod package;
 mod scratch;
 mod screen;
 mod sensor;

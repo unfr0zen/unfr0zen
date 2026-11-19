@@ -74,9 +74,10 @@ pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Res
 
 pub fn matter_codes(
     comm: &rs_matter::BasicCommData,
+    product: u16,
     capabilities: rs_matter::pairing::DiscoveryCapabilities,
 ) -> Result<(), String> {
-    let (png_bytes, code) = encode_matter_codes(comm, capabilities)?;
+    let (png_bytes, code) = encode_matter_codes(comm, product, capabilities)?;
     publish("matter.png", &png_bytes).map_err(|e| e.to_string())?;
     publish("matter.code", code.as_bytes()).map_err(|e| e.to_string())
 }
@@ -121,12 +122,19 @@ fn publish_activity_icons() -> std::io::Result<()> {
 
 fn encode_matter_codes(
     comm: &rs_matter::BasicCommData,
+    product: u16,
     capabilities: rs_matter::pairing::DiscoveryCapabilities,
 ) -> Result<(Vec<u8>, String), String> {
-    use rs_matter::dm::devices::test::{TEST_PID, TEST_VID};
     use rs_matter::pairing::qr::{no_optional_data, CommFlowType, Qr, QrPayload};
-    let payload =
-        QrPayload::new(capabilities, CommFlowType::Standard, comm.clone(), TEST_VID, TEST_PID, "", no_optional_data);
+    let payload = QrPayload::new(
+        capabilities,
+        CommFlowType::Standard,
+        comm.clone(),
+        crate::package::VENDOR,
+        product,
+        "",
+        no_optional_data,
+    );
     let mut text_buf = [0u8; 256];
     let (text, _) = payload.as_str(&mut text_buf).map_err(|e| e.to_string())?;
     let mut temporary = [0u8; 4096];
@@ -180,7 +188,8 @@ mod tests {
                 password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(&pin.to_le_bytes())),
                 discriminator,
             };
-            let (png, code) = encode_matter_codes(&comm, rs_matter::pairing::DiscoveryCapabilities::IP).unwrap();
+            let (png, code) =
+                encode_matter_codes(&comm, 0x8001, rs_matter::pairing::DiscoveryCapabilities::IP).unwrap();
             assert_eq!(code, comm.compute_pretty_pairing_code().as_str());
             let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
             let mut pixels = vec![0; reader.output_buffer_size()];

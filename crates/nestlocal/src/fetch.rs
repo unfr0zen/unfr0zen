@@ -1,8 +1,7 @@
 //! The HTTP(S) GETs nestlocal makes itself: the release check and an
-//! update's download, which goes to a file as it arrives. The unit's CA store holds Nest's roots alone, so TLS
+//! update's download, taken as it arrives. The unit's CA store holds Nest's roots alone, so TLS
 //! trusts Mozilla's (webpki-roots).
 
-use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -13,7 +12,6 @@ use hyper::header::{ACCEPT, HOST, LOCATION, USER_AGENT};
 use hyper::{Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
@@ -44,31 +42,30 @@ pub async fn get(url: &str, limit: usize, timeout: Duration) -> Result<Vec<u8>, 
     .await
 }
 
-/// The body of url written to path as it arrives, as get takes it; path is
-/// removed when the download fails.
-pub async fn download(url: &str, path: &Path, limit: usize, timeout: Duration) -> Result<(), String> {
-    let result = within(url, timeout, async {
+/// The body of url given to `each` as it arrives, as get takes it.
+pub async fn stream(
+    url: &str,
+    limit: usize,
+    timeout: Duration,
+    mut each: impl FnMut(&[u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    within(url, timeout, async {
         let (url, response) = follow(url).await?;
-        let mut file = tokio::fs::File::create(path).await.map_err(|e| format!("{}: {e}", path.display()))?;
         let mut body = response.into_body();
-        let mut written = 0;
+        let mut received = 0;
         while let Some(frame) = body.frame().await {
             let Ok(data) = frame.map_err(|e| format!("{url}: body: {e}"))?.into_data() else {
                 continue;
             };
-            written += data.len();
-            if written > limit {
+            received += data.len();
+            if received > limit {
                 return Err(format!("{url}: body: more than {limit} bytes"));
             }
-            file.write_all(&data).await.map_err(|e| format!("{}: {e}", path.display()))?;
+            each(&data)?;
         }
-        file.sync_all().await.map_err(|e| format!("{}: {e}", path.display()))
+        Ok(())
     })
-    .await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(path);
-    }
-    result
+    .await
 }
 
 async fn within<T>(
@@ -201,21 +198,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_download_lands_in_its_file_and_one_over_the_limit_leaves_none() {
+    async fn a_stream_takes_the_body_as_it_arrives_and_refuses_one_over_the_limit() {
         let base = serve(vec![
             "HTTP/1.1 302 Found\r\nLocation: /asset\r\nContent-Length: 0\r\n\r\n".into(),
             "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
             "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".into(),
         ])
         .await;
-        let dir = std::env::temp_dir().join(format!("nestlocal-download-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("bundle.tgz");
         let timeout = Duration::from_secs(30);
-        download(&format!("{base}/release"), &path, 100, timeout).await.unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"hello");
-        assert!(download(&base, &path, 4, timeout).await.unwrap_err().contains("body"));
-        assert!(!path.exists());
-        std::fs::remove_dir_all(&dir).unwrap();
+        let mut body = Vec::new();
+        stream(&format!("{base}/release"), 100, timeout, |data| {
+            body.extend_from_slice(data);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(body, b"hello");
+        assert!(stream(&base, 4, timeout, |_| Ok(())).await.unwrap_err().contains("body"));
+        assert_eq!(stream(&base, 100, timeout, |_| Err("refused".into())).await.unwrap_err(), "refused");
     }
 }
