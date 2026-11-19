@@ -4,6 +4,7 @@
 // matter/'s handler chain is a deeply nested type.
 #![recursion_limit = "256"]
 
+mod arp;
 mod bridge;
 mod brightness;
 mod clock;
