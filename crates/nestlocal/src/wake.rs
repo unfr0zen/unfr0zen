@@ -195,10 +195,10 @@ pub fn start(
     }
     let wake = broker_port.map(|port| Arc::new(Wake::new(port)));
     if let Some(wake) = &wake {
-        capture::start(iface, wake.clone());
+        capture::start(iface.clone(), wake.clone());
     }
     let _ = HOLDING.set(Box::new(holding));
-    tokio::spawn(run(wake, matter, zigbee, Arc::new(on_wake)));
+    tokio::spawn(run(wake, matter, zigbee, iface, Arc::new(on_wake)));
 }
 
 /// What else holds the unit awake: the MQTT connection, for now (start).
@@ -211,7 +211,7 @@ fn holding() -> bool {
 
 /// Serves the sniffer and the sleep entity and keeps the registration up;
 /// returns only if the system bus cannot be reached.
-async fn run(wake: Option<Arc<Wake>>, matter: bool, zigbee: bool, on_wake: Arc<dyn Fn() + Send + Sync>) {
+async fn run(wake: Option<Arc<Wake>>, matter: bool, zigbee: bool, iface: String, on_wake: Arc<dyn Fn() + Send + Sync>) {
     let bus = match zbus::Connection::system().await {
         Ok(bus) => bus,
         Err(e) => {
@@ -220,7 +220,8 @@ async fn run(wake: Option<Arc<Wake>>, matter: bool, zigbee: bool, on_wake: Arc<d
         }
     };
     let ready = Arc::new(AtomicBool::new(!matter));
-    let entity = SleepClient { wake: wake.clone(), bus: bus.clone(), on_wake, matter, ready: ready.clone(), zigbee };
+    let entity =
+        SleepClient { wake: wake.clone(), bus: bus.clone(), on_wake, matter, ready: ready.clone(), zigbee, iface };
     let served = match &wake {
         Some(wake) => bus.object_server().at(CZSNIFFER_PATH, Sniffer(wake.clone())).await.map(|_| ()),
         None => Ok(()),
@@ -434,12 +435,15 @@ struct SleepClient {
     ready: Arc<AtomicBool>,
     /// Zigbee is on: the unit stays awake while the radio has something to say.
     zigbee: bool,
+    /// The WiFi interface.
+    iface: String,
 }
 
 #[zbus::interface(name = "com.nestlabs.scpm.sleep_client")]
 impl SleepClient {
-    /// The unit is about to sleep: report the connection last, or decline
-    /// while holding it awake or while the radio has something to say.
+    /// The unit is about to sleep: report the connection last and have the
+    /// chip answer ARP, or decline while holding it awake or while the radio
+    /// has something to say.
     #[zbus(name = "RequestSleep")]
     async fn request_sleep(&self) -> (String, bool) {
         if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked())
@@ -458,6 +462,8 @@ impl SleepClient {
         if crate::thread_sleep::blocked() || (self.zigbee && crate::zigbee::wakeup::pending()) {
             return (ENTITY_PATH.into(), false);
         }
+        let iface = self.iface.clone();
+        let _ = tokio::task::spawn_blocking(move || crate::arp::check(&iface)).await;
         (ENTITY_PATH.into(), true)
     }
 
