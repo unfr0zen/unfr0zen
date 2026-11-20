@@ -1281,7 +1281,7 @@ impl App {
         ui.add_space(2.0);
     }
 
-    /// The unit on USB, and the task under way or how the last one ended.
+    /// The unit on USB, and whether a console is open.
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let frame = egui::Frame::new().fill(STATUS).inner_margin(egui::Margin::symmetric(12, 0));
         egui::Panel::bottom("status").exact_size(STATUS_HEIGHT).show_separator_line(false).frame(frame).show(
@@ -1295,33 +1295,6 @@ impl App {
                     if self.shell.port_name().or(self.uboot.port_name()).is_some() {
                         ui.separator();
                         ui.label(egui::RichText::new(tr!("status.console_open")).size(11.5).color(ACCENT));
-                    }
-                    if let Some(task) = &self.task {
-                        ui.separator();
-                        if self.running() {
-                            ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
-                            ui.label(egui::RichText::new(task.doing()).monospace().size(11.0).color(MUTED));
-                        } else if self.cancelled {
-                            ui.label(
-                                egui::RichText::new(tr!("status.cancelled", task = task.title()))
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(MUTED),
-                            );
-                        } else if let Some(outcome) = &self.logs.outcome {
-                            let ok = outcome.is_ok();
-                            outcome_mark(ui, ok, 11.0);
-                            let text = if ok {
-                                tr!("status.done", task = task.title())
-                            } else {
-                                tr!("status.failed", task = task.title())
-                            };
-                            ui.label(egui::RichText::new(text).monospace().size(11.0).color(if ok {
-                                MUTED
-                            } else {
-                                BAD
-                            }));
-                        }
                     }
                 });
             },
@@ -3598,7 +3571,6 @@ mod tests {
         app.on_event(Event::Done(Err("no unit entered USB download mode".into())));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(!shown.iter().any(|t| t == "now" || t.contains("no unit entered")), "{shown:?}");
-        assert!(shown.iter().any(|t| t == "Restore NAND: cancelled"), "the status bar still says: {shown:?}");
     }
 
     #[test]
@@ -3654,7 +3626,6 @@ mod tests {
         app.on_event(Event::Done(Err("no unit entered USB download mode".into())));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
         assert!(!shown.iter().any(|t| t.contains("no unit entered")), "{shown:?}");
-        assert!(shown.iter().any(|t| t == "Set up: cancelled"));
         assert!(unfr0zen_host::log_path().is_none(), "no log is kept of it");
         // The download prompt replaces the card until it is answered.
         let mut app = App { task: Some(Task::Restore("a".into())), page: Page::Backups, ..App::default() };
@@ -4202,12 +4173,8 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_says_how_a_run_went_without_its_message() {
-        const MESSAGE: &str = "NAND backup: /a/b/nand.bin (536870912 bytes, SHA-256 17f7)";
-        const STEP: &str = "Check the FCB against the restored U-Boot copies";
-        for (outcome, line) in
-            [(Ok(MESSAGE.to_string()), "Back up NAND: done"), (Err(MESSAGE.to_string()), "Back up NAND: failed")]
-        {
+    fn the_status_bar_shows_no_task() {
+        for outcome in [Ok(String::new()), Err(String::new())] {
             let mut app = App {
                 task: Some(Task::Backup("a".into())),
                 page: Page::SetUp,
@@ -4216,8 +4183,7 @@ mod tests {
             };
             app.logs.outcome = Some(outcome);
             let shown = texts(&render_frames(&mut app, WINDOW, 2));
-            assert!(shown.iter().any(|t| t == line), "{shown:?}");
-            assert!(!shown.iter().any(|t| t.contains(MESSAGE)), "{shown:?}");
+            assert!(!shown.iter().any(|t| t.starts_with("Back up NAND: ")), "{shown:?}");
         }
         let mut app =
             App { task: Some(Task::Backup("a".into())), page: Page::SetUp, popup_dismissed: true, ..App::default() };
@@ -4225,10 +4191,8 @@ mod tests {
             std::thread::sleep(Duration::from_secs(5));
             Ok(String::new())
         }));
-        app.on_event(Event::Begin(STEP.into()));
         let shown = texts(&render_frames(&mut app, WINDOW, 2));
-        assert!(shown.iter().any(|t| t == "Backing up"), "{shown:?}");
-        assert!(!shown.iter().any(|t| t.contains(STEP)), "{shown:?}");
+        assert!(!shown.iter().any(|t| t == "Backing up"), "{shown:?}");
     }
 
     #[test]
