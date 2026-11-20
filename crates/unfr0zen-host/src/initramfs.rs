@@ -66,6 +66,10 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
         Ok(output) => output.lines().for_each(|line| log::info!("unit: {line}")),
         Err(error) => log::error!("unfr0zen-apply failed: {error}"),
     }
+    // A port that failed reaches nothing more on the unit: its error is the run's.
+    if let Err(error @ unfr0zen_core::Error::Io(_)) = run {
+        return Err(error);
+    }
     let stock = shell.read_file(&format!("{OUT}/nlclient.stock"))?.map(|(_, _, data)| data);
     if let Some(data) = &stock {
         fs::write(run_dir.join("nlclient.stock"), data)?;

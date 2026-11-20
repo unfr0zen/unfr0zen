@@ -539,10 +539,12 @@ fn route_unit(
     progress.phase(Phase::SetUp);
     // The kernel is the initramfs's: the slot's firmware is named by its
     // installed image. Free RAM and room on the slot, before apply takes any.
+    // /init's own lines (board, panel, LCD_ID) go out before the host opens
+    // the port: the kernel log keeps them.
     let set_up = shell
         .run(
-            "uname -a; cat /proc/mtd; ls -d /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; \
-             grep \" /mnt \" /proc/mounts",
+            "uname -a; cat /proc/cmdline; dmesg | grep -E 'Machine:|unfr0zen initramfs:'; cat /proc/mtd; \
+             ls -d /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; grep \" /mnt \" /proc/mounts",
         )
         .and_then(|probe| {
             probe.lines().for_each(|line| log::info!("unit: {line}"));
@@ -557,6 +559,9 @@ fn route_unit(
     // it. A failure stays the phase it happened in.
     if set_up.is_ok() {
         progress.phase(Phase::Restart);
+    }
+    if let Err(unfr0zen_core::Error::Io(_)) = &set_up {
+        watch_port(port, seconds(30));
     }
     let restarted = shell.restart();
     let changes = set_up?;
@@ -575,6 +580,27 @@ fn route_unit(
 fn note(progress: &mut dyn Progress, line: &str) {
     log::info!("{line}");
     progress.status(line);
+}
+
+/// Logs what is at `port` for `period` after the unit's port failed, and
+/// each change: nothing (unplugged, powered off or hung), the OMAP boot ROM
+/// (restarted), or the unit's USB serial port again.
+fn watch_port(port: &str, period: Duration) {
+    let started = std::time::Instant::now();
+    let mut last = None;
+    while started.elapsed() < period {
+        let now = crate::usb::list().map(|devices| devices.get(port).copied()).map_err(|e| e.to_string());
+        if last.as_ref() != Some(&now) {
+            let at = started.elapsed().as_secs_f32();
+            match &now {
+                Ok(Some((vendor, product))) => log::info!("USB at {port} after {at:.1}s: {vendor:04x}:{product:04x}"),
+                Ok(None) => log::info!("USB at {port} after {at:.1}s: nothing"),
+                Err(error) => log::info!("USB at {port} after {at:.1}s: {error}"),
+            }
+            last = Some(now);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 /// Waits for the device with identity `id` at `port` to leave USB.

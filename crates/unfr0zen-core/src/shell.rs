@@ -180,10 +180,8 @@ impl<S: Serial> InitramfsShell<S> {
             if data.len() != heard.0 {
                 heard = (data.len(), Instant::now());
             } else if heard.1.elapsed() >= NUDGE_AFTER {
-                self.port
-                    .write_all(b"echo\n")
-                    .and_then(|()| self.port.drain(until))
-                    .map_err(|e| failed("nudging", e))?;
+                self.port.write_all(b"echo\n").map_err(|e| failed("nudging", e))?;
+                self.port.drain(until).map_err(|e| failed("draining a nudge for", e))?;
                 nudges += 1;
                 heard.1 = Instant::now();
             }
