@@ -61,6 +61,85 @@ pub fn restore_chunks(keep_fcb: bool) -> Vec<(u32, u32)> {
     chunks(if keep_fcb { BOOT_CONTROL } else { FIRMWARE }, NAND_SIZE - BBT_AREA)
 }
 
+/// The end of the UBI partition, mtdparts' 500m(ubipart) after the boot
+/// partition.
+pub const UBI_END: u32 = BOOT_SIZE + 500 * 0x10_0000;
+/// The fastmap's volume IDs: its blocks record where the others lie.
+const UBI_FASTMAP: std::ops::RangeInclusive<u32> = 0x7fff_f000..=0x7fff_f001;
+
+/// What a UBI partition block holds in an image, from its first two pages:
+/// the erase counter header, then the volume ID header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Peb {
+    /// Erased: UBI formats it when it attaches.
+    Erased,
+    /// An erase counter and no volume: UBI's free pool.
+    Free,
+    /// A block of a volume.
+    Used,
+    /// A block of the fastmap.
+    Fastmap,
+    /// No UBI headers.
+    Unknown,
+}
+
+impl Peb {
+    /// The bytes [`Peb::of`] reads from the start of a block.
+    pub const HEADERS: usize = 2 * PAGE as usize;
+
+    pub fn of(headers: &[u8]) -> Peb {
+        let erased = |bytes: &[u8]| bytes.iter().all(|&b| b == 0xff);
+        let (ec, vid) = headers[..Self::HEADERS].split_at(PAGE as usize);
+        if erased(ec) && erased(vid) {
+            Peb::Erased
+        } else if !ec.starts_with(b"UBI#") {
+            Peb::Unknown
+        } else if erased(vid) {
+            Peb::Free
+        } else if !vid.starts_with(b"UBI!") {
+            Peb::Unknown
+        } else if UBI_FASTMAP.contains(&u32::from_be_bytes([vid[8], vid[9], vid[10], vid[11]])) {
+            Peb::Fastmap
+        } else {
+            Peb::Used
+        }
+    }
+}
+
+/// Where the image's UBI blocks that fall on this chip's `bad` blocks are
+/// written instead, as (from, to): each volume's block into one the image
+/// holds free or erased, the last first, and a free one dropped. UBI finds
+/// a block by its headers, not its place, unless a fastmap records them.
+/// `kinds` holds each UBI block's [`Peb`] in order; `damaged` blocks,
+/// uncorrectable when the image was read, are not reused.
+pub fn relocate_ubi(kinds: &[Peb], bad: &[u32], damaged: &[u32]) -> Result<Vec<(u32, u32)>> {
+    let at = |index: usize| BOOT_SIZE + index as u32 * BLOCK;
+    let mut spare = (0..kinds.len())
+        .rev()
+        .filter(|&i| matches!(kinds[i], Peb::Free | Peb::Erased) && !bad.contains(&at(i)) && !damaged.contains(&at(i)));
+    let mut moves = Vec::new();
+    for &block in bad.iter().filter(|&&block| (BOOT_SIZE..UBI_END).contains(&block)) {
+        match kinds[((block - BOOT_SIZE) / BLOCK) as usize] {
+            Peb::Erased | Peb::Free => {}
+            Peb::Used if !kinds.contains(&Peb::Fastmap) => match spare.next() {
+                Some(to) => moves.push((block, at(to))),
+                None => return device(format!("no free UBI block left in the image for its block {block:#x}")),
+            },
+            Peb::Used | Peb::Fastmap => {
+                return device(format!(
+                    "UBI block {block:#x} is bad on this chip, and the image's fastmap pins it there"
+                ))
+            }
+            Peb::Unknown => {
+                return device(format!(
+                    "block {block:#x} is bad on this chip and holds data without UBI headers in the image"
+                ))
+            }
+        }
+    }
+    Ok(moves)
+}
+
 /// `offset..offset + size` in pieces `nand read` and `nand write` take as they
 /// are: (offset, size, bad) each, split where the boot-control blocks end and
 /// around each bad block.
@@ -269,6 +348,54 @@ mod tests {
         assert_eq!(restore[0], (BOOT_CONTROL, BOOT_SIZE - BOOT_CONTROL));
         assert_eq!(restore.last().map(|c| c.0 + c.1), Some(NAND_SIZE - BBT_AREA));
         assert_eq!(restore_chunks(false)[0].0, FIRMWARE);
+    }
+
+    fn headers(ec: &[u8], vid: &[u8]) -> Vec<u8> {
+        let mut block = vec![0xff; Peb::HEADERS];
+        block[..ec.len()].copy_from_slice(ec);
+        block[PAGE as usize..PAGE as usize + vid.len()].copy_from_slice(vid);
+        block
+    }
+
+    #[test]
+    fn ubi_blocks_are_told_apart_by_their_headers() {
+        let volume = |id: u32| [&b"UBI!\x01\x01\x00\x00"[..], &id.to_be_bytes()].concat();
+        assert_eq!(Peb::of(&headers(b"", b"")), Peb::Erased);
+        assert_eq!(Peb::of(&headers(b"UBI#\x01", b"")), Peb::Free);
+        assert_eq!(Peb::of(&headers(b"UBI#\x01", &volume(3))), Peb::Used);
+        assert_eq!(Peb::of(&headers(b"UBI#\x01", &volume(0x7fff_efff))), Peb::Used);
+        assert_eq!(Peb::of(&headers(b"UBI#\x01", &volume(0x7fff_f000))), Peb::Fastmap);
+        assert_eq!(Peb::of(&headers(b"hsqs", b"")), Peb::Unknown);
+        assert_eq!(Peb::of(&headers(b"UBI#\x01", b"junk")), Peb::Unknown);
+    }
+
+    #[test]
+    fn a_volume_block_on_a_bad_block_moves_to_the_last_free_one() {
+        let block = |i: u32| BOOT_SIZE + i * BLOCK;
+        let mut kinds = vec![Peb::Used; 4000];
+        kinds[3990..].fill(Peb::Free);
+        kinds[3999] = Peb::Erased;
+        kinds[5] = Peb::Free;
+        // Block 5 is free in the image: dropped. 3999 is bad here, 3998 damaged.
+        let bad = [block(5), block(7), block(8), block(3999), 0x1fff_0000];
+        let moves = relocate_ubi(&kinds, &bad, &[block(3998)]).unwrap();
+        assert_eq!(moves, [(block(7), block(3997)), (block(8), block(3996))]);
+        assert!(relocate_ubi(&kinds, &[], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_volume_block_on_a_bad_block_stays_put_without_room_or_with_a_fastmap() {
+        let block = |i: u32| BOOT_SIZE + i * BLOCK;
+        let mut kinds = vec![Peb::Used; 4000];
+        assert!(relocate_ubi(&kinds, &[block(7)], &[]).is_err());
+        kinds[3999] = Peb::Free;
+        assert!(relocate_ubi(&kinds, &[block(7)], &[]).is_ok());
+        assert!(relocate_ubi(&kinds, &[block(7), block(8)], &[]).is_err());
+        kinds[100] = Peb::Fastmap;
+        assert!(relocate_ubi(&kinds, &[block(7)], &[]).is_err());
+        kinds[100] = Peb::Used;
+        kinds[7] = Peb::Unknown;
+        assert!(relocate_ubi(&kinds, &[block(7)], &[]).is_err());
     }
 
     #[test]

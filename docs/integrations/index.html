@@ -301,7 +301,7 @@ data:
             <ul>
                 <li><b>Backup.</b> The whole NAND as an image with a <code>.sha256</code> beside it. On the 3rd generation: 512 MiB, ECC-corrected, with a <code>.bad</code> list of its bad and unreadable blocks. On the 1st and 2nd: raw pages with OOB, unclean blocks read until two reads agree. Nothing is written during a backup.</li>
                 <li><b>Resume.</b> <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file.</li>
-                <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again.</li>
+                <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again. On the 3rd, a UBI block that falls on one of the chip's bad blocks is written to a free one instead, so another unit's image restores too, unless it has a UBI fastmap.</li>
             </ul>
 
             <h2 id="themes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Home screen themes</h2>
