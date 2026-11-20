@@ -61,7 +61,7 @@
             </div>
             <ul>
                 <li><b>nestlocal.</b> MQTT, Matter, Zigbee, home screen themes and Doom are served by nestlocal, which any of them installs on the thermostat.</li>
-                <li><b>Wi-Fi.</b> MQTT and Matter use Wi-Fi, joined from the thermostat's Settings → Network. The network doesn't need internet access.</li>
+                <li><b>Wi-Fi.</b> MQTT and Matter use Wi-Fi, joined from the thermostat's Settings → Network. The network doesn't need internet access. Zigbee needs no Wi-Fi: the clock and updates come over Zigbee too, so a 2nd or 3rd generation thermostat whose Wi-Fi has failed works fully with Zigbee.</li>
                 <li><b>Generations.</b> 1st, 2nd and 3rd generation. The 1st has MQTT, Matter over Wi-Fi and the external temperature: no Zigbee or Matter over Thread (its radio is on a UART), and no USB shell. The Nest Thermostat E is detected and refused.</li>
                 <li><b>Command line.</b> On Linux and macOS, the app's executable run with arguments; Windows has the app only.</li>
                 <li><b>Linux.</b> Run the app and CLI as your normal user, after the <a href="/download/">one-time USB permission setup</a>. Run logs: <code>~/.local/share/unfr0zen/logs/</code>, or <code>$XDG_DATA_HOME/unfr0zen/logs/</code> when set.</li>

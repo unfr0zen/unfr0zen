@@ -8,6 +8,8 @@
 
 Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
+Zigbee needs no Wi-Fi at all, so it gives a new life to the many 2nd and 3rd
+generation units whose Wi-Fi has failed.
 
 > [!CAUTION]
 > **This rewrites the flash of the device that runs your heating.** A failed run
@@ -30,7 +32,7 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 |                         | Stock                                                    | With unfr0zen                                                                               |
 | ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Control from            | the Nest/Google Home app, through Google's cloud         | Home Assistant or any MQTT client, Matter controller or Zigbee coordinator, on your network |
-| Internet access         | required                                                 | not needed: the unit only has to join your Wi-Fi                                            |
+| Internet access         | required                                                 | not needed: the unit only has to join your Wi-Fi, or with Zigbee not even that              |
 | Nest and Google servers | always contacted                                         | blocked with Block cloud (`--block-cloud`)                                                  |
 | Integrations            | none                                                     | MQTT, Matter over Wi-Fi or Thread, Zigbee router                                            |
 | Room temperature        | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
@@ -68,7 +70,10 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 MQTT, Matter and Zigbee are nestlocal's: choosing any of them installs it on the
 thermostat. With MQTT or Matter, the thermostat reaches the broker or the
 controller over Wi-Fi, joined from its own menu (Settings → Network); the
-network doesn't need internet access.
+network doesn't need internet access. Zigbee needs no Wi-Fi: the unit is set up
+over USB, takes its clock from the coordinator's Time cluster and its updates
+from the coordinator's OTA server, so one whose Wi-Fi has failed works fully
+over Zigbee.
 
 ### Tested firmware
 
