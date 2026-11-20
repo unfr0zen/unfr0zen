@@ -3,7 +3,7 @@
 //! handoffs (the initramfs boot and the stock U-Boot chainload). Port of
 //! unfr0zen.py and scripts/vendor_uboot.py.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -107,11 +107,21 @@ pub fn newest(candidates: Vec<Environment>) -> Option<Environment> {
     })
 }
 
-/// The vendor FIT has one kernel and nine FDTs in 5.9.4-5, ten in 6.4-8.
-/// iminfo prints one "sha256+" for each valid hash and "Bad hash in FIT
-/// image!" on failure: at least the 5.9.4-5 count, and no bad one.
+/// The vendor FIT has one kernel and eight to ten FDTs, by release. iminfo
+/// lists each image ("    Image 0 (kernel@1)"), then checks each one
+/// ("   Hash(es) for Image 0 (kernel@1): sha256+"), printing "Bad hash in
+/// FIT image!" on failure: a kernel and an FDT at least, every listed image
+/// with a valid SHA-256, and no bad hash.
 pub fn verified_fit(output: &str) -> bool {
-    output.contains("FIT image found") && !output.contains("Bad hash") && output.matches("sha256+").count() >= 10
+    static LISTED: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^\s*Image (\d+) \("));
+    static VERIFIED: LazyLock<Regex> =
+        LazyLock::new(|| regex(r"(?m)^\s*Hash\(es\) for Image (\d+) \([^)]*\): sha256\+"));
+    let numbers = |pattern: &Regex| pattern.captures_iter(output).map(|c| c[1].to_string()).collect::<BTreeSet<_>>();
+    let listed = numbers(&LISTED);
+    output.contains("FIT image found")
+        && !output.contains("Bad hash")
+        && listed.len() >= 2
+        && listed == numbers(&VERIFIED)
 }
 
 /// The firmware version a mounted rootfs declares: the kernel release its
@@ -660,7 +670,7 @@ pub(crate) mod tests {
                 }
                 ["ubifsls", _] => "<DIR>\t        32  Wed Nov  5 07:22:11 2025  4.1.15-6.4-8\n".into(),
                 ["printenv", "filesize"] => "filesize=384\n".into(),
-                ["iminfo", _] => format!("FIT image found\n{}", "Hash(es) for Image: sha256+\n".repeat(10)),
+                ["iminfo", _] => iminfo(10, 11),
                 ["bdinfo"] => {
                     format!("DRAM bank   = 0x00000000\n-> start    = 0x80000000\n-> size     = {:#010x}\n", self.dram)
                 }
@@ -838,11 +848,31 @@ pub(crate) mod tests {
         assert_eq!(firmware_version("<DIR>\t        32  Wed Nov  5 07:22:11 2025  firmware\n"), None);
     }
 
+    /// iminfo's report on a vendor FIT with `fdts` FDTs, the first `verified`
+    /// images of which have their hash checked.
+    fn iminfo(fdts: usize, verified: usize) -> String {
+        let names: Vec<String> =
+            std::iter::once("kernel@1".to_string()).chain((1..=fdts).map(|n| format!("fdt@{n}"))).collect();
+        let mut out = String::from("## Checking Image at 83000000 ...\n   FIT image found\n");
+        for (n, name) in names.iter().enumerate() {
+            out += &format!("    Image {n} ({name})\n     Hash algo:    sha256\n");
+        }
+        out += "## Checking hash(es) for FIT Image at 83000000 ...\n";
+        for (n, name) in names.iter().enumerate().take(verified) {
+            out += &format!("   Hash(es) for Image {n} ({name}): sha256+ \n");
+        }
+        out
+    }
+
     #[test]
     fn fit_needs_every_hash() {
-        assert!(verified_fit(&format!("FIT image found\n{}", "sha256+\n".repeat(10))));
-        assert!(!verified_fit(&format!("FIT image found\n{}", "sha256+\n".repeat(9))));
-        assert!(!verified_fit(&format!("FIT image found\n{}Bad hash in FIT image!", "sha256+\n".repeat(10))));
+        assert!(verified_fit(&iminfo(8, 9)), "5.9.5-2");
+        assert!(verified_fit(&iminfo(9, 10)), "5.9.4-5");
+        assert!(verified_fit(&iminfo(10, 11)), "6.4-8");
+        assert!(!verified_fit(&iminfo(9, 9)));
+        assert!(!verified_fit(&iminfo(0, 1)));
+        assert!(!verified_fit(&format!("{}Bad hash in FIT image!", iminfo(9, 10))));
+        assert!(!verified_fit(&iminfo(9, 10).replace("FIT image found", "Unknown image format")));
     }
 
     #[test]
