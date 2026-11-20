@@ -63,7 +63,7 @@ const SSHD_START: (&str, &str) = ("\n${INITDIR}/sshd start\n", "\n#${INITDIR}/ss
 pub(crate) static ROOTFS: Rootfs =
     Rootfs { files: &FILES, shadow_modes: &[0o640], optional_files: |_| Vec::new(), set_up };
 
-fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
+fn set_up(tree: &mut Tree, options: &mut Options) -> Result<()> {
     set_up_usb_shell(tree, options.usb_shell)?;
     set_up_ssh(tree, options.ssh, !options.ssh_key_only)?;
     if tree.contains_key(PROFILE) {

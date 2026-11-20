@@ -486,7 +486,7 @@ pub(crate) struct Rootfs {
     /// Files the setup may add, for the run's options.
     pub optional_files: fn(&Options) -> Vec<String>,
     /// The USB root shell, SSH and root's shell profile, as the device has them.
-    pub set_up: fn(&mut Tree, &Options) -> Result<()>,
+    pub set_up: fn(&mut Tree, &mut Options) -> Result<()>,
 }
 
 fn rootfs(target: Device) -> Result<&'static Rootfs> {
@@ -715,21 +715,23 @@ pub fn set_up_owned(
     .filter(|(on, _)| *on)
     .map(|(_, section)| section)
     .collect();
+    let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
+    let dark_theme = matches!(target, Device::Diamond | Device::J49) && options.dark_theme;
+    let (block_cloud, temperature_screen) =
+        (options.block_cloud, std::mem::take(&mut options.external_temperature_screen));
     let build_screen = &|source: &[u8]| -> Result<Vec<u8>> {
         let journal = build_screen(source, &sections)?;
-        let external_temperature = matches!(target, Device::Diamond | Device::J49) && options.external_temperature;
-        let dark_theme = matches!(target, Device::Diamond | Device::J49) && options.dark_theme;
-        if !options.block_cloud && !external_temperature && !dark_theme {
+        if !block_cloud && !external_temperature && !dark_theme {
             return Ok(journal);
         }
         let mut output = crate::nlclient::Patch::parse(&journal)?.apply(source, false)?;
         if external_temperature {
-            crate::nlclient::external_temperature::patch(source, &mut output, &options.external_temperature_screen)?;
+            crate::nlclient::external_temperature::patch(source, &mut output, &temperature_screen)?;
         }
         if dark_theme {
             crate::nlclient::dark_theme::patch(source, &mut output)?;
         }
-        if options.block_cloud {
+        if block_cloud {
             patch_check_url(&mut output, crate::nlclient::BINARY, true)?;
         }
         crate::nlclient::Patch::journal(source, &output)
@@ -920,7 +922,7 @@ pub fn set_up_owned(
     }
     set_up_root_rw(&mut tree, true)?;
     set_up_wwn_boiler(&mut tree, options.wwn_boiler)?;
-    (rootfs.set_up)(&mut tree, &options)?;
+    (rootfs.set_up)(&mut tree, &mut options)?;
     if let Some(key) = &public_key {
         set_up_authorized_key(&mut tree, key)?;
         directories.retain(|(name, _)| name != "root/.ssh");
@@ -988,7 +990,7 @@ pub fn set_up_owned(
         }
         if let Some(previous) = &previous {
             if previous.output_sha == *sha {
-                source = previous.apply(&source, true)?;
+                source = previous.apply_owned(source, true)?;
             } else if previous.stock_sha != *sha {
                 return device("nlclient undo journal does not match the executable");
             }
@@ -1097,17 +1099,6 @@ pub fn set_up_owned(
     }
     let patch_screen = screen_patch.as_ref().is_some_and(|patch| screen.as_ref().unwrap().2 != patch.output_sha);
 
-    let mut writes: Vec<(String, &[u8], String, u32)> = Vec::new();
-    for (name, (data, mode)) in &tree {
-        let old = originals.get(name).cloned().flatten();
-        let key_file = name == AUTHORIZED_KEYS && public_key.is_some();
-        if old.as_ref().is_none_or(|(owner, old_mode, sha)| {
-            (*old_mode, sha.as_str()) != (*mode, sha256_hex(data).as_str()) || (key_file && owner != "0:0")
-        }) {
-            let owner = if key_file { "0:0".to_string() } else { old.map_or("0:0".to_string(), |(owner, _, _)| owner) };
-            writes.push((name.clone(), data, owner, *mode));
-        }
-    }
     let removals: Vec<&str> = STALE_SECRETS
         .iter()
         .copied()
@@ -1122,6 +1113,20 @@ pub fn set_up_owned(
         .chain(legacy.iter().copied())
         .filter(|name| originals.get(*name).is_some_and(Option::is_some) && !tree.contains_key(*name))
         .collect();
+    // The writes own the tree's files, each hashed once and freed once on
+    // flash: the 64 MB OMAP units cannot hold every file until the readback.
+    let mut writes: Vec<Write> = Vec::new();
+    for (name, (data, mode)) in std::mem::take(&mut tree) {
+        let sha = sha256_hex(&data);
+        let old = originals.get(&name).cloned().flatten();
+        let key_file = name == AUTHORIZED_KEYS && public_key.is_some();
+        if old.as_ref().is_none_or(|(owner, old_mode, old_sha)| {
+            (*old_mode, old_sha.as_str()) != (mode, sha.as_str()) || (key_file && owner != "0:0")
+        }) {
+            let owner = if key_file { "0:0".to_string() } else { old.map_or("0:0".to_string(), |(owner, _, _)| owner) };
+            writes.push(Write { name, len: data.len() as u64, data, sha, owner, mode });
+        }
+    }
     let mut folders = Vec::new();
     for (name, mode) in directories {
         if volume.directory(&name)? != Some(format!("0:0 {mode:o}")) {
@@ -1138,13 +1143,13 @@ pub fn set_up_owned(
             new: Some(format!("{mode:o}")),
         })
         .collect();
-    for (name, data, _, _) in &writes {
-        let old = originals.get(name).cloned().flatten().map(|(_, _, sha)| sha);
+    for write in &writes {
+        let old = originals.get(&write.name).cloned().flatten().map(|(_, _, sha)| sha);
         changes.push(Change {
-            name: name.clone(),
+            name: write.name.clone(),
             action: if old.is_some() { "write" } else { "create" },
             old,
-            new: Some(sha256_hex(data)),
+            new: Some(write.sha.clone()),
         });
     }
     for name in &removals {
@@ -1162,17 +1167,19 @@ pub fn set_up_owned(
     // Match the write order: files, staged nlclient, undo journal; the root
     // volume's and scratch's apart.
     let (mut sizes, mut scratch_sizes) = (Vec::new(), Vec::new());
-    for (name, data, _, _) in writes.iter().filter(|(name, _, _, _)| name != crate::nlclient::JOURNAL) {
+    for write in writes.iter().filter(|write| write.name != crate::nlclient::JOURNAL) {
+        let name = &write.name;
         let old = if originals.get(name).is_some_and(Option::is_some) { volume.file_size(name)? } else { 0 };
-        if scratch::holds(name) { &mut scratch_sizes } else { &mut sizes }.push((data.len() as u64, old));
+        if scratch::holds(name) { &mut scratch_sizes } else { &mut sizes }.push((write.len, old));
     }
     if patch_screen {
         let patch = screen_patch.as_ref().unwrap();
         sizes.push((patch.stock_len.max(patch.output_len) as u64, patch.stock_len as u64));
     }
-    for (name, data, _, _) in writes.iter().filter(|(name, _, _, _)| name == crate::nlclient::JOURNAL) {
-        let old = if originals.get(name).is_some_and(Option::is_some) { volume.file_size(name)? } else { 0 };
-        sizes.push((data.len() as u64, old));
+    for write in writes.iter().filter(|write| write.name == crate::nlclient::JOURNAL) {
+        let old =
+            if originals.get(&write.name).is_some_and(Option::is_some) { volume.file_size(&write.name)? } else { 0 };
+        sizes.push((write.len, old));
     }
     if volume.checks_space() {
         for (label, at, sizes) in [("Root volume", "", &sizes), ("Scratch", scratch::DIR, &scratch_sizes)] {
@@ -1195,20 +1202,19 @@ pub fn set_up_owned(
     for (name, mode) in &folders {
         volume.make_directory(name, *mode)?;
     }
-    for (name, data, owner, mode) in &writes {
-        if name != crate::nlclient::JOURNAL {
-            check_staging_space(volume, name, data.len() as u64)?;
-            volume.write(name, data, owner, *mode)?;
-            // Confirm the full backup reached flash before replacing nlclient.
-            if name == original_to && volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data))) {
-                return device("nlclient original backup did not read back correctly from flash");
-            }
-            // The same for connmand, whose backup sorts before it.
-            if name == moved(CONNMAND_ORIGINAL)
-                && volume.inspect(name)? != Some((owner.clone(), *mode, sha256_hex(data)))
-            {
-                return device("connmand original backup did not read back correctly from flash");
-            }
+    for write in writes.iter_mut().filter(|write| write.name != crate::nlclient::JOURNAL) {
+        let Write { name, data, sha, owner, mode, .. } = write;
+        check_staging_space(volume, name, data.len() as u64)?;
+        volume.write(name, data, owner, *mode)?;
+        *data = Vec::new();
+        let written = || Some((owner.clone(), *mode, sha.clone()));
+        // Confirm the full backup reached flash before replacing nlclient.
+        if name == original_to && volume.inspect(name)? != written() {
+            return device("nlclient original backup did not read back correctly from flash");
+        }
+        // The same for connmand, whose backup sorts before it.
+        if name == moved(CONNMAND_ORIGINAL) && volume.inspect(name)? != written() {
+            return device("connmand original backup did not read back correctly from flash");
         }
     }
     for name in &removals {
@@ -1220,11 +1226,10 @@ pub fn set_up_owned(
         volume.patch_nlclient(patch)?;
     }
     // Keep the prior undo journal until the binary replacement succeeds.
-    for (name, data, owner, mode) in &writes {
-        if name == crate::nlclient::JOURNAL {
-            check_staging_space(volume, name, data.len() as u64)?;
-            volume.write(name, data, owner, *mode)?;
-        }
+    for write in writes.iter_mut().filter(|write| write.name == crate::nlclient::JOURNAL) {
+        check_staging_space(volume, &write.name, write.len)?;
+        volume.write(&write.name, &write.data, &write.owner, write.mode)?;
+        write.data = Vec::new();
     }
     volume.remount(false)?;
     if patch_screen {
@@ -1236,10 +1241,11 @@ pub fn set_up_owned(
         }
     }
     if !writes.is_empty() {
-        let names: Vec<String> = writes.iter().map(|(name, _, _, _)| name.clone()).collect();
+        let names: Vec<String> = writes.iter().map(|write| write.name.clone()).collect();
         for (name, (sha, owner_mode)) in volume.digests(&names)? {
-            let (_, data, owner, mode) = writes.iter().find(|(n, _, _, _)| *n == name).expect("asked for");
-            if sha.as_deref() != Some(sha256_hex(data).as_str())
+            let Write { sha: written, owner, mode, .. } =
+                writes.iter().find(|write| write.name == name).expect("asked for");
+            if sha.as_deref() != Some(written.as_str())
                 || owner_mode.as_deref() != Some(format!("{owner} {mode:o}").as_str())
             {
                 return device(format!("{name} readback from flash does not match: {sha:?} {owner_mode:?}"));
@@ -1258,6 +1264,17 @@ pub fn set_up_owned(
     }
     log::info!("Verified {} changes on flash", changes.len());
     Ok(changes)
+}
+
+/// A file the setup writes. Its bytes are freed once on flash; its SHA-256
+/// stays for the readback.
+struct Write {
+    name: String,
+    data: Vec<u8>,
+    len: u64,
+    sha: String,
+    owner: String,
+    mode: u32,
 }
 
 /// Peak extra bytes while staging replacements, reclaiming each old file after rename.

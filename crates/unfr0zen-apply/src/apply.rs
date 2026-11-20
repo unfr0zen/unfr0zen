@@ -30,7 +30,7 @@ pub fn main() {
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
-    let (dry_run, live) = (flag("--dry-run"), flag("--live"));
+    let (dry_run, live, remove_bundle) = (flag("--dry-run"), flag("--live"), flag("--remove-bundle"));
     let paths: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--entropy=")) {
         if let Err(error) = credit_entropy(Path::new(path)) {
@@ -42,11 +42,13 @@ pub fn main() {
         ["update", bundle] => update(Path::new(bundle)),
         [bundle, options, root, out] => {
             let generation = args.iter().find_map(|a| a.strip_prefix("--device="));
-            run(Path::new(bundle), Path::new(options), Path::new(root), Path::new(out), dry_run, live, generation)
+            let paths = (Path::new(bundle), Path::new(options), Path::new(root), Path::new(out));
+            run(paths, dry_run, live, remove_bundle, generation)
         }
         _ => {
             eprintln!(
-                "usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--device=NAME] [--entropy=FILE] \
+                "usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--remove-bundle] [--device=NAME] \
+                       [--entropy=FILE] \
                        | update BUNDLE"
             );
             std::process::exit(2);
@@ -259,21 +261,23 @@ fn run_from_memory<T>(_: Vec<u8>, _: impl FnOnce(&str) -> std::io::Result<T>) ->
 }
 
 /// `generation`: the gen 1 or gen 2 the host read the unit's environment
-/// as, which share one bundle (named for the j49).
+/// as, which share one bundle (named for the j49). `remove_bundle`: the
+/// bundle file goes once read, as an initramfs holds it in RAM.
 fn run(
-    bundle: &Path,
-    options: &Path,
-    root: &Path,
-    out: &Path,
+    (bundle_path, options, root, out): (&Path, &Path, &Path, &Path),
     dry_run: bool,
     live: bool,
+    remove_bundle: bool,
     generation: Option<&str>,
 ) -> Result<()> {
     fs::create_dir_all(out)?;
     let mut settings = read_settings(options)?;
     // The overlays this run leaves out are only checked: a 64 MB unit cannot
     // hold them beside the rest.
-    let mut bundle = Bundle::read_some(fs::File::open(bundle)?, |name| settings.wants(name))?;
+    let mut bundle = Bundle::read_some(fs::File::open(bundle_path)?, |name| settings.wants(name))?;
+    if remove_bundle {
+        fs::remove_file(bundle_path)?;
+    }
     let target = match (device(&bundle.manifest.device)?, generation.map(device).transpose()?) {
         (Device::J49 | Device::Diamond, Some(unit @ (Device::J49 | Device::Diamond))) => unit,
         (bundled, None) => bundled,

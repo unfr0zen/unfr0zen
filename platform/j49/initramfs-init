@@ -11,6 +11,9 @@ export PATH=/sbin:/usr/sbin:/bin:/usr/bin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
+# The free memory Nest's own sysctl.conf keeps, so MTD and JFFS2 can still
+# allocate their erase block buffers when memory runs low and fragmented.
+echo 2304 >/proc/sys/vm/min_free_kbytes
 
 tty=/dev/console
 # unfr0zen.console keeps the shell on the console, for a unit driven over its UART.

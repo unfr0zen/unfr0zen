@@ -51,10 +51,11 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
     } else {
         String::new()
     };
-    // No input: the shell's own (the host's nudges among it) stays out of the hook scripts.
+    // No input: the shell's own (the host's nudges among it) stays out of the
+    // hook scripts. The bundle leaves the initramfs's RAM once apply has read it.
     let run = shell.run_with(
         &format!(
-            "tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT}{omap} < /dev/null 2>&1",
+            "tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT} --remove-bundle{omap} < /dev/null 2>&1",
             bundle::APPLY,
             bundle::APPLY
         ),
@@ -64,6 +65,10 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
     match &run {
         Ok(output) => output.lines().for_each(|line| log::info!("unit: {line}")),
         Err(error) => log::error!("unfr0zen-apply failed: {error}"),
+    }
+    // A port that failed reaches nothing more on the unit: its error is the run's.
+    if let Err(error @ unfr0zen_core::Error::Io(_)) = run {
+        return Err(error);
     }
     let stock = shell.read_file(&format!("{OUT}/nlclient.stock"))?.map(|(_, _, data)| data);
     if let Some(data) = &stock {

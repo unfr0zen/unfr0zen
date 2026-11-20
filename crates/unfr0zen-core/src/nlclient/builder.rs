@@ -133,7 +133,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
         "handover":handover,"dial":discovery.dial,"swap_call":discovery.anchors.get("swap_call_slot"),"settings_menu":settings_menu
     });
     let journal = Patch::journal(source, &output)?;
-    if Patch::parse(&journal)?.apply(source, false)? != output {
+    if !Patch::parse(&journal)?.reproduces(source, &output) {
         return device("nlclient build and journal disagree");
     }
     Ok(Built { output, journal, manifest })
