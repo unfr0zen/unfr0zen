@@ -121,6 +121,10 @@ impl Run {
                 Ok(result) => result.map_err(|e| e.to_string()),
                 Err(payload) => Err(panic_text(payload.as_ref())),
             };
+            // A refusal outside any stage reaches the run log only here.
+            if let Err(error) = &result {
+                log::error!("{error}");
+            }
             let _ = tx.send(Event::Done(result));
         });
         Run { events, cancel, _worker: worker }

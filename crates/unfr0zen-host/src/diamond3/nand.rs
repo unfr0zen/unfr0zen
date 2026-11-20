@@ -20,7 +20,10 @@
 //! cannot capture, and the last four blocks, which hold this chip's own bad
 //! block table. The current FCB is kept when it points at the image's U-Boot
 //! copies; otherwise the FCB and DBBT are regenerated from the copies' IVTs.
-//! This chip's bad blocks are skipped, and must be erased in the image.
+//! This chip's bad blocks are skipped, and must be erased in the image, but
+//! in the UBI partition: there UBI finds a block by its headers, so one a
+//! volume holds is written to a block the image holds free instead, and a
+//! free one is dropped. A verify then finds the moved blocks differ.
 
 use std::fs::{self, File};
 use std::io;
@@ -28,7 +31,7 @@ use std::path::Path;
 
 pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
 use unfr0zen_core::diamond3::nand::{
-    all_chunks, fcb_matches, image_firmware, restore_chunks, BLOCK, BOOT_CONTROL, BOOT_SIZE,
+    all_chunks, fcb_matches, image_firmware, relocate_ubi, restore_chunks, Peb, BLOCK, BOOT_CONTROL, BOOT_SIZE, UBI_END,
 };
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
@@ -241,6 +244,18 @@ fn erase_blocks(data: &mut [u8], offset: u32, blocks: &[u32]) {
     }
 }
 
+/// The image's `offset..offset + size` as a restore writes it: each moved
+/// block in its new place, and this chip's `bad` blocks erased.
+fn chunk_to_write(image: &Path, offset: u32, size: u32, moves: &[(u32, u32)], bad: &[u32]) -> Result<Vec<u8>> {
+    let mut data = read_at(image, offset.into(), size as usize)?;
+    for &(from, to) in moves.iter().filter(|(_, to)| (offset..offset + size).contains(to)) {
+        let at = (to - offset) as usize;
+        data[at..at + BLOCK as usize].copy_from_slice(&read_at(image, from.into(), BLOCK as usize)?);
+    }
+    erase_blocks(&mut data, offset, bad);
+    Ok(data)
+}
+
 /// Compares NAND with the image but for the blocks its list names and those
 /// that read uncorrectable now, which it returns.
 fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<Vec<u32>> {
@@ -311,10 +326,14 @@ fn restore(
     }
     let chunks = restore_chunks(keep);
     let (start, end) = (chunks[0].0, chunks.last().map_or(0, |c| c.0 + c.1));
-    let mut lost = Vec::new();
+    let (mut lost, mut in_ubi) = (Vec::new(), false);
     for &block in unit.bad.iter().filter(|&&block| (start..end).contains(&block)) {
         if read_at(image, block.into(), BLOCK as usize)?.iter().any(|&b| b != 0xff) {
-            lost.push(block);
+            if (BOOT_SIZE..UBI_END).contains(&block) {
+                in_ubi = true;
+            } else {
+                lost.push(block);
+            }
         }
     }
     if !lost.is_empty() {
@@ -325,11 +344,27 @@ fn restore(
         )));
     }
     let listed = read_bad_blocks(&bad_blocks_path(image))?.unwrap_or_default();
+    let moves = if in_ubi {
+        let kinds = (BOOT_SIZE..UBI_END)
+            .step_by(BLOCK as usize)
+            .map(|block| read_at(image, block.into(), Peb::HEADERS).map(|headers| Peb::of(&headers)))
+            .collect::<Result<Vec<_>>>()?;
+        relocate_ubi(&kinds, &unit.bad, &listed)?
+    } else {
+        Vec::new()
+    };
+    let moved = match moves.len() {
+        0 => String::new(),
+        count => {
+            log::info!("UBI blocks moved off this chip's bad blocks (from, to): {moves:#x?}");
+            format!(". {count} UBI blocks fall on this chip's bad blocks and are written to free ones instead")
+        }
+    };
     let damage = match listed.iter().filter(|block| (start..end).contains(*block) && !unit.bad.contains(*block)).count() {
         0 => String::new(),
         count => format!(". {count} blocks had uncorrectable pages when this backup was taken; they are written as read, any damage included"),
     };
-    if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}{damage}", image.display())) {
+    if !confirm(&format!("Erase and write NAND {start:#x}-{end:#x} from {}{moved}{damage}", image.display())) {
         return Err(failure("restore not confirmed; NAND untouched"));
     }
     each_chunk(
@@ -337,7 +372,9 @@ fn restore(
         "Restore",
         &chunks,
         |_| false,
-        |offset, size| unit.board.write_nand(offset, &read_at(image, offset.into(), size as usize)?, &unit.bad),
+        |offset, size| {
+            unit.board.write_nand(offset, &chunk_to_write(image, offset, size, &moves, &unit.bad)?, &unit.bad)
+        },
     )?;
     if !keep {
         stage(progress, "Regenerate the FCB and DBBT", || unit.board.write_boot_control(copies))?;
@@ -356,6 +393,23 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use unfr0zen_core::Error;
+
+    #[test]
+    fn a_moved_block_is_written_in_its_new_place_and_bad_blocks_erased() {
+        let block = |i: u32| BOOT_SIZE + i * BLOCK;
+        let image = std::env::temp_dir().join(format!("unfr0zen-moved-{}.bin", std::process::id()));
+        let data: Vec<u8> = (0..block(4)).map(|at| (at / BLOCK) as u8).collect();
+        fs::write(&image, &data).unwrap();
+        // Block 1 is bad here and moves to block 3; block 2 is bad and dropped.
+        let written = chunk_to_write(&image, BOOT_SIZE, 4 * BLOCK, &[(block(1), block(3))], &[block(1), block(2)]);
+        fs::remove_file(&image).unwrap();
+        let written = written.unwrap();
+        let blocks: Vec<&[u8]> = written.chunks(BLOCK as usize).collect();
+        let first = (BOOT_SIZE / BLOCK) as u8;
+        assert!(blocks[0].iter().all(|&b| b == first));
+        assert!(blocks[1].iter().chain(blocks[2]).all(|&b| b == 0xff));
+        assert!(blocks[3].iter().all(|&b| b == first + 1));
+    }
 
     #[test]
     fn a_restore_whose_image_fails_its_check_opens_no_log() {
