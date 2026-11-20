@@ -537,10 +537,22 @@ fn route_unit(
         ))
     })?;
     progress.phase(Phase::SetUp);
-    let set_up = shell.run("uname -a; cat /proc/mtd; grep \" /mnt \" /proc/mounts").and_then(|probe| {
-        probe.lines().for_each(|line| log::info!("unit: {line}"));
-        stage(progress, &format!("Set up {slot} on the unit"), || crate::initramfs::apply(&mut shell, run_dir, device))
-    });
+    // The kernel is the initramfs's: the slot's firmware is named by its
+    // installed image. Free RAM and room on the slot, before apply takes any.
+    let set_up = shell
+        .run(
+            "uname -a; cat /proc/mtd; ls -d /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; \
+             grep \" /mnt \" /proc/mounts",
+        )
+        .and_then(|probe| {
+            probe.lines().for_each(|line| log::info!("unit: {line}"));
+            if let Some(image) = probe.lines().find_map(|line| line.trim().strip_suffix(".nlsw")) {
+                log::info!("Firmware {}", image.rsplit('/').next().unwrap_or(image));
+            }
+            stage(progress, &format!("Set up {slot} on the unit"), || {
+                crate::initramfs::apply(&mut shell, run_dir, device)
+            })
+        });
     // On failure too: the slot keeps what was verified, and the unit boots
     // it. A failure stays the phase it happened in.
     if set_up.is_ok() {
