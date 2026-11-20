@@ -1202,6 +1202,7 @@ pub fn set_up_owned(
     for (name, mode) in &folders {
         volume.make_directory(name, *mode)?;
     }
+    log::info!("Writing {} files", writes.len());
     for write in writes.iter_mut().filter(|write| write.name != crate::nlclient::JOURNAL) {
         let Write { name, data, sha, owner, mode, .. } = write;
         check_staging_space(volume, name, data.len() as u64)?;
@@ -1221,6 +1222,7 @@ pub fn set_up_owned(
         volume.remove(name)?;
     }
     if patch_screen {
+        log::info!("Patching nlclient");
         let patch = screen_patch.as_ref().unwrap();
         check_staging_space(volume, crate::nlclient::BINARY, patch.stock_len.max(patch.output_len) as u64)?;
         volume.patch_nlclient(patch)?;
@@ -1242,6 +1244,7 @@ pub fn set_up_owned(
     }
     if !writes.is_empty() {
         let names: Vec<String> = writes.iter().map(|write| write.name.clone()).collect();
+        log::info!("Reading {} files back from flash", names.len());
         for (name, (sha, owner_mode)) in volume.digests(&names)? {
             let Write { sha: written, owner, mode, .. } =
                 writes.iter().find(|write| write.name == name).expect("asked for");

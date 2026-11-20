@@ -158,8 +158,14 @@ impl<S: Serial> InitramfsShell<S> {
         let end = Regex::new(&format!(r"\n{marker}:(\d+)\r?\n")).expect("valid pattern");
         let (mut data, mut nudges) = (Vec::new(), 0);
         let mut heard = (0, Instant::now());
+        // What arrived before the port failed shows how far the command got.
+        let cut_off = |data: &[u8]| {
+            if !quiet && !data.is_empty() {
+                log::info!("initramfs$ {command}, cut off after:\n{}", tail(data, 4000));
+            }
+        };
         while Instant::now() < until {
-            read_some(&mut self.port, &mut data)?;
+            read_some(&mut self.port, &mut data).inspect_err(|_| cut_off(&data))?;
             if let Some(found) = end.captures(&data) {
                 let stop = found.get(0).unwrap().start();
                 let start = begin.find(&data[..stop]).map_or(0, |found| found.end());
@@ -180,8 +186,11 @@ impl<S: Serial> InitramfsShell<S> {
             if data.len() != heard.0 {
                 heard = (data.len(), Instant::now());
             } else if heard.1.elapsed() >= NUDGE_AFTER {
-                self.port.write_all(b"echo\n").map_err(|e| failed("nudging", e))?;
-                self.port.drain(until).map_err(|e| failed("draining a nudge for", e))?;
+                self.port.write_all(b"echo\n").map_err(|e| failed("nudging", e)).inspect_err(|_| cut_off(&data))?;
+                self.port
+                    .drain(until)
+                    .map_err(|e| failed("draining a nudge for", e))
+                    .inspect_err(|_| cut_off(&data))?;
                 nudges += 1;
                 heard.1 = Instant::now();
             }
