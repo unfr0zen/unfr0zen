@@ -3494,6 +3494,8 @@ dependencies = [
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "futures-lite",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "http-body",
  "http-body-util",
  "hyper",

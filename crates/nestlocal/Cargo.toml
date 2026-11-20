@@ -11,6 +11,10 @@ bytes = "1"
 ccm = "0.6"
 png = "0.17"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+# Each version's first call waits on /dev/random where getrandom(2) is
+# missing: entropy.rs makes it while the seed is credited.
+getrandom = "0.4"
+getrandom-ring = { package = "getrandom", version = "0.2" }
 http-body = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["http1", "server", "client"] }
