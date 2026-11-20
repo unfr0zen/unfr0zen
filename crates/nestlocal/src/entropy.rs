@@ -51,6 +51,13 @@ fn seed_legacy_kernel() -> std::io::Result<()> {
     if unsafe { libc::ioctl(pool.as_raw_fd(), RNDADDENTROPY as _, &entropy) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
+    // Each getrandom version polls /dev/random once, on its first call, until
+    // the pool holds 64 credited bits; reads from /dev/urandom drain the count
+    // below that and little on the unit refills it, so a later first call
+    // (ring's for TLS, rand's) could block its thread, the runtime's, for good.
+    let mut byte = [0u8; 1];
+    getrandom_ring::getrandom(&mut byte).map_err(|e| std::io::Error::other(e.to_string()))?;
+    getrandom::fill(&mut byte).map_err(|e| std::io::Error::other(e.to_string()))?;
     crate::logf!("entropy: loaded and rotated the private installation seed");
     Ok(())
 }
