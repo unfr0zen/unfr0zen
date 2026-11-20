@@ -154,7 +154,10 @@ pub fn open_acm(id: Id, timeout: Duration) -> Result<Port> {
     while Instant::now() < until {
         if let Some(name) = acm_port(id) {
             match Port::open(&name) {
-                Ok(port) => return Ok(port),
+                Ok(port) => {
+                    log::info!("Opened {name}");
+                    return Ok(port);
+                }
                 Err(error) => {
                     if failed.is_none() {
                         log::info!("{name} not ready yet: {error}");
@@ -249,6 +252,21 @@ impl Serial for Port {
         #[cfg(windows)]
         windows::report_receive_errors(&self.0);
         self.0.clear(serialport::ClearBuffer::Input).map_err(io::Error::other)
+    }
+
+    /// tcdrain has no timeout: the output queue is watched instead. Windows
+    /// keeps its flush, as reading that queue there would also clear the
+    /// receive errors clear_input reports.
+    #[cfg(not(windows))]
+    fn drain(&mut self, until: Instant) -> io::Result<()> {
+        use serialport::SerialPort;
+        while self.0.bytes_to_write().map_err(io::Error::other)? > 0 {
+            if Instant::now() >= until {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the unit stopped reading"));
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
     }
 }
 

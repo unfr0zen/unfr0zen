@@ -59,6 +59,11 @@ typedef unsigned int u32;
 #define PRM_RSTCTRL       0x48307250
 #define PRM_RSTCTRL_RESET 0x04
 
+/* CAM_D6 as GPIO_105, an input: LCD_ID, which picks the panel on the
+ * Display-2.11 and later boards. */
+#define PADCONF_CAM_D6 0x48002122
+#define PAD_GPIO_INPUT 0x0104
+
 #define USB_BASE      0x480AB000
 #define USB_POWER     (USB_BASE + 0x01)
 #define USB_SOFTCONN  (1 << 6)
@@ -494,6 +499,11 @@ void flasher_main(void)
 				REG32(OTG_SYSCONFIG) |= OTG_SOFTRESET;
 				while (!(REG32(OTG_SYSSTATUS) & OTG_RESETDONE))
 					;
+				/* The kernel reads LCD_ID before it sets its
+				 * own pin mux, and x-loader does not set this
+				 * pad: it is left as Nest's U-Boot leaves it
+				 * for a boot from NAND. */
+				REG16(PADCONF_CAM_D6) = PAD_GPIO_INPUT;
 				enter_kernel(REG32(ATAGS - 4), command[1], ATAGS);
 			}
 		} else if (command[0] == CMD_RESET) {

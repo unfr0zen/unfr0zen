@@ -126,7 +126,7 @@
   "form.external_temperature_any_hint": "Regulates from temperatures sent over MQTT, Zigbee or Matter, and goes back to its own sensor when they stop.\n(3rd generation: the thermostat's own Bluetooth is turned off, so Nest Temperature Sensors stop working)",
   "form.external_temperature_ble": "External temperature",
   "form.external_temperature_ble_hint": "Regulates from temperatures sent over MQTT, Zigbee or Matter, and goes back to its own sensor when they stop.\nThe thermostat's own Bluetooth is turned off, so Nest Temperature Sensors stop working",
-  "form.dark_theme": "Dark theme",
+  "form.dark_theme": "Dark menus",
   "form.dark_theme_hint": "Shows the settings screens and boot logo in dark colours",
   "form.entry_point": "Entry point",
   "form.entry_point_choice_hint": "Choose how to enter the 3rd generation's boot ROM; auto tries all entry points",

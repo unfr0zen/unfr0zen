@@ -288,21 +288,26 @@ fn check_unit(
     run_dir: &Path,
 ) -> Result<Checked> {
     progress.phase(Phase::Check);
-    progress.status(&format!("NAND: {}", nand.chip()));
+    note(progress, &format!("NAND: {}", nand.chip()));
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
     let device = generation(config.omap, &env, usb);
     let nlmodel = env.get("nlmodel").unwrap_or_default().to_string();
-    progress.device(&format!("{}: {silicon}", device.description()));
-    progress.status(&format!(
-        "Generation: {} (nlmodel {})",
-        device.description(),
-        if nlmodel.is_empty() { "unset" } else { &nlmodel }
-    ));
+    let described = format!("{}: {silicon}", device.description());
+    log::info!("Device: {described}");
+    progress.device(&described);
+    note(
+        progress,
+        &format!(
+            "Generation: {} (nlmodel {})",
+            device.description(),
+            if nlmodel.is_empty() { "unset" } else { &nlmodel }
+        ),
+    );
     unsupported(device, &config.options)?;
     let order = env.boot_order()?;
-    progress.status(&format!("Installed boot order: {} then {}", order[0], order[1]));
+    note(progress, &format!("Installed boot order: {} then {}", order[0], order[1]));
     let slot = order[0];
-    progress.status(&format!("Application root slot: {slot}"));
+    note(progress, &format!("Application root slot: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
     Ok(Checked { device, slot, nlmodel })
 }
@@ -520,6 +525,12 @@ fn route_unit(
         InitramfsShell::connect(open_acm(app, seconds(120))?, seconds(30))
     })
     .map_err(|error| {
+        // Still there: the host's port failed. Gone or another identity: the unit left or restarted.
+        match crate::usb::list().map(|devices| devices.get(port).copied()) {
+            Ok(Some((vendor, product))) => log::info!("USB at {port}: {vendor:04x}:{product:04x}"),
+            Ok(None) => log::info!("USB at {port}: nothing"),
+            Err(error) => log::info!("USB at {port}: {error}"),
+        }
         failure(format!(
             "{error}. Hold the front panel button for 10 seconds to restart the unit; \
                                          nothing was written to its root slot"
@@ -545,6 +556,13 @@ fn route_unit(
         usb::wait_device_for(&[Mode::App], seconds(180), Some(port), app, &Default::default()).map(|_| ())
     })?;
     Ok(Outcome { device, slot, changed: kernel_changed || !changes.is_empty() })
+}
+
+/// A status line about the unit that support reads in the run log too;
+/// status lines alone reach only the window.
+fn note(progress: &mut dyn Progress, line: &str) {
+    log::info!("{line}");
+    progress.status(line);
 }
 
 /// Waits for the device with identity `id` at `port` to leave USB.

@@ -191,7 +191,7 @@ pub(crate) fn back_up_whole(
     file(&parts, fs::remove_dir_all(&parts))?;
     kept.0.pop();
     kept.0.extend([out.to_path_buf(), checksum]);
-    progress.status(&format!("{bad} factory-bad blocks; {unstable} blocks whose raw reads never agreed"));
+    super::note(progress, &format!("{bad} factory-bad blocks; {unstable} blocks whose raw reads never agreed"));
     Ok(format!("NAND backup: {} (raw 2112-byte pages, SHA-256 {sha})", out.display()))
 }
 
@@ -329,8 +329,10 @@ pub(crate) fn run(
     // The generation only names the unit here; an environment a restore is
     // to repair may not parse.
     let device = read_environment(&mut flasher).ok().and_then(|env| env.device()).unwrap_or(usb);
-    progress.device(&format!("{}: {}", device.description(), omap::silicon(&asic, flasher.idcode)));
-    progress.status(&format!("NAND: {}", flasher.chip()));
+    let described = format!("{}: {}", device.description(), omap::silicon(&asic, flasher.idcode));
+    log::info!("Device: {described}");
+    progress.device(&described);
+    super::note(progress, &format!("NAND: {}", flasher.chip()));
     let result = (|| -> Result<String> {
         Ok(match job {
             Job::Backup(out) => back_up_whole(&mut flasher, progress, out, &mut hand_back)?,
