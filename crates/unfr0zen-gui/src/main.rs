@@ -483,7 +483,7 @@ const WAIT_USB: Duration = Duration::from_secs(120);
 const WINDOW: [f32; 2] = [1080.0, 800.0];
 
 /// The sidebar's pages.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 enum Page {
     #[default]
     SetUp,
@@ -785,6 +785,12 @@ impl App {
 
     fn running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// The sidebar takes no clicks while a setup, backup, restore or rescue
+    /// runs: its page holds the run's progress.
+    fn nav_locked(&self) -> bool {
+        self.running() && !matches!(self.task, Some(Task::Uboot))
     }
 
     /// The Logs page lists the current run: while it runs, and after if it
@@ -1207,14 +1213,13 @@ impl App {
                     if !self.version.is_empty() {
                         ui.horizontal(|ui| {
                             ui.add_space(6.0);
-                            if ui
-                                .add(
-                                    egui::Label::new(egui::RichText::new(self.version).size(11.0).color(DIM))
-                                        .sense(egui::Sense::click()),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(tr!("nav.about_hint"))
-                                .clicked()
+                            let label = egui::Label::new(egui::RichText::new(self.version).size(11.0).color(DIM));
+                            if !self.nav_locked()
+                                && ui
+                                    .add(label.sense(egui::Sense::click()))
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text(tr!("nav.about_hint"))
+                                    .clicked()
                             {
                                 self.show(Page::About);
                             }
@@ -1236,22 +1241,30 @@ impl App {
             });
     }
 
-    /// One row of the sidebar: the page's name, lit when shown, with the
-    /// backup count at its right end.
+    /// One row of the sidebar: the page's name, lit when shown, dimmed while
+    /// the sidebar is locked, with the backup count at its right end.
     fn nav_item(&mut self, ui: &mut egui::Ui, page: Page) {
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), NAV_HEIGHT), egui::Sense::click());
+        let locked = self.nav_locked();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), NAV_HEIGHT), egui::Sense::hover());
+        let sense = if locked { egui::Sense::hover() } else { egui::Sense::click() };
+        let response = ui.interact(rect, nav_id(page), sense);
         let selected = self.page == page;
         let fill = if selected {
             NAV_SELECTED
-        } else if response.hovered() {
+        } else if response.hovered() && !locked {
             NAV_HOVER
         } else {
             egui::Color32::TRANSPARENT
         };
         let painter = ui.painter();
         painter.rect_filled(rect, 6.0, fill);
-        let color = if selected { ui.visuals().strong_text_color() } else { MUTED };
+        let color = if selected {
+            ui.visuals().strong_text_color()
+        } else if locked {
+            DIM
+        } else {
+            MUTED
+        };
         let font = if selected { medium(13.5) } else { egui::FontId::proportional(13.5) };
         nav_icon(painter, page, rect.left_center() + egui::vec2(16.0, 0.0), color);
         painter.text(rect.left_center() + egui::vec2(30.0, 0.0), egui::Align2::LEFT_CENTER, page.title(), font, color);
@@ -1275,7 +1288,7 @@ impl App {
             Page::Boot => tr!("nav.boot_hint"),
             Page::Terminal => tr!("nav.terminal_hint"),
         };
-        if response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint).clicked() {
+        if !locked && response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint).clicked() {
             self.show(page);
         }
         ui.add_space(2.0);
@@ -2250,6 +2263,11 @@ fn page_header(ui: &mut egui::Ui, title: &str, about: &str) {
     ui.add_space(2.0);
     ui.add(egui::Label::new(egui::RichText::new(about).color(MUTED)).wrap());
     ui.add_space(8.0);
+}
+
+/// The sidebar row for `page`.
+fn nav_id(page: Page) -> egui::Id {
+    egui::Id::new(("nav", page))
 }
 
 /// The page's icon, a line drawing 12 px across centred on `c`.
@@ -4170,6 +4188,45 @@ mod tests {
         let shown = texts(&render(&mut app, WINDOW));
         assert!(shown.iter().any(|t| t == "Chainload stock U-Boot from NAND"), "{shown:?}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_sidebar_takes_no_clicks_while_a_run_goes() {
+        let mut app = App { task: Some(Task::SetUp), popup_dismissed: true, ..App::default() };
+        app.run = Some(Run::task(|_| {
+            std::thread::sleep(Duration::from_secs(5));
+            Ok(String::new())
+        }));
+        let context = egui::Context::default();
+        install_fonts(&context);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(WINDOW[0], WINDOW[1]))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.frame_ui(ui),
+            )
+        };
+        frame(&mut app, Vec::new());
+        let at = context.read_response(nav_id(Page::Logs)).unwrap().rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let click = |app: &mut App| {
+            frame(app, vec![egui::Event::PointerMoved(at)]);
+            frame(app, vec![press(true)]);
+            frame(app, vec![press(false)]);
+        };
+        click(&mut app);
+        assert_eq!(app.page, Page::SetUp);
+        app.task = Some(Task::Uboot);
+        click(&mut app);
+        assert_eq!(app.page, Page::Logs);
     }
 
     #[test]
