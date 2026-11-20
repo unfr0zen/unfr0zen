@@ -16,17 +16,22 @@ impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Info
     }
+    /// Each line with the seconds since the run started: a host that loses
+    /// the unit midway still has a timeline of what arrived.
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            eprintln!("{}: {}", record.level(), record.args());
+            let at = STARTED.get_or_init(std::time::Instant::now).elapsed().as_secs_f32();
+            eprintln!("{} [{at:.1}s]: {}", record.level(), record.args());
         }
     }
     fn flush(&self) {}
 }
 
 static LOGGER: Logger = Logger;
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 pub fn main() {
+    STARTED.get_or_init(std::time::Instant::now);
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
