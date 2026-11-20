@@ -30,6 +30,11 @@ const REJECTED: &[&str] = &[
 pub trait Serial: Read + Write {
     /// Discards input that arrived before the next command.
     fn clear_input(&mut self) -> io::Result<()>;
+    /// Waits for what was written to leave, failing with a timeout at
+    /// `until`: a unit that stops reading must not hold the host past it.
+    fn drain(&mut self, _until: Instant) -> io::Result<()> {
+        self.flush()
+    }
 }
 
 /// Reads what is there; a read that times out returns nothing.

@@ -150,14 +150,14 @@ impl<S: Serial> InitramfsShell<S> {
                 _ => Error::Io(message),
             }
         };
+        let until = Instant::now() + timeout;
         self.port.clear_input().map_err(|e| failed("clearing input for", e))?;
         self.port.write_all(sent.as_bytes()).map_err(|e| failed("sending", e))?;
-        self.port.flush().map_err(|e| failed("flushing", e))?;
+        self.port.drain(until).map_err(|e| failed("flushing", e))?;
         let begin = Regex::new(&format!(r"{marker}:begin\r?\n")).expect("valid pattern");
         let end = Regex::new(&format!(r"\n{marker}:(\d+)\r?\n")).expect("valid pattern");
         let (mut data, mut nudges) = (Vec::new(), 0);
         let mut heard = (0, Instant::now());
-        let until = Instant::now() + timeout;
         while Instant::now() < until {
             read_some(&mut self.port, &mut data)?;
             if let Some(found) = end.captures(&data) {
@@ -180,7 +180,10 @@ impl<S: Serial> InitramfsShell<S> {
             if data.len() != heard.0 {
                 heard = (data.len(), Instant::now());
             } else if heard.1.elapsed() >= NUDGE_AFTER {
-                self.port.write_all(b"echo\n").and_then(|()| self.port.flush()).map_err(|e| failed("nudging", e))?;
+                self.port
+                    .write_all(b"echo\n")
+                    .and_then(|()| self.port.drain(until))
+                    .map_err(|e| failed("nudging", e))?;
                 nudges += 1;
                 heard.1 = Instant::now();
             }
@@ -245,7 +248,7 @@ impl<S: Serial> InitramfsShell<S> {
     /// Restarts the unit from Linux: it boots its installed firmware, or lands in SDP.
     pub fn restart(mut self) -> Result<()> {
         self.port.write_all(b"sync; mount -o remount,ro /mnt; reboot -f\n")?;
-        self.port.flush()?;
+        self.port.drain(Instant::now() + Duration::from_secs(5))?;
         Ok(())
     }
 }
@@ -450,10 +453,12 @@ mod tests {
     }
 
     /// A port that takes every write and says `said` once, never answering;
-    /// or, `gone`, one whose device has left.
+    /// or, `gone`, one whose device has left; or, `stuck`, one whose writes
+    /// never leave.
     struct SilentPort {
         said: &'static [u8],
         gone: bool,
+        stuck: bool,
     }
 
     impl Write for SilentPort {
@@ -487,13 +492,22 @@ mod tests {
             }
             Ok(())
         }
+        fn drain(&mut self, until: Instant) -> io::Result<()> {
+            if self.stuck {
+                std::thread::sleep(until.saturating_duration_since(Instant::now()));
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            Ok(())
+        }
     }
 
     #[test]
     fn a_port_whose_device_left_ends_the_wait_at_once() {
         let started = Instant::now();
         let error =
-            InitramfsShell::connect(SilentPort { said: b"", gone: true }, Duration::from_secs(30)).err().unwrap();
+            InitramfsShell::connect(SilentPort { said: b"", gone: true, stuck: false }, Duration::from_secs(30))
+                .err()
+                .unwrap();
         assert!(matches!(error, Error::Io(_)), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
@@ -501,10 +515,19 @@ mod tests {
     #[test]
     fn a_shell_that_never_answers_shows_what_the_unit_said() {
         let said = b"unfr0zen initramfs: mounting root0 (mtd5)\n";
-        let mut shell = InitramfsShell { port: SilentPort { said, gone: false } };
+        let mut shell = InitramfsShell { port: SilentPort { said, gone: false, stuck: false } };
         let error = shell.run_with("true", Duration::from_millis(300), false).unwrap_err();
         assert!(matches!(error, Error::Timeout(_)), "{error}");
         assert!(error.to_string().contains("mounting root0 (mtd5)"), "{error}");
+    }
+
+    #[test]
+    fn writes_the_unit_never_takes_end_at_the_commands_deadline() {
+        let started = Instant::now();
+        let mut shell = InitramfsShell { port: SilentPort { said: b"", gone: false, stuck: true } };
+        let error = shell.run_with("true", Duration::from_millis(300), false).unwrap_err();
+        assert!(matches!(error, Error::Timeout(_)), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

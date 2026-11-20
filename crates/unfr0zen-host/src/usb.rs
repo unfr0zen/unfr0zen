@@ -253,6 +253,21 @@ impl Serial for Port {
         windows::report_receive_errors(&self.0);
         self.0.clear(serialport::ClearBuffer::Input).map_err(io::Error::other)
     }
+
+    /// tcdrain has no timeout: the output queue is watched instead. Windows
+    /// keeps its flush, as reading that queue there would also clear the
+    /// receive errors clear_input reports.
+    #[cfg(not(windows))]
+    fn drain(&mut self, until: Instant) -> io::Result<()> {
+        use serialport::SerialPort;
+        while self.0.bytes_to_write().map_err(io::Error::other)? > 0 {
+            if Instant::now() >= until {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the unit stopped reading"));
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
 }
 
 /// Waits for the application's ACM `id` on the port and its uid-0 answer to a
