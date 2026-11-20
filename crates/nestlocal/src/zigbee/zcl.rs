@@ -294,6 +294,21 @@ pub fn read_response(frame: &[u8]) -> Option<(u8, Vec<(u16, Value)>)> {
     Some((*sequence, values))
 }
 
+/// A cluster command, client to server, standard and asking no default
+/// response.
+pub fn client_command(sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
+    frame_out(CLUSTER_SPECIFIC | NO_DEFAULT_RESPONSE, None, sequence, cmd, payload)
+}
+
+/// A standard cluster command from a server to us: its command and payload.
+pub fn server_command(frame: &[u8]) -> Option<(u8, &[u8])> {
+    let [control, _sequence, cmd, payload @ ..] = frame else {
+        return None;
+    };
+    (control & (CLUSTER_SPECIFIC | TO_CLIENT | MANUFACTURER_SPECIFIC) == CLUSTER_SPECIFIC | TO_CLIENT)
+        .then_some((*cmd, payload))
+}
+
 /// An attribute report, server to client.
 pub fn report(sequence: u8, attributes: &[(u16, Value)]) -> Vec<u8> {
     let mut payload = Vec::new();
@@ -447,6 +462,16 @@ mod tests {
             [0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x23, 1, 2, 3, 4, 0x02, 0x00, 0x00, 0x20, 9];
         assert_eq!(read_response(&response), Some((6, vec![(0x0001, Value::U8(7))])));
         assert_eq!(read_response(&[0x18, 7, 0x01]), Some((7, vec![])));
+    }
+
+    #[test]
+    fn cluster_commands_from_the_client_side() {
+        assert_eq!(client_command(4, 0x01, &[0xAA]), [0x11, 4, 0x01, 0xAA]);
+        assert_eq!(server_command(&[0x19, 4, 0x02, 0x98]), Some((0x02, &[0x98][..])));
+        // Not a cluster command to the client: a global one, one to a server, a manufacturer's.
+        for frame in [&[0x18, 4, 0x0B, 0x01, 0x00][..], &[0x01, 4, 0x02], &[0x1D, 0xD6, 0x10, 4, 0x02], &[0x19, 4]] {
+            assert_eq!(server_command(frame), None, "{frame:02x?}");
+        }
     }
 
     #[test]

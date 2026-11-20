@@ -46,6 +46,7 @@
 //! source (radio_wakeup.rs). A falling edge is what wakes, so RequestSleep is
 //! declined while the line is already low, until nestlocal has read what the
 //! radio has. Where the module cannot load, messages wait for the next wake.
+//! An update coming over Zigbee holds the unit awake until it is installed.
 //!
 //! A Thread RCP uses the same interrupt and programs host wake deadlines in
 //! the radio. While thread0 exists, its daemon's idle record gates suspend.
@@ -448,7 +449,7 @@ impl SleepClient {
     async fn request_sleep(&self) -> (String, bool) {
         if sleep_blocked(self.matter, self.ready.load(Ordering::SeqCst), crate::matter::sleep_blocked())
             || holding()
-            || (self.zigbee && crate::zigbee::wakeup::pending())
+            || (self.zigbee && (crate::zigbee::wakeup::pending() || crate::zigbee::updating()))
             || crate::thread_sleep::blocked()
         {
             return (ENTITY_PATH.into(), false);

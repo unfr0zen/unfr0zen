@@ -5,7 +5,7 @@
 //! cannot reach GitHub: a copy on the LAN.
 //!
 //! A release's package for this device (package.rs:
-//! unfr0zen-ota-<device>-<tag>.ota) is unwrapped as it downloads, and its
+//! unfr0zen-<device>-<tag>.ota) is unwrapped as it downloads, and its
 //! setup bundle goes to the engine the setup left on the unit
 //! (unfr0zen-apply update), which checks it against its manifest and the
 //! release key before running it; the unit then restarts into it. A bare
@@ -15,8 +15,9 @@
 //! The last answer about the latest release is kept (-update-store), so a
 //! restart shows it at once instead of unknown until the next check.
 //!
-//! Matter's OTA requestor (matter/ota.rs) installs through the same engine:
-//! it claims it, unwraps the package to DOWNLOAD itself, then applies it.
+//! Matter's OTA requestor (matter/ota.rs) and Zigbee's OTA client
+//! (zigbee/ota.rs) install through the same engine: each claims it, has the
+//! package unwrapped to DOWNLOAD, then applies it.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -103,7 +104,7 @@ fn order(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
 /// A version as Matter's u32 SoftwareVersion, in release order: MAJOR,
 /// MINOR and PATCH a byte each, then -rcN as N, the release as 128 and
 /// git describe's -N-gHASH builds as 128 + N (each N up to 127). 0 for
-/// another form. utils/bundle/matter-ota.py numbers images the same way.
+/// another form. utils/bundle/package.py numbers packages the same way.
 pub fn matter_version(version: &str) -> u32 {
     let Some((major, minor, patch, kind, n)) = order(version) else {
         return 0;
@@ -171,21 +172,17 @@ fn save(store: &Path, release: Option<&Release>) {
     }
 }
 
-/// The release in GitHub's description of it, with this device's package,
-/// or its bare bundle in a release made before packages.
+/// The release in GitHub's description of it, with this device's package.
 pub fn release(description: &Value, device: &str) -> Option<Release> {
     let version = description["tag_name"].as_str()?.to_string();
-    let asset = |extension: &str| {
-        let wanted = format!("unfr0zen-ota-{device}-{version}.{extension}");
-        description["assets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|asset| asset["name"].as_str() == Some(wanted.as_str()))
-            .and_then(|asset| asset["browser_download_url"].as_str())
-            .map(str::to_string)
-    };
-    let bundle = asset("ota").or_else(|| asset("tgz"));
+    let wanted = format!("unfr0zen-{device}-{version}.ota");
+    let bundle = description["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|asset| asset["name"].as_str() == Some(wanted.as_str()))
+        .and_then(|asset| asset["browser_download_url"].as_str())
+        .map(str::to_string);
     Some(Release { version, url: description["html_url"].as_str().map(str::to_string), bundle })
 }
 
@@ -324,7 +321,7 @@ impl Updates {
 
     /// The package at url unwrapped to DOWNLOAD, or why not; DOWNLOAD is
     /// removed when it fails.
-    async fn download(&self, url: &str, version: Option<u32>) -> Result<(), String> {
+    pub async fn download(&self, url: &str, version: Option<u32>) -> Result<(), String> {
         let file = std::fs::File::create(DOWNLOAD).map_err(|e| format!("{DOWNLOAD}: {e}"))?;
         let expected = package::Expected { product: package::product(self.device), version, bare: true };
         let mut unwrap = package::Unwrap::new(expected, std::io::BufWriter::new(&file));
@@ -401,8 +398,8 @@ mod tests {
     fn set_update_takes_install_or_a_bundles_url() {
         assert_eq!(request("install\n"), Some(Request::Latest));
         assert_eq!(
-            request(" http://nas.lan/unfr0zen-ota-diamond3-v0.5.0.tgz "),
-            Some(Request::Url("http://nas.lan/unfr0zen-ota-diamond3-v0.5.0.tgz".into()))
+            request(" http://nas.lan/unfr0zen-diamond3-v0.5.0.ota "),
+            Some(Request::Url("http://nas.lan/unfr0zen-diamond3-v0.5.0.ota".into()))
         );
         assert_eq!(request("https://x/b.tgz"), Some(Request::Url("https://x/b.tgz".into())));
         assert_eq!(request("file:///tmp/b.tgz"), None);
@@ -464,18 +461,13 @@ mod tests {
             "tag_name": "v0.5.0", "html_url": "https://github.com/unfr0zen/unfr0zen/releases/tag/v0.5.0",
             "assets": [
                 {"name": "unfr0zen-macos-universal-v0.5.0.zip", "browser_download_url": "https://x/app.zip"},
-                {"name": "unfr0zen-ota-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"},
-                {"name": "unfr0zen-ota-diamond3-v0.5.0.ota", "browser_download_url": "https://x/diamond3.ota"},
+                {"name": "unfr0zen-diamond3-v0.5.0.ota", "browser_download_url": "https://x/diamond3.ota"},
+                {"name": "unfr0zen-zigbee-ota.json", "browser_download_url": "https://x/index.json"},
             ],
         });
         let gen3 = release(&description, "diamond3").unwrap();
         assert_eq!((gen3.version.as_str(), gen3.bundle.as_deref()), ("v0.5.0", Some("https://x/diamond3.ota")));
         assert_eq!(release(&description, "j49").unwrap().bundle, None);
-        let before_packages = json!({
-            "tag_name": "v0.5.0",
-            "assets": [{"name": "unfr0zen-ota-diamond3-v0.5.0.tgz", "browser_download_url": "https://x/diamond3.tgz"}],
-        });
-        assert_eq!(release(&before_packages, "diamond3").unwrap().bundle.as_deref(), Some("https://x/diamond3.tgz"));
         assert_eq!(release(&json!({"message": "Not Found"}), "diamond3"), None);
     }
 }

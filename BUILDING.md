@@ -92,7 +92,7 @@ The version comes from `git describe --tag --always --dirty`.
 - The setup bundles: the gen 3's (`diamond3`), which the app sends the unit to
   set itself up, and the gen 1's and gen 2's (`j49`), from which it sets
   up the slot on the host; `diamond` packs the same for the gen 1 under its
-  own name, which a gen 1 asks a release for to update itself:
+  own name, the bundle of the gen 1's update package:
 
   ```sh
   cargo run -p unfr0zen-host --bin unfr0zen-bundle -- pack diamond3 VERSION unfr0zen-ota-diamond3-VERSION.tgz
@@ -106,3 +106,9 @@ The version comes from `git describe --tag --always --dirty`.
   unsigned updates" was on when they were set up. `unfr0zen-bundle keygen KEY` makes a key (and prints
   its public half), `unfr0zen-bundle verify BUNDLE PUBLIC-KEY` checks a
   signed bundle.
+
+- The update packages, one per device, which units install over MQTT, Matter
+  and Zigbee: `python3 utils/bundle/package.py [--base URL] BUNDLE...` wraps
+  each `unfr0zen-ota-<device>-<tag>.tgz` in `unfr0zen-<device>-<tag>.ota`
+  and writes Zigbee2MQTT's index of them, `unfr0zen-zigbee-ota.json`; the
+  packages carry their own URL, the release's asset, or under `--base`.
