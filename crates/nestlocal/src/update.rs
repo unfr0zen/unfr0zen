@@ -49,6 +49,9 @@ const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 3600);
 /// After a check that got no answer: a network can drop one.
 const RETRY: Duration = Duration::from_secs(300);
+/// How often a wait looks at the time since boot: tokio's timers stop while
+/// the unit is suspended, which a gen 2 is most of the time.
+const STEP: Duration = Duration::from_secs(60);
 /// The release description; a package is a few MB, well under the second.
 const API_LIMIT: usize = 1 << 20;
 pub const BUNDLE_LIMIT: usize = 64 << 20;
@@ -127,6 +130,27 @@ fn latest_version(installed: Option<&str>, release: &str) -> String {
     match installed {
         Some(installed) if order(installed).zip(order(release)).is_some_and(|(i, r)| i > r) => installed.to_string(),
         _ => release.to_string(),
+    }
+}
+
+/// The time since boot, suspended time included: /proc/uptime, as the gen 1
+/// and gen 2's 2.6.37 kernel predates CLOCK_BOOTTIME.
+fn since_boot() -> Option<Duration> {
+    let text = std::fs::read_to_string("/proc/uptime").ok()?;
+    Duration::try_from_secs_f64(text.split_whitespace().next()?.parse().ok()?).ok()
+}
+
+/// Waits until `duration` has passed on `clock`, looking every `step`; a
+/// plain sleep where the clock can't be read.
+async fn wait(duration: Duration, step: Duration, clock: impl Fn() -> Option<Duration>) {
+    let Some(start) = clock() else {
+        return tokio::time::sleep(duration).await;
+    };
+    while let Some(passed) = clock().map(|now| now.saturating_sub(start)) {
+        if passed >= duration {
+            return;
+        }
+        tokio::time::sleep((duration - passed).min(step)).await;
     }
 }
 
@@ -242,12 +266,12 @@ impl Updates {
     }
 
     /// Asks for the latest release a minute after start, then every 6 hours,
-    /// or 5 minutes after one that got no answer.
+    /// or 5 minutes after one that got no answer, suspended time included.
     pub async fn keep_checking(self: Arc<Self>) {
-        tokio::time::sleep(FIRST_CHECK).await;
+        wait(FIRST_CHECK, STEP, since_boot).await;
         loop {
             let answered = self.check().await;
-            tokio::time::sleep(if answered { CHECK_EVERY } else { RETRY }).await;
+            wait(if answered { CHECK_EVERY } else { RETRY }, STEP, since_boot).await;
         }
     }
 
@@ -427,6 +451,16 @@ mod tests {
         assert_eq!(matter_version("v0.5.1-46-g8955e215"), 0x0005_01ae);
         assert_eq!(matter_version("custom"), 0);
         assert_eq!(matter_version("v256.0.0"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_wait_counts_the_time_the_unit_was_suspended() {
+        let reads = std::sync::atomic::AtomicU64::new(0);
+        // The next read comes after a suspend as long as the wait.
+        let clock = || Some(if reads.fetch_add(1, Ordering::Relaxed) == 0 { Duration::ZERO } else { CHECK_EVERY });
+        let waited = tokio::time::timeout(Duration::from_secs(5), wait(CHECK_EVERY, Duration::from_millis(1), clock));
+        assert!(waited.await.is_ok());
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
     }
 
     #[test]
