@@ -44,9 +44,10 @@ fn optional_files(options: &Options) -> Vec<String> {
     std::iter::once(SHELL_SCRIPT.to_string()).chain(server).collect()
 }
 
-fn set_up(tree: &mut Tree, options: &Options) -> Result<()> {
+fn set_up(tree: &mut Tree, options: &mut Options) -> Result<()> {
     set_up_usb_shell(tree, options.usb_shell)?;
-    let server = options.ssh_server.as_ref().filter(|_| options.ssh);
+    // Moved into the tree: the 64 MB units cannot hold the server twice.
+    let server = options.ssh_server.take().filter(|_| options.ssh);
     if options.ssh && server.is_none() {
         return device("--ssh on a gen 1 or gen 2 needs its SSH server's files");
     }
@@ -75,7 +76,7 @@ pub(crate) fn set_up_usb_shell(tree: &mut Tree, usb_shell: bool) -> Result<()> {
 /// line (whose sshd is absent); without, no start.
 pub(crate) fn set_up_ssh(
     tree: &mut Tree,
-    server: Option<&crate::nestlocal::Overlay>,
+    server: Option<crate::nestlocal::Overlay>,
     password_login: bool,
 ) -> Result<()> {
     let (anchor, start) = SSH_START;
@@ -87,8 +88,8 @@ pub(crate) fn set_up_ssh(
     }
     if let Some(server) = server {
         rcs = rcs.replace(anchor, &format!("{anchor}{start}"));
-        for (name, mode, data) in &server.files {
-            tree.insert(name.clone(), (data.clone(), *mode));
+        for (name, mode, data) in server.files {
+            tree.insert(name, (data, mode));
         }
         // dropbear's -s: no password logins, keys only.
         if !password_login {
@@ -139,11 +140,11 @@ mod tests {
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (stock.as_bytes().to_vec(), 0o750))]);
         let server =
             Overlay { directories: vec![], files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())] };
-        set_up_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(server.clone()), true).unwrap();
         let started = "a\n${INITDIR}/sshd start\n${INITDIR}/unfr0zen-ssh start\nb\n";
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes());
         assert_eq!(tree["usr/sbin/dropbearmulti"], (b"ELF".to_vec(), 0o755));
-        set_up_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(server.clone()), true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, started.as_bytes(), "once");
         set_up_ssh(&mut tree, None, true).unwrap();
         assert_eq!(tree["etc/init.d/rcS"].0, stock.as_bytes());
@@ -154,10 +155,10 @@ mod tests {
         let init = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/j49/ssh.init"));
         let mut tree = Tree::from([("etc/init.d/rcS".to_string(), (b"a\n${INITDIR}/sshd start\nb\n".to_vec(), 0o750))]);
         let server = Overlay { directories: vec![], files: vec![(SSH_INIT.into(), 0o755, init.as_bytes().to_vec())] };
-        set_up_ssh(&mut tree, Some(&server), false).unwrap();
+        set_up_ssh(&mut tree, Some(server.clone()), false).unwrap();
         let keys_only = String::from_utf8(tree[SSH_INIT].0.clone()).unwrap();
         assert!(keys_only.contains(" -s -P \"$PIDFILE\""), "{keys_only}");
-        set_up_ssh(&mut tree, Some(&server), true).unwrap();
+        set_up_ssh(&mut tree, Some(server.clone()), true).unwrap();
         assert_eq!(tree[SSH_INIT].0, init.as_bytes(), "password login again: the script as shipped");
     }
 }

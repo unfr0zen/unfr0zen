@@ -163,17 +163,47 @@ impl Patch {
         })
     }
     pub fn apply(&self, source: &[u8], reverse: bool) -> Result<Vec<u8>> {
+        // Sized exactly: growing a copy of the source would double it.
+        let mut output = Vec::with_capacity(self.output_len.max(source.len()));
+        output.extend_from_slice(source);
+        self.apply_owned(output, reverse)
+    }
+    /// Whether apply turns `source` into `output`, checked in place: each
+    /// edit's bytes on both sides, in order and apart as journal writes them,
+    /// and the bytes between them unchanged.
+    pub fn reproduces(&self, source: &[u8], output: &[u8]) -> bool {
+        if source.len() != self.stock_len
+            || output.len() != self.output_len
+            || sha256_hex(source) != self.stock_sha
+            || sha256_hex(output) != self.output_sha
+        {
+            return false;
+        }
+        let mut at = 0;
+        for edit in &self.edits {
+            let (start, end) = (edit.offset, edit.offset + edit.after.len());
+            if start < at
+                || output[at..start] != source[at..start]
+                || source[start..start + edit.before.len()] != edit.before[..]
+                || output[start..end] != edit.after[..]
+            {
+                return false;
+            }
+            at = end;
+        }
+        at == output.len()
+    }
+    /// apply, in `source`'s own buffer: the 64 MB OMAP units cannot hold
+    /// nlclient twice beside the rest of a setup.
+    pub fn apply_owned(&self, mut output: Vec<u8>, reverse: bool) -> Result<Vec<u8>> {
         let (expected, result_hash, length) = if reverse {
             (&self.output_sha, &self.stock_sha, self.stock_len)
         } else {
             (&self.stock_sha, &self.output_sha, self.output_len)
         };
-        if sha256_hex(source) != *expected {
+        if sha256_hex(&output) != *expected {
             return device("nlclient firmware hash mismatch");
         }
-        // Sized exactly: growing a copy of the source would double it.
-        let mut output = Vec::with_capacity(self.output_len.max(source.len()));
-        output.extend_from_slice(source);
         output.resize(self.output_len, 0);
         for edit in &self.edits {
             let bytes = if reverse { &edit.before } else { &edit.after };
@@ -223,6 +253,18 @@ pub(crate) mod tests {
         let same = Patch::parse(&Patch::journal(b"stock", b"stock").unwrap()).unwrap();
         assert_eq!(same.edits.len(), 1);
         assert!(same.edits[0].before.is_empty() && same.edits[0].after.is_empty());
+    }
+
+    #[test]
+    fn a_journal_reproduces_its_output_from_its_stock_and_nothing_else() {
+        let (stock, output) = (&b"\x7fELF stock body"[..], &b"\x7fELF STOCK bodY and a tail"[..]);
+        let patch = Patch::parse(&journal(stock, output)).unwrap();
+        assert!(patch.reproduces(stock, output));
+        assert!(!patch.reproduces(stock, b"\x7fELF STOCK bodY and a tale"));
+        assert!(!patch.reproduces(b"\x7fELF stock bodx", output));
+        assert!(!patch.reproduces(output, output));
+        assert_eq!(patch.apply_owned(stock.to_vec(), false).unwrap(), output);
+        assert_eq!(patch.apply_owned(output.to_vec(), true).unwrap(), stock);
     }
 
     #[test]

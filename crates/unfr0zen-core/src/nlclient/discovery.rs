@@ -242,24 +242,65 @@ fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
     }
 }
 
-/// The ARM code's words, by address.
-fn code_words(elf: &Elf) -> Vec<(u32, u32)> {
-    let mut words = Vec::new();
-    for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
-        let data = elf.contents(section);
-        for at in (0..data.len() / 4 * 4).step_by(4) {
-            words.push((section.address + at as u32, u32::from_le_bytes(data[at..at + 4].try_into().unwrap())));
+/// The ARM code's words, indexed across the code sections in order and
+/// read in place: a table of them would take twice the code's size, which
+/// the 64 MB OMAP units cannot spare beside a setup.
+struct Words<'a> {
+    /// Each code section's address, contents, and the index of its first word.
+    sections: Vec<(u32, &'a [u8], usize)>,
+    len: usize,
+}
+
+impl<'a> Words<'a> {
+    fn new(elf: &'a Elf) -> Self {
+        let (mut sections, mut len) = (Vec::new(), 0);
+        for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
+            let data = elf.contents(section);
+            if data.len() >= 4 {
+                sections.push((section.address, data, len));
+                len += data.len() / 4;
+            }
         }
+        Words { sections, len }
     }
-    words
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Word `i`'s address and value.
+    fn get(&self, i: usize) -> Option<(u32, u32)> {
+        if i >= self.len {
+            return None;
+        }
+        let &(address, data, first) = self.sections.iter().rev().find(|(_, _, first)| *first <= i)?;
+        let at = (i - first) * 4;
+        Some((address + at as u32, u32::from_le_bytes(data[at..at + 4].try_into().unwrap())))
+    }
+
+    fn at(&self, i: usize) -> (u32, u32) {
+        self.get(i).expect("a word index below len")
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        (0..self.len).map(|i| self.at(i))
+    }
+
+    /// The index of the word at `address`.
+    fn index(&self, address: u32) -> Option<usize> {
+        self.sections.iter().find_map(|&(start, data, first)| {
+            let offset = address.checked_sub(start)? as usize;
+            (offset.is_multiple_of(4) && offset < data.len() / 4 * 4).then_some(first + offset / 4)
+        })
+    }
 }
 
 /// The indexes in `words` of the instructions that complete `target`'s
 /// address in a register: a literal load (plus pc on a position-independent
 /// build), or a movw/movt pair.
-fn references(elf: &Elf, words: &[(u32, u32)], target: u32) -> Vec<usize> {
+fn references(elf: &Elf, words: &Words, target: u32) -> Vec<usize> {
     let mut found = Vec::new();
-    for (i, &(address, w)) in words.iter().enumerate() {
+    for (i, (address, w)) in words.iter().enumerate() {
         let window = |n: usize| i + 1..(i + n).min(words.len());
         if w & 0xff7f_0000 == 0xe51f_0000 {
             let pc = address + 8;
@@ -269,7 +310,7 @@ fn references(elf: &Elf, words: &[(u32, u32)], target: u32) -> Vec<usize> {
             if value == target {
                 found.push(i);
             } else if let Some(j) = window(40).find(|&j| {
-                let (at, x) = words[j];
+                let (at, x) = words.at(j);
                 x & 0xffff_0ff0 == 0xe08f_0000 && x & 0xf == register && value.wrapping_add(at + 8) == target
             }) {
                 found.push(j);
@@ -278,7 +319,7 @@ fn references(elf: &Elf, words: &[(u32, u32)], target: u32) -> Vec<usize> {
             let register = (w >> 12) & 0xf;
             let low = ((w >> 4) & 0xf000) | (w & 0xfff);
             if let Some(j) = window(6).find(|&j| {
-                let x = words[j].1;
+                let x = words.at(j).1;
                 x & 0xfff0_f000 == 0xe340_0000 | register << 12
                     && ((((x >> 4) & 0xf000) | (x & 0xfff)) << 16 | low) == target
             }) {
@@ -306,21 +347,21 @@ fn branch_target(at: u32, w: u32, link: bool) -> Option<u32> {
 /// that shape.
 fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
     let string = string_address(elf, b"client: Setting mSleepTimeout - Old: %d New: %d\0")?;
-    let words = code_words(elf);
+    let words = Words::new(elf);
     let mut pairs = Vec::new();
     for at in references(elf, &words, string) {
         // The logger's call, then the copy.
-        let Some(call) = (at + 1..(at + 16).min(words.len())).find(|&j| words[j].1 >> 24 == 0xeb) else {
+        let Some(call) = (at + 1..(at + 16).min(words.len())).find(|&j| words.at(j).1 >> 24 == 0xeb) else {
             continue;
         };
         for j in call + 1..(call + 6).min(words.len()) {
-            let load = words[j].1;
+            let load = words.at(j).1;
             if load & 0xfff0_0000 != 0xe590_0000 {
                 continue;
             }
             let (value, base) = ((load >> 12) & 0xf, (load >> 16) & 0xf);
             if let Some(store) = (j + 1..(j + 5).min(words.len()))
-                .map(|k| words[k].1)
+                .map(|k| words.at(k).1)
                 .find(|x| x & 0xfff0_0000 == 0xe580_0000 && (x >> 12) & 0xf == value && (x >> 16) & 0xf == base)
             {
                 pairs.push((load & 0xfff, store & 0xfff));
@@ -355,44 +396,47 @@ pub(super) struct Brightness {
 /// which loads the mode and, for high (2), the level at `high`.
 fn brightness(elf: &Elf) -> Option<Brightness> {
     let string = string_address(elf, b"brightness manager: SetUserBrightnessSetting() invalid value:%d\0")?;
-    let words = code_words(elf);
-    let index = |address: u32| words.binary_search_by_key(&address, |&(a, _)| a).ok();
-    let mut callers: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    for (i, &(at, w)) in words.iter().enumerate() {
-        if let Some(target) = branch_target(at, w, true) {
-            callers.entry(target).or_default().push(i);
-        }
-    }
+    let words = Words::new(elf);
+    let calls_to = |target: u32| {
+        words.iter().enumerate().filter(move |&(_, (at, w))| branch_target(at, w, true) == Some(target)).map(|(i, _)| i)
+    };
     let [reference] = references(elf, &words, string)[..] else {
         return None;
     };
-    let referenced = words[reference].0;
-    let set = *callers.range(referenced.saturating_sub(0x100)..=referenced).next_back()?.0;
-    let start = index(set)?;
+    let referenced = words.at(reference).0;
+    let set = words
+        .iter()
+        .filter_map(|(at, w)| branch_target(at, w, true))
+        .filter(|target| (referenced.saturating_sub(0x100)..=referenced).contains(target))
+        .max()?;
+    let start = words.index(set)?;
     // str r1, [rN, #mode]
     let mode =
-        words[start..(start + 16).min(words.len())].iter().find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1 & 0xfff;
+        (start..(start + 16).min(words.len())).map(|j| words.at(j)).find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1
+            & 0xfff;
     let mut found = Vec::new();
-    for &call in callers.get(&set)? {
+    for call in calls_to(set) {
         // bl accessor, then (within a few) bl set.
-        let Some(accessor) =
-            (call.saturating_sub(3)..call).rev().find_map(|j| branch_target(words[j].0, words[j].1, true))
-        else {
+        let Some(accessor) = (call.saturating_sub(3)..call).rev().find_map(|j| {
+            let (at, w) = words.at(j);
+            branch_target(at, w, true)
+        }) else {
             continue;
         };
-        let first = index(accessor)?;
-        let Some(globals) = words[first..(first + 4).min(words.len())]
-            .iter()
-            .find(|(_, w)| w & 0xffff_f000 == 0xe590_0000)
-            .map(|(_, w)| w & 0xfff)
+        let first = words.index(accessor)?;
+        let Some(globals) = (first..(first + 4).min(words.len()))
+            .map(|j| words.at(j).1)
+            .find(|w| w & 0xffff_f000 == 0xe590_0000)
+            .map(|w| w & 0xfff)
         else {
             continue;
         };
         for j in call + 1..(call + 12).min(words.len()) {
-            let Some(apply) = branch_target(words[j].0, words[j].1, true).filter(|&t| t != accessor) else {
+            let (at, w) = words.at(j);
+            let Some(apply) = branch_target(at, w, true).filter(|&t| t != accessor) else {
                 continue;
             };
-            if let Some(high) = high_level(&words, index(apply)?, mode) {
+            if let Some(high) = high_level(&words, words.index(apply)?, mode) {
                 found.push((apply, globals, high));
             }
         }
@@ -408,16 +452,16 @@ fn brightness(elf: &Elf) -> Option<Brightness> {
 /// The offset of the level `apply` (at `words[start]`) loads for mode 2,
 /// high, after loading the mode: through a jump table (`ldrls pc, [pc, rX,
 /// lsl #2]`) or a compare with 2 and a branch.
-fn high_level(words: &[(u32, u32)], start: usize, mode: u32) -> Option<u32> {
+fn high_level(words: &Words, start: usize, mode: u32) -> Option<u32> {
     let end = (start + 24).min(words.len());
-    let index = |address: u32| words.binary_search_by_key(&address, |&(a, _)| a).ok();
-    let load = (start..end).find(|&i| words[i].1 & 0xfff0_0fff == 0xe590_0000 | mode)?;
-    let register = (words[load].1 >> 12) & 0xf;
+    let index = |address: u32| words.index(address);
+    let load = (start..end).find(|&i| words.at(i).1 & 0xfff0_0fff == 0xe590_0000 | mode)?;
+    let register = (words.at(load).1 >> 12) & 0xf;
     // vldr s0, [rN, #imm*4] at or after `from`, following one branch.
     let level = |from: usize| -> Option<u32> {
         let mut i = from;
         for _ in 0..6 {
-            let (at, x) = *words.get(i)?;
+            let (at, x) = words.get(i)?;
             if x & 0x0f70_ff00 == 0x0d10_0a00 && x & (1 << 23) != 0 && x >> 28 == 0xe {
                 return Some((x & 0xff) * 4);
             }
@@ -430,14 +474,18 @@ fn high_level(words: &[(u32, u32)], start: usize, mode: u32) -> Option<u32> {
         None
     };
     for i in load + 1..end {
-        let x = words[i].1;
+        let x = words.at(i).1;
         // ldrls pc, [pc, rX, lsl #2]: the table follows the next word.
         if x == 0x979f_f100 | register {
             return level(index(words.get(i + 2 + 2)?.1)?);
         }
         // cmp rX, #2, then beq target.
         if x == 0xe350_0002 | register << 16 {
-            let (b_at, b) = *words.get(i + 1..i + 3)?.iter().find(|(_, b)| b >> 24 == 0x0a)?;
+            let (b_at, b) = (i + 1..i + 3)
+                .map(|j| words.get(j))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .find(|(_, b)| b >> 24 == 0x0a)?;
             let offset = ((b & 0xff_ffff) << 8) as i32 >> 6;
             return level(index(b_at.wrapping_add(8).wrapping_add(offset as u32))?);
         }

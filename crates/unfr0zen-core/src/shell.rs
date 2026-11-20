@@ -65,7 +65,7 @@ pub trait Volume {
     fn patch_nlclient(&mut self, patch: &crate::nlclient::Patch) -> Result<()> {
         let (owner, mode, source) =
             self.read(crate::nlclient::BINARY)?.ok_or_else(|| crate::Error::Device("missing nlclient".into()))?;
-        let data = patch.apply(&source, false)?;
+        let data = patch.apply_owned(source, false)?;
         self.write(crate::nlclient::BINARY, &data, &owner, mode)
     }
     fn make_directory(&mut self, name: &str, mode: u32) -> Result<()>;

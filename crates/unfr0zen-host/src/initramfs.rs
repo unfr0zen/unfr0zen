@@ -51,10 +51,11 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
     } else {
         String::new()
     };
-    // No input: the shell's own (the host's nudges among it) stays out of the hook scripts.
+    // No input: the shell's own (the host's nudges among it) stays out of the
+    // hook scripts. The bundle leaves the initramfs's RAM once apply has read it.
     let run = shell.run_with(
         &format!(
-            "tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT}{omap} < /dev/null 2>&1",
+            "tar -xzf /{BUNDLE} -C / {} && /{} /{BUNDLE} /{OPTIONS} /mnt {OUT} --remove-bundle{omap} < /dev/null 2>&1",
             bundle::APPLY,
             bundle::APPLY
         ),
