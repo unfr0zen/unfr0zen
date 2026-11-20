@@ -544,12 +544,19 @@ fn route_unit(
     let set_up = shell
         .run(
             "uname -a; cat /proc/cmdline; dmesg | grep -E 'Machine:|unfr0zen initramfs:'; cat /proc/mtd; \
-             ls -d /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; grep \" /mnt \" /proc/mounts",
+             echo /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; grep \" /mnt \" /proc/mounts",
         )
         .and_then(|probe| {
             probe.lines().for_each(|line| log::info!("unit: {line}"));
-            if let Some(image) = probe.lines().find_map(|line| line.trim().strip_suffix(".nlsw")) {
-                log::info!("Firmware {}", image.rsplit('/').next().unwrap_or(image));
+            // echo, not ls, whose colours on the tty would wrap the name; an
+            // unmatched pattern comes back as itself.
+            if let Some(image) = probe
+                .lines()
+                .find_map(|line| line.trim().strip_suffix(".nlsw"))
+                .and_then(|path| path.rsplit('/').next())
+                .filter(|image| !image.contains('*'))
+            {
+                log::info!("Firmware {image}");
             }
             stage(progress, &format!("Set up {slot} on the unit"), || {
                 crate::initramfs::apply(&mut shell, run_dir, device)
