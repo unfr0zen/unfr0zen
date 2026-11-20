@@ -12,9 +12,14 @@
 //!   forecast.daily[]                   up to 6: date (epoch s),
 //!                                      temp_low_c, temp_high_c, humidity
 //!
+//!   location.timezone_long             a zone under /usr/share/zoneinfo,
+//!                                      read by its nlTimeZoneParser: the
+//!                                      unit's time zone (clock.rs)
+//!
 //! Everything but the first two is optional. The icon picks one of the
 //! unit's Weather_*.png: ClearDay/Night, PartlyCloudyDay/Night, Snow,
-//! Rain, Cloudy, or Default when there is none.
+//! Rain, Cloudy, or Default when there is none. The location stands alone:
+//! nlclient reads it from an answer with no weather too.
 
 use std::sync::Mutex;
 
@@ -26,7 +31,8 @@ use crate::fields;
 use crate::json::{num, Fields};
 
 /// Home Assistant's latest readings (set/outdoor_temperature,
-/// set/outdoor_humidity) and conditions and forecast (set/weather).
+/// set/outdoor_humidity), conditions and forecast (set/weather), and time
+/// zone (set/time_zone, or the Zigbee coordinator's offset).
 #[derive(Default)]
 pub struct Outdoor {
     state: Mutex<State>,
@@ -41,6 +47,10 @@ struct State {
     /// Home Assistant's own condition ("rainy", "pouring", ...), finer
     /// than the icon, for themes.
     condition: Option<String>,
+    zone: Option<String>,
+    /// The zone came by name (set/time_zone), with its own daylight saving
+    /// time rules: the Zigbee coordinator's offset does not replace it.
+    named: bool,
 }
 
 /// set/weather's payload: Home Assistant's own names, a weather entity's
@@ -139,18 +149,56 @@ impl Outdoor {
         self.state.lock().unwrap().temp
     }
 
-    /// The /weather answer under the query key, None until both the
-    /// temperature and the humidity are known.
+    /// The /weather answer under the query key: the weather once both the
+    /// temperature and the humidity are known, and the time zone once
+    /// known. None while neither is.
     pub fn answer(&self) -> Option<Fields> {
         let s = self.state.lock().unwrap();
-        let (temp, humidity) = (s.temp?, s.humidity?);
-        let mut current = fields! {"temp_c" => num(temp), "humidity" => num(humidity.round())};
-        current.extend(s.current.clone());
-        let mut answer = fields! {"current" => Value::Object(current)};
-        if !s.forecast.is_empty() {
-            answer.insert("forecast".into(), Value::Object(s.forecast.clone()));
+        let mut answer = Fields::new();
+        if let (Some(temp), Some(humidity)) = (s.temp, s.humidity) {
+            let mut current = fields! {"temp_c" => num(temp), "humidity" => num(humidity.round())};
+            current.extend(s.current.clone());
+            answer.insert("current".into(), Value::Object(current));
+            if !s.forecast.is_empty() {
+                answer.insert("forecast".into(), Value::Object(s.forecast.clone()));
+            }
         }
-        Some(answer)
+        if let Some(zone) = &s.zone {
+            answer.insert("location".into(), Value::Object(fields! {"timezone_long" => zone.as_str()}));
+        }
+        (!answer.is_empty()).then_some(answer)
+    }
+
+    /// Takes zone ("Europe/London"), a name from set/time_zone, for the
+    /// unit's time zone if the unit has its zone file: true when it differs
+    /// from the last.
+    pub fn set_zone(&self, zone: &str) -> Result<bool, String> {
+        self.set_zone_in(std::path::Path::new(crate::clock::ZONEINFO), zone, true)
+    }
+
+    /// Takes zone, one that keeps the Zigbee coordinator's offset, unless a
+    /// zone came by name: true when it differs from the last.
+    pub fn set_offset_zone(&self, zone: &str) -> Result<bool, String> {
+        self.set_zone_in(std::path::Path::new(crate::clock::ZONEINFO), zone, false)
+    }
+
+    /// Whether the zone came by name.
+    pub fn has_named_zone(&self) -> bool {
+        self.state.lock().unwrap().named
+    }
+
+    fn set_zone_in(&self, zoneinfo: &std::path::Path, zone: &str, named: bool) -> Result<bool, String> {
+        if !crate::clock::zone_known(zoneinfo, zone) {
+            return Err(format!("expected a time zone in {}", zoneinfo.display()));
+        }
+        let mut s = self.state.lock().unwrap();
+        if s.named && !named {
+            return Ok(false);
+        }
+        let changed = s.zone.as_deref() != Some(zone);
+        s.zone = Some(zone.into());
+        s.named = named;
+        Ok(changed)
     }
 
     /// Everything known so far, whatever is missing: temp_c, humidity,
@@ -291,6 +339,47 @@ mod tests {
         let a = o.answer().unwrap();
         assert!(a.get("forecast").is_none());
         assert_eq!(Value::Object(a), json!({"current": {"temp_c": 10, "humidity": 50, "icon": "rain"}}));
+    }
+
+    #[test]
+    fn the_time_zone_goes_in_the_location_with_or_without_weather() {
+        let zoneinfo = std::env::temp_dir().join(format!("nestlocal-zoneinfo-{}", std::process::id()));
+        std::fs::create_dir_all(zoneinfo.join("Europe")).unwrap();
+        std::fs::write(zoneinfo.join("Europe/London"), b"TZif").unwrap();
+        let o = Outdoor::default();
+        for zone in ["Europe/Paris", "Europe", "../Europe/London", "/Europe/London", "Europe/./London", ""] {
+            assert!(o.set_zone_in(&zoneinfo, zone, true).is_err(), "{zone:?}");
+        }
+        assert!(o.answer().is_none());
+        assert_eq!(o.set_zone_in(&zoneinfo, "Europe/London", true), Ok(true));
+        assert_eq!(o.set_zone_in(&zoneinfo, "Europe/London", true), Ok(false));
+        assert_eq!(Value::Object(o.answer().unwrap()), json!({"location": {"timezone_long": "Europe/London"}}));
+        o.set(Some(4.0), Some(90.0));
+        assert_eq!(
+            Value::Object(o.answer().unwrap()),
+            json!({"current": {"temp_c": 4, "humidity": 90}, "location": {"timezone_long": "Europe/London"}})
+        );
+        std::fs::remove_dir_all(&zoneinfo).unwrap();
+    }
+
+    #[test]
+    fn a_zone_by_name_is_not_replaced_by_one_for_an_offset() {
+        let zoneinfo = std::env::temp_dir().join(format!("nestlocal-zoneinfo-named-{}", std::process::id()));
+        for zone in ["America/New_York", "Etc/GMT+5", "Etc/GMT+4"] {
+            std::fs::create_dir_all(zoneinfo.join(zone).parent().unwrap()).unwrap();
+            std::fs::write(zoneinfo.join(zone), b"TZif").unwrap();
+        }
+        let zone = |o: &Outdoor| o.answer().unwrap()["location"]["timezone_long"].clone();
+        let o = Outdoor::default();
+        // The offset's zone, until a name comes; then the name, whatever
+        // the offset.
+        assert_eq!(o.set_zone_in(&zoneinfo, "Etc/GMT+5", false), Ok(true));
+        assert_eq!(zone(&o), json!("Etc/GMT+5"));
+        assert_eq!(o.set_zone_in(&zoneinfo, "America/New_York", true), Ok(true));
+        assert_eq!(o.set_zone_in(&zoneinfo, "Etc/GMT+4", false), Ok(false));
+        assert!(o.has_named_zone());
+        assert_eq!(zone(&o), json!("America/New_York"));
+        std::fs::remove_dir_all(&zoneinfo).unwrap();
     }
 
     #[test]

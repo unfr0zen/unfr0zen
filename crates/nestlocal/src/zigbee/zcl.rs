@@ -57,6 +57,7 @@ pub enum Value {
     Bitmap16(u16),
     U8(u8),
     U16(u16),
+    U32(u32),
     I8(i8),
     I16(i16),
     Enum8(u8),
@@ -75,6 +76,7 @@ impl Value {
             Value::Bitmap16(_) => 0x19,
             Value::U8(_) => 0x20,
             Value::U16(_) => 0x21,
+            Value::U32(_) => 0x23,
             Value::I8(_) => 0x28,
             Value::I16(_) => 0x29,
             Value::Enum8(_) => 0x30,
@@ -91,7 +93,7 @@ impl Value {
             Value::Bitmap8(v) | Value::U8(v) | Value::Enum8(v) => out.push(*v),
             Value::Bitmap16(v) | Value::U16(v) | Value::Enum16(v) => out.extend(v.to_le_bytes()),
             Value::F32(v) => out.extend(v.to_le_bytes()),
-            Value::Utc(v) => out.extend(v.to_le_bytes()),
+            Value::U32(v) | Value::Utc(v) => out.extend(v.to_le_bytes()),
             Value::I8(v) => out.push(*v as u8),
             Value::I16(v) => out.extend(v.to_le_bytes()),
             Value::Str(s) => {
@@ -115,6 +117,7 @@ impl Value {
             0x19 => Value::Bitmap16(u16::from_le_bytes(take(data, 2)?.try_into().ok()?)),
             0x20 => Value::U8(take(data, 1)?[0]),
             0x21 => Value::U16(u16::from_le_bytes(take(data, 2)?.try_into().ok()?)),
+            0x23 => Value::U32(u32::from_le_bytes(take(data, 4)?.try_into().ok()?)),
             0x28 => Value::I8(take(data, 1)?[0] as i8),
             0x29 => Value::I16(i16::from_le_bytes(take(data, 2)?.try_into().ok()?)),
             0x30 => Value::Enum8(take(data, 1)?[0]),
@@ -458,8 +461,9 @@ mod tests {
             assert_eq!(read_response(frame), None, "{frame:02x?}");
         }
         // A value of an unknown type ends the list; what came before stays.
-        let response =
-            [0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x23, 1, 2, 3, 4, 0x02, 0x00, 0x00, 0x20, 9];
+        let response = [
+            0x18, 6, 0x01, 0x01, 0x00, 0x00, 0x20, 7, 0x00, 0x00, 0x00, 0x24, 1, 2, 3, 4, 5, 0x02, 0x00, 0x00, 0x20, 9,
+        ];
         assert_eq!(read_response(&response), Some((6, vec![(0x0001, Value::U8(7))])));
         assert_eq!(read_response(&[0x18, 7, 0x01]), Some((7, vec![])));
     }
@@ -514,7 +518,8 @@ mod tests {
             (0x42, &[]),
             (0x42, &[5, b'N', b'e', b's', b't']),
             (0xE2, &[0x00, 0x00, 0x00]),
-            (0x23, &[0x00, 0x00, 0x00, 0x00]),
+            (0x23, &[0x00, 0x00, 0x00]),
+            (0x24, &[0x00, 0x00, 0x00, 0x00, 0x00]),
         ] {
             assert_eq!(Value::read(type_id, &mut &data[..]), None, "type {type_id:#04x}, {data:02x?}");
         }

@@ -311,6 +311,13 @@ impl Bridge {
 
             // Not a bucket: the unit's clock (clock.rs).
             "time" => self.time_answer(arg).map(|()| None),
+            // Not a bucket either: nlclient takes it from the weather answer.
+            "time_zone" => {
+                if self.outdoor.set_zone(arg)? {
+                    logf!("mqtt: time zone {arg}");
+                }
+                Ok(None)
+            }
 
             // The filter was changed now: nlclient zeroes its runtime and
             // clears the reminder. OFF does nothing, for On/Off endpoints.
@@ -475,6 +482,8 @@ mod tests {
             ("nope", ""),
             ("outdoor_temperature", "unavailable"),
             ("outdoor_humidity", "101"),
+            ("time_zone", "No/Such_Zone"),
+            ("time_zone", "../UTC"),
         ] {
             assert!(b.fields(name, arg).is_err(), "{name} {arg} accepted");
         }

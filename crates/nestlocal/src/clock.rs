@@ -5,7 +5,13 @@
 //! network with no way out to one, from Home Assistant over MQTT
 //! (Bridge::ask_time). On a unit whose ntpd keeps the time, the clock is never
 //! off by enough to touch.
+//!
+//! The time zone is nlclient's: it copies /usr/share/zoneinfo/<zone> to
+//! /nestlabs/etc/user/localtime (nlSetTimeZoneFile) and keeps the name as
+//! its time_zone_file setting, taking the zone from the weather answer's
+//! location.timezone_long (weather::Outdoor::set_zone).
 
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::net::UdpSocket;
@@ -121,6 +127,74 @@ pub fn answer(asked: SystemTime, t: SystemTime, from: &str) -> bool {
     true
 }
 
+/// The unit's zone files.
+pub const ZONEINFO: &str = "/usr/share/zoneinfo";
+
+/// Whether zone ("Europe/London") names a zone file in dir: a relative
+/// path of plain names, nothing nlclient's copy could take from elsewhere.
+pub fn zone_known(dir: &Path, zone: &str) -> bool {
+    let plain = |part: &str| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'))
+    };
+    zone.split('/').all(plain) && dir.join(zone).is_file()
+}
+
+/// The zone in dir that keeps offset (local minus UTC, seconds) all year,
+/// as Zigbee's Time cluster gives an offset and no zone: one under Etc if
+/// there is one, else the first by name.
+pub fn offset_zone(dir: &Path, offset: i64) -> Option<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => dirs.push(path),
+                Ok(t) if t.is_file() && std::fs::read(&path).ok().and_then(|b| fixed_offset(&b)) == Some(offset) => {
+                    found.extend(path.strip_prefix(dir).ok().and_then(Path::to_str).map(String::from));
+                }
+                _ => {}
+            }
+        }
+    }
+    found.into_iter().min_by_key(|zone| (!zone.starts_with("Etc/"), zone.clone()))
+}
+
+/// The offset from UTC, in seconds, of a zone file whose rule for times
+/// past its table (the POSIX TZ string ending a TZif file, RFC 8536) has
+/// no daylight saving time.
+fn fixed_offset(file: &[u8]) -> Option<i64> {
+    if !file.starts_with(b"TZif") {
+        return None;
+    }
+    let footer = file.strip_suffix(b"\n")?;
+    let rule = std::str::from_utf8(&footer[footer.iter().rposition(|&c| c == b'\n')? + 1..]).ok()?;
+    // The standard time's name: <+0530> or letters.
+    let rest = match rule.strip_prefix('<') {
+        Some(quoted) => &quoted[quoted.find('>')? + 1..],
+        None => rule.trim_start_matches(|c: char| c.is_ascii_alphabetic()),
+    };
+    if rest.len() == rule.len() {
+        return None;
+    }
+    // Hours west of UTC, [+-]hh[:mm[:ss]], and nothing after: no DST.
+    let (west, hms) = match rest.as_bytes().first()? {
+        b'-' => (false, &rest[1..]),
+        b'+' => (true, &rest[1..]),
+        _ => (true, rest),
+    };
+    let mut seconds = 0;
+    for (i, part) in hms.split(':').enumerate() {
+        if i > 2 || part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        seconds += part.parse::<i64>().ok()? * [3600, 60, 1][i];
+    }
+    Some(if west { -seconds } else { seconds })
+}
+
 /// Sets the clock to t if it is off.
 pub fn set_clock(t: SystemTime, from: &str) {
     let off = offset(t);
@@ -231,6 +305,41 @@ mod tests {
         let ahead = offset(SystemTime::now() + Duration::from_secs(100));
         let behind = offset(SystemTime::now() - Duration::from_secs(100));
         assert!((99.0..=100.0).contains(&ahead) && (-101.0..=-99.0).contains(&behind), "{ahead} {behind}");
+    }
+
+    #[test]
+    fn zone_files_with_no_dst_give_their_offset() {
+        let tzif = |rule: &str| format!("TZif2...\n{rule}\n").into_bytes();
+        assert_eq!(fixed_offset(&tzif("IST-5:30")), Some(19_800));
+        assert_eq!(fixed_offset(&tzif("<+0545>-5:45")), Some(20_700));
+        assert_eq!(fixed_offset(&tzif("<-0930>9:30")), Some(-34_200));
+        assert_eq!(fixed_offset(&tzif("<+01>-1")), Some(3600));
+        assert_eq!(fixed_offset(&tzif("UTC0")), Some(0));
+        assert_eq!(fixed_offset(&tzif("EST+5")), Some(-18_000));
+        for rule in ["GMT0BST,M3.5.0/1,M10.5.0", "EST5EDT", "<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45", "", "5"] {
+            assert_eq!(fixed_offset(&tzif(rule)), None, "{rule:?}");
+        }
+        assert_eq!(fixed_offset(b"IST-5:30\n"), None, "not a zone file");
+    }
+
+    #[test]
+    fn offsets_get_a_zone_that_keeps_them_all_year_etc_first() {
+        let dir = std::env::temp_dir().join(format!("nestlocal-offset-zones-{}", std::process::id()));
+        for (zone, rule) in [
+            ("Africa/Lagos", "WAT-1"),
+            ("Etc/GMT-1", "<+01>-1"),
+            ("Europe/Paris", "CET-1CEST,M3.5.0,M10.5.0/3"),
+            ("Asia/Kolkata", "IST-5:30"),
+            ("Asia/Colombo", "<+0530>-5:30"),
+        ] {
+            let path = dir.join(zone);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("TZif2\n{rule}\n")).unwrap();
+        }
+        assert_eq!(offset_zone(&dir, 3600).as_deref(), Some("Etc/GMT-1"));
+        assert_eq!(offset_zone(&dir, 19_800).as_deref(), Some("Asia/Colombo"));
+        assert_eq!(offset_zone(&dir, 7200), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
