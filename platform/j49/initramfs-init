@@ -44,7 +44,7 @@ fail() {
 
 # The board data and panel the kernel chose, and the panel LCD_ID names
 # (1 Samsung, 0 Renesas), which picks it on the Display-2.11 and later.
-board=$(dmesg | sed -n 's/^\[[^]]*\] Machine: \(.*Revision.*\)/\1/p' | head -n 1)
+board=$(dmesg | sed -n 's/^\(\[[^]]*\] \)\{0,1\}Machine: \(.*Revision.*\)/\2/p' | head -n 1)
 panel=$(readlink /sys/bus/omapdss/devices/display0/driver)
 echo 105 >/sys/class/gpio/export
 say "${board:-board unknown}, panel ${panel##*/}, LCD_ID $(cat /sys/class/gpio/gpio105/value)"
