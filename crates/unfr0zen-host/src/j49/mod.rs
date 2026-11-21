@@ -273,6 +273,8 @@ struct Checked {
     device: Device,
     slot: Slot,
     nlmodel: String,
+    /// The backlight level Nest's U-Boot passes its kernel.
+    brightness: Option<String>,
 }
 
 /// Reads the unit's U-Boot environment through the flasher or image: the
@@ -292,6 +294,7 @@ fn check_unit(
     let env = stage(progress, "Read installed boot order from NAND", || read_environment(nand))?;
     let device = generation(config.omap, &env, usb);
     let nlmodel = env.get("nlmodel").unwrap_or_default().to_string();
+    let brightness = env.get("brightness").map(str::to_string);
     let described = format!("{}: {silicon}", device.description());
     log::info!("Device: {described}");
     progress.device(&described);
@@ -309,7 +312,7 @@ fn check_unit(
     let slot = order[0];
     note(progress, &format!("Application root slot: {slot}"));
     fs::write(run_dir.join("selected-slot.txt"), format!("{slot}\n"))?;
-    Ok(Checked { device, slot, nlmodel })
+    Ok(Checked { device, slot, nlmodel, brightness })
 }
 
 /// Sets up the slot on the host, in memory, by appending JFFS2 nodes, then
@@ -497,12 +500,12 @@ fn route_unit(
                 checked.device.description()
             )));
         }
-        let atags = boot::atags(&checked.nlmodel, checked.slot, initramfs_len)?;
+        let atags = boot::atags(&checked.nlmodel, checked.brightness.as_deref(), checked.slot, initramfs_len)?;
         let (entry, machine) = (boot::kernel(checked.device)?, boot::machine(checked.device)?);
         let changed = install_kernel(progress, config, checked.slot, &mut flasher)?;
         Ok((checked, atags, entry, machine, changed))
     });
-    let (Checked { device, slot, nlmodel }, atags, entry, machine, kernel_changed) = match prepared {
+    let (Checked { device, slot, nlmodel, .. }, atags, entry, machine, kernel_changed) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             let _ = flasher.reset();
