@@ -60,9 +60,14 @@ typedef unsigned int u32;
 #define PRM_RSTCTRL_RESET 0x04
 
 /* CAM_D6 as GPIO_105, an input: LCD_ID, which picks the panel on the
- * Display-2.11 and later boards. */
-#define PADCONF_CAM_D6 0x48002122
-#define PAD_GPIO_INPUT 0x0104
+ * Display-2.11 and later boards. Each board's as Nest's U-Boot sets it: the
+ * gen 2's with its pull-up (j49_prototype_mux_init, IEN | PTU | EN | M4),
+ * which its kernel's mux also gives it, the gen 1's without (IEN | PTD |
+ * DIS | M4). */
+#define PADCONF_CAM_D6        0x48002122
+#define PAD_GPIO_INPUT        0x0104
+#define PAD_GPIO_INPUT_PULLUP 0x011C
+#define MACH_J49              4082
 
 #define USB_BASE      0x480AB000
 #define USB_POWER     (USB_BASE + 0x01)
@@ -501,9 +506,9 @@ void flasher_main(void)
 					;
 				/* The kernel reads LCD_ID before it sets its
 				 * own pin mux, and x-loader does not set this
-				 * pad: it is left as Nest's U-Boot leaves it
-				 * for a boot from NAND. */
-				REG16(PADCONF_CAM_D6) = PAD_GPIO_INPUT;
+				 * pad, which Nest's U-Boot sets for a boot
+				 * from NAND. */
+				REG16(PADCONF_CAM_D6) = command[1] == MACH_J49 ? PAD_GPIO_INPUT_PULLUP : PAD_GPIO_INPUT;
 				enter_kernel(REG32(ATAGS - 4), command[1], ATAGS);
 			}
 		} else if (command[0] == CMD_RESET) {

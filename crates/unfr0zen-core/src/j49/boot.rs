@@ -63,7 +63,7 @@ pub fn zimage(uimage: &[u8]) -> Result<&[u8]> {
 
 /// The board revision U-Boot gives for an nlmodel such as "Display-2.6"
 /// (0x0206); the board code reads nlmodel itself first.
-fn revision(nlmodel: &str) -> u32 {
+pub fn revision(nlmodel: &str) -> u32 {
     let version = nlmodel.rsplit_once('-').map_or("", |(_, version)| version);
     match version.split_once('.').map(|(major, minor)| (major.parse::<u8>(), minor.parse::<u8>())) {
         Some((Ok(major), Ok(minor))) => u32::from(major) << 8 | u32::from(minor),
@@ -73,16 +73,22 @@ fn revision(nlmodel: &str) -> u32 {
 
 /// The ATAGs for the initramfs of `length` bytes to set up `slot`: memory,
 /// the initramfs, the board revision, and the command line the unit's own
-/// U-Boot would give but for the root, with unfr0zen.slot naming it.
-pub fn atags(nlmodel: &str, slot: Slot, length: usize) -> Result<Vec<u8>> {
+/// U-Boot would give but for the root, with unfr0zen.slot naming it. That
+/// includes the environment's backlight `brightness`, which U-Boot appends
+/// (the drivers' own default is near full); one not a number is left out.
+pub fn atags(nlmodel: &str, brightness: Option<&str>, slot: Slot, length: usize) -> Result<Vec<u8>> {
     if INITRAMFS as usize + length > INITRAMFS_END as usize {
         return device(format!("the initramfs ({length} bytes) does not fit below {INITRAMFS_END:#x}"));
     }
     if nlmodel.is_empty() || !nlmodel.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.') {
         return device(format!("the U-Boot environment's nlmodel {nlmodel:?} is not a model name"));
     }
+    let brightness = brightness
+        .filter(|level| !level.is_empty() && level.len() <= 3 && level.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(String::new(), |level| format!(" brightness={level}"));
     let mut cmdline =
-        format!("console=ttyO0,115200 nlmodel={nlmodel} unfr0zen.slot={slot} rdinit=/init panic=5").into_bytes();
+        format!("console=ttyO0,115200 nlmodel={nlmodel}{brightness} unfr0zen.slot={slot} rdinit=/init panic=5")
+            .into_bytes();
     cmdline.push(0);
     cmdline.resize(cmdline.len().next_multiple_of(4), 0);
     let mut tags = Vec::new();
@@ -116,7 +122,7 @@ mod tests {
 
     #[test]
     fn the_atags_are_those_the_units_u_boot_gives_with_the_initramfs() {
-        let tags = atags("Display-2.6", Slot::Root1, 0x0d_b01d).unwrap();
+        let tags = atags("Display-2.6", None, Slot::Root1, 0x0d_b01d).unwrap();
         let w = words(&tags);
         assert_eq!(&w[..5], [5, 0x5441_0001, 1, 4096, 0]);
         assert_eq!(&w[5..9], [4, 0x5441_0002, 64 << 20, 0x8000_0000]);
@@ -130,10 +136,26 @@ mod tests {
     }
 
     #[test]
+    fn the_environments_brightness_goes_on_the_command_line_as_u_boot_appends_it() {
+        let cmdline = |brightness| {
+            let tags = atags("Display-2.12", brightness, Slot::Root0, 1).unwrap();
+            let text = String::from_utf8_lossy(&tags).into_owned();
+            text[text.find("console=").unwrap()..].split('\0').next().unwrap().to_string()
+        };
+        assert_eq!(
+            cmdline(Some("48")),
+            "console=ttyO0,115200 nlmodel=Display-2.12 brightness=48 unfr0zen.slot=root0 rdinit=/init panic=5"
+        );
+        for level in [None, Some(""), Some("48 init=/bin/sh"), Some("1000")] {
+            assert!(!cmdline(level).contains("brightness"), "{level:?}");
+        }
+    }
+
+    #[test]
     fn an_initramfs_beyond_the_kernels_reach_or_a_strange_nlmodel_is_refused() {
-        assert!(atags("Display-2.6", Slot::Root0, 24 << 20).is_err());
-        assert!(atags("Display-2.6 init=/bin/sh", Slot::Root0, 1).is_err());
-        assert!(atags("", Slot::Root0, 1).is_err());
+        assert!(atags("Display-2.6", None, Slot::Root0, 24 << 20).is_err());
+        assert!(atags("Display-2.6 init=/bin/sh", None, Slot::Root0, 1).is_err());
+        assert!(atags("", None, Slot::Root0, 1).is_err());
         assert_eq!(revision("Diamond-1.10"), 0x010a);
         assert_eq!(revision("unknown"), 0);
     }
