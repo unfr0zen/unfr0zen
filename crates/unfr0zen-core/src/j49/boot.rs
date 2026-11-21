@@ -63,7 +63,7 @@ pub fn zimage(uimage: &[u8]) -> Result<&[u8]> {
 
 /// The board revision U-Boot gives for an nlmodel such as "Display-2.6"
 /// (0x0206); the board code reads nlmodel itself first.
-fn revision(nlmodel: &str) -> u32 {
+pub fn revision(nlmodel: &str) -> u32 {
     let version = nlmodel.rsplit_once('-').map_or("", |(_, version)| version);
     match version.split_once('.').map(|(major, minor)| (major.parse::<u8>(), minor.parse::<u8>())) {
         Some((Ok(major), Ok(minor))) => u32::from(major) << 8 | u32::from(minor),

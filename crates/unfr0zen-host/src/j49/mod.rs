@@ -502,7 +502,7 @@ fn route_unit(
         let changed = install_kernel(progress, config, checked.slot, &mut flasher)?;
         Ok((checked, atags, entry, machine, changed))
     });
-    let (Checked { device, slot, .. }, atags, entry, machine, kernel_changed) = match prepared {
+    let (Checked { device, slot, nlmodel }, atags, entry, machine, kernel_changed) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             let _ = flasher.reset();
@@ -540,12 +540,20 @@ fn route_unit(
     // The kernel is the initramfs's: the slot's firmware is named by its
     // installed image. Free RAM and room on the slot, before apply takes any.
     // /init's own lines (board, panel, LCD_ID) go out before the host opens
-    // the port: the kernel log keeps them.
+    // the port: the kernel log keeps them. The panel is checked before
+    // anything reads the slot.
     let set_up = shell
-        .run(
-            "uname -a; cat /proc/cmdline; dmesg | grep -E 'Machine:|unfr0zen initramfs:'; cat /proc/mtd; \
-             echo /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; grep \" /mnt \" /proc/mounts",
-        )
+        .run("uname -a; dmesg | grep -E 'Machine:|unfr0zen initramfs:'; cat /proc/cmdline")
+        .and_then(|unit| {
+            unit.lines().for_each(|line| log::info!("unit: {line}"));
+            check_panel(&nlmodel, &unit)
+        })
+        .and_then(|()| {
+            shell.run(
+                "cat /proc/mtd; echo /mnt/var/nestlabs/osm/images/current/*.nlsw; free; df -k /mnt; \
+                 grep \" /mnt \" /proc/mounts",
+            )
+        })
         .and_then(|probe| {
             probe.lines().for_each(|line| log::info!("unit: {line}"));
             // echo, not ls, whose colours on the tty would wrap the name; an
@@ -587,6 +595,33 @@ fn route_unit(
 fn note(progress: &mut dyn Progress, line: &str) {
     log::info!("{line}");
     progress.status(line);
+}
+
+/// On the Display-2.11 and later the kernel picks the panel's driver from
+/// LCD_ID (1 the Tianma, 0 the Renesas) before its own pin mux sets the
+/// pin. A driver bound against what the pin reads once set (the line /init
+/// reports) drives a panel the unit does not have, and the unit hangs.
+fn check_panel(nlmodel: &str, unit: &str) -> Result<()> {
+    if !nlmodel.starts_with("Display-") || boot::revision(nlmodel) < 0x020b {
+        return Ok(());
+    }
+    let Some(line) = unit.lines().find(|line| line.contains("unfr0zen initramfs:") && line.contains(", panel ")) else {
+        return Ok(());
+    };
+    let panel = line.split(", panel ").nth(1).and_then(|rest| rest.split(',').next()).unwrap_or_default();
+    let lcd_id = line.rsplit("LCD_ID ").next().unwrap_or_default().trim();
+    let expected = match lcd_id {
+        "1" => "tianma_tm025zdz01",
+        "0" => "renesas_r61529a1",
+        _ => return Ok(()),
+    };
+    if panel != expected {
+        return Err(failure(format!(
+            "the unit's kernel drives the {panel} panel, but LCD_ID reads {lcd_id}, the {expected}'s. Hold the \
+             front panel button for 10 seconds to restart the unit; nothing was written to its root slot"
+        )));
+    }
+    Ok(())
 }
 
 /// Logs what is at `port` for `period` after the unit's port failed, and
@@ -856,6 +891,21 @@ fn finish(
 mod tests {
     use super::*;
     use unfr0zen_core::j49::flasher::Image;
+
+    #[test]
+    fn a_display_2_11_or_later_whose_panel_disagrees_with_lcd_id_is_refused() {
+        let line = |panel: &str, id: u8| {
+            format!("unfr0zen initramfs: Nest Display D2D, Revision 12, panel {panel}, LCD_ID {id}\n")
+        };
+        assert!(check_panel("Display-2.12", &line("renesas_r61529a1", 1)).is_err());
+        assert!(check_panel("Display-2.14", &line("tianma_tm025zdz01", 0)).is_err());
+        assert!(check_panel("Display-2.12", &line("tianma_tm025zdz01", 1)).is_ok());
+        assert!(check_panel("Display-2.14", &line("renesas_r61529a1", 0)).is_ok());
+        // Older boards have one panel, whatever LCD_ID reads; no line, no check.
+        assert!(check_panel("Display-2.6", &line("tianma_tm025zdz01", 0)).is_ok());
+        assert!(check_panel("Diamond-1.10", &line("renesas_r61529a1", 1)).is_ok());
+        assert!(check_panel("Display-2.12", "Machine: Nest J49\n").is_ok());
+    }
 
     /// boot0 with `stock` in its lower half, the upper half erased.
     fn boot0(stock: &[u8]) -> Image {
