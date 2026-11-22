@@ -339,6 +339,21 @@ impl Bridge {
                 Ok(Some(("schedule".into(), fields! {"days" => Value::Object(days)})))
             }
 
+            // Not a bucket change: nlclient lights the display, as for a
+            // press, when it commits the device bucket sent again.
+            "wake_screen" => {
+                let key = format!("device.{}", self.serial);
+                if self.store.get(&key).is_none() {
+                    return Err(format!("no {key} bucket yet"));
+                }
+                // The request first: nlclient takes it as it commits.
+                if let Err(e) = crate::settings_ui::request_wake() {
+                    logf!("display wake: {e}");
+                }
+                self.store.resend(&key);
+                Ok(None)
+            }
+
             _ => Err("unknown command".into()),
         }
     }
@@ -383,6 +398,20 @@ mod tests {
         let changed = fields["filter_changed_date"].as_f64().unwrap() as i64;
         assert_eq!(bucket, "device");
         assert!((chrono::Utc::now().timestamp() - changed).abs() <= 2);
+    }
+
+    #[test]
+    fn wake_screen_sends_the_device_bucket_again_unchanged() {
+        let b = test_bridge();
+        assert!(b.apply("mqtt", "wake_screen", "PRESS").is_err(), "no device bucket yet");
+        b.store.merge("device.S", &fields! {"temperature_scale" => "C"}, 0, 0, true);
+        let before = b.store.get("device.S").unwrap();
+        let (mut rx, _sub) = b.store.subscribe();
+        assert_eq!(b.apply("mqtt", "wake_screen", "PRESS"), Ok(()));
+        let sent = rx.try_recv().expect("the device bucket, sent again");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].value, before.value);
+        assert!(sent[0].revision > before.revision);
     }
 
     #[test]

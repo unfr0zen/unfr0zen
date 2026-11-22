@@ -39,7 +39,7 @@ use rs_matter::dm::clusters::decl::{
     temperature_measurement, thermostat_user_interface_configuration as ui_config,
 };
 use rs_matter::dm::clusters::desc::{self, ClusterHandler as _};
-use rs_matter::dm::clusters::identify::{self, IdentifyHandler};
+use rs_matter::dm::clusters::identify::{self, IdentifyAction, IdentifyHandler, IdentifyHooks};
 use rs_matter::dm::clusters::ota_req::{ClusterHandler as _, OtaRequestorHandler};
 // Every cluster's handler trait, for their CLUSTER constants.
 use rs_matter::dm::clusters::basic_info::BasicInfoConfig;
@@ -679,6 +679,22 @@ fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: 
     Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
 }
 
+/// Identify on any endpoint lights the display, as a press does; its end
+/// leaves the display to its timeout.
+struct WakeScreen(Arc<Nest>);
+
+impl IdentifyHooks for WakeScreen {
+    fn identify_type(&self) -> identify::IdentifyTypeEnum {
+        identify::IdentifyTypeEnum::Display
+    }
+
+    fn identify(&self, action: IdentifyAction) {
+        if !matches!(action, IdentifyAction::Cancel) {
+            let _ = self.0.apply("wake_screen", "");
+        }
+    }
+}
+
 /// The cluster handlers, by cluster; each serves every endpoint it is on.
 fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
     node: Node<'static>,
@@ -721,7 +737,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             )
             .chain(
                 |e, c| e != 0 && c == identify::CLUSTER.id,
-                Async(IdentifyHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                Async(IdentifyHandler::new_with(Dataver::new_rand(&mut rand), WakeScreen(nest.clone())).adapt()),
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Thermostat::CLUSTER.id,

@@ -407,6 +407,12 @@ const set = {
       await entity.command("hvacThermostat", "clearWeeklySchedule", {});
     },
   },
+  wake_screen: {
+    key: ["wake_screen"],
+    convertSet: async (entity) => {
+      await entity.command("genIdentify", "identify", { identifytime: 5 });
+    },
+  },
   filter_reset: {
     key: ["filter_reset"],
     convertSet: async (entity, key, value, meta) => {
@@ -524,6 +530,7 @@ const definition = {
     set.outputs,
     set.clear_schedule,
     set.filter_reset,
+    set.wake_screen,
     set.switches,
     set.weather,
     set.external_temperature,
@@ -747,6 +754,13 @@ const definition = {
         );
       }
     }
+    result.push(
+      e
+        .enum("wake_screen", ea.SET, ["wake"])
+        .withLabel("Wake screen")
+        .withHomeAssistant({ icon: "mdi:gesture-tap-button" })
+        .withDescription("Lights the display, as a press does"),
+    );
     result.push(
       e
         .enum("clear_schedule", ea.SET, ["clear"])

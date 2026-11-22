@@ -840,6 +840,15 @@ impl Bridge {
         sw(&mut add, "screen_brightness_auto", "Screen brightness auto", "mdi:brightness-auto");
         add(
             "button",
+            "wake_screen",
+            "Wake screen",
+            fields! {
+                "command_topic" => format!("{set}wake_screen"),
+                "icon" => "mdi:gesture-tap-button",
+            },
+        );
+        add(
+            "button",
             "clear_schedule",
             "Clear Nest schedule",
             fields! {
@@ -1492,7 +1501,7 @@ pub mod tests {
                         "temperature_scale" => "F",
                         "target_humidity" => "40",
                         "screen_timeout" | "screen_brightness" => "60",
-                        "clear_schedule" => "PRESS",
+                        "clear_schedule" | "wake_screen" => "PRESS",
                         n if n.ends_with("_enabled") => "ON",
                         "away_temperature_high" => "28",
                         n if n.starts_with("target") || n.starts_with("away_temperature_") => "20",
