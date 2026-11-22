@@ -1,6 +1,11 @@
 <div align="center">
 
+<img src="assets/icon/unfr0zen-macos.png" alt="unfr0zen" width="128">
+
 # unfr0zen
+
+**Root and free the Nest Learning Thermostat over USB: local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no
+Google cloud needed.**
 
 [![Build](https://dl.circleci.com/status-badge/img/gh/unfr0zen/unfr0zen/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/unfr0zen/unfr0zen/tree/main)
 [![GitHub Release](https://img.shields.io/github/v/release/unfr0zen/unfr0zen?include_prereleases&color=06b6d4)](https://github.com/unfr0zen/unfr0zen/releases)
@@ -9,9 +14,6 @@
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/willtm)
 
 **[Website](https://unfr0zen.com/) · [Download](https://unfr0zen.com/download/) · [Install guide](https://unfr0zen.com/install/) · [Integrations](https://unfr0zen.com/integrations/) · [Protocols](https://unfr0zen.com/protocols/)**
-
-Root and free the Nest Learning Thermostat over USB.
-Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
 
 </div>
 
