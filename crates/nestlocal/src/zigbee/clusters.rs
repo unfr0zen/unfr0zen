@@ -243,7 +243,7 @@ fn view(bridge: &Bridge) -> View {
     let buckets = bridge.buckets();
     let dev = buckets.get("device").cloned().unwrap_or_default();
     let sh = buckets.get("shared").cloned().unwrap_or_default();
-    let state = bridge::state(&dev, &sh);
+    let state = bridge.state(&dev, &sh);
     View { dev, sh, state }
 }
 

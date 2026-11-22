@@ -132,7 +132,7 @@ impl Nest {
         let buckets = self.bridge.buckets();
         let dev = buckets.get("device").cloned().unwrap_or_default();
         let sh = buckets.get("shared").cloned().unwrap_or_default();
-        let state = bridge::state(&dev, &sh);
+        let state = self.bridge.state(&dev, &sh);
         View { dev, sh, state }
     }
 
@@ -431,15 +431,22 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         }
     });
 
-    // Changes to the buckets and to occupancy, reported to subscribed controllers.
+    // Changes to the buckets, occupancy and the stand-in sensor, reported to
+    // subscribed controllers.
     let (changed, changes) = async_channel::bounded::<()>(1);
     let occupancy = changed.clone();
+    let reading = changed.clone();
     nest.bridge.store.watch(move |_| {
         let _ = changed.try_send(());
     });
     nest.bridge.occupancy.on_change(move || {
         let _ = occupancy.try_send(());
     });
+    if let Some(sensor) = nest.bridge.sensor.get() {
+        sensor.on_change(move || {
+            let _ = reading.try_send(());
+        });
+    }
     let mut report = pin!(async {
         while changes.recv().await.is_ok() {
             im.notify_all_changed();
