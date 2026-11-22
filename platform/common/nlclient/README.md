@@ -277,8 +277,7 @@ unknown allocated section or relocation. It does not synthesize veneers.
 ```sh
 cargo test -p unfr0zen-core -p unfr0zen-host -p unfr0zen-cli
 NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --test nlclient_golden
-NLCLIENT_STOCK="$PWD/.work/firmware/nlclient-gen3-2025" \
-  cargo test -p unfr0zen-core native_screen_patch_is_automatic -- --ignored
+NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --lib native_screen_patch_is_automatic
 ```
 
 Goldens from all three untouched dumps pin discovery, native API, planned

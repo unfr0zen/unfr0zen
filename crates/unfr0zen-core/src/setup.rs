@@ -2489,16 +2489,23 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires NLCLIENT_STOCK pointing to the researched firmware"]
     fn native_screen_patch_is_automatic_dry_run_safe_and_idempotent() {
-        let source = std::fs::read(std::env::var("NLCLIENT_STOCK").expect("NLCLIENT_STOCK")).unwrap();
+        let original = scratch::name(crate::nlclient::ORIGINAL);
+        let path = std::env::var_os("NLCLIENT_STOCK")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware/nlclient-gen3-2025"));
+        let Ok(source) = std::fs::read(&path) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            eprintln!("No private stock sample: {}", path.display());
+            return;
+        };
         let mut volume = FakeVolume::new(stock());
         volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, source));
         let changes = set_up(&mut volume, &options(), true).unwrap();
         assert!(volume.commands.is_empty());
         assert!(names(&changes).contains(crate::nlclient::BINARY));
-        assert!(names(&changes).contains(crate::nlclient::ORIGINAL));
-        assert!(!volume.files.contains_key(crate::nlclient::ORIGINAL));
+        assert!(names(&changes).contains(original));
+        assert!(!volume.files.contains_key(original));
         let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(names(&changes).contains(crate::nlclient::ICON));
         assert_eq!(volume.files[crate::nlclient::GLYPH].2, crate::nlclient::GLYPH_BYTES);
@@ -2508,12 +2515,8 @@ mod tests {
             .apply(&volume.files[crate::nlclient::BINARY].2, true)
             .unwrap();
         assert_eq!(sha256_hex(&restored), crate::nlclient::Patch::parse(journal).unwrap().stock_sha);
-        assert_eq!(volume.files[crate::nlclient::ORIGINAL], ("0:0".into(), 0o600, restored.clone()));
-        let backup_write = volume
-            .commands
-            .iter()
-            .position(|c| c.starts_with(&format!("write {} ", crate::nlclient::ORIGINAL)))
-            .unwrap();
+        assert_eq!(volume.files[original], ("0:0".into(), 0o600, restored.clone()));
+        let backup_write = volume.commands.iter().position(|c| c.starts_with(&format!("write {} ", original))).unwrap();
         let binary_write =
             volume.commands.iter().position(|c| c.starts_with(&format!("write {} ", crate::nlclient::BINARY))).unwrap();
         assert!(backup_write < binary_write);
@@ -2521,12 +2524,12 @@ mod tests {
         assert!(set_up(&mut volume, &options(), false).unwrap().is_empty());
         assert!(volume.commands.is_empty());
         // Upgrade older installations that only have the undo journal.
-        volume.files.remove(crate::nlclient::ORIGINAL);
+        volume.files.remove(original);
         let changes = set_up(&mut volume, &options(), false).unwrap();
-        assert_eq!(names(&changes), BTreeSet::from([crate::nlclient::ORIGINAL]));
-        assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, restored);
+        assert_eq!(names(&changes), BTreeSet::from([original]));
+        assert_eq!(volume.files[original].2, restored);
         // Even existing backup permissions are preserved on later runs.
-        volume.files.get_mut(crate::nlclient::ORIGINAL).unwrap().1 = 0o400;
+        volume.files.get_mut(original).unwrap().1 = 0o400;
         volume.commands.clear();
         let current_journal = volume.files[crate::nlclient::JOURNAL].2.clone();
         // Simulate a prior payload revision and its matching on-device journal.
@@ -2545,18 +2548,18 @@ mod tests {
         let changes = set_up(&mut volume, &options(), false).unwrap();
         assert!(names(&changes).contains(crate::nlclient::BINARY));
         assert_eq!(volume.files[crate::nlclient::JOURNAL].2, current_journal);
-        assert_eq!(volume.files[crate::nlclient::ORIGINAL], ("0:0".into(), 0o400, restored));
-        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {} ", crate::nlclient::ORIGINAL))));
+        assert_eq!(volume.files[original], ("0:0".into(), 0o400, restored));
+        assert!(!volume.commands.iter().any(|c| c.starts_with(&format!("write {} ", original))));
         assert!(set_up(&mut volume, &options(), true).unwrap().is_empty());
         // An unexpected existing backup is never replaced.
-        volume.files.get_mut(crate::nlclient::ORIGINAL).unwrap().2 = b"keep me".to_vec();
+        volume.files.get_mut(original).unwrap().2 = b"keep me".to_vec();
         volume.commands.clear();
         assert!(set_up(&mut volume, &options(), false)
             .unwrap_err()
             .to_string()
             .contains("original backup does not match"));
         assert!(volume.commands.is_empty());
-        assert_eq!(volume.files[crate::nlclient::ORIGINAL].2, b"keep me");
+        assert_eq!(volume.files[original].2, b"keep me");
     }
 
     #[test]
