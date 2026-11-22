@@ -1,3 +1,5 @@
+<div align="center">
+
 # unfr0zen
 
 [![Build](https://dl.circleci.com/status-badge/img/gh/unfr0zen/unfr0zen/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/unfr0zen/unfr0zen/tree/main)
@@ -6,10 +8,12 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/fBqjAFARYg)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/willtm)
 
-Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
+**[Website](https://unfr0zen.com/) · [Download](https://unfr0zen.com/download/) · [Install guide](https://unfr0zen.com/install/) · [Integrations](https://unfr0zen.com/integrations/) · [Protocols](https://unfr0zen.com/protocols/)**
+
+Root and free the Nest Learning Thermostat over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
-Zigbee needs no Wi-Fi at all, so it gives a new life to the many 2nd and 3rd
-generation units whose Wi-Fi has failed.
+
+</div>
 
 > [!CAUTION]
 > **This rewrites the flash of the device that runs your heating.** A failed run
@@ -22,29 +26,32 @@ generation units whose Wi-Fi has failed.
 > tests. unfr0zen comes **without any warranty**: you use it at your own risk
 > ([Disclaimers](#disclaimers)).
 
+## More from the thermostat you already own
+
+Keep working hardware useful. The line to Nest's cloud comes out, and three go
+in to Home Assistant on your own network.
+
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/routes-dark.svg">
+  <img alt="A thermostat running nestlocal. Its line to Nest's cloud is cut: nestlocal, on the thermostat, takes its place. It connects over Wi-Fi to your MQTT broker, where Home Assistant discovers it; over Wi-Fi or Thread to a Matter controller such as Home Assistant, Apple Home or Google Home; and through its own radio to a Zigbee coordinator, Zigbee2MQTT or ZHA, with no Wi-Fi needed. Any thermometer in Home Assistant can regulate the heating in place of its own sensor." src="assets/routes-light.svg">
+</picture>
+</p>
+
+## How it works
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/overview-dark.svg">
   <img alt="Inside the thermostat, Nest's nlclient app still runs the screen and drives the backplate's heating and cooling wires. nestlocal stands in for Nest's cloud on 127.0.0.1: it reaches an MQTT broker and Matter controllers over Wi-Fi, a Zigbee coordinator through the 802.15.4 radio over SPI, and a Thread border router through OpenThread's ot-daemon and the same radio, which carries Matter over Thread. Nest's and Google's servers are resolved to 0.0.0.0 in /etc/hosts." src="assets/overview-light.svg">
 </picture>
 
-## What you get
-
-|                         | Stock                                                    | With unfr0zen                                                                               |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Control from            | the Nest/Google Home app, through Google's cloud         | Home Assistant or any MQTT client, Matter controller or Zigbee coordinator, on your network |
-| Internet access         | required                                                 | not needed: the unit only has to join your Wi-Fi, or with Zigbee not even that              |
-| Nest and Google servers | always contacted                                         | blocked with Block cloud (`--block-cloud`)                                                  |
-| Integrations            | none                                                     | MQTT, Matter over Wi-Fi or Thread, Zigbee router                                            |
-| Room temperature        | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
-| Extras                  | none                                                     | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore                               |
-
 ## Supported thermostats
 
-| Device                                    | Codename   | MQTT |        Matter        | Zigbee | External temperature |
-| ----------------------------------------- | ---------- | :--: | :------------------: | :----: | :------------------: |
-| Nest Learning Thermostat (3rd generation) | `diamond3` |  ✅  | ✅ Wi-Fi · ✅ Thread |   ✅   |          ✅          |
-| Nest Learning Thermostat (2nd generation) | `j49`      |  ✅  | ✅ Wi-Fi · ✅ Thread |   ✅   |          ✅          |
-| Nest Learning Thermostat (1st generation) | `diamond`  |  ✅  | ✅ Wi-Fi · — Thread  |   —    |          ✅          |
+| Device                                    | Codename   | MQTT | Matter                          | Zigbee | External<br>temperature |
+| ----------------------------------------- | ---------- | :--: | :------------------------------ | :----: | :---------------------: |
+| Nest Learning Thermostat (3rd generation) | `diamond3` |  ✅  | ✅&nbsp;Wi-Fi<br>✅&nbsp;Thread |   ✅   |           ✅            |
+| Nest Learning Thermostat (2nd generation) | `j49`      |  ✅  | ✅&nbsp;Wi-Fi<br>✅&nbsp;Thread |   ✅   |           ✅            |
+| Nest Learning Thermostat (1st generation) | `diamond`  |  ✅  | ✅&nbsp;Wi-Fi<br>—&nbsp;Thread  |   —    |           ✅            |
 
 ✅ supported · — not available
 
@@ -55,25 +62,15 @@ generation units whose Wi-Fi has failed.
   Nest Temperature Sensors are not supported: on the 3rd generation the option
   turns Bluetooth off, and the 1st and 2nd generation never had them.
 - **1st generation:** it has to be opened up to reach USB download mode: see the
-  [install guide](https://unfr0zen.com/install/#gen1). Its CC2530 radio uses UART,
-  not the 2nd generation's SPI protocol, so there is no Zigbee or Matter over
-  Thread, and it has no USB shell.
-- **Matter and sleep:** the thermostat sleeps and wakes for a controller's
-  messages. On the 3rd generation a controller looking it up wakes it too; the
-  1st and 2nd generation's Wi-Fi chip lets no lookup through while it sleeps,
-  so it answers them on its own wakes.
+  [install guide](https://unfr0zen.com/install/#gen1). It has no Zigbee, no
+  Matter over Thread and no USB shell.
 - **Thread and Zigbee** share the 2nd and 3rd generation's 802.15.4 radio (an
   EM357 or EM3581 on SPI), so only one of them can be on, and on European
-  models either one replaces the wireless Heat Link connection. Zigbee drives
-  it directly; Matter over Thread goes through OpenThread's `ot-daemon`.
+  models either one replaces the wireless Heat Link connection.
 
-MQTT, Matter and Zigbee are nestlocal's: choosing any of them installs it on the
-thermostat. With MQTT or Matter, the thermostat reaches the broker or the
-controller over Wi-Fi, joined from its own menu (Settings → Network); the
-network doesn't need internet access. Zigbee needs no Wi-Fi: the unit is set up
-over USB, takes its clock from the coordinator's Time cluster and its updates
-from the coordinator's OTA server, so one whose Wi-Fi has failed works fully
-over Zigbee.
+Zigbee needs no Wi-Fi at all: the thermostat takes its clock and its updates
+from the coordinator. That gives a new life to the many 2nd and 3rd generation
+units whose Wi-Fi has failed.
 
 ### Tested firmware
 
@@ -132,8 +129,7 @@ Reconnect the unit afterwards if it is already plugged in. The same rules cover
 both the USB device and its HID/serial interfaces as it switches recovery modes.
 
 Both frontends save logs to `~/.local/share/unfr0zen/logs/<timestamp>/unfr0zen.log`
-(or `$XDG_DATA_HOME/unfr0zen/logs/<timestamp>/unfr0zen.log` when set). Errors creating
-run or log directories include the affected path.
+(or `$XDG_DATA_HOME/unfr0zen/logs/<timestamp>/unfr0zen.log` when set).
 
 | Dependency                                                                                                 | Why                                          |
 | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
@@ -147,10 +143,7 @@ run or log directories include the affected path.
 
 **App:** open it, tick the integrations on the Set up page, fill in their
 settings (the MQTT broker, Matter's pairing code), plug in the thermostat,
-press **Start** and follow the prompts. The sidebar's other pages are Backups
-(the whole-NAND images the app keeps, with back up, restore and delete), Logs
-(every run's steps and log), About and, under Advanced, the 3rd generation's
-application boot and a serial console on the USB root shell of a unit unfr0zen set up.
+press **Start** and follow the prompts.
 
 <p align="center"><a href="https://unfr0zen.com/"><img src="assets/app.png" width="100%" alt="The unfr0zen app on macOS, rotating through its Set up page's Integrations and Features steps and its Backups page."></a></p>
 
@@ -189,11 +182,22 @@ options side by side: [unfr0zen.com/integrations](https://unfr0zen.com/integrati
 
 ## Updating
 
-Release builds keep themselves current: the window checks for a newer release
-when it starts and offers to install it next to its version, and
-`unfr0zen update` does the same for the command-line tool. On macOS the window
-replaces its whole `unfr0zen.app`. Development builds (a `git describe` with
-commits past a tag, or local changes) never update.
+Once set up, the thermostat updates over the air, with no USB: each release's
+package, `unfr0zen-<device>-<version>.ota`, installs over whichever
+integration you use.
+
+- **MQTT:** Home Assistant's **unfr0zen** update entity shows the latest
+  release and installs it. A unit that can't reach GitHub takes the package's
+  URL on your own network instead.
+- **Matter:** from the controller's OTA provider, such as Home Assistant's
+  Matter server.
+- **Zigbee:** from Zigbee2MQTT's OTA page, with the converter. The package
+  comes over Wi-Fi when the unit reaches GitHub, otherwise over Zigbee itself.
+
+The thermostat installs only official releases signed with unfr0zen's release
+key, never an older one, unless Allow unsigned updates was on at setup. Setup
+for each: [unfr0zen.com/integrations](https://unfr0zen.com/integrations/).
+The app keeps itself current too.
 
 ## Undo it
 
@@ -209,9 +213,9 @@ commits past a tag, or local changes) never update.
 **The app doesn't see the thermostat.** Use a USB cable that carries data:
 charge-only cables are the usual cause. Connect to the USB port on the back of
 the detached display, not the power-only USB port on a European stand or Heat
-Link base. On Windows, the 1st and 2nd generation need the WinUSB driver the
-app installs for `0451:d00e`: accept its administrator prompt. On Linux, add the
-[udev rule](#install) and reconnect the unit.
+Link base. On Windows, accept the WinUSB driver's administrator prompt
+([Install](#install)). On Linux, add the [udev rule](#install) and reconnect
+the unit.
 
 **Windows stops with `ACM interface for 18d1:4ee0 did not appear` (3rd generation).**
 An Android driver installed earlier has claimed the recovery device, so its
@@ -220,20 +224,14 @@ Manager, find **Android Bootloader Interface**, choose Update driver → Browse
 my computer → Let me pick → Universal Serial Bus devices → **USB Composite
 Device**. The choice persists; run again.
 
-**macOS won't open the app.** It is signed ad hoc, not notarized: run
-`xattr -dr com.apple.quarantine unfr0zen.app`, or allow it under System
-Settings → Privacy & Security.
-
 **Home Assistant shows the thermostat offline.** The availability topic is
 online only while the thermostat's app calls in to nestlocal and nestlocal is
 connected to the broker. Check that the unit is on Wi-Fi (Settings → Network)
 and that it reaches the broker URL you gave it.
 
-Still stuck? [Open an issue](https://github.com/unfr0zen/unfr0zen/issues/new) with:
-
-- How you ran it (app or CLI, with the options used) and the OS of your computer
-- The full log of the run
-- What the thermostat screen showed
+Still stuck? Open a
+[Bug Report](https://github.com/unfr0zen/unfr0zen/issues/new?template=001_bug_report.yml)
+with the run's `unfr0zen.log` (see [CONTRIBUTING.md](CONTRIBUTING.md#issues)).
 
 ## Disclaimers
 
@@ -250,6 +248,10 @@ accept full responsibility for the result.
 ## Building
 
 See [BUILDING.md](BUILDING.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

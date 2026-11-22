@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 400" width="820" height="400" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif">
+<title>unfr0zen cuts the thermostat off Nest's cloud and connects it to Home Assistant over MQTT, Matter or Zigbee</title>
+<defs>
+<marker id="a-wire" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e7781"/></marker>
+<marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1a7f37"/></marker>
+</defs>
+<circle cx="150" cy="200" r="118" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+<circle cx="150" cy="200" r="100" fill="#0d1117"/>
+<line x1="94.8" y1="255.2" x2="86.4" y2="263.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="91.4" y1="251.4" x2="82.3" y2="259.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="88.1" y1="247.5" x2="78.6" y2="254.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="85.1" y1="243.3" x2="75.2" y2="250.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="82.5" y1="239.0" x2="72.1" y2="245.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="80.0" y1="234.5" x2="69.3" y2="239.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="77.9" y1="229.8" x2="66.9" y2="234.4" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="76.1" y1="225.1" x2="64.8" y2="228.9" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="74.7" y1="220.2" x2="63.1" y2="223.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="73.5" y1="215.2" x2="61.7" y2="217.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="72.7" y1="210.2" x2="60.8" y2="211.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="72.2" y1="205.1" x2="60.2" y2="205.9" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="72.0" y1="200.0" x2="60.0" y2="200.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="72.2" y1="194.9" x2="60.2" y2="194.1" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="72.7" y1="189.8" x2="60.8" y2="188.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="73.5" y1="184.8" x2="61.7" y2="182.4" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="76.6" y1="180.3" x2="63.1" y2="176.7" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="78.0" y1="175.6" x2="64.8" y2="171.1" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="79.8" y1="170.9" x2="66.9" y2="165.6" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="81.8" y1="166.4" x2="69.3" y2="160.2" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="84.2" y1="162.0" x2="72.1" y2="155.0" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="86.8" y1="157.8" x2="75.2" y2="150.0" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="89.7" y1="153.7" x2="78.6" y2="145.2" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="92.9" y1="149.9" x2="82.3" y2="140.7" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="96.3" y1="146.3" x2="86.4" y2="136.4" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="99.9" y1="142.9" x2="90.7" y2="132.3" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="103.7" y1="139.7" x2="95.2" y2="128.6" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="107.8" y1="136.8" x2="100.0" y2="125.2" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="112.0" y1="134.2" x2="105.0" y2="122.1" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="116.4" y1="131.8" x2="110.2" y2="119.3" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="120.9" y1="129.8" x2="115.6" y2="116.9" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="125.6" y1="128.0" x2="121.1" y2="114.8" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="130.3" y1="126.6" x2="126.7" y2="113.1" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="134.8" y1="123.5" x2="132.4" y2="111.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="139.8" y1="122.7" x2="138.3" y2="110.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="144.9" y1="122.2" x2="144.1" y2="110.2" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="150.0" y1="122.0" x2="150.0" y2="110.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="155.1" y1="122.2" x2="155.9" y2="110.2" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="160.2" y1="122.7" x2="161.7" y2="110.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="165.2" y1="123.5" x2="167.6" y2="111.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="170.2" y1="124.7" x2="173.3" y2="113.1" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="175.1" y1="126.1" x2="178.9" y2="114.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="179.8" y1="127.9" x2="184.4" y2="116.9" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="184.5" y1="130.0" x2="189.8" y2="119.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="189.0" y1="132.5" x2="195.0" y2="122.1" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="193.3" y1="135.1" x2="200.0" y2="125.2" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="197.5" y1="138.1" x2="204.8" y2="128.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="201.4" y1="141.4" x2="209.3" y2="132.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="205.2" y1="144.8" x2="213.6" y2="136.4" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="208.6" y1="148.6" x2="217.7" y2="140.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="211.9" y1="152.5" x2="221.4" y2="145.2" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="214.9" y1="156.7" x2="224.8" y2="150.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="217.5" y1="161.0" x2="227.9" y2="155.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="220.0" y1="165.5" x2="230.7" y2="160.2" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="222.1" y1="170.2" x2="233.1" y2="165.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="223.9" y1="174.9" x2="235.2" y2="171.1" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="225.3" y1="179.8" x2="236.9" y2="176.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="226.5" y1="184.8" x2="238.3" y2="182.4" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="227.3" y1="189.8" x2="239.2" y2="188.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="227.8" y1="194.9" x2="239.8" y2="194.1" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="228.0" y1="200.0" x2="240.0" y2="200.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="227.8" y1="205.1" x2="239.8" y2="205.9" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="227.3" y1="210.2" x2="239.2" y2="211.7" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="226.5" y1="215.2" x2="238.3" y2="217.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="225.3" y1="220.2" x2="236.9" y2="223.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="223.9" y1="225.1" x2="235.2" y2="228.9" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="222.1" y1="229.8" x2="233.1" y2="234.4" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="220.0" y1="234.5" x2="230.7" y2="239.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="217.5" y1="239.0" x2="227.9" y2="245.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="214.9" y1="243.3" x2="224.8" y2="250.0" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="211.9" y1="247.5" x2="221.4" y2="254.8" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="208.6" y1="251.4" x2="217.7" y2="259.3" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<line x1="205.2" y1="255.2" x2="213.6" y2="263.6" stroke="#484f58" stroke-width="2.4" stroke-linecap="round"/>
+<text x="150" y="214" font-size="56" font-weight="300" fill="#f0f6fc" text-anchor="middle">20<tspan font-size="22" dy="-26">5</tspan></text>
+<text x="150" y="244" font-size="14" fill="#9198a1" text-anchor="middle">nestlocal</text>
+<path d="M272 160.0C306.0 160.0 306.0 40.0 332 40.0" fill="none" stroke="#cf222e" stroke-width="1.8" stroke-dasharray="3 4"/>
+<circle cx="336" cy="40.0" r="4" fill="none" stroke="#cf222e" stroke-width="1.8"/>
+<circle cx="310.3" cy="78.8" r="10" fill="#ffffff" stroke="#cf222e" stroke-width="1.8"/>
+<path d="M306.3 74.8l8 8m0-8l-8 8" stroke="#cf222e" stroke-width="1.8"/>
+<line x1="350" y1="39.0" x2="414" y2="39.0" stroke="#59636e" stroke-width="2"/>
+<text x="352" y="40.0" font-size="22" font-weight="600" fill="#59636e" dominant-baseline="central">Cloud</text>
+<text x="500" y="30.0" font-size="13.5" font-weight="600" fill="#cf222e" dominant-baseline="central">Disconnected</text>
+<text x="500" y="50.0" font-size="13.5" fill="#59636e" dominant-baseline="central">nestlocal, on the thermostat, takes its place</text>
+<line x1="340" y1="80.0" x2="810" y2="80.0" stroke="#d1d9e0"/>
+<path d="M272 180.0C306.0 180.0 306.0 120.0 332 120.0" fill="none" stroke="#6e7781" stroke-width="1.8" marker-start="url(#a-wire)" marker-end="url(#a-wire)"/>
+<text x="352" y="120.0" font-size="22" font-weight="600" fill="#1f2328" dominant-baseline="central">MQTT</text>
+<text x="500" y="110.0" font-size="13.5" font-weight="600" fill="#1f2328" dominant-baseline="central">Wi-Fi, to your MQTT broker</text>
+<text x="500" y="130.0" font-size="13.5" fill="#59636e" dominant-baseline="central">Home Assistant discovers the thermostat</text>
+<line x1="340" y1="160.0" x2="810" y2="160.0" stroke="#d1d9e0"/>
+<path d="M272 200.0C306.0 200.0 306.0 200.0 332 200.0" fill="none" stroke="#6e7781" stroke-width="1.8" marker-start="url(#a-wire)" marker-end="url(#a-wire)"/>
+<text x="352" y="200.0" font-size="22" font-weight="600" fill="#1f2328" dominant-baseline="central">Matter</text>
+<text x="500" y="190.0" font-size="13.5" font-weight="600" fill="#1f2328" dominant-baseline="central">Wi-Fi or Thread, to a Matter controller</text>
+<text x="500" y="210.0" font-size="13.5" fill="#59636e" dominant-baseline="central">Home Assistant, Apple Home, Google Home</text>
+<line x1="340" y1="240.0" x2="810" y2="240.0" stroke="#d1d9e0"/>
+<path d="M272 220.0C306.0 220.0 306.0 280.0 332 280.0" fill="none" stroke="#6e7781" stroke-width="1.8" marker-start="url(#a-wire)" marker-end="url(#a-wire)"/>
+<text x="352" y="280.0" font-size="22" font-weight="600" fill="#1f2328" dominant-baseline="central">Zigbee</text>
+<text x="500" y="270.0" font-size="13.5" font-weight="600" fill="#1f2328" dominant-baseline="central">The thermostat&#x27;s own radio, to a coordinator</text>
+<text x="500" y="290.0" font-size="13.5" fill="#59636e" dominant-baseline="central">Zigbee2MQTT or ZHA, no Wi-Fi needed</text>
+<line x1="340" y1="320.0" x2="810" y2="320.0" stroke="#d1d9e0"/>
+<path d="M334 360.0C306.0 360.0 306.0 240.0 272 240.0" fill="none" stroke="#1a7f37" stroke-width="1.8" marker-end="url(#a-green)"/>
+<circle cx="336" cy="360.0" r="4" fill="#1a7f37"/>
+<text x="352" y="360.0" font-size="22" font-weight="600" fill="#1f2328" dominant-baseline="central">Temperature</text>
+<text x="500" y="350.0" font-size="13.5" font-weight="600" fill="#1a7f37" dominant-baseline="central">Any thermometer in Home Assistant</text>
+<text x="500" y="370.0" font-size="13.5" fill="#59636e" dominant-baseline="central">regulates the heating in place of its sensor</text>
+</svg>
