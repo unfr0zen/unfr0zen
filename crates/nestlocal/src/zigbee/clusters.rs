@@ -371,6 +371,19 @@ impl Nest {
         }
     }
 
+    fn occupied_setpoint(view: &View, heating: bool) -> i16 {
+        let eco = bridge::eco_targets(&view.state).and_then(|(heat, cool)| match (view.mode(), heating) {
+            ("heat", _) | ("heat_cool", true) => heat,
+            ("cool", _) | ("heat_cool", false) => cool,
+            _ => None,
+        });
+        eco.map(centi).or_else(|| view.shown(Self::setpoint(view, heating))).unwrap_or(if heating {
+            2000
+        } else {
+            2400
+        })
+    }
+
     fn thermostat(&self, attribute: u16) -> Option<Value> {
         let view = self.view();
         let temperature = |t: Option<i16>| Value::I16(t.unwrap_or(NONE));
@@ -380,14 +393,8 @@ impl Nest {
             0x0002 => Value::Bitmap8(u8::from(self.bridge.occupancy.occupied())),
             0x0003 | 0x0005 | 0x0015 | 0x0017 => Value::I16(MIN),
             0x0004 | 0x0006 | 0x0016 | 0x0018 => Value::I16(MAX),
-            0x0011 => {
-                let field = if view.mode() == "heat_cool" { "target_high" } else { "target" };
-                Value::I16(view.shown(field).unwrap_or(2400))
-            }
-            0x0012 => {
-                let field = if view.mode() == "heat_cool" { "target_low" } else { "target" };
-                Value::I16(view.shown(field).unwrap_or(2000))
-            }
+            0x0011 => Value::I16(Self::occupied_setpoint(&view, false)),
+            0x0012 => Value::I16(Self::occupied_setpoint(&view, true)),
             0x0013 => Value::I16(view.shown("away_temperature_high").unwrap_or(MAX)),
             0x0014 => Value::I16(view.shown("away_temperature_low").unwrap_or(MIN)),
             0x0019 => Value::I8(DEAD_BAND),
@@ -1022,6 +1029,31 @@ mod tests {
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(0)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0012), Some(Value::I16(1950)));
         assert_eq!(n.write(1, DISPLAY, 0x0000, Value::Enum8(2)), status::INVALID_VALUE);
+    }
+
+    #[test]
+    fn eco_setpoints_after_preset_change() {
+        let n = nest(
+            fields! {"temperature_scale" => "C", "away_temperature_low" => 16,
+            "away_temperature_high" => 29, "away_temperature_low_enabled" => true,
+            "away_temperature_high_enabled" => true},
+            fields! {"target_temperature_type" => "range", "target_temperature" => 22,
+            "target_temperature_low" => 20, "target_temperature_high" => 24,
+            "can_heat" => true, "can_cool" => true},
+        );
+        let targets = || (n.read(1, THERMOSTAT, 0x0012), n.read(1, THERMOSTAT, 0x0011));
+        let i16s = |low, high| (Some(Value::I16(low)), Some(Value::I16(high)));
+        assert_eq!(targets(), i16s(2000, 2400));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
+        assert_eq!(targets(), i16s(1600, 2900));
+        assert_eq!(n.apply("away_temperature_high_enabled", "off"), status::SUCCESS);
+        assert_eq!(targets(), i16s(1600, 2400));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(SCHEDULE)), status::SUCCESS);
+        assert_eq!(targets(), i16s(2000, 2400));
+        assert_eq!(n.write(1, THERMOSTAT, 0x001C, Value::Enum8(0x03)), status::SUCCESS);
+        assert_eq!(n.apply("away_temperature_high_enabled", "on"), status::SUCCESS);
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
+        assert_eq!(targets(), i16s(2900, 2900));
     }
 
     #[test]

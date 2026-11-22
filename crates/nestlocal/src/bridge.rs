@@ -394,6 +394,23 @@ impl Bridge {
     /// unit shows and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = self.state(dev, sh);
+        if let Some((heat, cool)) = eco_targets(&shown) {
+            let low = heat.map_or(Value::Null, num);
+            let high = cool.map_or(Value::Null, num);
+            match shown["mode"].as_str() {
+                Some("heat") => {
+                    shown.insert("target".into(), low);
+                }
+                Some("cool") => {
+                    shown.insert("target".into(), high);
+                }
+                Some("heat_cool") => {
+                    shown.insert("target_low".into(), low);
+                    shown.insert("target_high".into(), high);
+                }
+                _ => {}
+            }
+        }
         shown.insert("occupancy".into(), self.occupancy.occupied().into());
         let (brightness, automatic) = crate::brightness::reported(dev, self.brightness.shown());
         shown.insert("screen_brightness".into(), brightness.map_or(Value::Null, Value::from));
@@ -1044,6 +1061,24 @@ fn shown_eco(v: Option<&Value>, (low, high): (f64, f64)) -> Value {
     number(Some(&t)).map_or(t, |c| num(c.clamp(low, high)))
 }
 
+/// The enabled heat and cool targets while Eco is active, in °C.
+pub fn eco_targets(state: &Fields) -> Option<(Option<f64>, Option<f64>)> {
+    if state["preset"] != "eco" {
+        return None;
+    }
+    let limit = |key, enabled| {
+        if state[enabled] == true {
+            number(state.get(key))
+        } else {
+            None
+        }
+    };
+    Some((
+        limit("away_temperature_low", "away_temperature_low_enabled"),
+        limit("away_temperature_high", "away_temperature_high_enabled"),
+    ))
+}
+
 fn rfc3339(t: f64) -> Value {
     chrono::DateTime::from_timestamp(t as i64, 0)
         .map_or(Value::Null, |t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string().into())
@@ -1196,6 +1231,37 @@ pub mod tests {
         match canonical(v) {
             Value::Object(m) => m,
             _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn mqtt_targets_follow_the_active_eco_limits() {
+        let b = test_bridge();
+        let mut dev = obj(json!({
+            "away_temperature_low": 16,
+            "away_temperature_high": 29,
+            "away_temperature_low_enabled": true,
+            "away_temperature_high_enabled": true,
+        }));
+        let mut sh = obj(json!({
+            "target_temperature": 22, "target_temperature_low": 20, "target_temperature_high": 24,
+        }));
+        for (mode, preset, cool_enabled, targets) in [
+            ("range", "schedule", true, [json!(22), json!(20), json!(24)]),
+            ("range", "manual-eco", true, [json!(22), json!(16), json!(29)]),
+            ("range", "auto-eco", false, [json!(22), json!(16), Value::Null]),
+            ("range", "schedule", false, [json!(22), json!(20), json!(24)]),
+            ("heat", "manual-eco", true, [json!(16), json!(20), json!(24)]),
+            ("cool", "manual-eco", true, [json!(29), json!(20), json!(24)]),
+            ("cool", "manual-eco", false, [Value::Null, json!(20), json!(24)]),
+        ] {
+            dev.insert("eco".into(), json!({"mode": preset}));
+            dev.insert("away_temperature_high_enabled".into(), cool_enabled.into());
+            sh.insert("target_temperature_type".into(), mode.into());
+            let shown = b.shown(&dev, &sh);
+            for (key, target) in ["target", "target_low", "target_high"].into_iter().zip(targets) {
+                assert_eq!(shown[key], target, "{mode}, {preset}, {key}");
+            }
         }
     }
 

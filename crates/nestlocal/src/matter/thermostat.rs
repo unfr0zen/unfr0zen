@@ -27,7 +27,7 @@ use rs_matter::error::{Error, ErrorCode};
 use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVBuilderParent};
 use rs_matter::with;
 
-use super::{centi, failed, Nest};
+use super::{centi, failed, Nest, View};
 
 /// The unit's setpoint range, as the MQTT climate entity has it.
 const MIN: i16 = 900;
@@ -165,9 +165,8 @@ impl Thermostat {
         }
     }
 
-    /// The occupied heating and cooling setpoints.
-    fn occupied(&self) -> (i16, i16) {
-        let view = self.nest.view();
+    /// The regular heating and cooling setpoints, used when adjusting the schedule.
+    fn regular_targets(&self, view: &View) -> (i16, i16) {
         let mode = view.mode();
         let low = view.shown_centi("target_low").unwrap_or(2000);
         let high = view.shown_centi("target_high").unwrap_or(2400);
@@ -178,20 +177,37 @@ impl Thermostat {
         }
     }
 
+    fn occupied(&self) -> (i16, i16) {
+        let view = self.nest.view();
+        let (heat, cool) = self.regular_targets(&view);
+        let Some((eco_heat, eco_cool)) = crate::bridge::eco_targets(&view.state) else {
+            return (heat, cool);
+        };
+        let (eco_heat, eco_cool) = match view.mode() {
+            "heat" => (eco_heat, None),
+            "cool" => (None, eco_cool),
+            "heat_cool" => (eco_heat, eco_cool),
+            _ => return (heat, cool),
+        };
+        // Occupied setpoints require a number even when an Eco limit is off.
+        self.apart(eco_heat.map_or(heat, centi), eco_cool.map_or(cool, centi), eco_heat.is_none() && eco_cool.is_some())
+    }
+
     /// Sets the occupied setpoints given, to the unit's half degrees. One
     /// that comes within the dead band of the other moves the other.
     /// Outside range mode, the side that is not the target moves only when
     /// written: the target otherwise keeps it clear as it reads.
     fn change(&self, heat: Option<i16>, cool: Option<i16>) -> Result<(), Error> {
-        let mode = self.nest.view().mode().to_string();
-        let (old_heat, old_cool) = self.occupied();
+        let view = self.nest.view();
+        let mode = view.mode();
+        let (old_heat, old_cool) = self.regular_targets(&view);
         let (new_heat, new_cool) = self.apart(heat.map_or(old_heat, half), cool.map_or(old_cool, half), heat.is_none());
         // Off eco: the setpoints written are now the ones in force.
-        if self.nest.view().state_str("preset") == "eco" {
+        if view.state_str("preset") == "eco" {
             self.set("preset", "none")?;
         }
         let ranged = mode == "heat_cool";
-        let target_cools = self.target_cools(&mode);
+        let target_cools = self.target_cools(mode);
         let sides = [(false, heat, new_heat, old_heat), (true, cool, new_cool, old_cool)];
         // Whichever moves up goes first, so the two never cross on the way.
         let order = if new_cool > old_cool { [1, 0] } else { [0, 1] };
@@ -494,7 +510,7 @@ impl ClusterHandler for Thermostat {
             return Err(ErrorCode::InvalidCommand.into());
         }
         let ((heat_min, heat_max), (cool_min, cool_max)) = (self.equipment.heat_limits(), self.equipment.cool_limits());
-        let (low, high) = self.occupied();
+        let (low, high) = self.regular_targets(&view);
         self.change(
             heat.then(|| (low + delta).clamp(heat_min, heat_max)),
             cool.then(|| (high + delta).clamp(cool_min, cool_max)),
@@ -1030,6 +1046,34 @@ mod tests {
         );
         raise_lower(&t, Both, -20).unwrap();
         assert_eq!(low_high(&t), (Some(9.0), Some(10.5)));
+    }
+
+    #[test]
+    fn eco_setpoints_after_preset_change() {
+        let t = thermostat(
+            fields! {"temperature_scale" => "C", "away_temperature_low" => 16,
+            "away_temperature_high" => 29, "away_temperature_low_enabled" => true,
+            "away_temperature_high_enabled" => true},
+            fields! {"target_temperature_type" => "range", "target_temperature" => 22,
+            "target_temperature_low" => 20, "target_temperature_high" => 24,
+            "can_heat" => true, "can_cool" => true},
+        );
+        let targets = || (t.occupied_heating_setpoint(ctx(1)).unwrap(), t.occupied_cooling_setpoint(ctx(1)).unwrap());
+        assert_eq!(targets(), (2000, 2400));
+        t.set("preset", "eco").unwrap();
+        assert_eq!(active_preset(&t).as_deref(), Some(ECO));
+        assert_eq!(targets(), (1600, 2900));
+        t.set("away_temperature_high_enabled", "off").unwrap();
+        assert_eq!(targets(), (1600, 2400));
+        t.set("preset", "none").unwrap();
+        assert_eq!(targets(), (2000, 2400));
+        t.set("mode", "cool").unwrap();
+        t.set("away_temperature_high_enabled", "on").unwrap();
+        t.set("preset", "eco").unwrap();
+        assert_eq!(targets(), (2000, 2900));
+        t.set_occupied_cooling_setpoint(ctx(1), 2500).unwrap();
+        assert_eq!(active_preset(&t), None);
+        assert_eq!(targets(), (2000, 2500));
     }
 
     #[test]
