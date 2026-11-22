@@ -1012,7 +1012,13 @@ pub fn set_up_owned(
                     return device("nlclient original backup does not match this firmware; leaving it untouched");
                 }
             }
-            // The theme preload's bindings, for this stock nlclient; none without themes.
+            let journal = match rebuilt {
+                Some(journal) => journal,
+                None => build_screen(&source)?,
+            };
+            // The theme preload's bindings, for this stock nlclient; none
+            // without themes. After the screen's build, which keeps a stock
+            // nlclient that no review covers for the bug report.
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::theme::BINDINGS], false, false)?;
             if options.theme.is_some() {
                 tree.insert(
@@ -1022,10 +1028,6 @@ pub fn set_up_owned(
             } else {
                 tree.remove(crate::nlclient::theme::BINDINGS);
             }
-            let journal = match rebuilt {
-                Some(journal) => journal,
-                None => build_screen(&source)?,
-            };
             let current = crate::nlclient::Patch::parse(&journal)?;
             let patch = if let Some(previous) = previous.filter(|p| p.output_sha == *sha) {
                 crate::nlclient::Patch::upgrade(&previous, current)?
@@ -1863,10 +1865,24 @@ mod tests {
             volume.text(NESTLABS).contains(NLCLIENT_START.1) && !volume.text(NESTLABS).contains("libunfr0zen-theme")
         );
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
-        let error =
-            set_up_on_device(&mut volume, Device::Diamond, &on, b"ARMV7", &mut no_pki, true, &|_, _| unreachable!())
-                .unwrap_err();
-        assert!(error.to_string().contains("do not support this firmware"), "{error}");
+
+        // A build the themes were not reviewed on fails, after the screen's
+        // build had it, which keeps it for the bug report.
+        let Ok(unreviewed) = std::fs::read(firmware.join("nlclient-gen3-6.3-5")) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the 6.3-5 sample");
+            return;
+        };
+        assert!(!crate::nlclient::theme::supported(&unreviewed));
+        let mut volume = nestlocal_unit(Some(&pki));
+        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, unreviewed.clone()));
+        let built = std::cell::RefCell::new(Vec::new());
+        let error = set_up_on_device(&mut volume, Device::Diamond3, &on, b"ARMV7", &mut no_pki, true, &|source, _| {
+            built.borrow_mut().push(source.to_vec());
+            Err(crate::Error::Device("built".into()))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "built");
+        assert_eq!(*built.borrow(), [unreviewed]);
     }
 
     #[test]
