@@ -6,9 +6,8 @@ The finished GUI and CLI require no Python, GCC, clang, LLVM linker, pip,
 network access, or installed disassembly library to patch the screen.
 The object is compiled once with the firmware when building the app.
 
-Rust discovery incorporates research commit `aa5f304` from `imx6-stuff`: ELF
-imports, screen registrations, ARM call graphs and address-independent
-instruction fingerprints. Capstone's ARM decoder is statically linked.
+Rust discovery reads ELF imports, screen registrations, ARM call graphs and
+address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
 The three audited ABI shapes (2025 gen3, 2019 gen3, and gen1 and gen2) remain supported;
 this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
@@ -298,8 +297,7 @@ cargo run -p unfr0zen-core --bin nlclient -- \
   .work/firmware/nlclient-gen3-2025 build/custom-screen.o build/nlclient-screen
 ```
 
-QEMU testing uses a matching isolated NAND; the walkthrough is in
-`imx6-stuff/nlclient/docs/CUSTOM-LOGIC.md`. Physical QR scanning, Matter
+QEMU testing uses a matching isolated NAND. Physical QR scanning, Matter
 commissioning and a Zigbee radio join remain device acceptance checks.
 
 ## Undo locally
