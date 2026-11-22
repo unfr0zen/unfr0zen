@@ -394,16 +394,9 @@ impl Bridge {
     /// unit shows and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = self.state(dev, sh);
-        if shown["preset"] == "eco" {
-            let limit = |key: &str, enabled: &str| {
-                if shown[enabled] == true {
-                    shown[key].clone()
-                } else {
-                    Value::Null
-                }
-            };
-            let low = limit("away_temperature_low", "away_temperature_low_enabled");
-            let high = limit("away_temperature_high", "away_temperature_high_enabled");
+        if let Some((heat, cool)) = eco_targets(&shown) {
+            let low = heat.map_or(Value::Null, num);
+            let high = cool.map_or(Value::Null, num);
             match shown["mode"].as_str() {
                 Some("heat") => {
                     shown.insert("target".into(), low);
@@ -1066,6 +1059,24 @@ pub fn shown(v: Option<&Value>) -> Value {
 fn shown_eco(v: Option<&Value>, (low, high): (f64, f64)) -> Value {
     let t = shown(v);
     number(Some(&t)).map_or(t, |c| num(c.clamp(low, high)))
+}
+
+/// The enabled heat and cool targets while Eco is active, in °C.
+pub fn eco_targets(state: &Fields) -> Option<(Option<f64>, Option<f64>)> {
+    if state["preset"] != "eco" {
+        return None;
+    }
+    let limit = |key, enabled| {
+        if state[enabled] == true {
+            number(state.get(key))
+        } else {
+            None
+        }
+    };
+    Some((
+        limit("away_temperature_low", "away_temperature_low_enabled"),
+        limit("away_temperature_high", "away_temperature_high_enabled"),
+    ))
 }
 
 fn rfc3339(t: f64) -> Value {
