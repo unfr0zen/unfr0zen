@@ -339,10 +339,13 @@ impl Bridge {
                 Ok(Some(("schedule".into(), fields! {"days" => Value::Object(days)})))
             }
 
-            // The days given replace those days, as schedule.rs reads them.
+            // The days given replace those days, as schedule.rs reads them,
+            // in the schedule that runs.
             "schedule" => {
-                let current = self.store.get(&format!("schedule.{}", self.serial)).map(|o| o.value);
-                Ok(Some(("schedule".into(), crate::schedule::from_json(arg, current.as_ref(), now)?)))
+                let bucket = |typ: &str| self.store.get(&format!("{typ}.{}", self.serial)).map(|o| o.value);
+                let (current, device, shared) = (bucket("schedule"), bucket("device"), bucket("shared"));
+                let unit = crate::schedule::Unit::of(device.as_ref(), shared.as_ref());
+                Ok(Some(("schedule".into(), crate::schedule::from_json(arg, current.as_ref(), &unit, now)?)))
             }
 
             _ => Err("unknown command".into()),
@@ -690,6 +693,7 @@ mod tests {
             |time: i64, temp: f64| json!({"entry_type": "setpoint", "temp": temp, "time": time, "type": "HEAT"});
         let days: serde_json::Map<_, _> = (0..7).map(|d| (d.to_string(), json!({"0": entry(0, 18.0)}))).collect();
         b.store.merge("schedule.S", &fields! {"days" => Value::Object(days), "schedule_mode" => "HEAT"}, 0, 0, true);
+        b.store.merge("shared.S", &fields! {"can_heat" => true, "target_temperature_type" => "heat"}, 0, 0, true);
         b.apply("mqtt", "schedule", r#"{"days": {"monday": [{"time": "07:00", "temperature": 21}]}}"#).unwrap();
         let s = b.store.get("schedule.S").unwrap().value;
         assert_eq!(
@@ -705,6 +709,12 @@ mod tests {
         assert!(b
             .apply("mqtt", "schedule", r#"{"days": {"monday": [{"time": "07:00", "temperature": 50}]}}"#)
             .is_err());
+        // Heat-only equipment runs no cool schedule; a heating unit runs its heat one.
+        let cool = r#"{"mode": "cool", "days": {"monday": [{"time": "07:00", "temperature": 24}]}}"#;
+        assert!(b.apply("mqtt", "schedule", cool).is_err());
+        b.store.merge("shared.S", &fields! {"target_temperature_type" => "cool"}, 0, 0, true);
+        assert!(b.apply("mqtt", "schedule", cool).is_err());
+        assert_eq!(b.store.get("schedule.S").unwrap().value, s, "refused writes change nothing");
     }
 
     #[test]

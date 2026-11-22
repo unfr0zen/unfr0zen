@@ -462,12 +462,9 @@ impl Nest {
         }
     }
 
-    /// setpointRaiseLower: mode (heat, cool, both), amount in 0.1 °C, the
-    /// result kept within the setpoint limits. Outside heat_cool the one
-    /// setpoint moves unless the mode names the other side of the unit's.
     /// Set Weekly Schedule: the days it names get its transitions, through
-    /// the same command as MQTT's set/schedule. ZCL's day bits are Matter's
-    /// and the unit's schedule has one mode: heat, cool, or both (a range).
+    /// the same command as MQTT's set/schedule, so only for the schedule
+    /// that runs. ZCL's day bits are Matter's; heat, cool, or both (a range).
     fn set_weekly_schedule(&self, payload: &[u8]) -> u8 {
         let [count, days, mode, transitions @ ..] = payload else { return status::MALFORMED_COMMAND };
         let (heat, cool) = (mode & HEAT_SEQUENCE != 0, mode & COOL_SEQUENCE != 0);
@@ -545,6 +542,9 @@ impl Nest {
             .collect())
     }
 
+    /// setpointRaiseLower: mode (heat, cool, both), amount in 0.1 °C, the
+    /// result kept within the setpoint limits. Outside heat_cool the one
+    /// setpoint moves unless the mode names the other side of the unit's.
     fn raise_lower(&self, payload: &[u8]) -> u8 {
         let [mode, amount, ..] = *payload else {
             return status::INVALID_FIELD;
@@ -1413,7 +1413,11 @@ mod tests {
         assert_eq!(serve_all(&n, 1, THERMOSTAT, &set), vec![vec![0x18, 6, 0x0B, 0x01, 0x00]]);
         let answers = get(0x7F, HEAT_SEQUENCE | COOL_SEQUENCE);
         assert_eq!(answers.len(), 2);
-        assert_eq!(answers[0][3..], [1, 0x02, 0x01, 0x86, 0x01, 0x02, 0x08], "Monday, the unit's first day");
+        assert_eq!(
+            answers[0][3..],
+            [2, 0x02, 0x01, 0, 0, 0x34, 0x08, 0x86, 0x01, 0x02, 0x08],
+            "Monday, the unit's first day: Sunday's 21 °C carried on, then 20.5 °C"
+        );
         assert_eq!(answers[1][3..], [2, 0x7D, 0x01, 0, 0, 0x08, 0x07, 0xFC, 0x03, 0x34, 0x08], "every other day");
         // Asked for cool only, or for nothing it has: not found.
         assert_eq!(get(0x7F, COOL_SEQUENCE), vec![vec![0x18, 5, 0x0B, 0x02, status::NOT_FOUND]]);
@@ -1429,6 +1433,7 @@ mod tests {
             .chain((0..9u16).flat_map(|i| [(i * 60).to_le_bytes(), 2000i16.to_le_bytes()].concat()))
             .collect();
         assert_eq!(refused(&nine), status::INSUFFICIENT_SPACE);
+        assert_eq!(refused(&[1, 0x02, 0x02, 0, 0, 0x60, 0x09]), status::INVALID_VALUE, "cool, in heat");
     }
 
     #[test]

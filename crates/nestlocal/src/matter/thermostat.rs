@@ -52,17 +52,18 @@ impl Thermostat {
         Self { dataver, nest, schedules: Schedules::open(storage.map(|s| s.join("schedules.json"))) }
     }
 
+    /// The modes the equipment runs, the one the unit is in, its scale.
+    fn unit(&self) -> schedule::Unit {
+        schedule::Unit::of(self.nest.bucket("device").as_ref(), self.nest.bucket("shared").as_ref())
+    }
+
     /// The system modes a schedule can have: the ones the equipment runs.
     fn schedule_modes(&self) -> Vec<Mode> {
-        match self.sequence() {
-            ControlSequenceOfOperationEnum::HeatingOnly => vec![Mode::Heat],
-            ControlSequenceOfOperationEnum::CoolingOnly => vec![Mode::Cool],
-            _ => vec![Mode::Heat, Mode::Cool, Mode::Auto],
-        }
+        self.unit().modes
     }
 
     fn limits(&self) -> schedule::Limits {
-        schedule::Limits { modes: self.schedule_modes(), min: MIN, max: MAX, dead_band: i16::from(DEAD_BAND) * 10 }
+        schedule::Limits { unit: self.unit(), min: MIN, max: MAX, dead_band: i16::from(DEAD_BAND) * 10 }
     }
 
     /// Writes the schedule bucket, as MQTT's set/raw/schedule would.
@@ -574,7 +575,7 @@ impl ClusterHandler for Thermostat {
     ) -> Result<(), Error> {
         let handle = request.schedule_handle()?;
         self.schedules
-            .activate(handle.0, self.nest.bucket("schedule").as_ref(), |f| self.write_schedule(f))
+            .activate(handle.0, self.nest.bucket("schedule").as_ref(), &self.unit(), |f| self.write_schedule(f))
             .map_err(error)?;
         self.changed(&ctx);
         Ok(())

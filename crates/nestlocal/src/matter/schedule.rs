@@ -17,8 +17,8 @@ use serde_json::Value;
 use crate::fields;
 use crate::json::Fields;
 use crate::logf;
-use crate::schedule::{day_bit, from_bucket, half_degree, to_bucket, MINUTES_PER_DAY};
-pub use crate::schedule::{Mode, Transition, PER_DAY};
+use crate::schedule::{day_bit, from_bucket, to_bucket, to_unit, MINUTES_PER_DAY};
+pub use crate::schedule::{Mode, Transition, Unit, PER_DAY};
 
 /// The Schedules attribute, the one AtomicRequest takes.
 pub const SCHEDULES: u32 = 0x0051;
@@ -53,9 +53,10 @@ pub struct Schedule {
     pub transitions: Vec<Transition>,
 }
 
-/// What the unit takes, for a commit to check against.
+/// What the unit takes, for a commit to check against: `unit` has the
+/// modes its equipment runs and the one it runs now.
 pub struct Limits {
-    pub modes: Vec<Mode>,
+    pub unit: Unit,
     pub min: i16,
     pub max: i16,
     /// The least gap between a range's low and high, 0.01 °C.
@@ -87,11 +88,21 @@ pub enum Write {
 /// Who holds an atomic write: fabric index and node id.
 pub type Owner = (u8, u64);
 
-/// A pending list as the unit would keep it: setpoints to its half degrees.
-fn normalized(mut schedules: Vec<Schedule>) -> Vec<Schedule> {
-    for t in schedules.iter_mut().flat_map(|s| s.transitions.iter_mut()) {
-        t.heat = t.heat.map(half_degree);
-        t.cool = t.cool.map(half_degree);
+/// A pending list as the unit would keep it: each transition its committed
+/// schedule doesn't have to what the unit stores (half °C, or whole °F),
+/// the ones it has as they are, so writing back what was read changes
+/// nothing.
+fn normalized(mut schedules: Vec<Schedule>, committed: &[Schedule], fahrenheit: bool) -> Vec<Schedule> {
+    for s in &mut schedules {
+        let old = committed.iter().find(|c| c.handle.is_some() && c.handle == s.handle && c.mode == s.mode);
+        for t in &mut s.transitions {
+            let had = |o: &Transition| (o.minutes, o.heat, o.cool) == (t.minutes, t.heat, t.cool);
+            if old.is_some_and(|o| o.transitions.iter().any(had)) {
+                continue;
+            }
+            t.heat = t.heat.map(|c| to_unit(c, fahrenheit));
+            t.cool = t.cool.map(|c| to_unit(c, fahrenheit));
+        }
     }
     schedules
 }
@@ -111,7 +122,7 @@ pub fn validate(new: &[Schedule], committed: &[Schedule], active: Option<&[u8]>,
                 return Err(CONSTRAINT_ERROR);
             }
         }
-        if !limits.modes.contains(&s.mode) || s.name.as_ref().is_some_and(|n| n.len() > 64) {
+        if !limits.unit.modes.contains(&s.mode) || s.name.as_ref().is_some_and(|n| n.len() > 64) {
             return Err(CONSTRAINT_ERROR);
         }
         if s.transitions.len() > usize::from(TRANSITIONS) {
@@ -295,14 +306,29 @@ impl Schedules {
     ) -> Result<Outcome, u8> {
         let mut inner = self.lock();
         inner.owned(owner).map_err(|_| status::INVALID_IN_STATE)?;
-        let pending = normalized(inner.atomic.take().map(|a| a.pending).unwrap_or_default());
+        let pending = inner.atomic.take().map(|a| a.pending).unwrap_or_default();
         let (committed, active) = inner.list(bucket);
         let Some(active) = active else { return Ok(Outcome::schedules(status::INVALID_IN_STATE)) };
-        if let Err(code) = validate(&pending, &committed, Some(&active), limits) {
-            logf!("matter: schedules: commit refused, status {code:#04x}");
-            return Ok(Outcome::schedules(code));
-        }
-        let mut schedules = pending;
+        // Checked as written, then as the unit would keep it: a setpoint
+        // outside the limits is refused before rounding could take it in.
+        let checked = validate(&pending, &committed, Some(&active), limits).and_then(|()| {
+            let kept = normalized(pending, &committed, limits.unit.fahrenheit);
+            validate(&kept, &committed, Some(&active), limits)?;
+            // The active schedule is the one the unit runs: in its mode.
+            let running = kept.iter().find(|s| s.handle.as_deref() == Some(&active)).map(|s| s.mode);
+            let current = bucket.and_then(from_bucket).map(|(m, _)| m);
+            match (running, current) {
+                (Some(r), Some(c)) if r != limits.unit.mode(c) => Err(status::INVALID_IN_STATE),
+                _ => Ok(kept),
+            }
+        });
+        let mut schedules = match checked {
+            Ok(kept) => kept,
+            Err(code) => {
+                logf!("matter: schedules: commit refused, status {code:#04x}");
+                return Ok(Outcome::schedules(code));
+            }
+        };
         for i in 0..schedules.len() {
             if schedules[i].handle.is_none() {
                 let free = (1..)
@@ -314,7 +340,8 @@ impl Schedules {
         }
         let running = schedules.iter().find(|s| s.handle.as_deref() == Some(&active)).unwrap();
         if bucket.and_then(from_bucket) != Some((running.mode, running.transitions.clone())) {
-            let fields = to_bucket(running.mode, &running.transitions, bucket, chrono::Utc::now().timestamp());
+            let now = chrono::Utc::now().timestamp();
+            let fields = to_bucket(running.mode, &running.transitions, bucket, now, limits.unit.fahrenheit);
             if let Err(e) = apply(fields) {
                 logf!("matter: schedules: commit not applied: {e}");
                 return Ok(Outcome::schedules(status::FAILURE));
@@ -336,11 +363,13 @@ impl Schedules {
     }
 
     /// SetActiveScheduleRequest: the schedule written to the bucket, the one
-    /// it replaces kept as the bucket had it.
+    /// it replaces kept as the bucket had it. Only one in the mode the unit
+    /// runs, as that is the schedule nlclient runs.
     pub fn activate(
         &self,
         handle: &[u8],
         bucket: Option<&Fields>,
+        unit: &Unit,
         apply: impl FnOnce(Fields) -> Result<(), String>,
     ) -> Result<(), u8> {
         let mut inner = self.lock();
@@ -352,8 +381,14 @@ impl Schedules {
         if active.as_deref() == Some(handle) {
             return Ok(());
         }
+        let current = bucket.and_then(from_bucket).map_or(target.mode, |(m, _)| m);
+        if !unit.modes.contains(&target.mode) || target.mode != unit.mode(current) {
+            logf!("matter: schedules: {} is not in the mode the unit runs", String::from_utf8_lossy(handle));
+            return Err(status::INVALID_IN_STATE);
+        }
         let kept = inner.saved.days(handle);
-        let fields = to_bucket(target.mode, &target.transitions, kept.as_ref(), chrono::Utc::now().timestamp());
+        let now = chrono::Utc::now().timestamp();
+        let fields = to_bucket(target.mode, &target.transitions, kept.as_ref(), now, unit.fahrenheit);
         apply(fields).map_err(|e| {
             logf!("matter: schedules: {} not activated: {e}", String::from_utf8_lossy(handle));
             status::FAILURE
@@ -405,8 +440,15 @@ mod tests {
     const A: Owner = (1, 100);
     const B: Owner = (2, 200);
 
+    /// Heat-only equipment, heating, in Celsius.
     fn limits() -> Limits {
-        Limits { modes: vec![Mode::Heat], min: 900, max: 3200, dead_band: 150 }
+        let unit = Unit { modes: vec![Mode::Heat], running: Some(Mode::Heat), fahrenheit: false };
+        Limits { unit, min: 900, max: 3200, dead_band: 150 }
+    }
+
+    /// Heat and cool equipment, heating.
+    fn heat_and_cool() -> Limits {
+        Limits { unit: Unit { modes: vec![Mode::Heat, Mode::Cool, Mode::Auto], ..limits().unit }, ..limits() }
     }
 
     fn heat(days: u8, minutes: u16, centi: i16) -> Transition {
@@ -444,8 +486,12 @@ mod tests {
 
     /// Applies a commit's bucket write to `bucket`.
     fn commit(s: &Schedules, owner: Owner, bucket: &mut Fields) -> Result<Outcome, u8> {
+        commit_with(s, owner, bucket, &limits())
+    }
+
+    fn commit_with(s: &Schedules, owner: Owner, bucket: &mut Fields, limits: &Limits) -> Result<Outcome, u8> {
         let current = bucket.clone();
-        s.commit(owner, Some(&current), &limits(), |f| {
+        s.commit(owner, Some(&current), limits, |f| {
             bucket.extend(f);
             Ok(())
         })
@@ -478,7 +524,7 @@ mod tests {
     fn writing_back_what_was_read_keeps_every_entry_as_it_was() {
         let b = bucket();
         let (mode, transitions) = from_bucket(&b).unwrap();
-        let back = to_bucket(mode, &transitions, Some(&b), 42);
+        let back = to_bucket(mode, &transitions, Some(&b), 42, false);
         assert_eq!(back["days"], b["days"]);
         assert_eq!(back["schedule_mode"], json!("HEAT"));
     }
@@ -486,7 +532,7 @@ mod tests {
     #[test]
     fn new_transitions_become_entries_by_day_in_time_order() {
         let b = bucket();
-        let back = to_bucket(Mode::Heat, &[heat(TUE | SUN, 1200, 2050), heat(TUE, 360, 1900)], Some(&b), 42);
+        let back = to_bucket(Mode::Heat, &[heat(TUE | SUN, 1200, 2050), heat(TUE, 360, 1900)], Some(&b), 42, false);
         // Each day opens with a continuation: no day here starts at midnight.
         let tue = &back["days"]["1"];
         assert_eq!(
@@ -506,13 +552,15 @@ mod tests {
     #[test]
     fn a_range_schedule_keeps_its_low_and_high() {
         let t = Transition { days: MON, minutes: 60, heat: Some(1900), cool: Some(2400) };
-        let back = to_bucket(Mode::Auto, std::slice::from_ref(&t), None, 0);
+        let back = to_bucket(Mode::Auto, std::slice::from_ref(&t), None, 0, false);
         assert_eq!(back["schedule_mode"], json!("RANGE"));
         assert_eq!(
             (back["days"]["0"]["0"]["temp-min"].clone(), back["days"]["0"]["0"]["temp-max"].clone()),
             (json!(19), json!(24))
         );
-        assert_eq!(from_bucket(&back).unwrap(), (Mode::Auto, vec![t]));
+        // Every day runs on from it at midnight: a continuation, read as 00:00.
+        let carried = Transition { days: EVERY_DAY, minutes: 0, ..t.clone() };
+        assert_eq!(from_bucket(&back).unwrap(), (Mode::Auto, vec![carried, t]));
     }
 
     #[test]
@@ -526,7 +574,11 @@ mod tests {
         // Until the commit, the committed list is what reads see.
         assert_eq!(s.list(Some(&b)).0.len(), 1);
         assert_eq!(commit(&s, A, &mut b).unwrap(), Outcome::schedules(status::SUCCESS));
-        assert_eq!(from_bucket(&b).unwrap().1, vec![heat(EVERY_DAY, 420, 2050)], "to half degrees");
+        assert_eq!(
+            from_bucket(&b).unwrap().1,
+            vec![heat(EVERY_DAY, 0, 2050), heat(EVERY_DAY, 420, 2050)],
+            "to half degrees, carried on past midnight"
+        );
         let (list, active) = s.list(Some(&b));
         assert_eq!(
             list.iter().map(|s| s.handle.clone().unwrap()).collect::<Vec<_>>(),
@@ -592,6 +644,7 @@ mod tests {
             (vec![sched(Some(b"s1"), vec![heat(0, 60, 2000)])], status::CONSTRAINT_ERROR),
             (vec![sched(Some(b"s1"), vec![heat(AWAY, 60, 2000)])], status::CONSTRAINT_ERROR),
             (vec![sched(Some(b"s1"), vec![heat(MON, 60, 3300)])], status::CONSTRAINT_ERROR),
+            (vec![sched(Some(b"s1"), vec![heat(MON, 60, 890)])], status::CONSTRAINT_ERROR), // 9 °C once rounded
             (
                 vec![sched(Some(b"s1"), vec![Transition { days: MON, minutes: 60, heat: None, cool: Some(2400) }])],
                 status::CONSTRAINT_ERROR,
@@ -635,8 +688,9 @@ mod tests {
         let mut edited = b.clone();
         edited["days"]["0"]["0"]["temp"] = json!(17.5);
         let current = edited.clone();
-        assert_eq!(s.activate(b"s9", Some(&current), |_| Ok(())), Err(INVALID_COMMAND));
-        s.activate(b"s2", Some(&current), |f| {
+        let unit = limits().unit;
+        assert_eq!(s.activate(b"s9", Some(&current), &unit, |_| Ok(())), Err(INVALID_COMMAND));
+        s.activate(b"s2", Some(&current), &unit, |f| {
             edited.extend(f);
             Ok(())
         })
@@ -647,13 +701,66 @@ mod tests {
         assert_eq!(list[0].transitions[0], heat(MON, 0, 1750));
 
         let current = edited.clone();
-        s.activate(b"s1", Some(&current), |f| {
+        s.activate(b"s1", Some(&current), &unit, |f| {
             edited.extend(f);
             Ok(())
         })
         .unwrap();
         assert_eq!(edited["days"]["0"]["0"]["temp"], json!(17.5));
         assert_eq!(edited["days"]["1"], b["days"]["1"], "the untouched days as they were");
+    }
+
+    #[test]
+    fn only_a_schedule_in_the_mode_the_unit_runs_is_active() {
+        let limits = heat_and_cool();
+        let cool = |handle: Option<&[u8]>| Schedule {
+            mode: Mode::Cool,
+            ..sched(handle, vec![Transition { days: MON, minutes: 60, heat: None, cool: Some(2400) }])
+        };
+        // Kept beside it, a cool schedule is fine; made the active one, it would never run.
+        for (new, want) in [
+            (vec![sched(Some(b"s1"), vec![]), cool(None)], status::SUCCESS),
+            (vec![cool(Some(b"s1"))], status::INVALID_IN_STATE),
+        ] {
+            let s = schedules();
+            let mut b = bucket();
+            s.begin(A, &[SCHEDULES], Some(5000), Some(&b)).unwrap();
+            s.write(A, Write::Replace(new)).unwrap();
+            assert_eq!(commit_with(&s, A, &mut b, &limits).unwrap(), Outcome::schedules(want));
+        }
+        let s = schedules();
+        let mut b = bucket();
+        s.begin(A, &[SCHEDULES], Some(5000), Some(&b)).unwrap();
+        s.write(A, Write::Replace(vec![sched(Some(b"s1"), from_bucket(&b).unwrap().1), cool(None)])).unwrap();
+        commit_with(&s, A, &mut b, &limits).unwrap();
+        let current = b.clone();
+        let applied = std::cell::Cell::new(false);
+        let activate = |unit: &Unit| {
+            s.activate(b"s2", Some(&current), unit, |_| {
+                applied.set(true);
+                Ok(())
+            })
+        };
+        assert_eq!(activate(&limits.unit), Err(status::INVALID_IN_STATE), "the unit heats");
+        assert!(!applied.get());
+        assert_eq!(activate(&Unit { running: Some(Mode::Cool), ..limits.unit.clone() }), Ok(()), "now it cools");
+        assert!(applied.get());
+    }
+
+    #[test]
+    fn a_fahrenheit_unit_s_schedule_is_not_rewritten_by_writing_it_back() {
+        let limits = Limits { unit: Unit { fahrenheit: true, ..limits().unit }, ..limits() };
+        let mut b = bucket();
+        b["days"]["0"]["1"]["temp"] = json!(20.55556); // 69 °F on Mondays at 9:00
+        let s = schedules();
+        s.begin(A, &[SCHEDULES], Some(5000), Some(&b)).unwrap();
+        let mut list = s.list(Some(&b)).0;
+        list.push(sched(None, vec![heat(MON, 0, 2050)]));
+        s.write(A, Write::Replace(list)).unwrap();
+        let current = b.clone();
+        let outcome = s.commit(A, Some(&current), &limits, |_| panic!("the active schedule is as it was"));
+        assert_eq!(outcome.unwrap(), Outcome::schedules(status::SUCCESS));
+        assert_eq!(s.list(Some(&b)).0[1].transitions, vec![heat(MON, 0, 2056)], "a new one to whole °F: 69");
     }
 
     #[test]
