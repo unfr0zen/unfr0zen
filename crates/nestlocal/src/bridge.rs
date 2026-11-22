@@ -394,6 +394,30 @@ impl Bridge {
     /// unit shows and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = self.state(dev, sh);
+        if shown["preset"] == "eco" {
+            let limit = |key: &str, enabled: &str| {
+                if shown[enabled] == true {
+                    shown[key].clone()
+                } else {
+                    Value::Null
+                }
+            };
+            let low = limit("away_temperature_low", "away_temperature_low_enabled");
+            let high = limit("away_temperature_high", "away_temperature_high_enabled");
+            match shown["mode"].as_str() {
+                Some("heat") => {
+                    shown.insert("target".into(), low);
+                }
+                Some("cool") => {
+                    shown.insert("target".into(), high);
+                }
+                Some("heat_cool") => {
+                    shown.insert("target_low".into(), low);
+                    shown.insert("target_high".into(), high);
+                }
+                _ => {}
+            }
+        }
         shown.insert("occupancy".into(), self.occupancy.occupied().into());
         let (brightness, automatic) = crate::brightness::reported(dev, self.brightness.shown());
         shown.insert("screen_brightness".into(), brightness.map_or(Value::Null, Value::from));
@@ -1196,6 +1220,37 @@ pub mod tests {
         match canonical(v) {
             Value::Object(m) => m,
             _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn mqtt_targets_follow_the_active_eco_limits() {
+        let b = test_bridge();
+        let mut dev = obj(json!({
+            "away_temperature_low": 16,
+            "away_temperature_high": 29,
+            "away_temperature_low_enabled": true,
+            "away_temperature_high_enabled": true,
+        }));
+        let mut sh = obj(json!({
+            "target_temperature": 22, "target_temperature_low": 20, "target_temperature_high": 24,
+        }));
+        for (mode, preset, cool_enabled, targets) in [
+            ("range", "schedule", true, [json!(22), json!(20), json!(24)]),
+            ("range", "manual-eco", true, [json!(22), json!(16), json!(29)]),
+            ("range", "auto-eco", false, [json!(22), json!(16), Value::Null]),
+            ("range", "schedule", false, [json!(22), json!(20), json!(24)]),
+            ("heat", "manual-eco", true, [json!(16), json!(20), json!(24)]),
+            ("cool", "manual-eco", true, [json!(29), json!(20), json!(24)]),
+            ("cool", "manual-eco", false, [Value::Null, json!(20), json!(24)]),
+        ] {
+            dev.insert("eco".into(), json!({"mode": preset}));
+            dev.insert("away_temperature_high_enabled".into(), cool_enabled.into());
+            sh.insert("target_temperature_type".into(), mode.into());
+            let shown = b.shown(&dev, &sh);
+            for (key, target) in ["target", "target_low", "target_high"].into_iter().zip(targets) {
+                assert_eq!(shown[key], target, "{mode}, {preset}, {key}");
+            }
         }
     }
 
