@@ -1,7 +1,8 @@
 /* Preloaded into nlsleepd (every generation's alike), which sets the Wi-Fi chip's wake patterns before
  * each sleep (nl80211 SET_WOWLAN) and can only describe one kind: a frame to
  * an address and a port. This adds the patterns nestlocal lists in
- * /var/run/unfr0zen/wake-patterns to the ones nlsleepd sends, one a line:
+ * /var/run/unfr0zen/wake-patterns, then those the setup lists in
+ * /etc/unfr0zen/wake-patterns, to the ones nlsleepd sends, one a line:
  *
  *     OFFSET MASK PATTERN
  *
@@ -64,6 +65,7 @@ extern int unsetenv(const char *);
 #define MAX_PATTERNS                    8
 #define MAX_PATTERN_LEN                 128
 #define PATTERNS                        "/var/run/unfr0zen/wake-patterns"
+#define FIXED_PATTERNS                  "/etc/unfr0zen/wake-patterns"
 
 #define ALIGNED(n) (((n) + 3u) & ~3u)
 #define FOR_EACH_ATTR(a, start, end)                                                       \
@@ -96,20 +98,21 @@ static int hex(const char **p, u8 *out, int max)
 	}
 }
 
-/* Adds the list's patterns to the nest being written, numbered after the
- * count already in it. A line that does not parse ends the list. */
-static void add_listed(struct nl_msg *msg, int count)
+/* Adds the patterns listed in path to the nest being written, numbered
+ * after the count already in it, and returns the count. A line that does
+ * not parse ends the list. */
+static int add_listed(struct nl_msg *msg, int count, const char *path)
 {
 	static char text[4096];
 	const char *p = text;
-	int fd = open(PATTERNS, 0), length;
+	int fd = open(path, 0), length;
 
 	if (fd < 0)
-		return;
+		return count;
 	length = read(fd, text, sizeof(text) - 1);
 	close(fd);
 	if (length <= 0)
-		return;
+		return count;
 	text[length] = 0;
 	while (*p && count < MAX_PATTERNS) {
 		u8 mask[MAX_PATTERN_LEN / 8], pattern[MAX_PATTERN_LEN];
@@ -118,20 +121,20 @@ static void add_listed(struct nl_msg *msg, int count)
 		struct nlattr *entry;
 
 		if (*p < '0' || *p > '9')
-			return;
+			return count;
 		while (*p >= '0' && *p <= '9')
 			offset = offset * 10 + *p++ - '0';
 		if (*p++ != ' ')
-			return;
+			return count;
 		mask_len = hex(&p, mask, sizeof(mask));
 		if (mask_len < 1 || *p++ != ' ')
-			return;
+			return count;
 		pattern_len = hex(&p, pattern, sizeof(pattern));
 		if (pattern_len < 1 || mask_len != (pattern_len + 7) / 8 || *p++ != '\n')
-			return;
+			return count;
 		entry = nla_nest_start(msg, ++count);
 		if (!entry)
-			return;
+			return count;
 		nla_put(msg, NL80211_PKTPAT_MASK, mask_len, mask);
 		nla_put(msg, NL80211_PKTPAT_PATTERN, pattern_len, pattern);
 		/* The gen 1's and gen 2's cfg80211 predates the attribute: without it the
@@ -140,6 +143,7 @@ static void add_listed(struct nl_msg *msg, int count)
 			nla_put(msg, NL80211_PKTPAT_OFFSET, sizeof(offset), &offset);
 		nla_nest_end(msg, entry);
 	}
+	return count;
 }
 
 /* The message with the list's patterns added to its triggers, or NULL when
@@ -185,7 +189,8 @@ static struct nl_msg *with_listed(struct nlmsghdr *hdr)
 		if (nla_put(msg, ++count, entry->len - 4, entry + 1) < 0)
 			goto failed;
 	}
-	add_listed(msg, count);
+	count = add_listed(msg, count, PATTERNS);
+	add_listed(msg, count, FIXED_PATTERNS);
 	nla_nest_end(msg, patterns);
 	nla_nest_end(msg, nest);
 	return msg;
