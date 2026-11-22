@@ -1,3 +1,5 @@
+<div align="center">
+
 # unfr0zen
 
 [![Build](https://dl.circleci.com/status-badge/img/gh/unfr0zen/unfr0zen/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/unfr0zen/unfr0zen/tree/main)
@@ -11,6 +13,8 @@ Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud neede
 Zigbee needs no Wi-Fi at all, so it gives a new life to the many 2nd and 3rd
 generation units whose Wi-Fi has failed.
 
+</div>
+
 > [!CAUTION]
 > **This rewrites the flash of the device that runs your heating.** A failed run
 > or a bad setup can leave the thermostat unbootable, or running without
@@ -22,10 +26,12 @@ generation units whose Wi-Fi has failed.
 > tests. unfr0zen comes **without any warranty**: you use it at your own risk
 > ([Disclaimers](#disclaimers)).
 
+<p align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/routes-dark.svg">
   <img alt="A thermostat running nestlocal. Its line to Nest's cloud is cut: nestlocal, on the thermostat, takes its place. It connects over Wi-Fi to your MQTT broker, where Home Assistant discovers it; over Wi-Fi or Thread to a Matter controller such as Home Assistant, Apple Home or Google Home; and through its own radio to a Zigbee coordinator, Zigbee2MQTT or ZHA, with no Wi-Fi needed. Any thermometer in Home Assistant can regulate the heating in place of its own sensor." src="assets/routes-light.svg">
 </picture>
+</p>
 
 ## What you get
 
