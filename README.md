@@ -251,6 +251,10 @@ accept full responsibility for the result.
 
 See [BUILDING.md](BUILDING.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 unfr0zen is licensed under the [GNU General Public License v3.0](LICENSE).
