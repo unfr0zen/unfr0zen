@@ -173,7 +173,7 @@ pub struct Sensor {
     state: Mutex<State>,
     /// Interrupts the port's wait for a new reading (port.rs).
     notify: OnceLock<Box<dyn Fn() + Send + Sync>>,
-    on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    watchers: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     /// Gen 1 and gen 2 select only after their native manager accepts the first sample.
     select_after_delivery: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// The temperature of the beacon before any reading, °C.
@@ -206,15 +206,16 @@ impl Sensor {
                 introduced: false,
             }),
             notify: OnceLock::new(),
-            on_change: OnceLock::new(),
+            watchers: Mutex::new(Vec::new()),
             select_after_delivery: OnceLock::new(),
             introduction: OnceLock::new(),
         };
         Ok(Arc::new(sensor))
     }
 
+    /// Calls f with each reading, and whenever what Home Assistant shows changes.
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        let _ = self.on_change.set(Box::new(f));
+        self.watchers.lock().unwrap().push(Box::new(f));
     }
 
     pub fn select_when_ready(&self, store: &Store, serial: &str) {
@@ -289,7 +290,7 @@ impl Sensor {
         }
     }
 
-    /// Tells Home Assistant when what it shows has changed.
+    /// Tells the watchers when what Home Assistant shows has changed.
     fn publish_changes(&self, always: bool) {
         let changed = {
             let mut state = self.state.lock().unwrap();
@@ -300,7 +301,7 @@ impl Sensor {
             changed
         };
         if changed || always {
-            if let Some(f) = self.on_change.get() {
+            for f in self.watchers.lock().unwrap().iter() {
                 f();
             }
         }

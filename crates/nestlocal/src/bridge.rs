@@ -136,6 +136,19 @@ impl Bridge {
         Some(if active { sensor.source() } else { "backplate" })
     }
 
+    /// What the entities show, from the device and shared buckets, with the
+    /// stand-in sensor's reading as the current temperature while it
+    /// regulates: nlclient updates shared's only in steps of half a degree.
+    pub fn state(&self, dev: &Fields, sh: &Fields) -> Fields {
+        let mut s = state(dev, sh);
+        if self.temperature_source() == Some("external") {
+            if let Some(reading) = self.sensor.get().and_then(|sensor| sensor.reading()) {
+                s.insert("current_temperature".into(), shown(Some(&reading.into())));
+            }
+        }
+        s
+    }
+
     /// Takes readings for the sensor and shows what it does.
     pub fn attach_updates(self: &Arc<Self>, updates: Arc<crate::update::Updates>) {
         let bridge = Arc::downgrade(self);
@@ -380,7 +393,7 @@ impl Bridge {
     /// The state, with what no bucket holds: occupancy, the brightness the
     /// unit shows and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
-        let mut shown = state(dev, sh);
+        let mut shown = self.state(dev, sh);
         shown.insert("occupancy".into(), self.occupancy.occupied().into());
         let (brightness, automatic) = crate::brightness::reported(dev, self.brightness.shown());
         shown.insert("screen_brightness".into(), brightness.map_or(Value::Null, Value::from));
@@ -1175,6 +1188,30 @@ pub mod tests {
             Value::Object(m) => m,
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn the_current_temperature_is_the_external_reading_while_it_regulates() {
+        let b = test_bridge();
+        b.store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        let dir = std::env::temp_dir().join(format!("nestlocal-bridge-sensor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sensor =
+            crate::sensor::Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800))
+                .unwrap();
+        b.attach_sensor(sensor.clone());
+        crate::sensor::ensure_buckets(&b.store, "S", &sensor.bucket, None);
+        let sh = obj(json!({"current_temperature": 26.5}));
+        let current = || b.state(&Fields::new(), &sh)["current_temperature"].clone();
+        sensor.set(26.6).unwrap();
+        assert_eq!(current(), json!(26.5), "the backplate regulates until the sensor is chosen and heard");
+        crate::sensor::select(&b.store, "S", &sensor.bucket);
+        sensor.due().unwrap();
+        assert_eq!(current(), json!(26.6), "nlclient regulates from the reading its shared bucket rounds away");
+        sensor.set(26.73).unwrap();
+        assert_eq!(current(), json!(26.7));
+        b.store.merge("rcs_settings.S", &fields! {"active_rcs_sensors" => Vec::<Value>::new()}, 0, 0, true);
+        assert_eq!(current(), json!(26.5), "the backplate chosen on the screen");
     }
 
     #[test]

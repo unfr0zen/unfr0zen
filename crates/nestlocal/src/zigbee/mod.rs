@@ -134,6 +134,10 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         nest.bridge.occupancy.on_change(move || flag.store(true, Ordering::Relaxed));
         let flag = changed.clone();
         nest.bridge.brightness.on_change(move || flag.store(true, Ordering::Relaxed));
+        if let Some(sensor) = nest.bridge.sensor.get() {
+            let flag = changed.clone();
+            sensor.on_change(move || flag.store(true, Ordering::Relaxed));
+        }
         let mut failed_install = None;
         let mut attempt = PairingAttempt::default();
         attempt.look(Instant::now());
