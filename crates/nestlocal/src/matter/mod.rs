@@ -88,7 +88,7 @@ use extras::{
     Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, Humidity, Labels, Switch, Switches,
     TemperatureSource,
 };
-use thermostat::Thermostat;
+use thermostat::{Equipment, Thermostat};
 
 /// The endpoint the thermostat is on.
 pub const THERMOSTAT: u16 = 1;
@@ -381,13 +381,19 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let rand = crypto.rand()?;
     let ota = ota::Ota::new();
     let switches = extras::switches(&nest);
-    let node =
-        node_for_network(view.device_flag("has_fan"), &switches, settings.thread, nest.bridge.sensor.get().is_some());
+    let equipment = Equipment::of(&nest);
+    let node = node_for_network(
+        view.device_flag("has_fan"),
+        equipment,
+        &switches,
+        settings.thread,
+        nest.bridge.sensor.get().is_some(),
+    );
     let im = InteractionModel::new_with_net_ctl(
         &matter,
         &crypto,
         &buffers,
-        data_model(node, rand, nest.clone(), switches, &controller, &ota, settings.thread),
+        data_model(node, rand, nest.clone(), equipment, switches, &controller, &ota, settings.thread),
         &kv,
         &controller,
         &state,
@@ -603,28 +609,48 @@ const THREAD_ROOT: Endpoint<'static> = Endpoint::new_with_clients(
     &[OTA_PROVIDER],
 );
 
-/// The node: the thermostat, and the endpoints beside it that this unit's
-/// equipment calls for (a fan, its switches).
-#[cfg(test)]
-fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
-    node_for_network(has_fan, switches, false, false)
-}
-
-fn node_for_network(has_fan: bool, switches: &[Switch], thread: bool, external: bool) -> Node<'static> {
-    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
-    let mut endpoints = vec![
-        if thread { THREAD_ROOT } else { ROOT },
+/// The thermostat endpoint, with the features of what the equipment does.
+macro_rules! thermostat_endpoint {
+    ($equipment:expr) => {
         Endpoint::new(
             THERMOSTAT,
             devices!(DEV_TYPE_THERMOSTAT),
             clusters!(
                 desc::DescHandler::CLUSTER,
                 identify::CLUSTER,
-                Thermostat::CLUSTER,
+                $equipment.cluster(),
                 Humidity::CLUSTER,
                 Display::CLUSTER
             ),
-        ),
+        )
+    };
+}
+const HEATING_THERMOSTAT: Endpoint<'static> = thermostat_endpoint!(Equipment::Heat);
+const COOLING_THERMOSTAT: Endpoint<'static> = thermostat_endpoint!(Equipment::Cool);
+const THERMOSTAT_ENDPOINT: Endpoint<'static> = thermostat_endpoint!(Equipment::Both);
+
+/// The node: the thermostat, with the features of what the unit's equipment
+/// does, and the endpoints beside it that it calls for (a fan, its switches).
+#[cfg(test)]
+fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
+    node_for_network(has_fan, Equipment::Both, switches, false, false)
+}
+
+fn node_for_network(
+    has_fan: bool,
+    equipment: Equipment,
+    switches: &[Switch],
+    thread: bool,
+    external: bool,
+) -> Node<'static> {
+    use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
+    let mut endpoints = vec![
+        if thread { THREAD_ROOT } else { ROOT },
+        match equipment {
+            Equipment::Heat => HEATING_THERMOSTAT,
+            Equipment::Cool => COOLING_THERMOSTAT,
+            Equipment::Both => THERMOSTAT_ENDPOINT,
+        },
         Endpoint::new(
             BACKPLATE,
             devices!(DEV_TYPE_TEMPERATURE_SENSOR),
@@ -696,10 +722,12 @@ impl IdentifyHooks for WakeScreen {
 }
 
 /// The cluster handlers, by cluster; each serves every endpoint it is on.
+#[allow(clippy::too_many_arguments)]
 fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
     node: Node<'static>,
     mut rand: impl rand::Rng + Copy + 'a,
     nest: Arc<Nest>,
+    equipment: Equipment,
     switches: Vec<Switch>,
     controller: &'a C,
     ota: &'a ota::Ota,
@@ -741,7 +769,11 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Thermostat::CLUSTER.id,
-                Async(thermostat_cluster::HandlerAdaptor(Thermostat::new(Dataver::new_rand(&mut rand), nest.clone()))),
+                Async(thermostat_cluster::HandlerAdaptor(Thermostat::new(
+                    Dataver::new_rand(&mut rand),
+                    nest.clone(),
+                    equipment,
+                ))),
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Humidity::CLUSTER.id,

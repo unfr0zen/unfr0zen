@@ -2,10 +2,16 @@
 //! buckets and written through the same commands as MQTT's set/ topics.
 //!
 //! Every Matter temperature is in hundredths of a degree Celsius. The
-//! cluster advertises heating, cooling and auto on every unit; which of them
-//! the unit's equipment can do goes in ControlSequenceOfOperation, which is
-//! what controllers read the modes from. Eco is the one preset (PRES), and
-//! the eco temperatures are also the unoccupied setpoints (OCC).
+//! features follow the equipment the unit reported when Matter started:
+//! heating, cooling, or both and auto; controllers offer the modes from them.
+//! Eco is the one preset (PRES), and the eco temperatures are also the
+//! unoccupied setpoints (OCC).
+//!
+//! With auto, heating stays a dead band below cooling: the limits and the
+//! setpoints alike. Outside its range mode the unit has one target, the
+//! mode's setpoint (cooling in cool and on a unit that only cools, heating
+//! otherwise); the other setpoint is the range's end. A value the unit holds
+//! past a limit (set on the unit, over MQTT or Zigbee) reads as the limit.
 
 use std::sync::Arc;
 
@@ -14,7 +20,9 @@ use rs_matter::dm::clusters::decl::thermostat::{
     PresetStructArrayBuilder, PresetStructBuilder, PresetTypeFeaturesBitmap, PresetTypeStructArrayBuilder,
     PresetTypeStructBuilder, RelayStateBitmap, SetpointRaiseLowerModeEnum, SystemModeEnum,
 };
-use rs_matter::dm::{ArrayAttributeRead, Cluster, Dataver, InvokeContext, ReadContext, WriteContext};
+use rs_matter::dm::{
+    ArrayAttributeRead, Attribute, Cluster, Dataver, InvokeContext, Quality, ReadContext, WriteContext,
+};
 use rs_matter::error::{Error, ErrorCode};
 use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVBuilderParent};
 use rs_matter::with;
@@ -26,63 +34,216 @@ const MIN: i16 = 900;
 const MAX: i16 = 3200;
 /// The least gap the unit keeps between a range's low and high, 0.1 °C.
 const DEAD_BAND: i8 = 15;
+const GAP: i16 = DEAD_BAND as i16 * 10;
 /// The eco temperatures' own bounds, as the MQTT number entities have them:
 /// the unoccupied heating setpoint at most, the cooling one at least.
 const ECO_HEAT_MAX: i16 = 2100;
 const ECO_COOL_MIN: i16 = 2400;
 const ECO: &[u8] = b"eco";
 
+/// What the unit's equipment does, as the cluster's features have it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Equipment {
+    Heat,
+    Cool,
+    Both,
+}
+
+impl Equipment {
+    /// From the unit's can_heat and can_cool; neither reads as both.
+    pub fn of(nest: &Nest) -> Self {
+        let view = nest.view();
+        match (view.shared_flag("can_heat"), view.shared_flag("can_cool")) {
+            (true, false) => Self::Heat,
+            (false, true) => Self::Cool,
+            _ => Self::Both,
+        }
+    }
+
+    /// The cluster with this equipment's features.
+    pub const fn cluster(self) -> Cluster<'static> {
+        let modes = match self {
+            Self::Heat => thermostat::Feature::HEATING.bits(),
+            Self::Cool => thermostat::Feature::COOLING.bits(),
+            Self::Both => {
+                thermostat::Feature::HEATING.bits()
+                    | thermostat::Feature::COOLING.bits()
+                    | thermostat::Feature::AUTO_MODE.bits()
+            }
+        };
+        Thermostat::CLUSTER
+            .with_features(modes | thermostat::Feature::OCCUPANCY.bits() | thermostat::Feature::PRESETS.bits())
+    }
+
+    fn heats(self) -> bool {
+        self != Self::Cool
+    }
+
+    fn cools(self) -> bool {
+        self != Self::Heat
+    }
+
+    /// The heating setpoint's limits: with auto, a dead band under cooling's.
+    fn heat_limits(self) -> (i16, i16) {
+        (MIN, if self == Self::Both { MAX - GAP } else { MAX })
+    }
+
+    /// The cooling setpoint's limits: with auto, a dead band over heating's.
+    fn cool_limits(self) -> (i16, i16) {
+        (if self == Self::Both { MIN + GAP } else { MIN }, MAX)
+    }
+}
+
+/// The attributes every thermostat has, OutdoorTemperature, and those the
+/// cluster's features make mandatory.
+fn attributes(attr: &Attribute, _revision: u16, features: u32) -> bool {
+    use thermostat::AttributeId as A;
+    let has = |feature: thermostat::Feature| features & feature.bits() != 0;
+    if !attr.quality.contains(Quality::OPTIONAL) {
+        return true;
+    }
+    match A::try_from(attr.id) {
+        Ok(
+            A::OutdoorTemperature
+            | A::Occupancy
+            | A::ThermostatRunningState
+            | A::PresetTypes
+            | A::NumberOfPresets
+            | A::ActivePresetHandle
+            | A::Presets,
+        ) => true,
+        Ok(
+            A::OccupiedHeatingSetpoint
+            | A::UnoccupiedHeatingSetpoint
+            | A::AbsMinHeatSetpointLimit
+            | A::AbsMaxHeatSetpointLimit
+            | A::MinHeatSetpointLimit
+            | A::MaxHeatSetpointLimit,
+        ) => has(thermostat::Feature::HEATING),
+        Ok(
+            A::OccupiedCoolingSetpoint
+            | A::UnoccupiedCoolingSetpoint
+            | A::AbsMinCoolSetpointLimit
+            | A::AbsMaxCoolSetpointLimit
+            | A::MinCoolSetpointLimit
+            | A::MaxCoolSetpointLimit,
+        ) => has(thermostat::Feature::COOLING),
+        Ok(A::MinSetpointDeadBand) => has(thermostat::Feature::AUTO_MODE),
+        _ => false,
+    }
+}
+
 pub struct Thermostat {
     dataver: Dataver,
     nest: Arc<Nest>,
+    equipment: Equipment,
 }
 
 impl Thermostat {
-    pub fn new(dataver: Dataver, nest: Arc<Nest>) -> Self {
-        Self { dataver, nest }
-    }
-
-    /// The setpoint a heating (or cooling) write changes, for the unit's mode.
-    fn setpoint_command(&self, heating: bool) -> &'static str {
-        match (self.nest.view().mode(), heating) {
-            ("heat_cool", true) => "target_low",
-            ("heat_cool", false) => "target_high",
-            _ => "target",
-        }
+    pub fn new(dataver: Dataver, nest: Arc<Nest>, equipment: Equipment) -> Self {
+        Self { dataver, nest, equipment }
     }
 
     fn set(&self, name: &str, arg: &str) -> Result<(), Error> {
         self.nest.apply(name, arg).map_err(failed)
     }
 
-    /// Writes an occupied setpoint inside the advertised limits and, in
-    /// range mode, a dead band clear of the other one.
-    fn set_occupied(&self, heating: bool, value: i16) -> Result<(), Error> {
+    /// Whether the unit's one target is the cooling setpoint, outside range mode.
+    fn target_cools(&self, mode: &str) -> bool {
+        mode == "cool" || (self.equipment == Equipment::Cool && mode != "heat")
+    }
+
+    /// Heating and cooling inside their limits and, with auto, a dead band
+    /// apart: the side kept is cooling's if `keep_cooling`.
+    fn apart(&self, heat: i16, cool: i16, keep_cooling: bool) -> (i16, i16) {
+        let ((heat_min, heat_max), (cool_min, cool_max)) = (self.equipment.heat_limits(), self.equipment.cool_limits());
+        let (heat, cool) = (heat.clamp(heat_min, heat_max), cool.clamp(cool_min, cool_max));
+        match self.equipment {
+            Equipment::Both if cool - heat < GAP && keep_cooling => (cool - GAP, cool),
+            Equipment::Both if cool - heat < GAP => (heat, heat + GAP),
+            _ => (heat, cool),
+        }
+    }
+
+    /// The occupied heating and cooling setpoints.
+    fn occupied(&self) -> (i16, i16) {
         let view = self.nest.view();
-        let gap = i16::from(DEAD_BAND) * 10;
-        let clear = view.mode() != "heat_cool"
-            || if heating {
-                view.shown_centi("target_high").is_none_or(|high| value <= high - gap)
-            } else {
-                view.shown_centi("target_low").is_none_or(|low| value >= low + gap)
+        let mode = view.mode();
+        let low = view.shown_centi("target_low").unwrap_or(2000);
+        let high = view.shown_centi("target_high").unwrap_or(2400);
+        match view.shown_centi("target") {
+            Some(target) if mode != "heat_cool" && self.target_cools(mode) => self.apart(low, target, true),
+            Some(target) if mode != "heat_cool" => self.apart(target, high, false),
+            _ => self.apart(low, high, false),
+        }
+    }
+
+    /// Sets the occupied setpoints given, to the unit's half degrees. One
+    /// that comes within the dead band of the other moves the other.
+    /// Outside range mode, the side that is not the target moves only when
+    /// written: the target otherwise keeps it clear as it reads.
+    fn change(&self, heat: Option<i16>, cool: Option<i16>) -> Result<(), Error> {
+        let mode = self.nest.view().mode().to_string();
+        let (old_heat, old_cool) = self.occupied();
+        let (new_heat, new_cool) = self.apart(heat.map_or(old_heat, half), cool.map_or(old_cool, half), heat.is_none());
+        // Off eco: the setpoints written are now the ones in force.
+        if self.nest.view().state_str("preset") == "eco" {
+            self.set("preset", "none")?;
+        }
+        let ranged = mode == "heat_cool";
+        let target_cools = self.target_cools(&mode);
+        let sides = [(false, heat, new_heat, old_heat), (true, cool, new_cool, old_cool)];
+        // Whichever moves up goes first, so the two never cross on the way.
+        let order = if new_cool > old_cool { [1, 0] } else { [0, 1] };
+        for (cooling, written, new, old) in order.map(|i| sides[i]) {
+            let target = !ranged && cooling == target_cools;
+            if written.is_none() && (new == old || !(ranged || target)) {
+                continue;
+            }
+            let name = match (target, cooling) {
+                (true, _) => "target",
+                (false, true) => "target_high",
+                (false, false) => "target_low",
             };
-        if !(MIN..=MAX).contains(&value) || !clear {
+            self.set(name, &degrees(new))?;
+        }
+        Ok(())
+    }
+
+    /// Writes an occupied setpoint inside its limits.
+    fn set_occupied(&self, heating: bool, value: i16) -> Result<(), Error> {
+        let (min, max) = if heating { self.equipment.heat_limits() } else { self.equipment.cool_limits() };
+        if !(min..=max).contains(&value) {
             return Err(ErrorCode::ConstraintError.into());
         }
-        self.set(self.setpoint_command(heating), &degrees(value))
+        if heating {
+            self.change(Some(value), None)
+        } else {
+            self.change(None, Some(value))
+        }
+    }
+
+    /// The unoccupied (eco) heating and cooling setpoints, inside the limits.
+    fn unoccupied(&self) -> (i16, i16) {
+        let view = self.nest.view();
+        let ((heat_min, heat_max), (cool_min, cool_max)) = (self.equipment.heat_limits(), self.equipment.cool_limits());
+        (
+            view.shown_centi("away_temperature_low").unwrap_or(MIN).clamp(heat_min, heat_max),
+            view.shown_centi("away_temperature_high").unwrap_or(MAX).clamp(cool_min, cool_max),
+        )
     }
 
     fn sequence(&self) -> ControlSequenceOfOperationEnum {
-        let view = self.nest.view();
-        match (view.shared_flag("can_heat"), view.shared_flag("can_cool")) {
-            (true, false) => ControlSequenceOfOperationEnum::HeatingOnly,
-            (false, true) => ControlSequenceOfOperationEnum::CoolingOnly,
-            _ => ControlSequenceOfOperationEnum::CoolingAndHeating,
+        match self.equipment {
+            Equipment::Heat => ControlSequenceOfOperationEnum::HeatingOnly,
+            Equipment::Cool => ControlSequenceOfOperationEnum::CoolingOnly,
+            Equipment::Both => ControlSequenceOfOperationEnum::CoolingAndHeating,
         }
     }
 }
 
 impl ClusterHandler for Thermostat {
+    /// Every feature; the node has the unit's (`Equipment::cluster`).
     const CLUSTER: Cluster<'static> = thermostat::FULL_CLUSTER
         .with_features(
             thermostat::Feature::HEATING.bits()
@@ -91,31 +252,7 @@ impl ClusterHandler for Thermostat {
                 | thermostat::Feature::OCCUPANCY.bits()
                 | thermostat::Feature::PRESETS.bits(),
         )
-        // `required` is only what every thermostat has: what the features
-        // make mandatory is listed too.
-        .with_attrs(with!(
-            required;
-            thermostat::AttributeId::OutdoorTemperature
-                | thermostat::AttributeId::Occupancy
-                | thermostat::AttributeId::OccupiedHeatingSetpoint
-                | thermostat::AttributeId::OccupiedCoolingSetpoint
-                | thermostat::AttributeId::UnoccupiedHeatingSetpoint
-                | thermostat::AttributeId::UnoccupiedCoolingSetpoint
-                | thermostat::AttributeId::MinSetpointDeadBand
-                | thermostat::AttributeId::PresetTypes
-                | thermostat::AttributeId::NumberOfPresets
-                | thermostat::AttributeId::ActivePresetHandle
-                | thermostat::AttributeId::Presets
-                | thermostat::AttributeId::AbsMinHeatSetpointLimit
-                | thermostat::AttributeId::AbsMaxHeatSetpointLimit
-                | thermostat::AttributeId::AbsMinCoolSetpointLimit
-                | thermostat::AttributeId::AbsMaxCoolSetpointLimit
-                | thermostat::AttributeId::MinHeatSetpointLimit
-                | thermostat::AttributeId::MaxHeatSetpointLimit
-                | thermostat::AttributeId::MinCoolSetpointLimit
-                | thermostat::AttributeId::MaxCoolSetpointLimit
-                | thermostat::AttributeId::ThermostatRunningState
-        ))
+        .with_attrs(attributes)
         .with_cmds(with!(thermostat::CommandId::SetpointRaiseLower | thermostat::CommandId::SetActivePresetRequest));
 
     fn dataver(&self) -> u32 {
@@ -139,35 +276,35 @@ impl ClusterHandler for Thermostat {
     }
 
     fn abs_min_heat_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MIN)
+        Ok(self.equipment.heat_limits().0)
     }
 
     fn abs_max_heat_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MAX)
+        Ok(self.equipment.heat_limits().1)
     }
 
     fn abs_min_cool_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MIN)
+        Ok(self.equipment.cool_limits().0)
     }
 
     fn abs_max_cool_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MAX)
+        Ok(self.equipment.cool_limits().1)
     }
 
     fn min_heat_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MIN)
+        Ok(self.equipment.heat_limits().0)
     }
 
     fn max_heat_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MAX)
+        Ok(self.equipment.heat_limits().1)
     }
 
     fn min_cool_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MIN)
+        Ok(self.equipment.cool_limits().0)
     }
 
     fn max_cool_setpoint_limit(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(MAX)
+        Ok(self.equipment.cool_limits().1)
     }
 
     fn min_setpoint_dead_band(&self, _ctx: impl ReadContext) -> Result<i8, Error> {
@@ -175,23 +312,19 @@ impl ClusterHandler for Thermostat {
     }
 
     fn occupied_heating_setpoint(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        let view = self.nest.view();
-        let field = if view.mode() == "heat_cool" { "target_low" } else { "target" };
-        Ok(view.shown_centi(field).unwrap_or(2000))
+        Ok(self.occupied().0)
     }
 
     fn occupied_cooling_setpoint(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        let view = self.nest.view();
-        let field = if view.mode() == "heat_cool" { "target_high" } else { "target" };
-        Ok(view.shown_centi(field).unwrap_or(2400))
+        Ok(self.occupied().1)
     }
 
     fn unoccupied_heating_setpoint(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(self.nest.view().shown_centi("away_temperature_low").unwrap_or(MIN))
+        Ok(self.unoccupied().0)
     }
 
     fn unoccupied_cooling_setpoint(&self, _ctx: impl ReadContext) -> Result<i16, Error> {
-        Ok(self.nest.view().shown_centi("away_temperature_high").unwrap_or(MAX))
+        Ok(self.unoccupied().1)
     }
 
     fn control_sequence_of_operation(&self, _ctx: impl ReadContext) -> Result<ControlSequenceOfOperationEnum, Error> {
@@ -258,8 +391,9 @@ impl ClusterHandler for Thermostat {
         _ctx: impl ReadContext,
         builder: ArrayAttributeRead<PresetStructArrayBuilder<P>, PresetStructBuilder<P>>,
     ) -> Result<P, Error> {
-        let view = self.nest.view();
-        let (low, high) = (view.shown_centi("away_temperature_low"), view.shown_centi("away_temperature_high"));
+        let (low, high) = self.unoccupied();
+        let low = self.equipment.heats().then_some(low);
+        let high = self.equipment.cools().then_some(high);
         macro_rules! eco {
             ($b:expr) => {
                 $b.preset_handle(Nullable::some(Octets(ECO)))?
@@ -292,14 +426,12 @@ impl ClusterHandler for Thermostat {
     }
 
     fn set_system_mode(&self, _ctx: impl WriteContext, value: SystemModeEnum) -> Result<(), Error> {
-        use ControlSequenceOfOperationEnum::{CoolingAndHeating, CoolingOnly, HeatingOnly};
-        // Only the modes the control sequence allows.
-        let sequence = self.sequence();
+        // Only the modes the equipment has.
         let mode = match value {
             SystemModeEnum::Off => "off",
-            SystemModeEnum::Heat if sequence != CoolingOnly => "heat",
-            SystemModeEnum::Cool if sequence != HeatingOnly => "cool",
-            SystemModeEnum::Auto if sequence == CoolingAndHeating => "heat_cool",
+            SystemModeEnum::Heat if self.equipment.heats() => "heat",
+            SystemModeEnum::Cool if self.equipment.cools() => "cool",
+            SystemModeEnum::Auto if self.equipment == Equipment::Both => "heat_cool",
             _ => return Err(ErrorCode::ConstraintError.into()),
         };
         self.set("mode", mode)
@@ -313,8 +445,8 @@ impl ClusterHandler for Thermostat {
         self.set_occupied(false, value)
     }
 
-    // The heating and cooling limits are all Matter is told; the eco bounds
-    // keep the two more than a dead band apart.
+    // The eco bounds sit inside the heating and cooling limits and keep the
+    // two more than a dead band apart.
     fn set_unoccupied_heating_setpoint(&self, _ctx: impl WriteContext, value: i16) -> Result<(), Error> {
         if !(MIN..=ECO_HEAT_MAX).contains(&value) {
             return Err(ErrorCode::ConstraintError.into());
@@ -334,8 +466,8 @@ impl ClusterHandler for Thermostat {
         _ctx: impl WriteContext,
         _value: ControlSequenceOfOperationEnum,
     ) -> Result<(), Error> {
-        // The unit's wiring decides it.
-        Err(ErrorCode::UnsupportedAccess.into())
+        // The unit's wiring decides it: the spec has writes ignored.
+        Ok(())
     }
 
     fn handle_setpoint_raise_lower(
@@ -343,38 +475,30 @@ impl ClusterHandler for Thermostat {
         _ctx: impl InvokeContext,
         request: thermostat::SetpointRaiseLowerRequest<'_>,
     ) -> Result<(), Error> {
-        // Past the limits or the dead band, a setpoint stops at them: the
-        // spec's clamp, not an error.
+        // Past its limits a setpoint stops at them, the spec's clamp; one
+        // that comes within the dead band of the other moves the other.
         let delta = i16::from(request.amount()?) * 10; // 0.1 °C steps
         let view = self.nest.view();
-        if view.mode() != "heat_cool" {
-            return match view.shown_centi("target") {
-                Some(t) => self.set("target", &degrees((t + delta).clamp(MIN, MAX))),
-                None => Ok(()),
-            };
-        }
-        let (Some(low), Some(high)) = (view.shown_centi("target_low"), view.shown_centi("target_high")) else {
-            return Ok(());
+        let reported = if view.mode() == "heat_cool" {
+            view.shown_centi("target_low").is_some() && view.shown_centi("target_high").is_some()
+        } else {
+            view.shown_centi("target").is_some()
         };
+        if !reported {
+            return Ok(());
+        }
         let mode = request.mode()?;
-        let (heat, cool) = (mode != SetpointRaiseLowerModeEnum::Cool, mode != SetpointRaiseLowerModeEnum::Heat);
-        let mut new_low = if heat { (low + delta).clamp(MIN, MAX) } else { low };
-        let mut new_high = if cool { (high + delta).clamp(MIN, MAX) } else { high };
-        let gap = i16::from(DEAD_BAND) * 10;
-        if new_high - new_low < gap {
-            if delta > 0 {
-                new_low = new_high - gap
-            } else {
-                new_high = new_low + gap
-            }
+        let heat = mode != SetpointRaiseLowerModeEnum::Cool && self.equipment.heats();
+        let cool = mode != SetpointRaiseLowerModeEnum::Heat && self.equipment.cools();
+        if !heat && !cool {
+            return Err(ErrorCode::InvalidCommand.into());
         }
-        if heat {
-            self.set("target_low", &degrees(new_low))?;
-        }
-        if cool {
-            self.set("target_high", &degrees(new_high))?;
-        }
-        Ok(())
+        let ((heat_min, heat_max), (cool_min, cool_max)) = (self.equipment.heat_limits(), self.equipment.cool_limits());
+        let (low, high) = self.occupied();
+        self.change(
+            heat.then(|| (low + delta).clamp(heat_min, heat_max)),
+            cool.then(|| (high + delta).clamp(cool_min, cool_max)),
+        )
     }
 
     fn handle_set_active_preset_request(
@@ -446,6 +570,11 @@ impl ClusterHandler for Thermostat {
     }
 }
 
+/// A Matter temperature to the unit's half degrees, as the commands round it.
+fn half(centi: i16) -> i16 {
+    ((f64::from(centi) / 50.0).round() * 50.0) as i16
+}
+
 /// A Matter temperature as the °C argument the commands take.
 fn degrees(centi: i16) -> String {
     format!("{}", f64::from(centi) / 100.0)
@@ -460,8 +589,11 @@ mod tests {
     use rs_matter::utils::storage::WriteBuf;
     use serde_json::json;
 
+    /// A unit with the equipment its fields give.
     fn thermostat(dev: crate::json::Fields, sh: crate::json::Fields) -> Thermostat {
-        Thermostat::new(Dataver::new(0), nest(dev, sh))
+        let nest = nest(dev, sh);
+        let equipment = Equipment::of(&nest);
+        Thermostat::new(Dataver::new(0), nest, equipment)
     }
 
     fn code(result: Result<(), Error>) -> ErrorCode {
@@ -490,9 +622,7 @@ mod tests {
             "can_heat" => true, "can_cool" => false, "hvac_heater_state" => true, "hvac_fan_state" => true},
         );
         assert_eq!(t.local_temperature(ctx(1)).unwrap(), Nullable::some(1820));
-        // Heating and cooling both show the one target.
         assert_eq!(t.occupied_heating_setpoint(ctx(1)).unwrap(), 2138);
-        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2138);
         assert_eq!(t.unoccupied_heating_setpoint(ctx(1)).unwrap(), 1520);
         assert_eq!(t.unoccupied_cooling_setpoint(ctx(1)).unwrap(), 2800);
         assert_eq!(t.system_mode(ctx(1)).unwrap(), SystemModeEnum::Heat);
@@ -516,6 +646,74 @@ mod tests {
         assert_eq!(t.control_sequence_of_operation(ctx(1)).unwrap(), ControlSequenceOfOperationEnum::CoolingAndHeating);
         assert_eq!(t.thermostat_running_state(ctx(1)).unwrap(), RelayStateBitmap::COOL);
         assert_eq!(t.occupancy(ctx(1)).unwrap(), OccupancyBitmap::OCCUPIED);
+    }
+
+    #[test]
+    fn features_follow_the_equipment() {
+        use thermostat::AttributeId as A;
+        let has = |equipment: Equipment, id: A| {
+            let cluster = equipment.cluster();
+            cluster.attributes.iter().any(|a| a.id == id as u32 && (cluster.with_attrs)(a, 0, cluster.feature_map))
+        };
+        let (heat, cool, auto) =
+            (thermostat::Feature::HEATING, thermostat::Feature::COOLING, thermostat::Feature::AUTO_MODE);
+        for (equipment, features, absent) in [
+            (Equipment::Heat, heat, [A::OccupiedCoolingSetpoint, A::MinCoolSetpointLimit, A::MinSetpointDeadBand]),
+            (Equipment::Cool, cool, [A::OccupiedHeatingSetpoint, A::MaxHeatSetpointLimit, A::MinSetpointDeadBand]),
+        ] {
+            let modes = equipment.cluster().feature_map & (heat | cool | auto).bits();
+            assert_eq!(modes, features.bits(), "{equipment:?}");
+            for id in absent {
+                assert!(!has(equipment, id), "{equipment:?} {id:?}");
+            }
+            assert!(has(equipment, A::ControlSequenceOfOperation) && has(equipment, A::Presets));
+        }
+        assert_eq!(Equipment::Both.cluster().feature_map & (heat | cool | auto).bits(), (heat | cool | auto).bits());
+        assert!(has(Equipment::Both, A::MinSetpointDeadBand) && has(Equipment::Both, A::OccupiedCoolingSetpoint));
+
+        // A unit that only heats offers its whole range: no dead band.
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        assert_eq!(t.equipment, Equipment::Heat);
+        assert_eq!(
+            (t.min_heat_setpoint_limit(ctx(1)).unwrap(), t.max_heat_setpoint_limit(ctx(1)).unwrap()),
+            (MIN, MAX)
+        );
+        assert_eq!(t.control_sequence_of_operation(ctx(1)).unwrap(), ControlSequenceOfOperationEnum::HeatingOnly);
+    }
+
+    #[test]
+    fn heating_stays_a_dead_band_below_cooling() {
+        let t = thermostat(fields! {"temperature_scale" => "C"}, fields! {});
+        let gap = i16::from(t.min_setpoint_dead_band(ctx(1)).unwrap()) * 10;
+        let pairs = [
+            (t.abs_min_heat_setpoint_limit(ctx(1)), t.abs_min_cool_setpoint_limit(ctx(1))),
+            (t.abs_max_heat_setpoint_limit(ctx(1)), t.abs_max_cool_setpoint_limit(ctx(1))),
+            (t.min_heat_setpoint_limit(ctx(1)), t.min_cool_setpoint_limit(ctx(1))),
+            (t.max_heat_setpoint_limit(ctx(1)), t.max_cool_setpoint_limit(ctx(1))),
+        ];
+        for (heat, cool) in pairs {
+            assert!(heat.unwrap() <= cool.unwrap() - gap);
+        }
+        // Outside range mode the target is one side, the range's end the
+        // other, moved clear of the target when it is not.
+        for (mode, target, low, high, want) in [
+            ("heat", 20.37, 18.0, 24.0, (2037, 2400)),
+            ("heat", 24.0, 18.0, 24.5, (2400, 2550)),
+            ("cool", 24.0, 18.0, 26.0, (1800, 2400)),
+            ("cool", 19.0, 18.0, 26.0, (1750, 1900)),
+            ("off", 18.0, 17.0, 19.0, (1800, 1950)),
+            // Set on the unit past the limits: they read as the limits.
+            ("heat", 31.5, 18.0, 24.0, (3050, 3200)),
+            ("heat_cool", 0.0, 4.5, 35.0, (900, 3200)),
+        ] {
+            let t = thermostat(
+                fields! {"temperature_scale" => "C"},
+                fields! {"target_temperature_type" => if mode == "heat_cool" { "range" } else { mode },
+                "target_temperature" => target, "target_temperature_low" => low, "target_temperature_high" => high},
+            );
+            let read = (t.occupied_heating_setpoint(ctx(1)).unwrap(), t.occupied_cooling_setpoint(ctx(1)).unwrap());
+            assert_eq!(read, want, "{mode} {target}");
+        }
     }
 
     #[test]
@@ -568,11 +766,9 @@ mod tests {
             assert_eq!(code(t.set_system_mode(ctx(1), unsupported)), ErrorCode::ConstraintError, "{unsupported:?}");
             assert_eq!(t.system_mode(ctx(1)).unwrap(), SystemModeEnum::Off);
         }
-        // The equipment's wiring decides the sequence.
-        assert_eq!(
-            code(t.set_control_sequence_of_operation(ctx(1), ControlSequenceOfOperationEnum::HeatingOnly)),
-            ErrorCode::UnsupportedAccess
-        );
+        // The equipment's wiring decides the sequence: a write is ignored.
+        t.set_control_sequence_of_operation(ctx(1), ControlSequenceOfOperationEnum::HeatingOnly).unwrap();
+        assert_eq!(t.control_sequence_of_operation(ctx(1)).unwrap(), ControlSequenceOfOperationEnum::CoolingAndHeating);
     }
 
     #[test]
@@ -582,33 +778,50 @@ mod tests {
             fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0,
             "target_temperature_low" => 18.0, "target_temperature_high" => 25.0},
         );
+        let low_high = |t: &Thermostat| (shared(t, "target_temperature_low"), shared(t, "target_temperature_high"));
+        let read = |t: &Thermostat| {
+            (t.occupied_heating_setpoint(ctx(1)).unwrap(), t.occupied_cooling_setpoint(ctx(1)).unwrap())
+        };
         // To the unit's half degrees: 21.26 °C is 21.5.
         t.set_occupied_heating_setpoint(ctx(1), 2126).unwrap();
         assert_eq!(shared(&t, "target_temperature"), Some(21.5));
-        t.set_occupied_cooling_setpoint(ctx(1), 2240).unwrap();
-        assert_eq!(shared(&t, "target_temperature"), Some(22.5));
-        assert_eq!(
-            (shared(&t, "target_temperature_low"), shared(&t, "target_temperature_high")),
-            (Some(18.0), Some(25.0))
-        );
+        // In heat, cooling is the range's high: the target stays.
+        t.set_occupied_cooling_setpoint(ctx(1), 2400).unwrap();
+        assert_eq!((shared(&t, "target_temperature"), low_high(&t)), (Some(21.5), (Some(18.0), Some(24.0))));
+        assert_eq!(read(&t), (2150, 2400));
+        // Within the dead band of the target, it moves the target.
+        t.set_occupied_cooling_setpoint(ctx(1), 2200).unwrap();
+        assert_eq!((shared(&t, "target_temperature"), low_high(&t)), (Some(20.5), (Some(18.0), Some(22.0))));
+        assert_eq!(read(&t), (2050, 2200));
+
+        // In cool, the reverse.
+        t.set_system_mode(ctx(1), SystemModeEnum::Cool).unwrap();
+        t.set_occupied_heating_setpoint(ctx(1), 2100).unwrap();
+        assert_eq!((shared(&t, "target_temperature"), low_high(&t)), (Some(22.5), (Some(21.0), Some(22.0))));
+        t.set_occupied_cooling_setpoint(ctx(1), 2600).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(26.0));
+        assert_eq!(read(&t), (2100, 2600));
 
         t.set_system_mode(ctx(1), SystemModeEnum::Auto).unwrap();
         t.set_occupied_heating_setpoint(ctx(1), 1900).unwrap();
         t.set_occupied_cooling_setpoint(ctx(1), 2650).unwrap();
-        assert_eq!(
-            (shared(&t, "target_temperature_low"), shared(&t, "target_temperature_high")),
-            (Some(19.0), Some(26.5))
-        );
-        assert_eq!(shared(&t, "target_temperature"), Some(22.5));
-        assert_eq!(
-            (t.occupied_heating_setpoint(ctx(1)).unwrap(), t.occupied_cooling_setpoint(ctx(1)).unwrap()),
-            (1900, 2650)
-        );
+        assert_eq!(low_high(&t), (Some(19.0), Some(26.5)));
+        assert_eq!(shared(&t, "target_temperature"), Some(26.0));
+        assert_eq!(read(&t), (1900, 2650));
 
         t.set_unoccupied_heating_setpoint(ctx(1), 1220).unwrap();
         t.set_unoccupied_cooling_setpoint(ctx(1), 2900).unwrap();
         assert_eq!(field(&t.nest, "device", "away_temperature_low").as_f64(), Some(12.0));
         assert_eq!(field(&t.nest, "device", "away_temperature_high").as_f64(), Some(29.0));
+
+        // Off on a unit that only cools: cooling is the target.
+        let t = thermostat(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "off", "target_temperature" => 22.0, "can_cool" => true},
+        );
+        t.set_occupied_cooling_setpoint(ctx(1), 2400).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(24.0));
+        assert_eq!(t.occupied_cooling_setpoint(ctx(1)).unwrap(), 2400);
     }
 
     #[test]
@@ -628,14 +841,22 @@ mod tests {
             fields! {"temperature_scale" => "C"},
             fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0},
         );
-        // The unit takes 4.5-35 °C; Matter is told 9-32.
-        for centi in [500, 850, 3250, 3500] {
+        // The unit takes 4.5-35 °C; Matter is told 9-30.5 to heat to,
+        // 10.5-32 to cool to.
+        for centi in [500, 850, 3100, 3250, 3500] {
             assert_eq!(code(t.set_occupied_heating_setpoint(ctx(1), centi)), ErrorCode::ConstraintError, "{centi}");
+        }
+        for centi in [500, 1000, 3250, 3500] {
             assert_eq!(code(t.set_occupied_cooling_setpoint(ctx(1), centi)), ErrorCode::ConstraintError, "{centi}");
         }
         assert_eq!(shared(&t, "target_temperature"), Some(20.0));
         t.set_occupied_heating_setpoint(ctx(1), MIN).unwrap();
         assert_eq!(shared(&t, "target_temperature"), Some(9.0));
+        t.set_occupied_heating_setpoint(ctx(1), 3050).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(30.5));
+        t.set_system_mode(ctx(1), SystemModeEnum::Cool).unwrap();
+        t.set_occupied_cooling_setpoint(ctx(1), 1050).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(10.5));
         t.set_occupied_cooling_setpoint(ctx(1), MAX).unwrap();
         assert_eq!(shared(&t, "target_temperature"), Some(32.0));
 
@@ -655,25 +876,30 @@ mod tests {
     }
 
     #[test]
-    fn range_setpoints_keep_the_dead_band() {
+    fn range_setpoints_move_the_other_clear_of_the_dead_band() {
         let t = thermostat(
             fields! {"temperature_scale" => "C"},
             fields! {"target_temperature_type" => "range", "target_temperature_low" => 19.0,
             "target_temperature_high" => 24.0},
         );
-        assert_eq!(code(t.set_occupied_heating_setpoint(ctx(1), 2260)), ErrorCode::ConstraintError);
-        assert_eq!(code(t.set_occupied_cooling_setpoint(ctx(1), 2040)), ErrorCode::ConstraintError);
-        assert_eq!(
-            (shared(&t, "target_temperature_low"), shared(&t, "target_temperature_high")),
-            (Some(19.0), Some(24.0))
+        let low_high = |t: &Thermostat| (shared(t, "target_temperature_low"), shared(t, "target_temperature_high"));
+        // 22.6 °C is 22.5 to the unit, clear of the high.
+        t.set_occupied_heating_setpoint(ctx(1), 2260).unwrap();
+        assert_eq!(low_high(&t), (Some(22.5), Some(24.0)));
+        // The side written stays; the other moves.
+        t.set_occupied_heating_setpoint(ctx(1), 2300).unwrap();
+        assert_eq!(low_high(&t), (Some(23.0), Some(24.5)));
+        t.set_occupied_cooling_setpoint(ctx(1), 2040).unwrap();
+        assert_eq!(low_high(&t), (Some(19.0), Some(20.5)));
+
+        // Rounded as the unit stores it: 22.3 °C is 22.5, too close to 23.8.
+        let t = thermostat(
+            fields! {"temperature_scale" => "F"},
+            fields! {"target_temperature_type" => "range", "target_temperature_low" => 19.0,
+            "target_temperature_high" => 23.8},
         );
-        t.set_occupied_heating_setpoint(ctx(1), 2250).unwrap();
-        assert_eq!(code(t.set_occupied_cooling_setpoint(ctx(1), 2350)), ErrorCode::ConstraintError);
-        t.set_occupied_cooling_setpoint(ctx(1), 2400).unwrap();
-        assert_eq!(
-            (shared(&t, "target_temperature_low"), shared(&t, "target_temperature_high")),
-            (Some(22.5), Some(24.0))
-        );
+        t.set_occupied_heating_setpoint(ctx(1), 2230).unwrap();
+        assert_eq!(low_high(&t), (Some(22.5), Some(24.0)));
     }
 
     #[test]
@@ -698,7 +924,7 @@ mod tests {
     #[test]
     fn writes_before_the_unit_reported_are_refused() {
         let bridge = crate::bridge::tests::test_bridge();
-        let t = Thermostat::new(Dataver::new(0), std::sync::Arc::new(Nest { bridge }));
+        let t = Thermostat::new(Dataver::new(0), std::sync::Arc::new(Nest { bridge }), Equipment::Both);
         assert_eq!(code(t.set_system_mode(ctx(1), SystemModeEnum::Heat)), ErrorCode::ConstraintError);
         assert_eq!(code(t.set_occupied_heating_setpoint(ctx(1), 2000)), ErrorCode::ConstraintError);
     }
@@ -732,13 +958,22 @@ mod tests {
             (Some(20.5), Some(23.0))
         );
 
-        // One setpoint: the target moves whichever the request names.
+        // In cool, the target is cooling.
         let t = thermostat(
             fields! {"temperature_scale" => "C"},
             fields! {"target_temperature_type" => "cool", "target_temperature" => 24.0},
         );
-        raise_lower(&t, Both, -20).unwrap();
+        raise_lower(&t, Cool, -20).unwrap();
         assert_eq!(shared(&t, "target_temperature"), Some(22.0));
+
+        // A unit that only heats has no cooling side to move.
+        let t = thermostat(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0, "can_heat" => true},
+        );
+        assert_eq!(raise_lower(&t, Cool, 10).unwrap_err().code(), ErrorCode::InvalidCommand);
+        raise_lower(&t, Both, 10).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(21.0));
     }
 
     #[test]
@@ -747,23 +982,39 @@ mod tests {
         let low_high = |t: &Thermostat| (shared(t, "target_temperature_low"), shared(t, "target_temperature_high"));
         let t = thermostat(
             fields! {"temperature_scale" => "C"},
-            fields! {"target_temperature_type" => "heat", "target_temperature" => 31.5},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 29.5},
         );
         raise_lower(&t, Heat, 20).unwrap();
-        assert_eq!(shared(&t, "target_temperature"), Some(32.0));
+        assert_eq!(shared(&t, "target_temperature"), Some(30.5));
         raise_lower(&t, Heat, -127).unwrap();
         raise_lower(&t, Heat, -127).unwrap();
         assert_eq!(shared(&t, "target_temperature"), Some(9.0));
+        // Set past the limit on the unit: it reads as the limit, and steps from there.
+        let t = thermostat(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 31.5},
+        );
+        raise_lower(&t, Heat, 20).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(30.5));
+        raise_lower(&t, Heat, -5).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(30.0));
+        let t = thermostat(
+            fields! {"temperature_scale" => "C"},
+            fields! {"target_temperature_type" => "cool", "target_temperature" => 12.0},
+        );
+        raise_lower(&t, Cool, -30).unwrap();
+        assert_eq!(shared(&t, "target_temperature"), Some(10.5));
 
         let t = thermostat(
             fields! {"temperature_scale" => "C"},
             fields! {"target_temperature_type" => "range", "target_temperature_low" => 21.0,
             "target_temperature_high" => 23.5},
         );
+        // Into the dead band: the side named moves, the other a dead band from it.
         raise_lower(&t, Heat, 20).unwrap();
-        assert_eq!(low_high(&t), (Some(22.0), Some(23.5)));
+        assert_eq!(low_high(&t), (Some(23.0), Some(24.5)));
         raise_lower(&t, Cool, -30).unwrap();
-        assert_eq!(low_high(&t), (Some(22.0), Some(23.5)));
+        assert_eq!(low_high(&t), (Some(20.0), Some(21.5)));
         // Both up against the top: the high stops at it, the low a dead band under.
         let t = thermostat(
             fields! {"temperature_scale" => "C"},
@@ -826,5 +1077,46 @@ mod tests {
         assert_eq!(presets[0].preset_handle().unwrap().into_option().map(|h| h.0), Some(ECO));
         assert_eq!(presets[0].heating_setpoint().unwrap(), Some(1500));
         assert_eq!(presets[0].cooling_setpoint().unwrap(), Some(2840));
+    }
+
+    fn preset_setpoints(t: &Thermostat) -> (Option<i16>, Option<i16>) {
+        let mut buf = [0u8; 256];
+        let mut wb = WriteBuf::new(&mut buf);
+        let array = PresetStructArrayBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        t.presets(ctx(1), ArrayAttributeRead::ReadAll(array)).unwrap();
+        let len = wb.get_tail();
+        let presets: TLVArray<'_, thermostat::PresetStruct<'_>> = TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
+        let eco = presets.iter().next().unwrap().unwrap();
+        (eco.heating_setpoint().unwrap(), eco.cooling_setpoint().unwrap())
+    }
+
+    #[test]
+    fn eco_temperatures_past_the_limits_read_as_the_limits() {
+        // MQTT and Zigbee take eco heat down to 4.5 °C.
+        let t = thermostat(
+            fields! {"temperature_scale" => "C", "away_temperature_low" => 4.5, "away_temperature_high" => 28.0},
+            fields! {"target_temperature_type" => "heat"},
+        );
+        assert_eq!(t.unoccupied_heating_setpoint(ctx(1)).unwrap(), MIN);
+        assert_eq!(preset_setpoints(&t), (Some(MIN), Some(2800)));
+        // A unit that only heats has no cooling setpoint in its preset.
+        let t = thermostat(
+            fields! {"temperature_scale" => "C", "away_temperature_low" => 15.0, "away_temperature_high" => 28.0},
+            fields! {"target_temperature_type" => "heat", "can_heat" => true},
+        );
+        assert_eq!(preset_setpoints(&t), (Some(1500), None));
+    }
+
+    #[test]
+    fn a_setpoint_written_in_eco_leaves_eco() {
+        let t = thermostat(
+            fields! {"temperature_scale" => "C", "eco" => json!({"mode": "manual-eco"})},
+            fields! {"target_temperature_type" => "heat", "target_temperature" => 20.0},
+        );
+        assert_eq!(active_preset(&t).as_deref(), Some(ECO));
+        t.set_occupied_heating_setpoint(ctx(1), 2200).unwrap();
+        assert_eq!(active_preset(&t), None);
+        assert_eq!(field(&t.nest, "device", "eco")["mode"], json!("schedule"));
+        assert_eq!(shared(&t, "target_temperature"), Some(22.0));
     }
 }
