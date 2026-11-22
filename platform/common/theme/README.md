@@ -99,7 +99,7 @@ preload calls in any build; the background layer, brightness manager, views,
 displayed temperature and humidity, the leaf, the globals' setpoint, unit and
 mode getters, the dial's size and whether nlclient draws on the CPU come from
 the builds reviewed by hand (`REVIEWED` in `nlclient/theme.rs`): 6.4-8,
-6.5-14 and 5.9.4-5. Another build is refused at setup. The preload
+both 6.5-14 builds and 5.9.4-5. Another build is refused at setup. The preload
 hooks nothing without a complete `/etc/unfr0zen/theme.bindings` (`name value`
 lines) or when a vtable slot does not hold the stock method it names.
 

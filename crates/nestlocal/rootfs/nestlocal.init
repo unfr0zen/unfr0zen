@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # nestlocal: the unit's own stand-in for Nest's service, bridged to Home
-# Assistant over MQTT (ha/README.md in the imx6-stuff repository).
+# Assistant over MQTT.
 # Started from rcS before nlclient, and kept running by monit.
 #
 # CLI/GUI settings in /etc/nestlocal/options take precedence. Units without
