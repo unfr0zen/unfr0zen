@@ -23,8 +23,8 @@ generation units whose Wi-Fi has failed.
 > ([Disclaimers](#disclaimers)).
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/overview-dark.svg">
-  <img alt="Inside the thermostat, Nest's nlclient app still runs the screen and drives the backplate's heating and cooling wires. nestlocal stands in for Nest's cloud on 127.0.0.1: it reaches an MQTT broker and Matter controllers over Wi-Fi, a Zigbee coordinator through the 802.15.4 radio over SPI, and a Thread border router through OpenThread's ot-daemon and the same radio, which carries Matter over Thread. Nest's and Google's servers are resolved to 0.0.0.0 in /etc/hosts." src="assets/overview-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/routes-dark.svg">
+  <img alt="A thermostat running nestlocal. Its line to Nest's cloud is cut: nestlocal, on the thermostat, takes its place. It connects over Wi-Fi to your MQTT broker, where Home Assistant discovers it; over Wi-Fi or Thread to a Matter controller such as Home Assistant, Apple Home or Google Home; and through its own radio to a Zigbee coordinator, Zigbee2MQTT or ZHA, with no Wi-Fi needed. Any thermometer in Home Assistant can regulate the heating in place of its own sensor." src="assets/routes-light.svg">
 </picture>
 
 ## What you get
@@ -37,6 +37,13 @@ generation units whose Wi-Fi has failed.
 | Integrations            | none                                                     | MQTT, Matter over Wi-Fi or Thread, Zigbee router                                            |
 | Room temperature        | the thermostat's own sensor, or Nest Temperature Sensors | any thermometer in Home Assistant too, with External temperature (`--external-temperature`) |
 | Extras                  | none                                                     | SSH (`--ssh`), Doom (`--doom`), whole-NAND backup and restore                               |
+
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/overview-dark.svg">
+  <img alt="Inside the thermostat, Nest's nlclient app still runs the screen and drives the backplate's heating and cooling wires. nestlocal stands in for Nest's cloud on 127.0.0.1: it reaches an MQTT broker and Matter controllers over Wi-Fi, a Zigbee coordinator through the 802.15.4 radio over SPI, and a Thread border router through OpenThread's ot-daemon and the same radio, which carries Matter over Thread. Nest's and Google's servers are resolved to 0.0.0.0 in /etc/hosts." src="assets/overview-light.svg">
+</picture>
 
 ## Supported thermostats
 
