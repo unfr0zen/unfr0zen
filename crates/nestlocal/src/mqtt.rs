@@ -182,6 +182,21 @@ impl Client {
         self.connected.load(Ordering::Relaxed)
     }
 
+    /// A client whose publishes queue as a connected one's do, never sent.
+    #[cfg(test)]
+    pub fn connected_for_tests() -> (Client, Connection) {
+        let options = Options {
+            client_id: "nestlocal-S".into(),
+            user: None,
+            password: String::new(),
+            will: ("nestlocal/S/availability".into(), b"offline".to_vec()),
+            tls: None,
+        };
+        let (client, connection) = Client::new(Broker::parse("tcp://127.0.0.1:1").unwrap(), options);
+        client.connected.store(true, Ordering::Relaxed);
+        (client, connection)
+    }
+
     /// Whether the connection needs the unit awake for now (wake.rs).
     pub fn holds_awake(&self) -> bool {
         self.awake.load(Ordering::Relaxed)
@@ -194,10 +209,14 @@ impl Client {
         (connects.saturating_sub(1), self.stats.last_end.lock().unwrap().clone())
     }
 
-    pub fn publish(&self, topic: &str, payload: &[u8], qos: u8, retain: bool) {
-        if self.is_connected() {
-            let _ = self.tx.try_send(Request::Publish { topic: topic.into(), payload: payload.to_vec(), qos, retain });
-        }
+    /// Queues a publish; false if it was not, while disconnected or with the
+    /// queue full.
+    pub fn publish(&self, topic: &str, payload: &[u8], qos: u8, retain: bool) -> bool {
+        self.is_connected()
+            && self
+                .tx
+                .try_send(Request::Publish { topic: topic.into(), payload: payload.to_vec(), qos, retain })
+                .is_ok()
     }
 
     /// How long since the last packet to the broker, by the wall clock.

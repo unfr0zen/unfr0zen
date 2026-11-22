@@ -253,6 +253,7 @@ impl Cloud {
             "/entry" => self.entry(),
             "/passphrase" => self.reply(&json!({"value": "LOCAL00", "expires": now_ms() + 3_600_000})),
             "/upload" => self.reply(&json!({"status": "ok"})), // logs and diagnostics: dropped
+            "/schedules/create" => self.create_schedule(body),
             _ if path.starts_with("/transport/") => self.transport(path, body),
             _ if path.starts_with("/weather/") => self.weather(uri.query()),
             _ if path.starts_with("/pro_info/") => empty(StatusCode::NOT_FOUND),
@@ -310,6 +311,30 @@ impl Cloud {
             let all: Vec<_> = self.store.all().into_iter().map(|o| (o, false)).collect();
             self.reply_bytes(objects_json(&all))
         }
+    }
+
+    /// nlclient keeps its hot water schedule as a custom schedule, and asks
+    /// for a bucket to sync it through: {"name": "HOTWATER", "mode":
+    /// "hotwater", "is_built_in": true}, taking the reply's bucket_id when
+    /// its status is "success". The name picks the bucket, so asking again
+    /// gets the same one. It starts empty at timestamp 1, older than the
+    /// device's copy, so the device's next subscribe uploads it; GET
+    /// transport/device lists it, as nlclient expects.
+    fn create_schedule(&self, body: &[u8]) -> Response<Body> {
+        let name = decode_object(body).and_then(|b| b.get("name").and_then(Value::as_str).map(str::to_lowercase));
+        let usable =
+            |n: &String| !n.is_empty() && n.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+        let Some(name) = name.filter(usable) else {
+            logf!("cloud: schedules/create: no usable name in {}", String::from_utf8_lossy(body));
+            let mut r = self.reply(&json!({"error_description": "expected a schedule name"}));
+            *r.status_mut() = StatusCode::BAD_REQUEST;
+            return r;
+        };
+        let key = format!("custom_schedule.{name}");
+        if self.store.get(&key).is_none() {
+            self.store.merge(&key, &Fields::new(), 0, 1, true);
+        }
+        self.reply(&json!({"bucket_id": key, "status": "success"}))
     }
 
     fn bad_json() -> Response<Body> {
@@ -463,6 +488,26 @@ mod tests {
         let (parts, body) = r.into_parts();
         let bytes = body.collect().await.unwrap().to_bytes();
         (parts.status, parts.headers, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_custom_schedule_gets_a_bucket_of_its_own() {
+        let c = cloud();
+        let body = r#"{"name":"HOTWATER","mode":"hotwater","is_built_in":true}"#;
+        let (status, _, reply) = call(&c, "/schedules/create", body).await;
+        assert_eq!(
+            (status, reply.as_str()),
+            (StatusCode::OK, r#"{"bucket_id":"custom_schedule.hotwater","status":"success"}"#)
+        );
+        assert_eq!(call(&c, "/schedules/create", body).await.2, reply, "the same bucket again");
+        let made = c.store.get("custom_schedule.hotwater").unwrap();
+        assert_eq!((made.timestamp, made.value.len()), (1, 0), "empty, and older than the device's copy");
+        assert!(call(&c, "/transport/device/S", "").await.2.contains("custom_schedule.hotwater"));
+        for bad in [r#"{"mode":"hotwater"}"#, r#"{"name":"../x"}"#, "not json"] {
+            let (status, _, reply) = call(&c, "/schedules/create", bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+            assert!(reply.contains("error_description"), "{bad}");
+        }
     }
 
     #[tokio::test]

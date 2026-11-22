@@ -564,8 +564,9 @@ impl Server {
         if message.aps.cluster == ota::CLUSTER && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
             ota.message(ezsp, (message.sender, message.aps.source_endpoint), &message.payload)?;
         }
-        if let Some((endpoint, answer)) = answer(nest, &message) {
-            let to = (message.sender, message.aps.source_endpoint);
+        let (endpoint, answers) = answer(nest, &message);
+        let to = (message.sender, message.aps.source_endpoint);
+        for answer in answers {
             // A read unanswered now is a failed read: wait briefly for room.
             let until = Instant::now() + ANSWER_RETRY;
             while !send(ezsp, to, endpoint, message.aps.cluster, &answer)? && Instant::now() < until {
@@ -590,17 +591,23 @@ impl Server {
                 .filter_map(|&a| nest.read(endpoint, cluster, a).map(|v| (a, v)))
                 .filter(|(a, v)| self.reported.get(&(endpoint, cluster, *a)) != Some(v))
                 .collect();
-            if changed.is_empty() {
-                continue;
-            }
-            self.sequence = self.sequence.wrapping_add(1);
-            let report = zcl::report(self.sequence, &changed);
-            if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), endpoint, cluster, &report)? {
-                self.pending = true;
-                return Ok(());
-            }
-            for (a, v) in changed {
-                self.reported.insert((endpoint, cluster, a), v);
+            // As many attributes a frame as fit in it.
+            let mut rest = changed.as_slice();
+            while !rest.is_empty() {
+                let fit = (1..=rest.len())
+                    .take_while(|&n| zcl::report(0, cluster, &rest[..n]).len() <= zcl::MAX_FRAME)
+                    .last()
+                    .unwrap_or(1);
+                self.sequence = self.sequence.wrapping_add(1);
+                let report = zcl::report(self.sequence, cluster, &rest[..fit]);
+                if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), endpoint, cluster, &report)? {
+                    self.pending = true;
+                    return Ok(());
+                }
+                for (a, v) in &rest[..fit] {
+                    self.reported.insert((endpoint, cluster, *a), v.clone());
+                }
+                rest = &rest[fit..];
             }
         }
         Ok(())
@@ -664,9 +671,9 @@ impl Server {
     }
 }
 
-/// The answer to a message, if one is due, and the endpoint it is from: a
+/// The answers due to a message, and the endpoint they are from: a
 /// broadcast or multicast gets no default response.
-fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
+fn answer(nest: &Nest, message: &Incoming) -> (u8, Vec<Vec<u8>>) {
     // EmberIncomingMessageType: unicast, unicast reply; multicast, broadcast
     // and their loopbacks above.
     const UNICAST_REPLY: u8 = 0x01;
@@ -675,10 +682,11 @@ fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
         e => e,
     };
     if message.aps.profile != PROFILE_HA || !nest.endpoints.iter().any(|e| e.id == endpoint) {
-        return None;
+        return (endpoint, Vec::new());
     }
-    let answer = zcl::serve(nest, endpoint, message.aps.cluster, &message.payload)?;
-    (message.kind <= UNICAST_REPLY || !zcl::is_default_response(&answer)).then_some((endpoint, answer))
+    let mut answers = zcl::serve_all(nest, endpoint, message.aps.cluster, &message.payload);
+    answers.retain(|answer| message.kind <= UNICAST_REPLY || !zcl::is_default_response(answer));
+    (endpoint, answers)
 }
 
 /// A ZCL frame from one of the unit's endpoints to a node's endpoint,
@@ -815,16 +823,16 @@ mod tests {
             sender: COORDINATOR,
             payload: payload.to_vec(),
         };
-        let unknown = [0x01, 7, 0x01]; // a command the Thermostat cluster does not have
+        let unknown = [0x01, 7, 0x04]; // a command the Thermostat cluster does not have
         let read = [0x00, 8, 0x00, 0x03, 0x00]; // AbsMinHeatSetpointLimit
         for kind in [0x00, 0x01] {
-            assert_eq!(answer(&nest, &message(kind, &unknown)), Some((1, vec![0x18, 7, 0x0B, 0x01, 0x81])), "{kind}");
+            assert_eq!(answer(&nest, &message(kind, &unknown)), (1, vec![vec![0x18, 7, 0x0B, 0x04, 0x81]]), "{kind}");
         }
         for kind in 0x02..=0x05 {
-            assert_eq!(answer(&nest, &message(kind, &unknown)), None, "{kind}");
+            assert_eq!(answer(&nest, &message(kind, &unknown)), (1, vec![]), "{kind}");
             assert_eq!(
                 answer(&nest, &message(kind, &read)),
-                Some((1, vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03])),
+                (1, vec![vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03]]),
                 "{kind}"
             );
         }

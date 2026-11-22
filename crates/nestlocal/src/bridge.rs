@@ -9,6 +9,14 @@
 //!                                      (retained, will)
 //!   <prefix>/<serial>/state            the computed state (retained)
 //!   <prefix>/<serial>/raw/<bucket>     each bucket, whole (retained)
+//!   <prefix>/<serial>/heating_times    the schedule by day, schedule.rs's
+//!                                      shown (retained); set/heating_times
+//!                                      replaces the days it names
+//!   <prefix>/<serial>/hot_water_times  the hot water schedule by day,
+//!                                      hotwater.rs's shown (retained) while
+//!                                      the unit has hot water control and
+//!                                      nlclient has synced it, else empty;
+//!                                      set/hot_water_times likewise
 //!   <prefix>/<serial>/set/<command>    Home Assistant's commands
 //!   <prefix>/<serial>/set/raw/<bucket> merge a JSON object into a bucket
 //!                                      (anything the entities don't cover)
@@ -68,6 +76,11 @@ pub struct Bridge {
     /// The unit's wakes since nestlocal started (wake.rs).
     wakes: AtomicU64,
     announced: Mutex<Option<BTreeMap<String, String>>>, // discovery topic -> config last published
+    /// <base>/hot_water_times as last published; None: not since connecting.
+    hot_water_times: Mutex<Option<String>>,
+    /// Held while a command reads a bucket and writes its change, so two
+    /// commands editing one bucket don't undo each other.
+    pub(crate) applying: Mutex<()>,
     naming: Mutex<Naming>,
     /// The entities are removed, waiting out RENAME_WAIT.
     renaming: AtomicBool,
@@ -106,6 +119,8 @@ impl Bridge {
             mqtt: OnceLock::new(),
             wakes: AtomicU64::new(0),
             announced: Mutex::new(None),
+            hot_water_times: Mutex::new(None),
+            applying: Mutex::new(()),
             naming: Mutex::new(naming),
             renaming: AtomicBool::new(false),
             time_asked: Mutex::new(None),
@@ -276,6 +291,7 @@ impl Bridge {
     fn connected(&self) {
         logf!("mqtt: connected");
         *self.announced.lock().unwrap() = None;
+        *self.hot_water_times.lock().unwrap() = None;
         if let Some(c) = self.mqtt.get() {
             c.subscribe(&format!("{}/set/#", self.base));
             c.subscribe("homeassistant/status");
@@ -344,10 +360,9 @@ impl Bridge {
         }
     }
 
-    fn publish(&self, topic: &str, retain: bool, payload: &[u8]) {
-        if let Some(c) = self.mqtt.get() {
-            c.publish(topic, payload, 0, retain);
-        }
+    /// Whether the publish was queued.
+    fn publish(&self, topic: &str, retain: bool, payload: &[u8]) -> bool {
+        self.mqtt.get().is_some_and(|c| c.publish(topic, payload, 0, retain))
     }
 
     fn changed(&self, o: &Object) {
@@ -358,6 +373,23 @@ impl Bridge {
     fn publish_raw(&self, o: &Object) {
         let typ = o.key.split_once('.').map_or(o.key.as_str(), |(t, _)| t);
         self.publish(&format!("{}/raw/{typ}", self.base), true, Value::Object(o.value.clone()).to_string().as_bytes());
+        if o.key == format!("schedule.{}", self.serial) {
+            let times = crate::schedule::shown(&o.value);
+            self.publish(
+                &format!("{}/schedule", self.base),
+                true,
+                crate::schedule::schedule_json(&o.value, &times).to_string().as_bytes(),
+            );
+            self.publish(&format!("{}/heating_times", self.base), true, times.to_string().as_bytes());
+        }
+    }
+
+    /// The hot water schedule's bucket, once nlclient has synced it.
+    pub fn hot_water_schedule(&self) -> Option<Object> {
+        self.store
+            .all()
+            .into_iter()
+            .find(|o| o.key.starts_with("custom_schedule.") && crate::hotwater::is_hot_water(&o.value))
     }
 
     /// Buckets of this unit, by type: device, shared, ... With
@@ -388,6 +420,23 @@ impl Bridge {
         self.announce(dev, sh);
         let shown = self.shown(dev, sh);
         self.publish(&format!("{}/state", self.base), true, Value::Object(shown).to_string().as_bytes());
+        self.publish_hot_water_times(dev);
+    }
+
+    /// The hot water schedule, only on a unit with hot water control: an
+    /// empty retained message clears it otherwise. Sent when it changes.
+    fn publish_hot_water_times(&self, dev: &Fields) {
+        let times = match self.hot_water_schedule() {
+            Some(hw) if truthy(dev.get("has_hot_water_control")) => crate::hotwater::shown(&hw.value).to_string(),
+            _ => String::new(),
+        };
+        let mut last = self.hot_water_times.lock().unwrap();
+        // Remembered once queued: one dropped goes again with the next state.
+        if last.as_deref() != Some(times.as_str())
+            && self.publish(&format!("{}/hot_water_times", self.base), true, times.to_string().as_bytes())
+        {
+            *last = Some(times);
+        }
     }
 
     /// The state, with what no bucket holds: occupancy, the brightness the
@@ -1458,6 +1507,32 @@ pub mod tests {
         plain.store.merge("shared.S", &obj(json!({"can_heat": false})), 0, 0, true);
         assert_eq!(plain.buckets()["shared"]["can_heat"], json!(false));
         assert_eq!(test_bridge().buckets().len(), 0);
+    }
+
+    #[test]
+    fn the_hot_water_schedule_shows_only_on_a_unit_with_hot_water() {
+        let b = test_bridge();
+        let sent = |b: &Bridge| b.hot_water_times.lock().unwrap().clone();
+        let interval = json!({"start_day": 0, "start_time": 21600, "end_day": 0, "end_time": 28800});
+        b.store.merge(
+            "custom_schedule.hotwater",
+            &fields! {"mode" => "hotwater", "intervals" => json!([interval])},
+            0,
+            0,
+            true,
+        );
+        b.publish_hot_water_times(&Fields::new());
+        assert_eq!(sent(&b), None, "not remembered as sent while not connected");
+        let (client, _connection) = mqtt::Client::connected_for_tests();
+        let _ = b.mqtt.set(client);
+        b.publish_hot_water_times(&Fields::new());
+        assert_eq!(sent(&b).as_deref(), Some(""), "cleared without hot water control");
+        b.publish_hot_water_times(&fields! {"has_hot_water_control" => true});
+        let shown: Value = serde_json::from_str(&sent(&b).unwrap()).unwrap();
+        assert_eq!(shown["days"]["mon"], json!([{"on": "06:00", "off": "08:00"}]));
+        b.store.merge("custom_schedule.hotwater", &fields! {"mode" => "heat"}, 0, 0, true);
+        b.publish_hot_water_times(&fields! {"has_hot_water_control" => true});
+        assert_eq!(sent(&b).as_deref(), Some(""), "cleared without the schedule");
     }
 
     #[test]

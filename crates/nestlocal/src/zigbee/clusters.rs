@@ -37,7 +37,10 @@
 //!   43  whether the screen's brightness is automatic: Binary Output, in
 //!       SWITCHES
 //!
-//! The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
+//! The Thermostat cluster's weekly schedule is the unit's (schedule.rs): Set
+//! Weekly Schedule replaces the days it names, Get Weekly Schedule answers
+//! with a response for each group of identical days. A range schedule carries
+//! both setpoints. Clear Weekly Schedule empties every day.
 //!
 //! ZCL temperatures are hundredths of a degree Celsius; 0x8000 is none.
 
@@ -51,7 +54,9 @@ use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
 use crate::weather::{HAForecast, HAWeather};
 
-use super::zcl::{status, Clusters, Value};
+use super::zcl::{status, Answer, Clusters, Value};
+use crate::hotwater;
+use crate::schedule::{self, Kind};
 
 pub const BASIC: u16 = 0x0000;
 pub const POWER: u16 = 0x0001;
@@ -82,6 +87,13 @@ pub const TIME: u16 = 0x000A;
 ///   0x2ddf  daily forecast, day dd (0-5): as hourly, and f = 3 the low
 ///           (int16); 1 is the high
 pub const WEATHER: u16 = 0xFC00;
+/// Hot water schedule, manufacturer-specific (zcl::MANUFACTURER_CODE in its
+/// frames), on a unit with hot water control: the on periods by day,
+/// attribute 0x0000 (Monday) to 0x0006 (Sunday), each a string of them,
+/// "06:00-08:00,17:00-20:00" ("" none; one past midnight ends the next
+/// day). Writing a day replaces its periods, as MQTT's set/hot_water_times.
+pub const HOT_WATER: u16 = 0xFC01;
+const HOT_WATER_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006];
 const OUTDOOR_TEMPERATURE: u16 = 0x0000;
 const OUTDOOR_HUMIDITY: u16 = 0x0001;
 const CONDITION: u16 = 0x0002;
@@ -170,7 +182,7 @@ const SIMPLE_SENSOR: u16 = 0x000C;
 const BASIC_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0007, 0x4000];
 const THERMOSTAT_ATTRIBUTES: &[u16] = &[
     0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
-    0x0018, 0x0019, 0x001B, 0x001C, 0x0025, 0x0029,
+    0x0018, 0x0019, 0x001B, 0x001C, 0x0020, 0x0021, 0x0022, 0x0025, 0x0029,
 ];
 const ANALOG_OUTPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0041, 0x0045, 0x0051, 0x0055, 0x006F, 0x0075];
 const ANALOG_INPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F, 0x0075];
@@ -191,6 +203,9 @@ const NONE: i16 = i16::MIN;
 /// ThermostatProgrammingOperationMode: following its schedule, economy.
 const SCHEDULE: u8 = 0x01;
 const ECONOMY: u8 = 0x04;
+/// A weekly schedule's mode: its transitions' heating or cooling setpoints.
+const HEAT_SETPOINTS: u8 = 0x01;
+const COOL_SETPOINTS: u8 = 0x02;
 // BACnet engineering units, Analog Output's.
 const SECONDS: u16 = 73;
 const MINUTES: u16 = 72;
@@ -257,6 +272,9 @@ impl Nest {
         let mut thermostat = vec![BASIC, POWER, IDENTIFY, THERMOSTAT, DISPLAY, HUMIDITY, WEATHER];
         if has_fan {
             thermostat.push(FAN);
+        }
+        if has("has_hot_water_control") {
+            thermostat.push(HOT_WATER);
         }
         let mut endpoints = vec![
             Endpoint { id: THERMOSTAT_ENDPOINT, device: THERMOSTAT_DEVICE, clusters: thermostat },
@@ -339,6 +357,7 @@ impl Nest {
                     POWER => &[0x0020],
                     FAN | DISPLAY | HUMIDITY | TEMPERATURE => &[0x0000],
                     ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT | BINARY_OUTPUT => &[0x0055],
+                    HOT_WATER => HOT_WATER_ATTRIBUTES,
                     _ => continue,
                 };
                 out.push((e.id, cluster, attributes));
@@ -384,6 +403,160 @@ impl Nest {
         })
     }
 
+    /// The unit's schedule bucket, and the mode bits its setpoints are: a
+    /// range schedule's are both, its low the heating setpoint and its high
+    /// the cooling one.
+    fn schedule(&self) -> (Option<Fields>, Option<u8>) {
+        let bucket = self.bridge.buckets().remove("schedule");
+        let mode = schedule::kind(bucket.as_ref().unwrap_or(&Fields::new())).map(|k| match k {
+            Kind::Heat => HEAT_SETPOINTS,
+            Kind::Cool => COOL_SETPOINTS,
+            Kind::Range => HEAT_SETPOINTS | COOL_SETPOINTS,
+        });
+        (bucket, mode)
+    }
+
+    /// Set Weekly Schedule: transitions, days (bit 0 Sunday to bit 6
+    /// Saturday, bit 7 away), mode, then each transition's minutes after
+    /// midnight and its heating then cooling setpoint, as the mode has them.
+    fn set_weekly_schedule(&self, payload: &[u8]) -> u8 {
+        let [count, days, mode, transitions @ ..] = payload else {
+            return status::MALFORMED_COMMAND;
+        };
+        let width =
+            2 + 2 * (mode & HEAT_SETPOINTS).count_ones() as usize + 2 * (mode & COOL_SETPOINTS).count_ones() as usize;
+        if transitions.len() != usize::from(*count) * width {
+            return status::MALFORMED_COMMAND;
+        }
+        let (bucket, Some(want)) = self.schedule() else {
+            return status::INVALID_FIELD;
+        };
+        let bucket = bucket.unwrap_or_default();
+        // A range schedule takes both setpoints; the others the one theirs is.
+        if usize::from(*count) > schedule::DAILY {
+            return status::INSUFFICIENT_SPACE;
+        }
+        if mode & want != want || mode & !3 != 0 || *days == 0 || days & 0x80 != 0 {
+            return status::INVALID_FIELD;
+        }
+        // The heating setpoint comes first; each only where the mode has it.
+        let has = |bit: u8| mode & bit != 0;
+        let cool_at = if has(HEAT_SETPOINTS) { 4 } else { 2 };
+        let setpoint = |t: &[u8], at: usize| i16::from_le_bytes([t[at], t[at + 1]]);
+        let days: Vec<usize> = (0..7).filter(|b| days & (1 << b) != 0).map(|b| (b + 6) % 7).collect();
+        // What each day named holds: minutes, and the setpoints taken.
+        let held: Vec<Vec<(u16, Vec<i16>)>> = days
+            .iter()
+            .map(|&d| match want {
+                HEAT_SETPOINTS | COOL_SETPOINTS => {
+                    schedule::day(&bucket, d).into_iter().map(|(m, c)| (m, vec![centi(c)])).collect()
+                }
+                _ => schedule::range_day(&bucket, d)
+                    .into_iter()
+                    .map(|(m, low, high)| (m, vec![centi(low), centi(high)]))
+                    .collect(),
+            })
+            .collect();
+        let mut points = Vec::new();
+        for t in transitions.chunks(width) {
+            let minutes = u16::from_le_bytes([t[0], t[1]]);
+            if minutes >= 24 * 60 {
+                return status::INVALID_FIELD;
+            }
+            let heat = if has(HEAT_SETPOINTS) { setpoint(t, 2) } else { 0 };
+            let cool = if has(COOL_SETPOINTS) { setpoint(t, cool_at) } else { 0 };
+            // Within the setpoint limits the cluster advertises, a range's
+            // high the unit's gap above its low.
+            let taken = match want {
+                HEAT_SETPOINTS => vec![heat],
+                COOL_SETPOINTS => vec![cool],
+                _ => vec![heat, cool],
+            };
+            // A day sent back whole echoes the setpoints it holds, those the
+            // thermostat or MQTT set outside these narrower limits too.
+            let echoed = held.iter().all(|day| day.iter().any(|(m, s)| (*m, s) == (minutes, &taken)));
+            if (!echoed && taken.iter().any(|s| !(MIN..=MAX).contains(s)))
+                || (want == HEAT_SETPOINTS | COOL_SETPOINTS && f64::from(cool - heat) / 100.0 < schedule::RANGE_GAP)
+            {
+                return status::INVALID_VALUE;
+            }
+            points.push((minutes, f64::from(heat) / 100.0, f64::from(cool) / 100.0));
+        }
+        let days = days.into_iter();
+        let command = if want == HEAT_SETPOINTS | COOL_SETPOINTS {
+            schedule::range_command(&days.map(|d| (d, points.clone())).collect::<Vec<_>>())
+        } else {
+            let one = |&(m, heat, cool): &(u16, f64, f64)| (m, if want == HEAT_SETPOINTS { heat } else { cool });
+            schedule::command(&days.map(|d| (d, points.iter().map(one).collect())).collect::<Vec<_>>())
+        };
+        let expected = match want {
+            HEAT_SETPOINTS => Kind::Heat,
+            COOL_SETPOINTS => Kind::Cool,
+            _ => Kind::Range,
+        };
+        match self.bridge.apply_in_mode("zigbee", "heating_times", &command, Some(expected)) {
+            Ok(()) => status::SUCCESS,
+            Err(_) => status::INVALID_VALUE,
+        }
+    }
+
+    /// Get Weekly Schedule (days, mode): the days it asks, as a Get Weekly
+    /// Schedule Response, in Set Weekly Schedule's layout, for each set of
+    /// those days with the same transitions.
+    fn get_weekly_schedule(&self, payload: &[u8]) -> Answer {
+        let [days, mode, ..] = *payload else {
+            return status::MALFORMED_COMMAND.into();
+        };
+        let asked: Vec<usize> = (0..7).filter(|b| days & (1 << b) != 0).collect();
+        if asked.is_empty() {
+            return status::INVALID_FIELD.into();
+        }
+        let (Some(bucket), Some(want)) = self.schedule() else {
+            return status::NOT_FOUND.into();
+        };
+        if mode & want == 0 {
+            return status::NOT_FOUND.into();
+        }
+        // The setpoints asked for that the schedule has: a range's low as
+        // the heating setpoint, its high as the cooling one.
+        let want = mode & want;
+        // Minutes after midnight, and those setpoints.
+        type Transition = (u16, Vec<i16>);
+        let range = schedule::kind(&bucket) == Some(Kind::Range);
+        let day = |d: usize| -> Vec<Transition> {
+            if range {
+                let points = schedule::range_day(&bucket, d).into_iter();
+                let pick = |low: f64, high: f64| match want {
+                    HEAT_SETPOINTS => vec![centi(low)],
+                    COOL_SETPOINTS => vec![centi(high)],
+                    _ => vec![centi(low), centi(high)],
+                };
+                points.map(|(m, low, high)| (m, pick(low, high))).collect()
+            } else {
+                schedule::day(&bucket, d).into_iter().map(|(m, c)| (m, vec![centi(c)])).collect()
+            }
+        };
+        let mut groups: Vec<(u8, Vec<Transition>)> = Vec::new();
+        for bit in asked {
+            let points: Vec<_> = day((bit + 6) % 7).into_iter().take(schedule::DAILY).collect();
+            match groups.iter_mut().find(|(_, p)| *p == points) {
+                Some((bits, _)) => *bits |= 1 << bit,
+                None => groups.push((1 << bit, points)),
+            }
+        }
+        let responses = groups.into_iter().map(|(bits, points)| {
+            let mut out = vec![points.len() as u8, bits, want];
+            for (minutes, setpoints) in points {
+                out.extend(minutes.to_le_bytes());
+                for s in setpoints {
+                    out.extend(s.to_le_bytes());
+                }
+            }
+            out
+        });
+        Answer::Command(0x00, responses.collect())
+    }
+
     fn thermostat(&self, attribute: u16) -> Option<Value> {
         let view = self.view();
         let temperature = |t: Option<i16>| Value::I16(t.unwrap_or(NONE));
@@ -398,6 +571,9 @@ impl Nest {
             0x0013 => Value::I16(view.shown("away_temperature_high").unwrap_or(MAX)),
             0x0014 => Value::I16(view.shown("away_temperature_low").unwrap_or(MIN)),
             0x0019 => Value::I8(DEAD_BAND),
+            0x0020 => Value::Enum8(1), // StartOfWeek: Monday
+            0x0021 => Value::U8((schedule::DAILY * 7) as u8),
+            0x0022 => Value::U8(schedule::DAILY as u8),
             // Cooling only, heating only, or both.
             0x001B => Value::Enum8(match (truthy(view.sh.get("can_heat")), truthy(view.sh.get("can_cool"))) {
                 (true, false) => 0x02,
@@ -724,6 +900,7 @@ impl Clusters for Nest {
             ANALOG_INPUT => ANALOG_INPUT_ATTRIBUTES,
             BINARY_INPUT | BINARY_OUTPUT => BINARY_ATTRIBUTES,
             WEATHER => WEATHER_ATTRIBUTES.as_slice(),
+            HOT_WATER => HOT_WATER_ATTRIBUTES,
             _ => return None,
         })
     }
@@ -792,6 +969,10 @@ impl Clusters for Nest {
                 })
             }),
             (WEATHER, a) => self.weather(a),
+            (HOT_WATER, day @ 0x0000..=0x0006) => {
+                let hw = self.bridge.hot_water_schedule().map(|o| o.value).unwrap_or_default();
+                Some(Value::Str(hotwater::text(&hotwater::day(&hw, usize::from(day)))))
+            }
             _ => None,
         }
     }
@@ -825,28 +1006,35 @@ impl Clusters for Nest {
             (IDENTIFY, 0x0000, Value::U16(0)) => status::SUCCESS,
             (IDENTIFY, 0x0000, Value::U16(_)) => self.apply("wake_screen", ""),
             (WEATHER, a, v) => self.write_weather(a, v),
+            (HOT_WATER, day @ 0x0000..=0x0006, Value::Str(periods)) => match hotwater::from_text(&periods) {
+                Some(periods) => self.apply("hot_water_times", &hotwater::command(&[(usize::from(day), periods)])),
+                None => status::INVALID_VALUE,
+            },
             _ => status::READ_ONLY,
         }
     }
 
-    fn command(&self, _endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> u8 {
+    fn command(&self, _endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> Answer {
         match (cluster, command) {
-            (THERMOSTAT, 0x00) => self.raise_lower(payload),
-            (THERMOSTAT, 0x03) => self.apply("clear_schedule", ""), // Clear Weekly Schedule
+            (THERMOSTAT, 0x00) => self.raise_lower(payload).into(),
+            (THERMOSTAT, 0x01) => self.set_weekly_schedule(payload).into(),
+            (THERMOSTAT, 0x02) => self.get_weekly_schedule(payload),
+            (THERMOSTAT, 0x03) => self.apply("clear_schedule", "").into(), // Clear Weekly Schedule
             (IDENTIFY, 0x00) => match *payload {
                 [0, 0, ..] => status::SUCCESS,
                 [_, _, ..] => self.apply("wake_screen", ""),
                 _ => status::INVALID_FIELD,
-            },
-            (IDENTIFY, 0x01) => status::SUCCESS,
-            _ => status::UNSUP_CLUSTER_COMMAND,
+            }
+            .into(),
+            (IDENTIFY, 0x01) => status::SUCCESS.into(),
+            _ => status::UNSUP_CLUSTER_COMMAND.into(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::zcl::serve;
+    use super::super::zcl::{serve, serve_all};
     use super::*;
     use crate::fields;
 
@@ -927,9 +1115,9 @@ mod tests {
         assert!((soon - 602..=soon - 598).contains(&changed));
         assert_eq!(n.write(19, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
         assert_eq!(n.read(19, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
-        assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::INVALID_VALUE); // no schedule yet
+        assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::INVALID_VALUE.into()); // no schedule yet
         n.bridge.store.merge(&format!("schedule.{}", n.bridge.serial), &fields! {"ver" => 2}, 0, 0, true);
-        assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x03, &[]), status::SUCCESS.into());
         assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         // learning off with the schedule
     }
@@ -1071,14 +1259,14 @@ mod tests {
         assert_eq!(n.write(1, THERMOSTAT, 0x0011, Value::I16(2550)), status::SUCCESS);
         assert_eq!(range(&n), i16s(2000, 2550));
         // setpointRaiseLower: heat down 1 °C, both up 0.5 °C, cool up 0.5 °C.
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, (-10i8) as u8]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, (-10i8) as u8]), status::SUCCESS.into());
         assert_eq!(range(&n), i16s(1900, 2550));
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, 5]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, 5]), status::SUCCESS.into());
         assert_eq!(range(&n), i16s(1950, 2600));
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x01, 5]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x01, 5]), status::SUCCESS.into());
         assert_eq!(range(&n), i16s(1950, 2650));
         // Its amount missing.
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02]), status::INVALID_FIELD);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02]), status::INVALID_FIELD.into());
         assert_eq!(range(&n), i16s(1950, 2650));
     }
 
@@ -1196,13 +1384,147 @@ mod tests {
     }
 
     #[test]
+    fn the_hot_water_schedule_comes_with_hot_water_control() {
+        assert!(!nest(fields! {}, fields! {"can_heat" => true}).has(1, HOT_WATER));
+        let n = nest(fields! {"has_hot_water_control" => true}, fields! {"can_heat" => true});
+        assert!(n.reported().contains(&(1, HOT_WATER, HOT_WATER_ATTRIBUTES)));
+        let interval = serde_json::json!({"start_day": 1, "start_time": 21600, "end_day": 1, "end_time": 28800});
+        let hw = fields! {"mode" => "hotwater", "intervals" => serde_json::json!([interval])};
+        n.bridge.store.merge("custom_schedule.hotwater", &hw, 0, 0, true);
+        // Read Tuesday (0x0001), as a manufacturer-specific frame.
+        assert_eq!(
+            serve(&n, 1, HOT_WATER, &[0x04, 0xD6, 0x10, 1, 0x00, 0x01, 0x00]).unwrap(),
+            [&[0x1C, 0xD6, 0x10, 1, 0x01, 0x01, 0x00, 0x00, 0x42, 11][..], b"06:00-08:00"].concat()
+        );
+        // Write Sunday: 23:00 until 01:00 Monday.
+        let mut write = vec![0x04, 0xD6, 0x10, 2, 0x02, 0x06, 0x00, 0x42, 11];
+        write.extend(b"23:00-01:00");
+        assert_eq!(serve(&n, 1, HOT_WATER, &write).unwrap(), [0x1C, 0xD6, 0x10, 2, 0x04, 0x00]);
+        let hw = n.bridge.store.get("custom_schedule.hotwater").unwrap().value;
+        assert_eq!((hotwater::day(&hw, 6), hotwater::day(&hw, 1)), (vec![(1380, 60)], vec![(360, 480)]));
+        assert_eq!(n.write(1, HOT_WATER, 0x0000, Value::Str("6-8".into())), status::INVALID_VALUE);
+    }
+
+    #[test]
+    fn a_day_sent_back_keeps_a_setpoint_it_holds_outside_the_limits() {
+        let n = nest(fields! {}, fields! {"can_heat" => true});
+        let key = format!("schedule.{}", n.bridge.serial);
+        let frost = serde_json::json!({"entry_type": "setpoint", "time": 3600, "temp": 6, "type": "HEAT"});
+        let days = serde_json::json!({"0": {"1": frost}});
+        n.bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days, "ver" => 2}, 0, 0, true);
+        // Monday: 01:00 6 °C as it holds, and 07:00 20 °C beside it.
+        let edit = [2, 0x02, 0x01, 0x3C, 0x00, 0x58, 0x02, 0xA4, 0x01, 0xD0, 0x07];
+        assert_eq!(n.command(1, THERMOSTAT, 0x01, &edit), status::SUCCESS.into());
+        assert_eq!(schedule::day(&n.bridge.store.get(&key).unwrap().value, 0), [(60, 6.0), (420, 20.0)]);
+        // 6 °C at another time, or on a day that does not hold it, is refused.
+        assert_eq!(
+            n.command(1, THERMOSTAT, 0x01, &[1, 0x02, 0x01, 0x78, 0x00, 0x58, 0x02]),
+            status::INVALID_VALUE.into()
+        );
+        assert_eq!(
+            n.command(1, THERMOSTAT, 0x01, &[1, 0x04, 0x01, 0x3C, 0x00, 0x58, 0x02]),
+            status::INVALID_VALUE.into()
+        );
+        assert_eq!(
+            n.command(1, THERMOSTAT, 0x01, &[1, 0x06, 0x01, 0x3C, 0x00, 0x58, 0x02]),
+            status::INVALID_VALUE.into()
+        );
+    }
+
+    #[test]
+    fn the_weekly_schedule_is_the_units() {
+        let n = nest(fields! {"learning_mode" => true}, fields! {"can_heat" => true});
+        // Get Weekly Schedule, Monday and Tuesday, heat: none yet.
+        assert_eq!(serve(&n, 1, THERMOSTAT, &[0x01, 1, 0x02, 0x06, 0x01]).unwrap(), [0x18, 1, 0x0B, 0x02, 0x8B]);
+        let key = format!("schedule.{}", n.bridge.serial);
+        n.bridge.store.merge(
+            &key,
+            &fields! {"schedule_mode" => "HEAT", "days" => serde_json::json!({}), "ver" => 2},
+            0,
+            0,
+            true,
+        );
+        // Set: Monday and Saturday, heat and cool, 06:30 20.5 °C, 22:00 17 °C.
+        let set =
+            [0x01, 2, 0x01, 2, 0x42, 0x03, 0x86, 0x01, 0x02, 0x08, 0x60, 0x09, 0x28, 0x05, 0xA4, 0x06, 0x60, 0x09];
+        assert!(serve(&n, 1, THERMOSTAT, &set).is_some_and(|out| out == [0x18, 2, 0x0B, 0x01, 0x00]));
+        let bucket = n.bridge.store.get(&key).unwrap().value;
+        assert_eq!(schedule::day(&bucket, 0), [(390, 20.5), (1320, 17.0)]);
+        assert_eq!(schedule::day(&bucket, 5), [(390, 20.5), (1320, 17.0)]);
+        assert_eq!(schedule::day(&bucket, 1), [(0, 17.0)]);
+        assert_eq!(n.view().dev["learning_mode"], serde_json::json!(true));
+        // Get, Monday and Tuesday: a response each, heating setpoints.
+        assert_eq!(
+            serve_all(&n, 1, THERMOSTAT, &[0x01, 3, 0x02, 0x06, 0x03]),
+            [
+                vec![0x19, 3, 0x00, 2, 0x02, 0x01, 0x86, 0x01, 0x02, 0x08, 0x28, 0x05, 0xA4, 0x06],
+                vec![0x19, 3, 0x00, 1, 0x04, 0x01, 0, 0, 0xa4, 0x06],
+            ]
+        );
+        // The whole week: the days with the same transitions together.
+        let week = serve_all(&n, 1, THERMOSTAT, &[0x01, 4, 0x02, 0x7F, 0x01]);
+        assert_eq!(week.iter().map(|f| f[4]).collect::<Vec<_>>(), [0x01 | 0x1C | 0x20, 0x02 | 0x40]);
+        assert_eq!(n.command(1, THERMOSTAT, 0x02, &[0x01, 0x02]), status::NOT_FOUND.into(), "no cooling schedule");
+        // Zigbee2MQTT's (the converter's): Monday, both setpoints, no default response.
+        let z2m =
+            [0x11, 9, 0x01, 2, 0x02, 0x03, 0x86, 0x01, 0x02, 0x08, 0x02, 0x08, 0x28, 0x05, 0xA4, 0x06, 0xA4, 0x06];
+        assert_eq!(serve(&n, 1, THERMOSTAT, &z2m), None);
+        assert_eq!(schedule::day(&n.bridge.store.get(&key).unwrap().value, 0), [(390, 20.5), (1320, 17.0)]);
+        // A wrong length, no day, a time past midnight, a temperature the unit refuses.
+        for bad in [
+            &[1, 0x02, 0x01, 0x00][..],
+            &[0, 0x80, 0x01],
+            &[0, 0x82, 0x01],
+            &[1, 0x02, 0x01, 0xA0, 0x05, 0x08, 0x07],
+            &[1, 0x02, 0x01, 0x00, 0x00, 0x00, 0x10],
+            &[1, 0x02, 0x01, 0x00, 0x00, 0x20, 0x03], // 8 °C, under the advertised 9 °C
+        ] {
+            assert_ne!(n.command(1, THERMOSTAT, 0x01, bad), status::SUCCESS.into(), "{bad:02x?}");
+        }
+        let mut full = vec![11, 0x02, 0x01];
+        full.resize(3 + 11 * 4, 0);
+        assert_eq!(n.command(1, THERMOSTAT, 0x01, &full), status::INSUFFICIENT_SPACE.into());
+        assert_eq!(n.read(1, THERMOSTAT, 0x0022), Some(Value::U8(10)));
+    }
+
+    #[test]
     fn commands_the_endpoint_does_not_have_are_refused() {
         let n = nest(fields! {}, fields! {"can_heat" => true});
-        assert_eq!(n.command(10, BINARY_OUTPUT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND);
+        assert_eq!(n.command(10, BINARY_OUTPUT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND.into());
         assert_eq!(n.write(20, BINARY_INPUT, 0x0055, Value::Bool(true)), status::READ_ONLY); // a state, not a switch
         assert_eq!(n.write(20, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::READ_ONLY);
-        assert_eq!(n.command(1, THERMOSTAT, 0x01, &[]), status::UNSUP_CLUSTER_COMMAND);
+        assert_eq!(n.command(1, THERMOSTAT, 0x04, &[]), status::UNSUP_CLUSTER_COMMAND.into());
         assert_eq!(n.write(1, BASIC, 0x0005, Value::Str("x".into())), status::READ_ONLY);
+    }
+
+    #[test]
+    fn a_range_schedule_carries_both_setpoints() {
+        let n = nest(fields! {}, fields! {"can_heat" => true, "can_cool" => true});
+        let key = format!("schedule.{}", n.bridge.serial);
+        let entry = serde_json::json!({"entry_type": "setpoint", "time": 10800, "temp-min": 18, "temp-max": 25, "type": "RANGE"});
+        let days = serde_json::json!({"0": {"1": entry}});
+        n.bridge.store.merge(&key, &fields! {"schedule_mode" => "RANGE", "days" => days, "ver" => 2}, 0, 0, true);
+        // Get, Monday: 03:00, heating 18 °C (the low), cooling 25 °C (the high).
+        assert_eq!(
+            serve(&n, 1, THERMOSTAT, &[0x01, 1, 0x02, 0x02, 0x03]).unwrap(),
+            [0x19, 1, 0x00, 1, 0x02, 0x03, 0xB4, 0x00, 0x08, 0x07, 0xC4, 0x09]
+        );
+        // Get, Monday, heating alone: the lows.
+        assert_eq!(
+            serve(&n, 1, THERMOSTAT, &[0x01, 5, 0x02, 0x02, 0x01]).unwrap(),
+            [0x19, 5, 0x00, 1, 0x02, 0x01, 0xB4, 0x00, 0x08, 0x07]
+        );
+        // Set, Tuesday: 06:30, 19-24 °C.
+        let set = [0x01, 2, 0x01, 1, 0x04, 0x03, 0x86, 0x01, 0x6C, 0x07, 0x60, 0x09];
+        assert_eq!(serve(&n, 1, THERMOSTAT, &set).unwrap(), [0x18, 2, 0x0B, 0x01, 0x00]);
+        assert_eq!(schedule::range_day(&n.bridge.store.get(&key).unwrap().value, 1), [(390, 19.0, 24.0)]);
+        // One setpoint alone, or a high not the unit's gap above the low, is refused.
+        assert_eq!(
+            n.command(1, THERMOSTAT, 0x01, &[1, 0x04, 0x01, 0x86, 0x01, 0x6C, 0x07]),
+            status::INVALID_FIELD.into()
+        );
+        let close = [1, 0x04, 0x03, 0x86, 0x01, 0xD0, 0x07, 0x34, 0x08];
+        assert_eq!(n.command(1, THERMOSTAT, 0x01, &close), status::INVALID_VALUE.into());
     }
 
     #[test]
@@ -1235,7 +1557,7 @@ mod tests {
         assert_eq!(n.write(1, THERMOSTAT, 0x001C, Value::Enum8(0x07)), status::INVALID_VALUE);
         assert_eq!(n.write(1, THERMOSTAT, 0x0000, Value::I16(0)), status::READ_ONLY);
         // Half degrees, as the unit has them; out of range is refused.
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 5]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 5]), status::SUCCESS.into());
         assert_eq!(n.write(1, THERMOSTAT, 0x0011, Value::I16(9000)), status::INVALID_VALUE);
         // Eco, the fan timer, a switch.
         assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
@@ -1333,13 +1655,13 @@ mod tests {
         let resent = |rx: &mut tokio::sync::mpsc::Receiver<Vec<crate::store::Object>>| {
             std::iter::from_fn(|| rx.try_recv().ok()).flatten().filter(|o| o.key == device).count()
         };
-        assert_eq!(n.command(1, IDENTIFY, 0x00, &[0, 0]), status::SUCCESS);
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[0, 0]), status::SUCCESS.into());
         assert_eq!(n.write(1, IDENTIFY, 0x0000, Value::U16(0)), status::SUCCESS);
         assert_eq!(resent(&mut rx), 0);
-        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5, 0]), status::SUCCESS);
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5, 0]), status::SUCCESS.into());
         assert_eq!(n.write(1, IDENTIFY, 0x0000, Value::U16(5)), status::SUCCESS);
         assert_eq!(resent(&mut rx), 2);
-        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5]), status::INVALID_FIELD);
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5]), status::INVALID_FIELD.into());
         assert_eq!(n.read(1, IDENTIFY, 0x0000), Some(Value::U16(0)));
     }
 
@@ -1350,15 +1672,15 @@ mod tests {
             fields! {"target_temperature_type" => "heat", "target_temperature" => 31.0, "can_heat" => true},
         );
         let heating = |n: &Nest| n.read(1, THERMOSTAT, 0x0012);
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 50]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 50]), status::SUCCESS.into());
         assert_eq!(heating(&n), Some(Value::I16(MAX)));
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, (-128i8) as u8]), status::SUCCESS);
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, (-128i8) as u8]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, (-128i8) as u8]), status::SUCCESS.into());
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x02, (-128i8) as u8]), status::SUCCESS.into());
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
         // Cool alone leaves a heating unit's setpoint; no such mode as 3.
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x01, 20]), status::SUCCESS);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x01, 20]), status::SUCCESS.into());
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
-        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x03, 20]), status::INVALID_FIELD);
+        assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x03, 20]), status::INVALID_FIELD.into());
         assert_eq!(heating(&n), Some(Value::I16(MIN)));
     }
 

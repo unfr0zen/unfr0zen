@@ -12,22 +12,35 @@
 //! mode's setpoint (cooling in cool and on a unit that only cools, heating
 //! otherwise); the other setpoint is the range's end. A value the unit holds
 //! past a limit (set on the unit, over MQTT or Zigbee) reads as the limit.
+//!
+//! The live schedule comes from the unit's active mode. Matter can keep
+//! three additional schedules and activate one in its matching mode.
+
+use crate::json::Fields;
+use crate::schedule::{Catalog, SavedWeek};
 
 use std::sync::Arc;
 
 use rs_matter::dm::clusters::decl::thermostat::{
     self, ClusterHandler, ControlSequenceOfOperationEnum, OccupancyBitmap, PresetScenarioEnum,
     PresetStructArrayBuilder, PresetStructBuilder, PresetTypeFeaturesBitmap, PresetTypeStructArrayBuilder,
-    PresetTypeStructBuilder, RelayStateBitmap, SetpointRaiseLowerModeEnum, SystemModeEnum,
+    PresetTypeStructBuilder, RelayStateBitmap, ScheduleStructArrayBuilder, ScheduleStructBuilder,
+    ScheduleTypeFeaturesBitmap, ScheduleTypeStructArrayBuilder, ScheduleTypeStructBuilder, SetpointRaiseLowerModeEnum,
+    SystemModeEnum,
 };
 use rs_matter::dm::{
-    ArrayAttributeRead, Attribute, Cluster, Dataver, InvokeContext, Quality, ReadContext, WriteContext,
+    ArrayAttributeRead, ArrayAttributeWrite, Attribute, Cluster, Dataver, InvokeContext, Quality, ReadContext,
+    WriteContext,
 };
 use rs_matter::error::{Error, ErrorCode};
-use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVBuilderParent};
+#[cfg(test)]
+use rs_matter::im::IMStatusCode;
+use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVArray, TLVBuilderParent};
 use rs_matter::with;
 
+use super::schedules::{self as msch, day_bit, Pending, Schedules, Transition, Writer, SCHEDULES};
 use super::{centi, failed, Nest, View};
+use crate::schedule::{self, Kind};
 
 /// The unit's setpoint range, as the MQTT climate entity has it.
 const MIN: i16 = 900;
@@ -71,8 +84,12 @@ impl Equipment {
                     | thermostat::Feature::AUTO_MODE.bits()
             }
         };
-        Thermostat::CLUSTER
-            .with_features(modes | thermostat::Feature::OCCUPANCY.bits() | thermostat::Feature::PRESETS.bits())
+        Thermostat::CLUSTER.with_features(
+            modes
+                | thermostat::Feature::OCCUPANCY.bits()
+                | thermostat::Feature::PRESETS.bits()
+                | thermostat::Feature::MATTER_SCHEDULE_CONFIGURATION.bits(),
+        )
     }
 
     fn heats(self) -> bool {
@@ -129,7 +146,94 @@ fn attributes(attr: &Attribute, _revision: u16, features: u32) -> bool {
             | A::MaxCoolSetpointLimit,
         ) => has(thermostat::Feature::COOLING),
         Ok(A::MinSetpointDeadBand) => has(thermostat::Feature::AUTO_MODE),
+        Ok(
+            A::ScheduleTypes
+            | A::NumberOfSchedules
+            | A::NumberOfScheduleTransitions
+            | A::NumberOfScheduleTransitionPerDay
+            | A::ActiveScheduleHandle
+            | A::Schedules,
+        ) => has(thermostat::Feature::MATTER_SCHEDULE_CONFIGURATION),
         _ => false,
+    }
+}
+
+/// The built-in schedule's handle.
+const SCHEDULE: &[u8] = b"nest";
+
+/// A setpoint as Schedules shows it: minutes after midnight, and its heating
+/// and cooling setpoints (hundredths of a degree) as the schedule has them.
+type Shown = (u16, Option<i16>, Option<i16>);
+
+/// The most transitions Schedules holds for a range schedule (Auto): with
+/// both setpoints each, as many as fit one message, with room to spare.
+const RANGE_TRANSITIONS: usize = 56;
+
+/// The most transitions Schedules holds for a schedule of `mode`.
+fn transitions_for(mode: SystemModeEnum) -> usize {
+    if mode == SystemModeEnum::Auto {
+        RANGE_TRANSITIONS
+    } else {
+        schedule::DAILY * 7
+    }
+}
+
+const CAPACITY: usize = 4;
+
+fn mode_key(mode: SystemModeEnum) -> &'static str {
+    match mode {
+        SystemModeEnum::Heat => "HEAT",
+        SystemModeEnum::Cool => "COOL",
+        SystemModeEnum::Auto => "RANGE",
+        _ => "",
+    }
+}
+
+/// A week with no programmed target holds the thermostat's current target. A named
+/// Matter schedule must contain at least one transition, even when it sets no temperature.
+fn hold_week() -> Transition {
+    Transition { days: 0x7f, minutes: 0, heat: None, cool: None, mode: None, preset: false }
+}
+
+/// A week's days with no entry on any, as the unit takes a cleared week.
+fn empty_days() -> serde_json::Value {
+    serde_json::Value::Object((0..7).map(|d| (d.to_string(), serde_json::json!({}))).collect())
+}
+
+impl Catalog {
+    fn handle(&self, mode: SystemModeEnum) -> &str {
+        self.active.get(mode_key(mode)).map_or("nest", String::as_str)
+    }
+
+    fn list(&self, live: &Fields, mode: SystemModeEnum) -> Vec<Pending> {
+        let active = self.handle(mode);
+        let mut result = Vec::new();
+        let mut add = |handle: &str, name: Option<String>, bucket: &Fields| {
+            if let Some((mode, mut transitions)) = Thermostat::bucket_schedule(bucket) {
+                if transitions.is_empty() && (handle != "nest" || !self.named.is_empty()) {
+                    transitions.push(hold_week());
+                }
+                if !transitions.is_empty() {
+                    result.push(Pending {
+                        name,
+                        mode,
+                        handle: Some(handle.as_bytes().to_vec()),
+                        built_in: Some(handle == "nest"),
+                        preset: false,
+                        transitions,
+                    });
+                }
+            }
+        };
+        if active == "nest" {
+            add("nest", None, live);
+        } else if let Some(native) = self.native.get(mode_key(mode)) {
+            add("nest", None, native);
+        }
+        for (handle, week) in &self.named {
+            add(handle, week.name.clone(), if handle == active { live } else { &week.bucket });
+        }
+        result
     }
 }
 
@@ -137,11 +241,302 @@ pub struct Thermostat {
     dataver: Dataver,
     nest: Arc<Nest>,
     equipment: Equipment,
+    schedules: Schedules,
 }
 
 impl Thermostat {
     pub fn new(dataver: Dataver, nest: Arc<Nest>, equipment: Equipment) -> Self {
-        Self { dataver, nest, equipment }
+        Self { dataver, nest, equipment, schedules: Schedules::default() }
+    }
+
+    fn snapshot(&self) -> Result<crate::store::Object, ErrorCode> {
+        self.nest.bridge.store.get(&format!("schedule.{}", self.nest.bridge.serial)).ok_or(ErrorCode::InvalidInState)
+    }
+    /// The mode and transitions a controller can read and replace.
+    fn schedule(&self) -> Option<(SystemModeEnum, Vec<Transition>)> {
+        Self::bucket_schedule(&self.nest.schedule()?)
+    }
+
+    fn bucket_schedule(bucket: &Fields) -> Option<(SystemModeEnum, Vec<Transition>)> {
+        let kind = schedule::kind(bucket)?;
+        let mode = match kind {
+            Kind::Heat => SystemModeEnum::Heat,
+            Kind::Cool => SystemModeEnum::Cool,
+            Kind::Range => SystemModeEnum::Auto,
+        };
+        // Identical changes on several days fit in one transition.
+        let mut transitions: Vec<Transition> = Vec::new();
+        for d in 0..7 {
+            let points: Vec<Shown> = match kind {
+                Kind::Heat => schedule::day(bucket, d).into_iter().map(|(m, c)| (m, Some(centi(c)), None)).collect(),
+                Kind::Cool => schedule::day(bucket, d).into_iter().map(|(m, c)| (m, None, Some(centi(c)))).collect(),
+                Kind::Range => schedule::range_day(bucket, d)
+                    .into_iter()
+                    .map(|(m, low, high)| (m, Some(centi(low)), Some(centi(high))))
+                    .collect(),
+            };
+            for (minutes, heat, cool) in points {
+                match transitions.iter_mut().find(|t| (t.minutes, t.heat, t.cool) == (minutes, heat, cool)) {
+                    Some(t) => t.days |= day_bit(d),
+                    None => transitions.push(Transition {
+                        days: day_bit(d),
+                        minutes,
+                        heat,
+                        cool,
+                        mode: None,
+                        preset: false,
+                    }),
+                }
+            }
+        }
+        // An unreadable week cannot be edited through a controller that
+        // would treat it as empty and replace the other days on its next edit.
+        (transitions.len() <= transitions_for(mode)).then_some((mode, transitions))
+    }
+
+    fn current(&self) -> Vec<Pending> {
+        let Ok(o) = self.snapshot() else { return vec![] };
+        let Some((mode, _)) = Self::bucket_schedule(&o.value) else { return vec![] };
+        o.local_schedules.unwrap_or_default().list(&o.value, mode)
+    }
+
+    /// Schedules as `writer` reads it (schedules.rs).
+    fn shown(&self, writer: &Writer) -> Vec<Pending> {
+        self.schedules.shown(writer, || self.current())
+    }
+
+    #[cfg(test)]
+    fn begin(&self, writer: &Writer, timeout: Option<u16>) -> Result<u16, ErrorCode> {
+        self.schedules.begin(writer, timeout, self.current())
+    }
+
+    #[cfg(test)]
+    fn atomic(&self) -> std::sync::MutexGuard<'_, Option<super::schedules::Atomic>> {
+        self.schedules.atomic()
+    }
+
+    #[cfg(test)]
+    fn finish(&self, writer: &Writer, commit: bool) -> Result<IMStatusCode, ErrorCode> {
+        self.schedules.finish(writer, commit, |initial, pending| self.commit_checked(initial, pending))
+    }
+
+    #[cfg(test)]
+    fn commit(&self, pending: &[Pending]) -> Result<(), ErrorCode> {
+        self.commit_checked(&self.current(), pending)
+    }
+
+    /// Validate and install against the same bucket revision.
+    fn commit_checked(&self, initial: &[Pending], pending: &[Pending]) -> Result<(), ErrorCode> {
+        let original = self.snapshot()?;
+        let live = &original.value;
+        let (mode, _) = Self::bucket_schedule(live).ok_or(ErrorCode::ConstraintError)?;
+        let catalog = original.local_schedules.clone().unwrap_or_default();
+        if catalog.list(live, mode) != initial {
+            return Err(ErrorCode::InvalidInState);
+        }
+        let active = catalog.handle(mode).to_owned();
+        // Single-schedule controllers clear the native week with an empty list.
+        if pending.is_empty() {
+            if !catalog.named.is_empty() {
+                return Err(ErrorCode::InvalidInState);
+            }
+            let mut cleared = live.clone();
+            cleared.insert("days".into(), empty_days());
+            return self.install(&original, catalog, Some(&cleared));
+        }
+        let mut next = catalog.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut replacement = None;
+        for item in pending {
+            let builtin =
+                item.handle.as_deref() == Some(SCHEDULE) || (item.handle.is_none() && item.built_in == Some(true));
+            let handle = if builtin {
+                "nest".to_owned()
+            } else if let Some(bytes) = &item.handle {
+                let key = std::str::from_utf8(bytes).map_err(|_| ErrorCode::NotFound)?;
+                if !catalog.named.contains_key(key) {
+                    return Err(ErrorCode::NotFound);
+                }
+                key.to_owned()
+            } else {
+                (1..).map(|n| format!("s{n}")).find(|h| !next.named.contains_key(h)).unwrap()
+            };
+            if !seen.insert(handle.clone())
+                || item.preset
+                || item.built_in.is_some_and(|v| v != builtin)
+                || (builtin && item.name.is_some())
+                || !self.supports(item.mode)
+            {
+                return Err(ErrorCode::ConstraintError);
+            }
+            let is_active = handle == active;
+            if ((is_active || builtin) && item.mode != mode)
+                || next.active.iter().any(|(m, h)| h == &handle && m != mode_key(item.mode))
+            {
+                return Err(ErrorCode::ConstraintError);
+            }
+            let empty = crate::fields! { "schedule_mode" => mode_key(item.mode) };
+            let original = if is_active {
+                live
+            } else if builtin {
+                next.native.get(mode_key(mode)).unwrap_or(&empty)
+            } else {
+                catalog
+                    .named
+                    .get(&handle)
+                    .filter(|w| schedule::kind(&w.bucket) == schedule::kind(&empty))
+                    .map_or(&empty, |w| &w.bucket)
+            };
+            let week = self.edited_week(item, original)?;
+            if is_active {
+                replacement = Some(week.clone());
+            }
+            if !builtin {
+                next.named.insert(handle, SavedWeek { name: item.name.clone(), bucket: week });
+            } else if !is_active {
+                next.native.insert(mode_key(mode).to_owned(), week);
+            }
+        }
+        if (initial.iter().any(|s| s.handle.as_deref() == Some(active.as_bytes())) && !seen.contains(&active))
+            || next.active.values().any(|h| !seen.contains(h))
+        {
+            return Err(ErrorCode::InvalidInState);
+        }
+        next.named.retain(|h, _| seen.contains(h));
+        if next.named.len() >= CAPACITY {
+            return Err(ErrorCode::ResourceExhausted);
+        }
+        self.install(&original, next, replacement.as_ref())
+    }
+
+    fn supports(&self, mode: SystemModeEnum) -> bool {
+        match mode {
+            SystemModeEnum::Heat => self.equipment.heats(),
+            SystemModeEnum::Cool => self.equipment.cools(),
+            SystemModeEnum::Auto => self.equipment == Equipment::Both,
+            _ => false,
+        }
+    }
+
+    fn edited_week(&self, one: &Pending, original: &Fields) -> Result<Fields, ErrorCode> {
+        let mode = one.mode;
+        let (_, current) = Self::bucket_schedule(original).ok_or(ErrorCode::ConstraintError)?;
+        if one.transitions == [hold_week()] {
+            let mut held = original.clone();
+            held.insert("days".into(), empty_days());
+            return Ok(held);
+        }
+        if current == one.transitions {
+            // A week not yet saved has no days: saved empty, so that
+            // activating it replaces the live week.
+            let mut same = original.clone();
+            same.entry("days").or_insert_with(empty_days);
+            return Ok(same);
+        }
+        if one.transitions.len() > transitions_for(mode) {
+            return Err(ErrorCode::ResourceExhausted);
+        }
+        // Each transition as minutes and its setpoints in °C: one for heat or
+        // cool, a low (heating) and a high (cooling) for Auto, a range.
+        let mut week: Vec<Vec<(u16, f64, f64)>> = vec![Vec::new(); 7];
+        for t in &one.transitions {
+            // Only the schedule's setpoints, within the advertised limits, a
+            // range's high the dead band above its low: no system mode or
+            // preset of a transition's own.
+            let fits = t.days != 0 && t.days & 0x80 == 0 && t.minutes < 24 * 60 && !t.preset;
+            let own_mode = t.mode.is_some_and(|m| m != mode);
+            // A whole-week write echoes existing points, including ones the
+            // thermostat or MQTT set outside this cluster's narrower limits.
+            let reported = current
+                .iter()
+                .any(|old| t.days & !old.days == 0 && (t.minutes, t.heat, t.cool) == (old.minutes, old.heat, old.cool));
+            let within =
+                |s: Option<i16>| s.filter(|s| reported || (MIN..=MAX).contains(s)).map(|s| f64::from(s) / 100.0);
+            let setpoints = match mode {
+                SystemModeEnum::Heat if t.cool.is_none() => within(t.heat).map(|c| (c, c)),
+                SystemModeEnum::Cool if t.heat.is_none() => within(t.cool).map(|c| (c, c)),
+                // In hundredths, as sent: the dead band exactly.
+                SystemModeEnum::Auto => {
+                    let gap = t.heat.zip(t.cool).is_some_and(|(heat, cool)| cool.saturating_sub(heat) >= GAP);
+                    within(t.heat).zip(within(t.cool)).filter(|_| gap)
+                }
+                _ => None,
+            };
+            let Some((low, high)) = setpoints.filter(|_| fits && !own_mode) else {
+                return Err(ErrorCode::ConstraintError);
+            };
+            for bit in (0..7).filter(|b| t.days & (1 << b) != 0) {
+                week[(bit + 6) % 7].push((t.minutes, low, high));
+            }
+        }
+        if week.iter().any(|d| d.len() > schedule::DAILY) {
+            return Err(ErrorCode::ResourceExhausted);
+        }
+        let command = if mode == SystemModeEnum::Auto {
+            schedule::range_command(&week.into_iter().enumerate().collect::<Vec<_>>())
+        } else {
+            let one = |d: Vec<(u16, f64, f64)>| d.into_iter().map(|(m, c, _)| (m, c)).collect();
+            schedule::command(&week.into_iter().map(one).enumerate().collect::<Vec<_>>())
+        };
+        let fahrenheit = self.nest.view().device_str("temperature_scale") == "F";
+        let mut bucket = original.clone();
+        bucket.extend(
+            schedule::write(original, &command, chrono::Utc::now().timestamp(), fahrenheit, (9., 32.))
+                .map_err(|_| ErrorCode::ConstraintError)?,
+        );
+        Self::bucket_schedule(&bucket).ok_or(ErrorCode::ResourceExhausted)?;
+        Ok(bucket)
+    }
+
+    fn install(
+        &self,
+        original: &crate::store::Object,
+        next: Catalog,
+        replacement: Option<&Fields>,
+    ) -> Result<(), ErrorCode> {
+        let metadata = (next != Catalog::default()).then_some(next);
+        self.nest.bridge.replace_schedule(original, replacement.and_then(|w| w.get("days")), metadata).map_err(|e| {
+            crate::logf!("matter: schedule commit: {e}");
+            ErrorCode::InvalidInState
+        })
+    }
+    fn activate(&self, handle: &[u8]) -> Result<(), ErrorCode> {
+        let atomic = self.schedules.atomic();
+        if atomic.is_some() {
+            return Err(ErrorCode::Busy);
+        }
+        let original = self.snapshot()?;
+        let live = &original.value;
+        let (mode, current) = Self::bucket_schedule(live).ok_or(ErrorCode::InvalidInState)?;
+        let catalog = original.local_schedules.clone().unwrap_or_default();
+        let old = catalog.handle(mode);
+        if handle == old.as_bytes() {
+            return if current.is_empty() && catalog.named.is_empty() { Err(ErrorCode::NotFound) } else { Ok(()) };
+        }
+        let key = std::str::from_utf8(handle).map_err(|_| ErrorCode::NotFound)?;
+        let target = if handle == SCHEDULE {
+            catalog.native.get(mode_key(mode))
+        } else {
+            catalog.named.get(key).map(|w| &w.bucket)
+        }
+        .ok_or(ErrorCode::NotFound)?
+        .clone();
+        if schedule::kind(&target) != schedule::kind(live) {
+            return Err(ErrorCode::InvalidInState);
+        }
+        let mut next = catalog.clone();
+        if old == "nest" {
+            next.native.insert(mode_key(mode).to_owned(), live.clone());
+        } else if let Some(w) = next.named.get_mut(old) {
+            w.bucket = live.clone();
+        }
+        if handle == SCHEDULE {
+            next.active.remove(mode_key(mode));
+            next.native.remove(mode_key(mode));
+        } else {
+            next.active.insert(mode_key(mode).to_owned(), key.to_owned());
+        }
+        self.install(&original, next, Some(&target))
     }
 
     fn set(&self, name: &str, arg: &str) -> Result<(), Error> {
@@ -266,10 +661,16 @@ impl ClusterHandler for Thermostat {
                 | thermostat::Feature::COOLING.bits()
                 | thermostat::Feature::AUTO_MODE.bits()
                 | thermostat::Feature::OCCUPANCY.bits()
-                | thermostat::Feature::PRESETS.bits(),
+                | thermostat::Feature::PRESETS.bits()
+                | thermostat::Feature::MATTER_SCHEDULE_CONFIGURATION.bits(),
         )
         .with_attrs(attributes)
-        .with_cmds(with!(thermostat::CommandId::SetpointRaiseLower | thermostat::CommandId::SetActivePresetRequest));
+        .with_cmds(with!(
+            thermostat::CommandId::SetpointRaiseLower
+                | thermostat::CommandId::SetActivePresetRequest
+                | thermostat::CommandId::SetActiveScheduleRequest
+                | thermostat::CommandId::AtomicRequest
+        ));
 
     fn dataver(&self) -> u32 {
         self.dataver.get()
@@ -529,6 +930,98 @@ impl ClusterHandler for Thermostat {
         }
     }
 
+    fn schedule_types<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<ScheduleTypeStructArrayBuilder<P>, ScheduleTypeStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        // Put the live mode first so an empty native week still has a type.
+        let current = self.schedule().map(|(mode, _)| mode).filter(|m| self.supports(*m));
+        let modes: Vec<_> = current
+            .into_iter()
+            .chain(
+                [SystemModeEnum::Heat, SystemModeEnum::Cool, SystemModeEnum::Auto]
+                    .into_iter()
+                    .filter(|m| current.is_some() && Some(*m) != current && self.supports(*m)),
+            )
+            .collect();
+        let (count, features) = if modes.is_empty() {
+            (0, ScheduleTypeFeaturesBitmap::empty())
+        } else {
+            (
+                CAPACITY as u8,
+                ScheduleTypeFeaturesBitmap::SUPPORTS_SETPOINTS | ScheduleTypeFeaturesBitmap::SUPPORTS_NAMES,
+            )
+        };
+        let modes = if modes.is_empty() { vec![SystemModeEnum::Auto] } else { modes };
+        macro_rules! one {
+            ($b:expr,$m:expr) => {
+                $b.system_mode($m)?.number_of_schedules(count)?.schedule_type_features(features)?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for m in modes {
+                    array = one!(array.push()?, m)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => {
+                one!(item, *modes.get(usize::from(i)).ok_or(ErrorCode::ConstraintError)?)
+            }
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn number_of_schedules(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        Ok(CAPACITY as u8)
+    }
+
+    fn number_of_schedule_transitions(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        let mode = self.schedule().map_or(SystemModeEnum::Heat, |(mode, _)| mode);
+        Ok(transitions_for(mode) as u8)
+    }
+
+    fn number_of_schedule_transition_per_day(&self, _ctx: impl ReadContext) -> Result<Nullable<u8>, Error> {
+        Ok(Nullable::some(schedule::DAILY as u8))
+    }
+
+    fn active_schedule_handle<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: NullableBuilder<P, OctetsBuilder<P>>,
+    ) -> Result<P, Error> {
+        if let Ok(o) = self.snapshot() {
+            if let Some((mode, points)) = Self::bucket_schedule(&o.value) {
+                let catalog = o.local_schedules.unwrap_or_default();
+                let handle = catalog.handle(mode).as_bytes();
+                if !catalog.named.is_empty() || !points.is_empty() {
+                    return builder.non_null()?.set(Octets(handle));
+                }
+            }
+        }
+        builder.null()
+    }
+
+    fn schedules<P: TLVBuilderParent>(
+        &self,
+        ctx: impl ReadContext,
+        builder: ArrayAttributeRead<ScheduleStructArrayBuilder<P>, ScheduleStructBuilder<P>>,
+    ) -> Result<P, Error> {
+        msch::read(&self.shown(&msch::writer(&ctx, ctx.attr().fab_idx)), builder)
+    }
+
+    fn set_schedules(
+        &self,
+        ctx: impl WriteContext,
+        value: ArrayAttributeWrite<TLVArray<'_, thermostat::ScheduleStruct<'_>>, thermostat::ScheduleStruct<'_>>,
+    ) -> Result<(), Error> {
+        self.schedules
+            .write(&msch::writer(&ctx, ctx.attr().fab_idx), CAPACITY, value)
+            .inspect_err(|e| crate::logf!("matter: Schedules write refused, {e:?}"))
+    }
+
+    // The weekly schedule is Schedules' (MSCH): no SCH commands.
     fn handle_set_weekly_schedule(
         &self,
         _ctx: impl InvokeContext,
@@ -553,9 +1046,13 @@ impl ClusterHandler for Thermostat {
     fn handle_set_active_schedule_request(
         &self,
         _ctx: impl InvokeContext,
-        _request: thermostat::SetActiveScheduleRequestRequest<'_>,
+        request: thermostat::SetActiveScheduleRequestRequest<'_>,
     ) -> Result<(), Error> {
-        Err(ErrorCode::CommandNotFound.into())
+        self.activate(request.schedule_handle()?.0)?;
+        self.dataver.changed();
+        _ctx.notify_own_attr_changed(SCHEDULES);
+        _ctx.notify_own_attr_changed(thermostat::AttributeId::ActiveScheduleHandle as u32);
+        Ok(())
     }
 
     fn handle_add_thermostat_suggestion<P: TLVBuilderParent>(
@@ -577,12 +1074,28 @@ impl ClusterHandler for Thermostat {
 
     fn handle_atomic_request<P: TLVBuilderParent>(
         &self,
-        _ctx: impl InvokeContext,
-        _request: thermostat::AtomicRequestRequest<'_>,
-        _response: thermostat::AtomicResponseBuilder<P>,
+        ctx: impl InvokeContext,
+        request: thermostat::AtomicRequestRequest<'_>,
+        response: thermostat::AtomicResponseBuilder<P>,
     ) -> Result<P, Error> {
-        // The one preset is built in; there is nothing to edit atomically.
-        Err(ErrorCode::CommandNotFound.into())
+        let refused = || {
+            self.dataver.changed();
+            ctx.notify_own_attr_changed(SCHEDULES);
+        };
+        self.schedules.atomic_request(
+            &ctx,
+            &request,
+            response,
+            || self.current(),
+            |initial, p| {
+                self.commit_checked(initial, p)?;
+                self.dataver.changed();
+                ctx.notify_own_attr_changed(SCHEDULES);
+                ctx.notify_own_attr_changed(thermostat::AttributeId::ActiveScheduleHandle as u32);
+                Ok(())
+            },
+            refused,
+        )
     }
 }
 
@@ -600,7 +1113,9 @@ fn degrees(centi: i16) -> String {
 mod tests {
     use super::*;
     use crate::fields;
-    use crate::matter::tests::{ctx, field, nest};
+    use crate::matter::schedules::pending;
+    use crate::matter::tests::{ctx, ctx_on, field, nest};
+    use rs_matter::dm::clusters::decl::thermostat::ScheduleDayOfWeekBitmap;
     use rs_matter::tlv::{FromTLV, TLVArray, TLVElement, TLVTag, TLVWriteParent};
     use rs_matter::utils::storage::WriteBuf;
     use serde_json::json;
@@ -1162,5 +1677,562 @@ mod tests {
         assert_eq!(active_preset(&t), None);
         assert_eq!(field(&t.nest, "device", "eco")["mode"], json!("schedule"));
         assert_eq!(shared(&t, "target_temperature"), Some(22.0));
+    }
+
+    /// A transition, as Schedules has it: day bits (bit 0 Sunday), minutes,
+    /// heating and cooling setpoints.
+    type Shown = (u8, u16, Option<i16>, Option<i16>);
+    /// A schedule as read: its handle, system mode, built-in, and transitions.
+    type ReadSchedule = (Option<Vec<u8>>, SystemModeEnum, Option<bool>, Vec<Shown>);
+    /// A schedule to write: its handle, system mode and transitions.
+    type WriteSchedule<'a> = (Option<&'a [u8]>, SystemModeEnum, &'a [Shown]);
+    /// An AtomicResponse: the overall status, each attribute's, and the timeout.
+    type Atomic = (u8, Vec<(u32, u8)>, Option<u16>);
+
+    /// Schedules as read: each schedule's handle, system mode, built-in, and transitions.
+    fn schedules(t: &Thermostat) -> Vec<ReadSchedule> {
+        let mut buf = [0u8; 2048];
+        let mut wb = WriteBuf::new(&mut buf);
+        let array = ScheduleStructArrayBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        t.schedules(ctx(1), ArrayAttributeRead::ReadAll(array)).unwrap();
+        let len = wb.get_tail();
+        let list: TLVArray<'_, thermostat::ScheduleStruct<'_>> = TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
+        list.iter()
+            .map(|s| {
+                let p = pending(&s.unwrap()).unwrap();
+                let shown = p.transitions.iter().map(|t| (t.days, t.minutes, t.heat, t.cool)).collect();
+                (p.handle, p.mode, p.built_in, shown)
+            })
+            .collect()
+    }
+
+    /// Writes `list` (each schedule's handle, mode and transitions) to Schedules for `fabric`.
+    fn write_schedules(t: &Thermostat, fabric: u8, list: &[WriteSchedule<'_>]) -> Result<(), ErrorCode> {
+        let mut buf = [0u8; 2048];
+        let mut wb = WriteBuf::new(&mut buf);
+        let mut array =
+            ScheduleStructArrayBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        for (handle, mode, transitions) in list {
+            let mut each = array
+                .push()
+                .unwrap()
+                .schedule_handle(Nullable::new(handle.map(Octets)))
+                .unwrap()
+                .system_mode(*mode)
+                .unwrap()
+                .name(None)
+                .unwrap()
+                .preset_handle(None)
+                .unwrap()
+                .transitions()
+                .unwrap();
+            for &(days, minutes, heat, cool) in *transitions {
+                each = each
+                    .push()
+                    .unwrap()
+                    .day_of_week(ScheduleDayOfWeekBitmap::from_bits_truncate(days))
+                    .unwrap()
+                    .transition_time(minutes)
+                    .unwrap()
+                    .preset_handle(None)
+                    .unwrap()
+                    .system_mode(None)
+                    .unwrap()
+                    .cooling_setpoint(cool)
+                    .unwrap()
+                    .heating_setpoint(heat)
+                    .unwrap()
+                    .end()
+                    .unwrap();
+            }
+            array = each.end().unwrap().built_in(Nullable::none()).unwrap().end().unwrap();
+        }
+        array.end().unwrap();
+        let len = wb.get_tail();
+        let list = TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
+        t.set_schedules(ctx_on(1, fabric), ArrayAttributeWrite::Replace(list)).map_err(|e| e.code())
+    }
+
+    /// AtomicRequest of `kind` for Schedules (and `others`) from `fabric`: the
+    /// overall status, each attribute's, and the timeout.
+    fn atomic(t: &Thermostat, fabric: u8, kind: u8, others: &[u32]) -> Result<Atomic, ErrorCode> {
+        let mut tlv = vec![0x15, 0x24, 0x00, kind, 0x36, 0x01, 0x06];
+        tlv.extend(SCHEDULES.to_le_bytes());
+        for a in others {
+            tlv.push(0x06);
+            tlv.extend(a.to_le_bytes());
+        }
+        tlv.extend([0x18, 0x25, 0x02, 0x10, 0x27, 0x18]); // timeout 10000 ms
+        let request = thermostat::AtomicRequestRequest::new(TLVElement::new(&tlv));
+        let mut buf = [0u8; 256];
+        let mut wb = WriteBuf::new(&mut buf);
+        let builder =
+            thermostat::AtomicResponseBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        t.handle_atomic_request(ctx_on(1, fabric), request, builder).map_err(|e| e.code())?;
+        let len = wb.get_tail();
+        let response = thermostat::AtomicResponse::new(TLVElement::new(&buf[..len]));
+        let each = response.attribute_status().unwrap().iter().map(Result::unwrap);
+        Ok((
+            response.status_code().unwrap(),
+            each.map(|a| (a.attribute_id().unwrap(), a.status_code().unwrap())).collect(),
+            response.timeout().unwrap(),
+        ))
+    }
+
+    const BEGIN: u8 = 0;
+    const COMMIT: u8 = 1;
+    const ROLLBACK: u8 = 2;
+    const MONDAY: u8 = 0x02;
+    const SATURDAY: u8 = 0x40;
+
+    fn heating(t: &Thermostat) {
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        let days = json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"}}});
+        bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days, "ver" => 2}, 0, 0, true);
+    }
+
+    #[test]
+    fn schedules_shows_the_units_schedule() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        heating(&t);
+        assert_eq!(
+            schedules(&t),
+            [(Some(SCHEDULE.to_vec()), SystemModeEnum::Heat, Some(true), vec![(MONDAY, 390, Some(2050), None)])]
+        );
+        assert_eq!(t.number_of_schedule_transition_per_day(ctx(1)).unwrap(), Nullable::some(10));
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        assert_eq!(schedule_types(&t), [(SystemModeEnum::Heat, 4)]);
+        bridge.store.merge(&key, &fields! {"schedule_mode" => "RANGE"}, 0, 0, true);
+        assert_eq!(schedules(&t), [], "a range schedule without ranges");
+        assert_eq!(schedule_types(&t), [(SystemModeEnum::Auto, 0)], "range on heating-only wiring");
+        bridge.store.merge(&key, &fields! {"schedule_mode" => "OTHER"}, 0, 0, true);
+        assert_eq!(schedule_types(&t), [(SystemModeEnum::Auto, 0)], "never an empty list");
+    }
+
+    /// The unit's range schedule: Monday 03:00, 18-25 °C.
+    fn ranging(t: &Thermostat) {
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        let entry = json!({"entry_type": "setpoint", "time": 10800, "temp-min": 18, "temp-max": 25, "type": "RANGE"});
+        bridge.store.merge(
+            &key,
+            &fields! {"schedule_mode" => "RANGE", "days" => json!({"0": {"1": entry}}), "ver" => 2},
+            0,
+            0,
+            true,
+        );
+    }
+
+    /// A range week: `per_day` changes on each of `days` days, every one of
+    /// its own temperatures.
+    fn distinct_ranges(t: &Thermostat, days: usize, per_day: usize) {
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        let week: crate::json::Fields = (0..days)
+            .map(|d| {
+                let day: crate::json::Fields = (0..per_day)
+                    .map(|i| {
+                        let low = 10.0 + (d * per_day + i) as f64 * 0.1;
+                        let e = json!({"entry_type": "setpoint", "time": (i * 120 + 1) * 60, "temp-min": low,
+                                       "temp-max": low + 5.0, "type": "RANGE"});
+                        (i.to_string(), e)
+                    })
+                    .collect();
+                (d.to_string(), serde_json::Value::Object(day))
+            })
+            .collect();
+        bridge.store.merge(&key, &fields! {"schedule_mode" => "RANGE", "days" => week, "ver" => 2}, 0, 0, true);
+    }
+
+    /// The bytes Schedules takes as read.
+    fn schedules_size(t: &Thermostat) -> usize {
+        let mut buf = [0u8; 4096];
+        let mut wb = WriteBuf::new(&mut buf);
+        let array = ScheduleStructArrayBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        t.schedules(ctx(1), ArrayAttributeRead::ReadAll(array)).unwrap();
+        wb.get_tail()
+    }
+
+    #[test]
+    fn a_range_week_fits_a_message() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true, "can_cool" => true});
+        // The most it shows, each transition different: well within the
+        // 1178 bytes rs-matter sends in one message, report and all.
+        distinct_ranges(&t, 6, 10);
+        assert_eq!(schedules(&t), [], "60: more than it shows");
+        assert_eq!(schedule_types(&t), [(SystemModeEnum::Auto, 0)]);
+        assert!(t.commit(&[]).is_err(), "a controller cannot replace a week it could not read");
+        distinct_ranges(&t, 7, 8);
+        assert_eq!(schedules(&t)[0].3.len(), RANGE_TRANSITIONS);
+        assert!(schedules_size(&t) <= 1000, "{} bytes", schedules_size(&t));
+        assert_eq!(t.number_of_schedule_transitions(ctx(1)).unwrap(), RANGE_TRANSITIONS as u8);
+        // A heating week of its 70 transitions, each different, fits too.
+        let heat = thermostat(fields! {}, fields! {"can_heat" => true});
+        let key = format!("schedule.{}", heat.nest.bridge.serial);
+        let week: crate::json::Fields = (0..7)
+            .map(|d| {
+                let day: crate::json::Fields = (0..10)
+                    .map(|i| {
+                        let temp = 10.0 + (d * 10 + i) as f64 * 0.1;
+                        (
+                            i.to_string(),
+                            json!({"entry_type": "setpoint", "time": (i * 120 + 1) * 60, "temp": temp, "type": "HEAT"}),
+                        )
+                    })
+                    .collect();
+                (d.to_string(), serde_json::Value::Object(day))
+            })
+            .collect();
+        heat.nest.bridge.store.merge(
+            &key,
+            &fields! {"schedule_mode" => "HEAT", "days" => week, "ver" => 2},
+            0,
+            0,
+            true,
+        );
+        assert_eq!(schedules(&heat)[0].3.len(), 70);
+        assert!(schedules_size(&heat) <= 1000, "{} bytes", schedules_size(&heat));
+    }
+
+    #[test]
+    fn the_same_change_on_several_days_is_one_transition() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        let entry = json!({"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"});
+        let days: crate::json::Fields = (0..7).map(|d| (d.to_string(), json!({"1": entry}))).collect();
+        bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days, "ver" => 2}, 0, 0, true);
+        assert_eq!(schedules(&t)[0].3, [(0x7F, 390, Some(2050), None)]);
+    }
+
+    #[test]
+    fn a_range_schedule_is_an_auto_one_of_lows_and_highs() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true, "can_cool" => true});
+        ranging(&t);
+        assert_eq!(
+            schedules(&t),
+            [(Some(SCHEDULE.to_vec()), SystemModeEnum::Auto, Some(true), vec![(MONDAY, 180, Some(1800), Some(2500))])]
+        );
+        let week = [(MONDAY | SATURDAY, 390, Some(1900), Some(2400))];
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Auto, &week)]).unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        let bucket = t.nest.schedule().unwrap();
+        assert_eq!(
+            (schedule::range_day(&bucket, 0), schedule::range_day(&bucket, 5)),
+            (vec![(390, 19.0, 24.0)], vec![(390, 19.0, 24.0)])
+        );
+        // The dead band exactly, in hundredths.
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Auto, &[(MONDAY, 390, Some(1456), Some(1606))])])
+            .unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        // Each a low and a high, the high the dead band above the low.
+        for transitions in [
+            [(MONDAY, 390, Some(2000), Some(2100))],
+            [(MONDAY, 390, Some(i16::MIN), Some(i16::MAX))],
+            [(MONDAY, 390, Some(1900), None)],
+            [(MONDAY, 390, None, Some(2400))],
+        ] {
+            atomic(&t, 1, BEGIN, &[]).unwrap();
+            write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Auto, &transitions)]).unwrap();
+            assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((1, vec![(SCHEDULES, 0x87)], None)), "{transitions:?}");
+        }
+    }
+
+    fn schedule_types(t: &Thermostat) -> Vec<(SystemModeEnum, u8)> {
+        let mut buf = [0u8; 256];
+        let mut wb = WriteBuf::new(&mut buf);
+        let array =
+            ScheduleTypeStructArrayBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous).unwrap();
+        t.schedule_types(ctx(1), ArrayAttributeRead::ReadAll(array)).unwrap();
+        let len = wb.get_tail();
+        let list: TLVArray<'_, thermostat::ScheduleTypeStruct<'_>> =
+            TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
+        list.iter().map(|s| s.unwrap()).map(|s| (s.system_mode().unwrap(), s.number_of_schedules().unwrap())).collect()
+    }
+
+    #[test]
+    fn named_weeks_activate_only_in_their_mode_and_restore_the_native_days() {
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true,"can_cool"=>true});
+        heating(&t);
+        let original = t.nest.schedule().unwrap();
+        let native = t.current().remove(0);
+        let mut warm = native.clone();
+        warm.handle = None;
+        warm.built_in = Some(false);
+        warm.name = Some("Weekend".into());
+        warm.transitions[0].heat = Some(2250);
+        let mut cool = warm.clone();
+        cool.name = Some("Summer".into());
+        cool.mode = SystemModeEnum::Cool;
+        cool.transitions[0].cool = Some(2400);
+        cool.transitions[0].heat = None;
+        t.commit(&[native.clone(), warm, cool]).unwrap();
+        let list = t.current();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[1].name.as_deref(), Some("Weekend"));
+        assert_eq!(t.activate(b"s2"), Err(ErrorCode::InvalidInState));
+        t.activate(b"s1").unwrap();
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 22.5)]);
+        let reloaded = Thermostat::new(Dataver::new(0), t.nest.clone(), t.equipment);
+        assert_eq!(reloaded.current(), t.current());
+        reloaded.activate(b"nest").unwrap();
+        assert_eq!(t.nest.schedule().unwrap(), original);
+        t.commit(&[native]).unwrap();
+        assert!(t.snapshot().unwrap().local_schedules.is_none());
+    }
+
+    #[test]
+    fn an_omitted_active_week_is_protected_and_a_held_named_week_stays_editable() {
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true});
+        heating(&t);
+        let native = t.current().remove(0);
+        let mut named = native.clone();
+        named.name = Some("Weekend".into());
+        named.handle = None;
+        named.built_in = Some(false);
+        assert_eq!(t.commit(std::slice::from_ref(&named)), Err(ErrorCode::InvalidInState));
+        assert_eq!(t.current(), std::slice::from_ref(&native));
+        t.commit(&[native.clone(), named]).unwrap();
+        t.activate(b"s1").unwrap();
+        let mut list = t.current();
+        let original = list.clone();
+        list[1].transitions = vec![hold_week()];
+        t.commit(&list).unwrap();
+        assert_eq!(t.current(), list);
+        assert!(schedule::day(&t.nest.schedule().unwrap(), 0).is_empty());
+        assert_eq!(t.commit(&[]), Err(ErrorCode::InvalidInState));
+        t.activate(b"nest").unwrap();
+        assert_eq!(t.current(), list);
+        t.activate(b"s1").unwrap();
+        t.commit(&original).unwrap();
+        assert_eq!(t.current(), original);
+    }
+
+    #[test]
+    fn a_named_week_without_transitions_empties_the_week_when_activated() {
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true});
+        heating(&t);
+        let native = t.current().remove(0);
+        let mut away = native.clone();
+        away.name = Some("Away".into());
+        away.handle = None;
+        away.built_in = Some(false);
+        away.transitions.clear();
+        t.commit(&[native, away]).unwrap();
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 20.5)]);
+        t.activate(b"s1").unwrap();
+        let empty = json!({"0": {}, "1": {}, "2": {}, "3": {}, "4": {}, "5": {}, "6": {}});
+        assert_eq!(t.nest.schedule().unwrap()["days"], empty);
+        // The native week comes back, and the named one stays empty.
+        t.activate(b"nest").unwrap();
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 20.5)]);
+        assert_eq!(t.snapshot().unwrap().local_schedules.unwrap().named["s1"].bucket["days"], empty);
+    }
+
+    #[test]
+    fn a_cleared_or_held_week_names_every_day_empty() {
+        let empty = json!({"0": {}, "1": {}, "2": {}, "3": {}, "4": {}, "5": {}, "6": {}});
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true});
+        heating(&t);
+        t.commit(&[]).unwrap();
+        assert_eq!(t.nest.schedule().unwrap()["days"], empty);
+        heating(&t);
+        let mut held = t.current();
+        held[0].transitions = vec![hold_week()];
+        t.commit(&held).unwrap();
+        assert_eq!(t.nest.schedule().unwrap()["days"], empty);
+    }
+
+    #[test]
+    fn a_named_week_activates_over_a_schedule_that_names_no_mode() {
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true});
+        let key = format!("schedule.{}", t.nest.bridge.serial);
+        let days = json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5}}});
+        t.nest.bridge.store.merge(&key, &fields! {"days" => days, "ver" => 2}, 0, 0, true);
+        let native = t.current().remove(0);
+        let mut warm = native.clone();
+        warm.name = Some("Weekend".into());
+        warm.handle = None;
+        warm.built_in = Some(false);
+        warm.transitions[0].heat = Some(2250);
+        t.commit(&[native, warm]).unwrap();
+        t.activate(b"s1").unwrap();
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 22.5)]);
+        // An edit of the inactive week keeps what it holds.
+        t.activate(b"nest").unwrap();
+        let mut list = t.current();
+        list[1].transitions[0].minutes = 400;
+        t.commit(&list).unwrap();
+        assert_eq!(t.current(), list);
+    }
+
+    #[test]
+    fn a_commit_from_a_stale_week_or_with_an_extra_setpoint_changes_nothing() {
+        let t = thermostat(fields! {}, fields! {"can_heat"=>true});
+        heating(&t);
+        let initial = t.current();
+        let mut invalid = initial.clone();
+        invalid[0].transitions[0].cool = Some(2300);
+        assert_eq!(t.commit(&invalid), Err(ErrorCode::ConstraintError));
+        t.nest.bridge.apply("mqtt", "heating_times", r#"{"tue":[{"time":"12:00","temp":23}]}"#).unwrap();
+        assert_eq!(t.commit_checked(&initial, &initial), Err(ErrorCode::InvalidInState));
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 1), [(720, 23.)]);
+    }
+
+    #[test]
+    fn an_atomic_write_replaces_the_week() {
+        let t = thermostat(fields! {"learning_mode" => true}, fields! {"can_heat" => true});
+        heating(&t);
+        let week = [(MONDAY | SATURDAY, 360, Some(2100), None), (MONDAY, 1320, Some(1700), None)];
+        assert_eq!(
+            write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Heat, &week)]),
+            Err(ErrorCode::InvalidInState)
+        );
+        assert_eq!(atomic(&t, 1, BEGIN, &[]), Ok((0, vec![(SCHEDULES, 0)], Some(10000))));
+        // Another fabric is refused while it is open.
+        assert_eq!(atomic(&t, 2, BEGIN, &[]), Ok((1, vec![(SCHEDULES, 0x9C)], None)));
+        assert_eq!(write_schedules(&t, 2, &[]), Err(ErrorCode::InvalidInState));
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Heat, &week)]).unwrap();
+        // Nothing applied before the commit: the writer reads what it wrote, others the unit's.
+        assert_eq!(schedules(&t)[0].3, [(MONDAY | SATURDAY, 360, Some(2100), None), (MONDAY, 1320, Some(1700), None)]);
+        assert_eq!(t.shown(&(2, String::new()))[0].transitions[0].heat, Some(2050));
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        assert_eq!(
+            schedules(&t)[0].3,
+            [
+                (MONDAY | SATURDAY, 360, Some(2100), None),
+                (MONDAY, 1320, Some(1700), None),
+                (60, 0, Some(1700), None),
+                (1, 0, Some(2100), None)
+            ]
+        );
+        assert_eq!(field(&t.nest, "device", "learning_mode"), json!(true));
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Err(ErrorCode::InvalidInState), "closed");
+    }
+
+    #[test]
+    fn a_day_edit_keeps_the_fahrenheit_setpoints_home_assistant_read() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        let bridge = &t.nest.bridge;
+        let key = format!("schedule.{}", bridge.serial);
+        let original = json!({"entry_type": "setpoint", "time": 25200, "temp": 20.55556, "touched_by": 1});
+        let frost = json!({"entry_type": "setpoint", "time": 3600, "temp": 6, "touched_by": 1});
+        bridge.store.merge(
+            &key,
+            &fields! {"schedule_mode" => "HEAT", "days" => json!({"1": {"1": original}, "6": {"1": frost}})},
+            0,
+            0,
+            true,
+        );
+        let week = [(MONDAY, 390, Some(2050), None), (0x04, 420, Some(2056), None), (1, 60, Some(600), None)];
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Heat, &week)]).unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]).unwrap().0, 0);
+        let bucket = t.nest.schedule().unwrap();
+        assert_eq!(bucket["days"]["1"]["1"], original);
+        assert_eq!(bucket["days"]["6"]["1"], frost);
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        let below_limit = [(MONDAY, 60, Some(600), None)];
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Heat, &below_limit)]).unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]).unwrap().1, [(SCHEDULES, 0x87)]);
+    }
+
+    #[test]
+    fn a_commit_the_unit_cannot_take_changes_nothing() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        heating(&t);
+        let before = schedules(&t);
+        let cooling = [(MONDAY, 360, None, Some(2400))];
+        let heats = [(MONDAY, 360, Some(2000), None)];
+        let eleven: Vec<Shown> = (0..11).map(|h| (MONDAY, h * 60, Some(2000), None)).collect();
+        for (list, status) in [
+            (vec![(Some(SCHEDULE), SystemModeEnum::Heat, &cooling[..])], 0x87),
+            (vec![(Some(&b"other"[..]), SystemModeEnum::Heat, &heats[..])], 0x8b),
+            (vec![(Some(SCHEDULE), SystemModeEnum::Cool, &heats[..])], 0x87),
+            (vec![(Some(SCHEDULE), SystemModeEnum::Heat, &eleven[..])], 0x89),
+        ] {
+            assert_eq!(atomic(&t, 1, BEGIN, &[]).unwrap().0, 0);
+            write_schedules(&t, 1, &list).unwrap();
+            assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((1, vec![(SCHEDULES, status)], None)), "{list:?}");
+            assert_eq!(schedules(&t), before);
+        }
+        // A fifth schedule, refused as written; the begin again, while open.
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        let five = [(None, SystemModeEnum::Heat, &heats[..]); 5];
+        assert_eq!(write_schedules(&t, 1, &five), Err(ErrorCode::ResourceExhausted));
+        assert_eq!(atomic(&t, 1, BEGIN, &[]).unwrap().1, vec![(SCHEDULES, 0xCB)], "its own, still open");
+        assert_eq!(atomic(&t, 1, ROLLBACK, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        // A rollback, and Presets, which takes no atomic write.
+        atomic(&t, 1, BEGIN, &[]).unwrap();
+        write_schedules(&t, 1, &[(None, SystemModeEnum::Heat, &heats)]).unwrap();
+        assert_eq!(atomic(&t, 1, ROLLBACK, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        assert_eq!(schedules(&t), before);
+        assert_eq!(atomic(&t, 1, BEGIN, &[0x50]), Ok((1, vec![(SCHEDULES, 0), (0x50, 0x86)], None)));
+    }
+
+    #[test]
+    fn an_atomic_write_is_its_writers_alone() {
+        let t = thermostat(fields! {"learning_mode" => true}, fields! {"can_heat" => true});
+        heating(&t);
+        let (a, b): (Writer, Writer) = ((1, "node a".into()), (1, "node b".into()));
+        t.begin(&a, Some(10000)).unwrap();
+        // Another node on the same fabric neither takes it over nor ends it.
+        assert_eq!(t.begin(&b, Some(10000)), Err(ErrorCode::Busy));
+        assert_eq!(t.finish(&b, true), Err(ErrorCode::InvalidInState));
+        // The writer reads its pending copy; the others the unit's.
+        t.atomic().as_mut().unwrap().pending[0].transitions[0].heat = Some(2200);
+        assert_eq!(t.shown(&a)[0].transitions[0].heat, Some(2200));
+        assert_eq!(t.shown(&b)[0].transitions[0].heat, Some(2050));
+        // Nothing written: a commit changes nothing, learning included.
+        assert_eq!(t.finish(&a, true), Ok(IMStatusCode::Success));
+        assert_eq!(field(&t.nest, "device", "learning_mode"), json!(true));
+        assert_eq!(schedules(&t)[0].3, [(MONDAY, 390, Some(2050), None)]);
+    }
+
+    #[test]
+    fn a_commit_refuses_what_matter_does_not_allow() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        heating(&t);
+        let at = |t: Transition| {
+            vec![Pending {
+                name: None,
+                handle: Some(SCHEDULE.to_vec()),
+                mode: SystemModeEnum::Heat,
+                built_in: None,
+                preset: false,
+                transitions: vec![t],
+            }]
+        };
+        let ok = Transition { days: MONDAY, minutes: 360, heat: Some(2000), cool: None, mode: None, preset: false };
+        for bad in [
+            Transition { heat: Some(3500), ..ok.clone() },
+            Transition { heat: Some(800), ..ok.clone() },
+            Transition { mode: Some(SystemModeEnum::Off), ..ok.clone() },
+            Transition { preset: true, ..ok.clone() },
+        ] {
+            assert_eq!(t.commit(&at(bad.clone())), Err(ErrorCode::ConstraintError), "{bad:?}");
+        }
+        let same_mode = Transition { mode: Some(SystemModeEnum::Heat), ..ok };
+        assert_eq!(t.commit(&at(same_mode)), Ok(()));
+    }
+
+    #[test]
+    fn a_schedule_of_no_transitions_empties_the_week() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true});
+        heating(&t);
+        assert_eq!(atomic(&t, 1, BEGIN, &[]).unwrap().0, 0);
+        write_schedules(&t, 1, &[(Some(SCHEDULE), SystemModeEnum::Heat, &[])]).unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((0, vec![(SCHEDULES, 0)], None)));
+        // A week without setpoints shows as no schedule at all.
+        assert_eq!(schedules(&t), []);
+        heating(&t);
+        assert_eq!(atomic(&t, 1, BEGIN, &[]).unwrap().0, 0);
+        write_schedules(&t, 1, &[]).unwrap();
+        assert_eq!(atomic(&t, 1, COMMIT, &[]), Ok((0, vec![(SCHEDULES, 0)], None)), "no schedule empties the week");
+        assert_eq!(schedules(&t), []);
     }
 }

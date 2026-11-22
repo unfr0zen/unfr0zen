@@ -20,11 +20,13 @@ mod extras;
 mod netifs;
 mod ota;
 mod pairing;
+mod schedules;
 mod srp;
 mod thermostat;
 mod thread;
 pub mod timer;
 pub mod wake_patterns;
+mod water_heater;
 
 use std::path::PathBuf;
 use std::pin::pin;
@@ -34,9 +36,12 @@ use std::time::Duration;
 use embassy_futures::select::select4;
 use rs_matter::crypto::{default_crypto, Crypto};
 use rs_matter::dm::clusters::decl::thermostat as thermostat_cluster;
+use rs_matter::dm::clusters::decl::water_heater_management::ClusterHandler as _;
+use rs_matter::dm::clusters::decl::water_heater_mode::ClusterHandler as _;
 use rs_matter::dm::clusters::decl::{
     fan_control, fixed_label, mode_select, on_off, power_source, relative_humidity_measurement,
-    temperature_measurement, thermostat_user_interface_configuration as ui_config,
+    temperature_measurement, thermostat_user_interface_configuration as ui_config, water_heater_management,
+    water_heater_mode,
 };
 use rs_matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter::dm::clusters::identify::{self, IdentifyAction, IdentifyHandler, IdentifyHooks};
@@ -139,6 +144,16 @@ impl Nest {
     /// Runs a command, as MQTT's set/<name> would.
     pub fn apply(&self, name: &str, arg: &str) -> Result<(), String> {
         self.bridge.apply("matter", name, arg)
+    }
+
+    /// The unit's hot water schedule bucket, once nlclient has synced it.
+    pub fn hot_water(&self) -> Option<Fields> {
+        self.bridge.hot_water_schedule().map(|o| o.value)
+    }
+
+    /// The unit's schedule bucket, once nlclient has synced it.
+    pub fn schedule(&self) -> Option<Fields> {
+        self.bridge.buckets().remove("schedule")
     }
 
     pub fn outdoor_temperature(&self) -> Option<f64> {
@@ -385,6 +400,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let node = node_for_network(
         view.device_flag("has_fan"),
         equipment,
+        view.device_flag("has_hot_water_control"),
         &switches,
         settings.thread,
         nest.bridge.sensor.get().is_some(),
@@ -630,15 +646,17 @@ const COOLING_THERMOSTAT: Endpoint<'static> = thermostat_endpoint!(Equipment::Co
 const THERMOSTAT_ENDPOINT: Endpoint<'static> = thermostat_endpoint!(Equipment::Both);
 
 /// The node: the thermostat, with the features of what the unit's equipment
-/// does, and the endpoints beside it that it calls for (a fan, its switches).
+/// does, and the endpoints beside it that it calls for (a fan, hot water,
+/// its switches).
 #[cfg(test)]
 fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
-    node_for_network(has_fan, Equipment::Both, switches, false, false)
+    node_for_network(has_fan, Equipment::Both, false, switches, false, false)
 }
 
 fn node_for_network(
     has_fan: bool,
     equipment: Equipment,
+    hot_water: bool,
     switches: &[Switch],
     thread: bool,
     external: bool,
@@ -684,6 +702,20 @@ fn node_for_network(
             TEMPERATURE_SOURCE,
             devices!(DEV_TYPE_MODE_SELECT),
             clusters!(desc::DescHandler::CLUSTER, TemperatureSource::CLUSTER, Labels::CLUSTER),
+        ));
+    }
+    if hot_water {
+        endpoints.push(Endpoint::new(
+            water_heater::WATER_HEATER,
+            devices!(water_heater::DEV_TYPE_WATER_HEATER),
+            clusters!(
+                desc::DescHandler::CLUSTER,
+                identify::CLUSTER,
+                water_heater::HotWater::CLUSTER,
+                water_heater::Management::CLUSTER,
+                water_heater::Mode::CLUSTER,
+                Labels::CLUSTER
+            ),
         ));
     }
     for switch in switches {
@@ -744,6 +776,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
         (FAN_SCHEDULE, "Fan schedule run time"),
         (FAN_SCHEDULE + 1, "Fan schedule start"),
         (FAN_SCHEDULE + 2, "Fan schedule end"),
+        (water_heater::WATER_HEATER, "Hot water"),
     ];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
@@ -774,6 +807,27 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
                     nest.clone(),
                     equipment,
                 ))),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::HotWater::CLUSTER.id,
+                Async(thermostat_cluster::HandlerAdaptor(water_heater::HotWater::new(
+                    Dataver::new_rand(&mut rand),
+                    nest.clone(),
+                ))),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::Management::CLUSTER.id,
+                Async(water_heater_management::HandlerAdaptor(water_heater::Management {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::Mode::CLUSTER.id,
+                Async(water_heater_mode::HandlerAdaptor(water_heater::Mode {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Humidity::CLUSTER.id,
@@ -1075,6 +1129,14 @@ mod tests {
         cmd: CmdDetails,
     }
 
+    /// A context for a peer on another fabric.
+    pub(super) fn ctx_on(endpoint: u16, fabric: u8) -> Ctx {
+        let mut c = ctx(endpoint);
+        c.attr.fab_idx = fabric;
+        c.cmd.fab_idx = fabric;
+        c
+    }
+
     pub(super) fn ctx(endpoint: u16) -> Ctx {
         Ctx {
             attr: AttrDetails {
@@ -1199,6 +1261,10 @@ mod tests {
     impl OperationContext for Ctx {
         fn exchange(&self) -> &Exchange<'_> {
             unreachable!()
+        }
+        // No session: no peer node.
+        fn accessor(&self) -> Result<rs_matter::acl::Accessor<'_>, Error> {
+            Err(ErrorCode::NotFound.into())
         }
     }
 

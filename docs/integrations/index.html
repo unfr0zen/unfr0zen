@@ -44,6 +44,7 @@
                 <li><a href="#thread">Matter over Thread</a></li>
                 <li><a href="#zigbee">Zigbee</a></li>
                 <li><a href="#external-temperature">External temperature</a></li>
+                <li><a href="#schedules">Schedules in Home Assistant</a></li>
                 <li><a href="#options">Other options</a></li>
                 <li><a href="#backup">Backup &amp; restore</a></li>
                 <li><a href="#themes">Home screen themes</a></li>
@@ -55,6 +56,7 @@
                 <a class="card" href="#matter"><h3>Matter</h3><p>Wi-Fi or Thread, to a Matter controller: Apple Home, Google Home, Alexa or Home Assistant.</p></a>
                 <a class="card" href="#zigbee"><h3>Zigbee</h3><p>The thermostat's own 802.15.4 radio, to your coordinator: Zigbee2MQTT or ZHA.</p></a>
                 <a class="card" href="#external-temperature"><h3>External temperature</h3><p>A thermometer of yours regulates the heating in place of the thermostat's own sensor.</p></a>
+                <a class="card" href="#schedules"><h3>Schedules in Home Assistant</h3><p>The thermostat's own weekly schedule and hot water schedule, as calendars and dashboard cards you edit.</p></a>
             </div>
             <div class="callout">
                 <p><b>nestlocal replaces the thermostat's connection to Nest's cloud.</b> Nest's own <code>nlclient</code> keeps running the screen and the heating, pointed at nestlocal on the unit instead of Nest's servers. The Nest and Google Home apps no longer control the thermostat; Home Assistant does, over your network. Remaining traffic to Nest's and Google's servers, NTP for example, stops with <a href="#options">Block Nest and Google servers</a>.</p>
@@ -102,6 +104,7 @@
             <ul class="chips">
                 <li>Filter reminder and its reset</li><li>Hot water state, schedule and boost</li><li>Humidifier and dehumidifier state</li><li>Humidity control</li>
             </ul>
+            <p>The weekly heating schedule, and with hot water control the hot water schedule, are read and written as JSON on <code>heating_times</code> and <code>hot_water_times</code> (see <a href="/protocols/#mqtt">Protocols</a>).</p>
             <h3>Updates</h3>
             <p>An <b>unfr0zen</b> update entity shows the version the thermostat runs and, when it can reach GitHub, the latest release, checked every 6 hours. <b>Install</b> downloads that release's package for the thermostat, <code>unfr0zen-&lt;device&gt;-&lt;version&gt;.ota</code> (the same one Matter and Zigbee install), checks its bundle against its manifest and unfr0zen's release key, installs it and restarts the thermostat; the thermostat stays awake until then. Only official releases install, and never one older than the installed version, unless <b>Allow unsigned updates</b> was on when the unit was set up. A unit set up without the update engine shows the versions; update it with the app. An install that fails says why in the thermostat's log and leaves it running; one that does not come back after the restart is fixed by setting it up again with the app over USB.</p>
             <p>A thermostat that can't reach GitHub installs a release's package (<code>unfr0zen-diamond3-&lt;version&gt;.ota</code>, from the release's assets) from your own network: put it on any web server the thermostat reaches and publish its URL, for example from a Home Assistant script:</p>
@@ -149,6 +152,7 @@ data:
             <h3>Entities</h3>
             <p>Home Assistant gets the thermostat (modes, setpoints and range, action, eco as a preset, humidity, outdoor temperature), occupancy, °C/°F, backplate temperature, battery, fan and its timer, the fan schedule's run time, start and end, and the switches below. The other MQTT entities aren't offered over Matter.</p>
             <p>The climate entity shows the enabled Eco limits for the current mode while Eco is active and restores the regular setpoints when Eco clears.</p>
+            <p>The weekly heating schedule can be read and written as the thermostat's Schedules (Matter 1.4). With hot water control there is a water heater too, with the hot water schedule, its on/off and its boost: Home Assistant shows the boost's state and a button that ends it, and a water heater entity (off, eco, high demand for a boost) only where the unit reports its hot water temperature. See <a href="/protocols/#matter-water-heater">Protocols</a>.</p>
             <p>The switches are on/off plugs, one per endpoint from 10 up, in this order; a switch the equipment doesn't call for is left out and the ones after it move up. A thermostat has 4 to 12: 5 heating only, 6 heating and cooling, 7 with a fan as well.</p>
             <div class="table-scroll">
                 <table>
@@ -213,6 +217,7 @@ data:
             <h3>Entities, clock and weather</h3>
             <p>The climate entity shows the enabled Eco limits for the current mode while Eco is active and restores the regular setpoints when Eco clears.</p>
             <p>With the converter, Home Assistant gets the MQTT entities under the same names, minus IP address, Wi-Fi signal and the MQTT diagnostics; temperature and HVAC action sit on the climate entity. The clock and the time zone's current offset come from the coordinator's Time cluster, no blueprint needed. The weather has a Zigbee2MQTT blueprint: import it, create an automation, pick the thermostat, the base topic (default <code>zigbee2mqtt</code>) and a weather entity. It sends the outdoor temperature and humidity every 15 minutes, and the conditions and forecast every hour. Outdoor sensors are optional; °F is converted to °C. Nothing needs Wi-Fi.</p>
+            <p>The converter also reads and writes the weekly heating schedule (<code>heating_times</code>, the Thermostat cluster's weekly schedule commands) and, with hot water control, the hot water schedule (<code>hot_water_times</code>, the <a href="/protocols/#zigbee-hot-water">hot water schedule cluster</a>), in MQTT's JSON. When the thermostat switches between heat, cool and heat-cool, the converter reads the new mode's week automatically. Standard Zigbee2MQTT clients can also set <code>weekly_schedule</code> and read the grouped days in <code>weekly_schedule_by_day</code>. ZHA reaches them through the same clusters.</p>
             <p class="badge"><a href="https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Funfr0zen%2Funfr0zen%2Fblob%2Fmain%2Fintegrations%2Fhome-assistant%2Fweather-zigbee.yaml" target="_blank" rel="noopener"><img src="https://my.home-assistant.io/badges/blueprint_import.svg" alt="Import the weather blueprint for Zigbee"></a></p>
             <h3>Updates</h3>
             <p>With the converter, Zigbee2MQTT's OTA page and Home Assistant's update entity install unfr0zen's updates: the same package as MQTT's <b>Install</b>, <code>unfr0zen-&lt;device&gt;-&lt;version&gt;.ota</code>, of which Zigbee2MQTT sends the Zigbee image inside. Point Zigbee2MQTT at the latest release's index in <code>configuration.yaml</code>, restart it, and re-interview the thermostat once so Zigbee2MQTT sees its OTA cluster:</p>
@@ -257,6 +262,17 @@ data:
                 <li>Home Assistant shows <b>External temperature</b>, the reading while it counts, and <b>Temperature source</b>, <code>external</code> or <code>backplate</code>. Zigbee2MQTT shows Temperature source only. On Matter both are selects: Temperature source shows the source, and choosing the other one is refused.</li>
                 <li>Installing again without the option removes the sensor from the thermostat, its Sensors menu entry included, and undoes the gen 1 and 2 input patch or restores the gen 3 Bluetooth setting.</li>
             </ul>
+
+            <h2 id="schedules"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>Schedules in Home Assistant</h2>
+            <p>The <a href="https://github.com/unfr0zen/homeassistant-unfr0zen" target="_blank" rel="noopener">unfr0zen integration</a> for Home Assistant shows the thermostat's own weekly schedule, and on a unit with hot water control its hot water schedule, as calendars, with dashboard cards that edit a day at a time. A change goes into the schedule on the thermostat, which runs it itself: it keeps to it when Home Assistant, the network or the broker is away.</p>
+            <ul>
+                <li><b>The schedule for the thermostat's mode:</b> heating setpoints in Heat, cooling ones in Cool, and in Heat·Cool a low and a high at each change. Each mode keeps its own schedule. The Matter calendar follows the active schedule when a controller selects a named week. Ordinary edits keep Auto-Schedule as configured.</li>
+                <li><b>Hot water:</b> its on periods, its boost and its on/off, where the unit has hot water control.</li>
+                <li><b>Over any of the thermostat's integrations:</b> MQTT, Zigbee2MQTT, ZHA or Matter. A thermostat on MQTT is discovered. On Zigbee2MQTT the calendar first appears once all seven days have answered. A heat-cool week with more than 56 distinct transitions can be edited over MQTT or Zigbee.</li>
+            </ul>
+            <p>Home Assistant 2026.10 or later. Open the integration in Home Assistant's Marketplace (HACS on 2026.10), download it and restart Home Assistant, then add it:</p>
+            <p class="badge"><a href="https://my.home-assistant.io/redirect/marketplace_repository/?owner=unfr0zen&amp;repository=homeassistant-unfr0zen&amp;category=integration" target="_blank" rel="noopener"><img src="https://my.home-assistant.io/badges/marketplace_repository.svg" alt="Open the unfr0zen integration in the Marketplace"></a> <a href="https://my.home-assistant.io/redirect/config_flow_start/?domain=unfr0zen" target="_blank" rel="noopener"><img src="https://my.home-assistant.io/badges/config_flow_start.svg" alt="Add the unfr0zen integration"></a></p>
+            <p>The schedules' topics, attributes and commands are in <a href="/protocols/">Protocols</a>.</p>
 
             <h2 id="options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Other options</h2>
             <p>The app's <b>Set up</b> page takes you through Connect, Integrations, Features and Review. Works With Nest boiler (with Zigbee or Thread), Block Nest and Google servers, the time server, SSH, the USB console, Customizable home screen themes, Doom and Dark theme are on Features; Device, Entry point, Backplate simulator and Allow unsigned updates under <b>Developer options</b> on Review, which also offers a NAND backup before the setup. The app opens with the choices of the last setup it started, kept in <code>setup.json</code> in its data folder: not the passwords, the Matter pairing code, or the developer options other than Backplate simulator and Allow unsigned updates.</p>
