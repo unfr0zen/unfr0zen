@@ -55,8 +55,11 @@
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
 //
-// The Thermostat cluster's weekly schedule is the unit's schedule (weekly_schedule): Set and Get Weekly
-// Schedule, and Clear Weekly Schedule, which clears it.
+// The Thermostat cluster's weekly schedule is the unit's schedule, the one
+// for the mode it is in: weekly_schedule sets it (Set Weekly Schedule; a
+// refusal fails the set), and reading it (Get Weekly Schedule) fills
+// weekly_schedule_by_day, sunday to saturday, merged from every response.
+// Clear Weekly Schedule clears it.
 //
 // Home Assistant gets the entities unfr0zen's MQTT relay announces, under
 // the same names: the climate has one target in heat or cool and the range
@@ -379,7 +382,32 @@ const nest = {
       }
     },
   },
+  // The schedule by day: each Get Weekly Schedule Response is one run of days
+  // with the same transitions, so they are merged into what came before
+  // (fz.thermostat_weekly_schedule would keep the last run only).
+  weekly_schedule: {
+    cluster: "hvacThermostat",
+    type: ["commandGetWeeklyScheduleRsp"],
+    convert: (model, msg, publish, options, meta) => {
+      const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+      const transitions = msg.data.transitions.map((t) => ({
+        time: hhmm(t.transitionTime),
+        ...(t.heatSetpoint !== undefined ? { heating_setpoint: t.heatSetpoint / 100 } : {}),
+        ...(t.coolSetpoint !== undefined ? { cooling_setpoint: t.coolSetpoint / 100 } : {}),
+      }));
+      const schedule = { ...meta.state?.weekly_schedule_by_day };
+      WEEKDAYS.forEach((day, bit) => {
+        if (msg.data.dayofweek & (1 << bit)) {
+          schedule[day] = transitions;
+        }
+      });
+      return { weekly_schedule_by_day: schedule };
+    },
+  },
 };
+
+// ZCL's day bits, Sunday first.
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 const set = {
   preset: {
@@ -401,6 +429,31 @@ const set = {
     convertGet: async (entity, key, meta) => {
       await meta.device.getEndpoint(OUTPUTS[key]).read("genAnalogOutput", ["presentValue"]);
     },
+  },
+  // tz.thermostat_weekly_schedule, with a refusal reported: herdsman's
+  // endpoint.command() doesn't check the default response's status, so a
+  // Set Weekly Schedule the unit refuses would otherwise pass in silence.
+  weekly_schedule: {
+    key: ["weekly_schedule"],
+    convertSet: async (entity, key, value, meta) => {
+      const checked = new Proxy(entity, {
+        get(target, prop) {
+          const v = Reflect.get(target, prop, target);
+          if (prop !== "command") {
+            return typeof v === "function" ? v.bind(target) : v;
+          }
+          return async (...args) => {
+            const reply = await target.command(...args);
+            if (reply?.statusCode) {
+              throw new Error(`the unit refused the schedule (ZCL status 0x${reply.statusCode.toString(16)})`);
+            }
+            return reply;
+          };
+        },
+      });
+      return tz.thermostat_weekly_schedule.convertSet(checked, key, value, meta);
+    },
+    convertGet: tz.thermostat_weekly_schedule.convertGet,
   },
   clear_schedule: {
     key: ["clear_schedule"],
@@ -499,7 +552,7 @@ const definition = {
   ota: true,
   fromZigbee: [
     fz.thermostat,
-    fz.thermostat_weekly_schedule,
+    nest.weekly_schedule,
     fz.fan,
     fz.humidity,
     fz.battery,
@@ -522,7 +575,7 @@ const definition = {
     tz.thermostat_running_state,
     tz.fan_mode,
     tz.thermostat_temperature_display_mode,
-    tz.thermostat_weekly_schedule,
+    set.weekly_schedule,
     set.preset,
     set.outputs,
     set.clear_schedule,
