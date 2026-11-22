@@ -814,7 +814,9 @@ impl Clusters for Nest {
                 Some((key, _)) => self.apply(key, if on { "ON" } else { "OFF" }),
                 None => status::READ_ONLY,
             },
-            (IDENTIFY, 0x0000, _) => status::SUCCESS, // nothing to blink
+            // Identifying lights the display; stopping leaves it to its timeout.
+            (IDENTIFY, 0x0000, Value::U16(0)) => status::SUCCESS,
+            (IDENTIFY, 0x0000, Value::U16(_)) => self.apply("wake_screen", ""),
             (WEATHER, a, v) => self.write_weather(a, v),
             _ => status::READ_ONLY,
         }
@@ -824,7 +826,12 @@ impl Clusters for Nest {
         match (cluster, command) {
             (THERMOSTAT, 0x00) => self.raise_lower(payload),
             (THERMOSTAT, 0x03) => self.apply("clear_schedule", ""), // Clear Weekly Schedule
-            (IDENTIFY, 0x00 | 0x01) => status::SUCCESS,
+            (IDENTIFY, 0x00) => match *payload {
+                [0, 0, ..] => status::SUCCESS,
+                [_, _, ..] => self.apply("wake_screen", ""),
+                _ => status::INVALID_FIELD,
+            },
+            (IDENTIFY, 0x01) => status::SUCCESS,
             _ => status::UNSUP_CLUSTER_COMMAND,
         }
     }
@@ -1284,6 +1291,24 @@ mod tests {
         // Per record, in a write frame: 4.5 °C fails, the rest is not stopped.
         let out = serve(&n, 1, THERMOSTAT, &[0x00, 1, 0x02, 0x12, 0x00, 0x29, 0xC2, 0x01]).unwrap();
         assert_eq!(out, [0x18, 1, 0x04, 0x87, 0x12, 0x00]);
+    }
+
+    #[test]
+    fn identifying_lights_the_display_and_stopping_does_nothing() {
+        let n = nest(fields! {"temperature_scale" => "C"}, fields! {"can_heat" => true});
+        let (mut rx, _sub) = n.bridge.store.subscribe();
+        let device = format!("device.{}", n.bridge.serial);
+        let resent = |rx: &mut tokio::sync::mpsc::Receiver<Vec<crate::store::Object>>| {
+            std::iter::from_fn(|| rx.try_recv().ok()).flatten().filter(|o| o.key == device).count()
+        };
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[0, 0]), status::SUCCESS);
+        assert_eq!(n.write(1, IDENTIFY, 0x0000, Value::U16(0)), status::SUCCESS);
+        assert_eq!(resent(&mut rx), 0);
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5, 0]), status::SUCCESS);
+        assert_eq!(n.write(1, IDENTIFY, 0x0000, Value::U16(5)), status::SUCCESS);
+        assert_eq!(resent(&mut rx), 2);
+        assert_eq!(n.command(1, IDENTIFY, 0x00, &[5]), status::INVALID_FIELD);
+        assert_eq!(n.read(1, IDENTIFY, 0x0000), Some(Value::U16(0)));
     }
 
     #[test]
