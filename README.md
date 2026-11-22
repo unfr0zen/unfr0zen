@@ -8,6 +8,8 @@
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/fBqjAFARYg)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/willtm)
 
+**[Website](https://unfr0zen.com/) · [Download](https://unfr0zen.com/download/) · [Install guide](https://unfr0zen.com/install/) · [Integrations](https://unfr0zen.com/integrations/) · [Protocols](https://unfr0zen.com/protocols/)**
+
 Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
 Zigbee needs no Wi-Fi at all, so it gives a new life to the many 2nd and 3rd
