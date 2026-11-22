@@ -12,8 +12,6 @@
 
 Root and free the Nest Learning Thermostat (1st, 2nd and 3rd generation) over USB.
 Local control over MQTT, Matter (Wi-Fi, Thread) or Zigbee, no Google cloud needed.
-Zigbee needs no Wi-Fi at all, so it gives a new life to the many 2nd and 3rd
-generation units whose Wi-Fi has failed.
 
 </div>
 
@@ -70,8 +68,9 @@ generation units whose Wi-Fi has failed.
   EM357 or EM3581 on SPI), so only one of them can be on, and on European
   models either one replaces the wireless Heat Link connection.
 
-Over Zigbee the thermostat takes its clock and its updates from the
-coordinator, so one whose Wi-Fi has failed works fully.
+Zigbee needs no Wi-Fi at all: the thermostat takes its clock and its updates
+from the coordinator. That gives a new life to the many 2nd and 3rd generation
+units whose Wi-Fi has failed.
 
 ### Tested firmware
 
