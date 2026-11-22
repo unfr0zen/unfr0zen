@@ -420,8 +420,9 @@ fn nestlocal(root: &Path, out: &Path) {
     gzip(&data, &out.join("unfr0zen-apply.gz"));
 }
 
-/// The libraries nlsleepd preloads for Matter (platform/common/wakefilter) and
-/// nlclient beside nestlocal (platform/common/localcloud).
+/// The libraries nlsleepd preloads for Matter and the gen 1's and gen 2's
+/// SSH (platform/common/wakefilter) and nlclient beside nestlocal
+/// (platform/common/localcloud).
 fn preloads(root: &Path, out: &Path) {
     let library = root.join("build/wakefilter/libwakefilter.so");
     println!("cargo:rerun-if-changed={}", library.display());

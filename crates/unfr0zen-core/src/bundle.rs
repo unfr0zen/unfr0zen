@@ -507,7 +507,7 @@ impl Settings {
                 })
                 .transpose()?,
             matter,
-            wake_filter: if matter.is_some() {
+            wake_filter: if matter.is_some() || self.ssh {
                 bundle.take(WAKE_FILTER).map_or_else(|| device(format!("bundle: no {WAKE_FILTER}")), Ok)?
             } else {
                 Vec::new()
@@ -763,8 +763,10 @@ mod tests {
         let asked = Settings { ssh: true, external_temperature: true, ..Settings::default() }.options(&bundle).unwrap();
         assert_eq!(asked.external_temperature_screen, b"\x7fELF rcs");
         assert_eq!(asked.ssh_server.unwrap().files[0].0, "usr/sbin/dropbearmulti");
+        // SSH wakes the unit through nlsleepd's library.
+        assert_eq!(asked.wake_filter, b"\x7fELF wake");
         let not = Settings::default().options(&bundle).unwrap();
-        assert!(not.external_temperature_screen.is_empty() && not.ssh_server.is_none());
+        assert!(not.external_temperature_screen.is_empty() && not.ssh_server.is_none() && not.wake_filter.is_empty());
     }
 
     #[test]

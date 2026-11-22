@@ -122,6 +122,18 @@ pub(crate) fn check_mode(tree: &Tree, name: &str, mode: u32) -> Result<()> {
 pub(crate) const NLSLEEP: &str = "etc/init.d/nlsleep";
 /// Where the start line below preloads the library from.
 const WAKE_FILTER: &str = "nestlabs/lib/libwakefilter.so";
+/// The setup's own wake patterns, which the library adds after nestlocal's
+/// (platform/common/wakefilter).
+const FIXED_WAKE_PATTERNS: &str = "etc/unfr0zen/wake-patterns";
+/// The gen 1's and gen 2's SSH server: any TCP to port 22, over IPv4, then
+/// IPv6, so that an open session's packets wake the unit as well as a new
+/// connection. Asleep, their WL127x matches only frames sent to the unit,
+/// so the patterns leave its address out, and their cfg80211 takes no
+/// offset: each starts at the Ethernet header (EtherType at 12; IPv4's
+/// protocol at 23 and destination port at 36, IPv6's next header at 20 and
+/// destination port at 56).
+const SSH_WAKE_PATTERNS: &str = "0 0030800030 0000000000000000000000000800000000000000000000060000000000000000000000000016\n\
+                                 0 0030100000000003 00000000000000000000000086dd0000000000000600000000000000000000000000000000000000000000000000000000000000000000000016\n";
 /// How the script starts nlsleepd, and the same with the library that adds
 /// nestlocal's Wi-Fi wake patterns to nlsleepd's preloaded (nestlocal puts it
 /// there: crates/nestlocal/src/matter/wake_patterns.rs). The loader goes on
@@ -187,7 +199,8 @@ fn set_up_local_cloud(tree: &mut Tree, enabled: bool, theme: bool) -> Result<()>
 }
 
 /// nlsleepd started with the wake pattern library for a unit with Matter, so
-/// that a controller looking the sleeping unit up wakes it; as stock without.
+/// that a controller looking the sleeping unit up wakes it, or with SSH on a
+/// gen 1 or gen 2, so that a connection wakes it; as stock without.
 fn set_up_wake_patterns(tree: &mut Tree, enabled: bool) -> Result<()> {
     let (stock, preloaded) = NLSLEEPD_START;
     let mut script = text(tree, NLSLEEP)?.replace(preloaded, stock);
@@ -881,10 +894,15 @@ pub fn set_up_owned(
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
     if matches!(target, Device::Diamond | Device::Diamond3 | Device::J49) {
         fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
-        fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER], false, false)?;
-        let wake = options.matter.is_some() && !options.wake_filter.is_empty();
+        fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER, FIXED_WAKE_PATTERNS], false, false)?;
+        let ssh = options.ssh && matches!(target, Device::Diamond | Device::J49);
+        let wake = (options.matter.is_some() || ssh) && !options.wake_filter.is_empty();
         if wake {
             tree.insert(WAKE_FILTER.into(), (std::mem::take(&mut options.wake_filter), 0o755));
+        }
+        if wake && ssh {
+            tree.insert(FIXED_WAKE_PATTERNS.into(), (SSH_WAKE_PATTERNS.as_bytes().to_vec(), 0o644));
+            directories.push(("etc/unfr0zen".into(), 0o755));
         }
         if tree.contains_key(NLSLEEP) {
             set_up_wake_patterns(&mut tree, wake)?;
@@ -1106,6 +1124,7 @@ pub fn set_up_owned(
         .copied()
         .chain([
             WAKE_FILTER,
+            FIXED_WAKE_PATTERNS,
             LOCAL_CLOUD,
             moved(APPLY),
             THEME_PRELOAD,
@@ -1771,6 +1790,71 @@ mod tests {
         assert!(changes.iter().any(|c| c.name == WAKE_FILTER && c.action == "remove"));
         assert!(!volume.files.contains_key(WAKE_FILTER));
         assert_eq!(volume.text(NLSLEEP), script);
+    }
+
+    #[test]
+    fn ssh_wake_patterns_match_tcp_to_port_22_from_the_ethernet_header() {
+        let lines: Vec<&str> = SSH_WAKE_PATTERNS.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let matched = |line: &str| -> Vec<(usize, u8)> {
+            let fields: Vec<&str> = line.split(' ').collect();
+            assert_eq!(fields[0], "0");
+            let decode = |hex: &str| {
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect::<Vec<u8>>()
+            };
+            let (mask, pattern) = (decode(fields[1]), decode(fields[2]));
+            assert_eq!(mask.len(), pattern.len().div_ceil(8));
+            (0..pattern.len()).filter(|i| mask[i / 8] >> (i % 8) & 1 == 1).map(|i| (i, pattern[i])).collect()
+        };
+        assert_eq!(matched(lines[0]), [(12, 0x08), (13, 0x00), (23, 6), (36, 0), (37, 22)]);
+        assert_eq!(matched(lines[1]), [(12, 0x86), (13, 0xdd), (20, 6), (56, 0), (57, 22)]);
+    }
+
+    #[test]
+    fn ssh_on_a_gen_2_wakes_it_through_the_library_and_off_again_removes_both() {
+        let script = "start_nlsleepd () {\n ${STARTDAEMON} -q -b -m -p \"${NLSLEEPD_PID_FILE}\" -a ${NLSLEEPD_APP} -- `${CAT} x`\n}\n";
+        let ssh = Options {
+            ssh: true,
+            ssh_server: Some(Overlay {
+                directories: vec![],
+                files: vec![("usr/sbin/dropbearmulti".into(), 0o755, b"ELF".to_vec())],
+            }),
+            wake_filter: b"\x7fELF library".to_vec(),
+            ..options()
+        };
+        for target in [Device::J49, Device::Diamond3] {
+            let mut volume = FakeVolume::new(stock());
+            if target == Device::J49 {
+                volume.files.get_mut("etc/inittab").unwrap().2 = b"::sysinit:/etc/init.d/rcS\n".to_vec();
+            }
+            volume.files.insert(NLSLEEP.into(), ("0:0".into(), 0o755, script.as_bytes().to_vec()));
+            let run = |volume: &mut FakeVolume, options: &Options| {
+                set_up_on_device(volume, target, options, b"", &mut no_pki, false, &|source, sections| {
+                    crate::nlclient::build(source, b"", sections)
+                })
+            };
+            run(&mut volume, &ssh).unwrap();
+            if target == Device::Diamond3 {
+                // The gen 3's sshd is stock and its nlsleepd stays so.
+                assert!(!volume.files.contains_key(WAKE_FILTER) && !volume.files.contains_key(FIXED_WAKE_PATTERNS));
+                assert_eq!(volume.text(NLSLEEP), script);
+                continue;
+            }
+            assert_eq!(volume.files[WAKE_FILTER].2, b"\x7fELF library");
+            assert_eq!(
+                (volume.files[FIXED_WAKE_PATTERNS].1, volume.text(FIXED_WAKE_PATTERNS)),
+                (0o644, SSH_WAKE_PATTERNS.into())
+            );
+            assert_eq!(volume.directories["etc/unfr0zen"], "0:0 755");
+            assert!(volume.text(NLSLEEP).contains(" LD_PRELOAD=/nestlabs/lib/libwakefilter.so ${STARTDAEMON} "));
+            // Again changes nothing.
+            assert!(run(&mut volume, &ssh).unwrap().is_empty());
+            let changes = run(&mut volume, &Options { ssh: false, ssh_server: None, ..ssh.clone() }).unwrap();
+            for name in [WAKE_FILTER, FIXED_WAKE_PATTERNS] {
+                assert!(changes.iter().any(|c| c.name == name && c.action == "remove"), "{name} stays");
+            }
+            assert_eq!(volume.text(NLSLEEP), script);
+        }
     }
 
     #[test]

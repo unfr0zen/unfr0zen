@@ -48,7 +48,8 @@ impl Budget {
     pub fn of(generation: u8) -> Budget {
         match generation {
             // The gen 1's and gen 2's WL127x takes 7 patterns of up to 91 bytes;
-            // nlsleepd sets 3: the Wi-Fi rekey and the broker's connection twice.
+            // nlsleepd sets 3: the Wi-Fi rekey and the broker's connection twice;
+            // with SSH, the setup's list takes 2 (setup.rs SSH_WAKE_PATTERNS).
             1 | 2 => Budget { patterns: 4, length: 91, matter_port: true, multicast: false },
             // The gen 3's BCM43340 takes 8 of up to 128; nlsleepd sets 4: the
             // rekey, the broker's connection, Matter's port over IPv4 and IPv6.

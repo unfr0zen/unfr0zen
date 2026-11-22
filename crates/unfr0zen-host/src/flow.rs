@@ -221,7 +221,7 @@ impl SetupInputs {
                 .then(|| Matter::from_pairing_code(code.unwrap_or(nestlocal::DEFAULT_MATTER_CODE)))
                 .transpose()?,
             device_name: self.device_name.clone(),
-            wake_filter: if matter { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
+            wake_filter: if matter || self.ssh { assets::WAKE_FILTER.to_vec() } else { Vec::new() },
             local_cloud: assets::LOCAL_CLOUD.to_vec(),
             // Each device's run adds it from its bundle::Settings.
             record: Vec::new(),
