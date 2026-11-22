@@ -8,7 +8,8 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-The three audited ABI shapes (2025 gen3, 2019 gen3, and gen1 and gen2) remain supported;
+The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.3-5, 6.4-8 and
+both 6.5-14 builds, and the gen 1 and gen 2's 5.9.4-5) remain supported;
 this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
