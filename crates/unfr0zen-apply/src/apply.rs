@@ -296,6 +296,7 @@ fn run(
         settings.version = bundle.manifest.version.clone();
     }
     let options = settings.take_options(&mut bundle)?;
+    let themes = options.theme.is_some();
     let pki = settings.pki()?;
     let env = [
         ("UNFR0ZEN_ROOT", root.display().to_string()),
@@ -323,7 +324,7 @@ fn run(
         let stock = out.join("nlclient.stock");
         match nlclient::builder::build(source, screen, sections) {
             Ok(built) => {
-                if built.manifest["reviewed"] == false {
+                if built.manifest["reviewed"] == false || (themes && !nlclient::theme::supported(source)) {
                     fs::write(&stock, source)?;
                 }
                 log::info!("nlclient: {}", built.manifest["status"].as_str().unwrap_or_default());
