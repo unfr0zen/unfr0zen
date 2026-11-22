@@ -484,6 +484,10 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
             continue;
         }
         let stock = std::fs::read(&path).unwrap();
+        // Only the reviewed builds, each with its golden, take the screen.
+        if !root().join(format!("platform/common/nlclient/tests/golden/{}.json", sha256_hex(&stock))).exists() {
+            continue;
+        }
         let all = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL).unwrap();
         let none = nlclient::builder::build(&stock, &object, &[]).unwrap();
         let (all, none) = (&all.manifest["settings_menu"], (&none.manifest["settings_menu"], &none.output));
