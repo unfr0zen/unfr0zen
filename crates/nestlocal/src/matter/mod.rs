@@ -553,8 +553,14 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let reshaped = std::cell::Cell::new(false);
     // A running hot water boost also changes with time alone, stepping down
     // to a shorter length or ending: reported then too.
+    let mut boosting = None;
     let mut report = pin!(async {
         loop {
+            if shape.hot_water {
+                if let Err(e) = water_heater::report_boost(&im, &nest, &mut boosting) {
+                    logf!("matter: hot water boost event: {e:?}");
+                }
+            }
             let step = bridge::hot_water_boost_step(&nest.view().dev);
             let stepped = async {
                 match step {

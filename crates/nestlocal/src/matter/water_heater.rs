@@ -11,7 +11,8 @@
 //!   unit has, on a unit that reports them; neither is written.
 //! - Water Heater Management: the boiler heats it (HeaterTypes); HeatDemand
 //!   while hot water is on; Boost for a duration up to MQTT's longest
-//!   (hot_water_boost), BoostState while one runs, CancelBoost.
+//!   (hot_water_boost), BoostState while one runs, CancelBoost; BoostStarted
+//!   and BoostEnded as one starts and ends (report_boost).
 //! - Water Heater Mode: Off, or Timed (following the schedule).
 
 use std::sync::Arc;
@@ -27,7 +28,7 @@ use rs_matter::dm::clusters::decl::water_heater_management::{
 use rs_matter::dm::clusters::decl::water_heater_mode::{self as mode, ModeTag};
 use rs_matter::dm::DeviceType;
 use rs_matter::dm::{
-    ArrayAttributeRead, ArrayAttributeWrite, Cluster, Dataver, InvokeContext, ReadContext, WriteContext,
+    ArrayAttributeRead, ArrayAttributeWrite, Cluster, Dataver, EventEmitter, InvokeContext, ReadContext, WriteContext,
 };
 use rs_matter::error::{Error, ErrorCode};
 use rs_matter::tlv::{Nullable, NullableBuilder, Octets, OctetsBuilder, TLVArray, TLVBuilderParent};
@@ -565,6 +566,39 @@ impl management::ClusterHandler for Management {
     }
 }
 
+/// Emits BoostStarted or BoostEnded when a boost has started or ended since
+/// `was`, from whichever side started it (the unit's screen, MQTT, Zigbee,
+/// Matter) or by running out; `was` then holds whether one runs. The first
+/// call only records it.
+pub fn report_boost(emitter: impl EventEmitter, nest: &Nest, was: &mut Option<bool>) -> Result<(), Error> {
+    let dev = nest.view().dev;
+    let running = crate::bridge::hot_water_boost(&dev).is_some();
+    let before = was.replace(running);
+    match (before, running) {
+        (Some(false), true) => {
+            let end = dev.get("hot_water_boost_time_to_end").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let seconds = (end - chrono::Utc::now().timestamp() as f64).max(0.0).round() as u32;
+            management::BoostStarted::emit_for(emitter, WATER_HEATER, |event| {
+                event
+                    .boost_info()?
+                    .duration(seconds)?
+                    .one_shot(None)?
+                    .emergency_boost(None)?
+                    .temporary_setpoint(None)?
+                    .target_percentage(None)?
+                    .target_reheat(None)?
+                    .end()?
+                    .end()
+            })?;
+        }
+        (Some(true), false) => {
+            management::BoostEnded::emit_for(emitter, WATER_HEATER, |event| event.end())?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Water Heater Mode: off, or following the schedule.
 pub struct Mode {
     pub dataver: Dataver,
@@ -822,6 +856,47 @@ mod tests {
         assert_eq!(w.boost_state(ctx(8)).unwrap(), BoostStateEnum::Inactive);
         assert_eq!(w.heater_types(ctx(8)).unwrap(), WaterHeaterHeatSourceBitmap::BOILER);
         assert_eq!(w.heat_demand(ctx(8)).unwrap(), WaterHeaterHeatSourceBitmap::empty());
+    }
+
+    /// The events emitted: endpoint, cluster, event.
+    #[derive(Default)]
+    struct Events(std::cell::RefCell<Vec<(u16, u32, u32)>>);
+
+    impl EventEmitter for Events {
+        fn emit_event<F>(
+            &self,
+            endpoint: u16,
+            cluster: u32,
+            event: u32,
+            _: rs_matter::im::EventPriority,
+            _: F,
+        ) -> Result<rs_matter::dm::EventNumber, Error>
+        where
+            F: FnOnce(rs_matter::im::events::EventTLVWrite<'_>) -> Result<(), Error>,
+        {
+            self.0.borrow_mut().push((endpoint, cluster, event));
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn a_boost_from_anywhere_starts_and_ends_with_its_events() {
+        let n = unit(fields! {"has_hot_water_control" => true});
+        let events = Events::default();
+        let mut was = None;
+        report_boost(&events, &n, &mut was).unwrap();
+        assert!(events.0.borrow().is_empty(), "the first look only records");
+        let ids = |events: &Events| events.0.borrow().iter().map(|e| e.2).collect::<Vec<_>>();
+        let cluster = management::FULL_CLUSTER.id;
+        // A boost from MQTT, as from the unit's screen: BoostStarted, once.
+        n.apply("hot_water_boost", "60").unwrap();
+        report_boost(&events, &n, &mut was).unwrap();
+        report_boost(&events, &n, &mut was).unwrap();
+        assert_eq!(*events.0.borrow(), [(WATER_HEATER, cluster, management::EventId::BoostStarted as u32)]);
+        // Cancelled, or run out: BoostEnded.
+        n.apply("hot_water_boost", "off").unwrap();
+        report_boost(&events, &n, &mut was).unwrap();
+        assert_eq!(ids(&events), [management::EventId::BoostStarted as u32, management::EventId::BoostEnded as u32]);
     }
 
     #[test]
