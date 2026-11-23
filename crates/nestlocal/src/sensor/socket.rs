@@ -61,12 +61,22 @@ fn delivered(sensor: &Sensor, reading: Reading, now: Duration) {
     }
 }
 
-fn client_process() -> Option<(u32, u64)> {
+/// nlclient's process, by pid and start time: a new one is a new start.
+pub(super) fn client_process() -> Option<(u32, u64)> {
     let pid = std::fs::read_to_string("/var/run/nlclient.pid").ok()?.trim().parse::<u32>().ok()?;
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let fields = stat.rsplit_once(") ")?.1;
     let started = fields.split_whitespace().nth(19)?.parse().ok()?;
     Some((pid, started))
+}
+
+/// How long the process that started `started` clock ticks after boot has run.
+pub(super) fn client_age(started: u64) -> Option<Duration> {
+    // SAFETY: sysconf only reads a configuration value.
+    let ticks = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|&ticks| ticks > 0)?;
+    let uptime = std::fs::read_to_string("/proc/uptime").ok()?.split_whitespace().next()?.parse::<f64>().ok()?;
+    let started = Duration::try_from_secs_f64(started as f64 / ticks as f64).ok()?;
+    Some(Duration::try_from_secs_f64(uptime).ok()?.saturating_sub(started))
 }
 
 fn watch_restart(store: &Arc<crate::store::Store>, serial: &str, sensor: &Arc<Sensor>, booting: Arc<AtomicBool>) {

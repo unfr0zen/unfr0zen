@@ -526,25 +526,62 @@ fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
 }
 
 /// nlclient turns sensors OFF while it starts, before it has heard of them:
-/// it is told again whenever it says so, the sensor chosen once a reading has
-/// come. A selection of the backplate on its screen stays: that one comes with
-/// OVERRIDE.
+/// an OFF within STARTUP of nlclient's start is answered, with the sensor
+/// chosen once a reading has come. The backplate chosen on its screen comes
+/// with OFF too, and stays until nlclient restarts, unless it is chosen within
+/// STARTUP of nlclient's start: that is taken for the start-up's. Where
+/// nlclient's process cannot be told, every OFF is answered.
 ///
 /// Not at once: this watch runs inside nlclient's own update, whose answer
 /// would carry the new revision and timestamp without the values, and nlclient
 /// would take itself to be up to date. Later, the change reaches it as a push.
 pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
+    keep_selected_by(store, serial, sensor, || {
+        let id = socket::client_process()?;
+        Some(Client { id, age: socket::client_age(id.1)? })
+    });
+}
+
+/// How often nlclient's process is looked at, for a restart.
+#[cfg(not(test))]
+const WATCH_EVERY: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const WATCH_EVERY: Duration = Duration::from_millis(5);
+/// How long after nlclient starts its OFF is taken for the start-up's: nlclient
+/// that starts with the sensor selected makes none.
+const STARTUP: Duration = Duration::from_secs(120);
+
+/// nlclient's process: its pid and start time, which tell a new one, and how long it has run.
+#[derive(Clone, Copy)]
+struct Client {
+    id: (u32, u64),
+    age: Duration,
+}
+
+/// keep_selected, with `process` telling nlclient's process.
+fn keep_selected_by(
+    store: &Arc<Store>,
+    serial: &str,
+    sensor: &Arc<Sensor>,
+    process: impl Fn() -> Option<Client> + Send + Sync + 'static,
+) {
+    let process = Arc::new(process);
     let key = format!("rcs_settings.{serial}");
-    let (again, serial, sensor) = (store.clone(), serial.to_string(), sensor.clone());
     let waiting = Arc::new(AtomicBool::new(false));
+    let (again, answer_serial, answer_sensor) = (store.clone(), serial.to_string(), sensor.clone());
+    let watching = process.clone();
     store.watch(move |o| {
-        if o.key != key
-            || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF")
-            || waiting.swap(true, Ordering::SeqCst)
-        {
+        if o.key != key || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF") {
             return;
         }
-        let (store, serial, sensor, waiting) = (again.clone(), serial.clone(), sensor.clone(), waiting.clone());
+        if watching().is_some_and(|client| client.age >= STARTUP) {
+            return;
+        }
+        if waiting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (store, serial, sensor, waiting) =
+            (again.clone(), answer_serial.clone(), answer_sensor.clone(), waiting.clone());
         std::thread::spawn(move || {
             std::thread::sleep(SELECT_AFTER);
             waiting.store(false, Ordering::SeqCst);
@@ -554,6 +591,29 @@ pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
                 choose(&store, &serial, &sensor.bucket, false);
             }
         });
+    });
+    // An OFF that is the one stored is no change, and the watch does not hear it: with one
+    // stored, a new process first takes the association back, so that its OFF is one. This
+    // looks every WATCH_EVERY, and nlclient's OFF comes later than that after it starts.
+    let (store, sensor, serial) = (Arc::downgrade(store), Arc::downgrade(sensor), serial.to_string());
+    std::thread::spawn(move || {
+        let mut last = process().map(|client| client.id);
+        loop {
+            std::thread::sleep(WATCH_EVERY);
+            let (Some(store), Some(sensor)) = (store.upgrade(), sensor.upgrade()) else { return };
+            let current = process().map(|client| client.id);
+            if current != last {
+                last = current;
+                if current.is_some() {
+                    let off = store
+                        .get(&format!("rcs_settings.{serial}"))
+                        .is_some_and(|o| o.value.get("rcs_control_setting").and_then(Value::as_str) == Some("OFF"));
+                    if off {
+                        choose(&store, &serial, &sensor.bucket, false);
+                    }
+                }
+            }
+        }
     });
 }
 
@@ -809,7 +869,7 @@ mod tests {
         let store = temp_store();
         store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
         ensure_buckets(&store, "S", &sensor.bucket, None);
-        keep_selected(&store, "S", &sensor);
+        keep_selected_by(&store, "S", &sensor, || None);
         let setting = || store.get("rcs_settings.S").unwrap().value;
         let off = || {
             store.merge(
@@ -835,6 +895,83 @@ mod tests {
             &json!([]),
             "the backplate chosen on the screen stays"
         );
+    }
+
+    #[test]
+    fn the_backplate_chosen_on_the_screen_stays_until_nlclient_restarts() {
+        let dir = dir("pick");
+        let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
+        let store = temp_store();
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        ensure_buckets(&store, "S", &sensor.bucket, None);
+        sensor.set(20.0).unwrap();
+        // nlclient's process, whose start the test moves by its pid and age.
+        let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
+        let running = process.clone();
+        keep_selected_by(&store, "S", &sensor, move || *running.lock().unwrap());
+        let setting = || store.get("rcs_settings.S").unwrap().value;
+        let settle = || std::thread::sleep(SELECT_AFTER * 20 + WATCH_EVERY * 20);
+        // The screen's backplate comes with OFF, as nlclient's start-up does.
+        let off = || {
+            store.merge(
+                "rcs_settings.S",
+                &fields! {"rcs_control_setting" => "OFF", "active_rcs_sensors" => Vec::<Value>::new()},
+                0,
+                0,
+                true,
+            )
+        };
+        off();
+        settle();
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "the nlclient running stays on it");
+        assert_eq!(setting().get("rcs_control_setting").unwrap(), "OFF");
+        // Restarted, nlclient makes the OFF the store already holds.
+        *process.lock().unwrap() = Some(Client { id: (200, 2), age: Duration::ZERO });
+        settle();
+        off();
+        settle();
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([sensor.bucket]), "a restart is answered");
+        assert_eq!(setting().get("rcs_control_setting").unwrap(), "OVERRIDE");
+        // It runs on, and the screen's pick stays.
+        process.lock().unwrap().as_mut().unwrap().age = STARTUP;
+        off();
+        settle();
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "the screen's pick stays");
+        // Its OFF is answered without the watch of its process having seen it start.
+        store.merge("rcs_settings.S", &fields! {"rcs_control_setting" => "OVERRIDE"}, 0, 0, true);
+        *process.lock().unwrap() = Some(Client { id: (300, 3), age: Duration::ZERO });
+        off();
+        settle();
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([sensor.bucket]), "an early OFF is answered");
+        // An nlclient that starts with the sensor selected makes no OFF: a later one is the screen's.
+        *process.lock().unwrap() = Some(Client { id: (400, 4), age: Duration::ZERO });
+        settle();
+        process.lock().unwrap().as_mut().unwrap().age = STARTUP;
+        off();
+        settle();
+        assert_eq!(setting().get("active_rcs_sensors").unwrap(), &json!([]), "past the start-up, the pick stays");
+        assert_eq!(setting().get("rcs_control_setting").unwrap(), "OFF");
+    }
+
+    #[test]
+    fn nlclient_restarting_with_the_sensor_selected_leaves_it_selected() {
+        let dir = dir("restart");
+        let sensor = Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
+        let store = temp_store();
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        ensure_buckets(&store, "S", &sensor.bucket, None);
+        sensor.set(20.0).unwrap();
+        select(&store, "S", &sensor.bucket);
+        let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
+        let running = process.clone();
+        keep_selected_by(&store, "S", &sensor, move || *running.lock().unwrap());
+        std::thread::sleep(WATCH_EVERY * 20);
+        // It starts again with the sensor selected, and makes no OFF.
+        *process.lock().unwrap() = Some(Client { id: (200, 2), age: Duration::ZERO });
+        std::thread::sleep(SELECT_AFTER * 20 + WATCH_EVERY * 20);
+        let setting = store.get("rcs_settings.S").unwrap().value;
+        assert_eq!(setting.get("active_rcs_sensors").unwrap(), &json!([sensor.bucket]), "the selection is left alone");
+        assert_eq!(setting.get("rcs_control_setting").unwrap(), "OVERRIDE");
     }
 
     #[test]
