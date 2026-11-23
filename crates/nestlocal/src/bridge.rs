@@ -1284,6 +1284,10 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     }
     s.insert("hot_water_boost".into(), hot_water_boost(dev).map_or("off".to_string(), |m| m.to_string()).into());
     s.insert("hot_water_schedule".into(), hot_water_schedule(dev).into());
+    // This nestlocal reads and writes heating_times and hot_water_times: a
+    // retained schedule from older firmware can't say so, as the state,
+    // sent again on each connect, does.
+    s.insert("schedules".into(), true.into());
 
     let eco_mode = sprint(dev.get("eco").and_then(|e| e.get("mode")));
     let preset = if eco_mode == "manual-eco" || eco_mode == "auto-eco" { "eco" } else { "none" };
@@ -1798,6 +1802,11 @@ pub mod tests {
         assert!(config["options"].as_array().unwrap().contains(&s["theme"]));
         crate::theme::tests::set(&themes, offered(true), "lcd");
         assert_eq!(select(&b)["options"], json!(["Stock", "LCD", "Analog"]), "a theme added is offered");
+    }
+
+    #[test]
+    fn the_state_says_this_firmware_has_schedules() {
+        assert_eq!(state(&Fields::new(), &Fields::new())["schedules"], json!(true));
     }
 
     #[test]
