@@ -90,8 +90,8 @@ use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
 use extras::{
-    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, Humidity, Labels, Switch, Switches,
-    TemperatureSource,
+    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HotWaterBoost, Humidity, Labels,
+    Switch, Switches, TemperatureSource,
 };
 use thermostat::{Equipment, Thermostat};
 
@@ -551,11 +551,30 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     // The node is built once a start: equipment the unit reports later (a
     // Heat Link's hot water, a fan) stops it, to be served again at once.
     let reshaped = std::cell::Cell::new(false);
+    // A running hot water boost also changes with time alone, stepping down
+    // to a shorter length or ending: reported then too.
     let mut report = pin!(async {
-        while changes.recv().await.is_ok() {
-            if shape.grows_into(&Shape::of(&nest), settings.thread, external) {
-                reshaped.set(true);
-                break;
+        loop {
+            let step = bridge::hot_water_boost_step(&nest.view().dev);
+            let stepped = async {
+                match step {
+                    // On the clock that counts the time the unit sleeps (timer.rs).
+                    Some(left) => {
+                        embassy_time::Timer::after(embassy_time::Duration::from_millis((left * 1000.0) as u64 + 1000))
+                            .await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            match embassy_futures::select::select(changes.recv(), stepped).await {
+                embassy_futures::select::Either::First(Err(_)) => break,
+                embassy_futures::select::Either::First(Ok(())) => {
+                    if shape.grows_into(&Shape::of(&nest), settings.thread, external) {
+                        reshaped.set(true);
+                        break;
+                    }
+                }
+                embassy_futures::select::Either::Second(()) => {}
             }
             im.notify_all_changed();
         }
@@ -825,6 +844,13 @@ fn endpoints_for(
             clusters!(desc::DescHandler::CLUSTER, identify::CLUSTER, Switches::CLUSTER, Labels::CLUSTER),
         ));
     }
+    if hot_water {
+        endpoints.push(Endpoint::new(
+            extras::HOT_WATER_BOOST,
+            devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, HotWaterBoost::CLUSTER, Labels::CLUSTER),
+        ));
+    }
     if has_fan {
         for id in FAN_SCHEDULE..FAN_SCHEDULE + 3 {
             endpoints.push(Endpoint::new(
@@ -877,6 +903,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
         (FAN_SCHEDULE + 1, "Fan schedule start"),
         (FAN_SCHEDULE + 2, "Fan schedule end"),
         (water_heater::WATER_HEATER, "Hot water"),
+        (extras::HOT_WATER_BOOST, "Hot water boost"),
     ];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
@@ -961,6 +988,13 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             .chain(
                 |e, c| e == FAN_TIMER && c == FanTimer::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(FanTimer {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| e == extras::HOT_WATER_BOOST && c == HotWaterBoost::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(HotWaterBoost {
                     dataver: Dataver::new_rand(&mut rand),
                     nest: nest.clone(),
                 })),
@@ -1464,6 +1498,10 @@ mod tests {
         }
         assert_eq!((endpoint(&with, "hot_water_boost"), endpoint(&with, "hot_water_schedule")), (Some(30), Some(31)));
         let ids = with.endpoints(false, false);
+        assert!(
+            ids.contains(&extras::HOT_WATER_BOOST)
+                && !without.endpoints(false, false).contains(&extras::HOT_WATER_BOOST)
+        );
         assert!(ids.windows(2).all(|w| w[0] < w[1]), "ascending: {ids:?}");
         // Hot water reported later is served at once; hot water gone waits for a restart.
         assert!(without.grows_into(&with, false, false));
