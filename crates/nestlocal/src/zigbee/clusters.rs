@@ -500,6 +500,15 @@ impl Nest {
         }
     }
 
+    /// The whole week, as Get Weekly Schedule Responses with the schedule's
+    /// own setpoints; none without a schedule.
+    pub fn week(&self) -> Vec<Vec<u8>> {
+        match self.get_weekly_schedule(&[0x7F, HEAT_SETPOINTS | COOL_SETPOINTS]) {
+            Answer::Command(_, responses) => responses,
+            Answer::Status(_) => Vec::new(),
+        }
+    }
+
     /// Get Weekly Schedule (days, mode): the days it asks, as a Get Weekly
     /// Schedule Response, in Set Weekly Schedule's layout, for each set of
     /// those days with the same transitions.
@@ -1485,6 +1494,30 @@ mod tests {
         full.resize(3 + 11 * 4, 0);
         assert_eq!(n.command(1, THERMOSTAT, 0x01, &full), status::INSUFFICIENT_SPACE.into());
         assert_eq!(n.read(1, THERMOSTAT, 0x0022), Some(Value::U8(10)));
+    }
+
+    #[test]
+    fn the_week_follows_the_schedule_whoever_changes_it() {
+        let n = nest(fields! {}, fields! {"can_cool" => true});
+        assert!(n.week().is_empty(), "no schedule yet");
+        let key = format!("schedule.{}", n.bridge.serial);
+        let day = |time: u32, temp: f64| serde_json::json!({"0": {"entry_type": "setpoint", "time": time, "temp": temp, "type": "COOL"}});
+        let week = |monday| {
+            serde_json::json!({"0": monday, "1": day(23400, 24.0), "2": day(23400, 24.0),
+            "3": day(23400, 24.0), "4": day(23400, 24.0), "5": day(23400, 24.0), "6": day(23400, 24.0)})
+        };
+        let bucket = |monday| fields! {"schedule_mode" => "COOL", "days" => week(monday), "ver" => 2};
+        n.bridge.store.merge(&key, &bucket(day(23400, 24.0)), 0, 0, true);
+        // Every day alike: one response, all seven days, cooling setpoints, 06:30 24 °C.
+        assert_eq!(n.week(), [vec![1, 0x7F, 0x02, 0x86, 0x01, 0x60, 0x09]]);
+        // Monday moved to 09:15, as MQTT or Matter would: Monday apart.
+        n.bridge.store.merge(&key, &bucket(day(33300, 24.0)), 0, 0, true);
+        assert_eq!(
+            n.week(),
+            [vec![1, 0x7D, 0x02, 0x86, 0x01, 0x60, 0x09], vec![1, 0x02, 0x02, 0x2B, 0x02, 0x60, 0x09]]
+        );
+        // Sent unasked, as the cluster's command 0x00 to the client.
+        assert_eq!(super::super::zcl::server_command_out(7, 0x00, &n.week()[0])[..4], [0x19, 7, 0x00, 1]);
     }
 
     #[test]

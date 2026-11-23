@@ -351,6 +351,12 @@ pub fn client_command(sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
     frame_out(CLUSTER_SPECIFIC | NO_DEFAULT_RESPONSE, None, sequence, cmd, payload)
 }
 
+/// A cluster command, server to client, standard and asking no default
+/// response: one the server sends unasked.
+pub fn server_command_out(sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
+    frame_out(CLUSTER_SPECIFIC | TO_CLIENT | NO_DEFAULT_RESPONSE, None, sequence, cmd, payload)
+}
+
 /// A standard cluster command from a server to us: its command and payload.
 pub fn server_command(frame: &[u8]) -> Option<(u8, &[u8])> {
     let [control, _sequence, cmd, payload @ ..] = frame else {

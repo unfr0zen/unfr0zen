@@ -35,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::bridge::Bridge;
 use crate::{clock, logf};
 
-use clusters::{Nest, THERMOSTAT_ENDPOINT, TIME};
+use clusters::{Nest, THERMOSTAT, THERMOSTAT_ENDPOINT, TIME};
 use ezsp::{id, status, Aps, Callback, Ezsp, Incoming, Network, Reader};
 use zcl::Value;
 
@@ -58,6 +58,8 @@ const INSTALL_RETRY: Duration = Duration::from_secs(3600);
 /// the coordinator has asked what the thermostat is), and how often joining
 /// is tried without a network.
 const FULL_REPORT: Duration = Duration::from_secs(600);
+/// The Thermostat cluster's command to the client with a day's transitions.
+const GET_WEEKLY_SCHEDULE_RESPONSE: u8 = 0x00;
 const FIRST_REPORT: Duration = Duration::from_secs(10);
 const JOIN_RETRY: Duration = Duration::from_secs(30);
 /// How long a unit on no network looks for one by itself, from when Zigbee
@@ -192,6 +194,7 @@ fn run(
         reported: BTreeMap::new(),
         next_full: Instant::now() + FIRST_REPORT,
         pending: false,
+        week: Vec::new(),
         time_asked: None,
         next_time: Instant::now() + FIRST_REPORT,
     };
@@ -545,6 +548,8 @@ struct Server {
     next_full: Instant,
     /// Reports the radio had no room for yet.
     pending: bool,
+    /// The weekly schedule last sent, as its Get Weekly Schedule Responses.
+    week: Vec<Vec<u8>>,
     /// The time read on its way: when it was sent (wall clock) and its sequence.
     time_asked: Option<(SystemTime, u8)>,
     /// When to ask for the time: a minute after a read that got no time,
@@ -577,11 +582,14 @@ impl Server {
     }
 
     /// Reports to the coordinator what changed, or everything; what the
-    /// radio has no room for goes on the next round.
+    /// radio has no room for goes on the next round. The weekly schedule has
+    /// no attributes: a change sends the week as Get Weekly Schedule
+    /// Responses, which Zigbee2MQTT's converter takes as answers.
     fn report(&mut self, ezsp: &mut Ezsp, nest: &Nest, everything: bool) -> Result<(), String> {
         use zcl::Clusters as _;
         if everything {
             self.reported.clear();
+            self.week.clear();
             self.next_full = Instant::now() + FULL_REPORT;
         }
         self.pending = false;
@@ -609,6 +617,18 @@ impl Server {
                 }
                 rest = &rest[fit..];
             }
+        }
+        let week = nest.week();
+        if week != self.week {
+            for response in &week {
+                self.sequence = self.sequence.wrapping_add(1);
+                let frame = zcl::server_command_out(self.sequence, GET_WEEKLY_SCHEDULE_RESPONSE, response);
+                if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), THERMOSTAT_ENDPOINT, THERMOSTAT, &frame)? {
+                    self.pending = true;
+                    return Ok(());
+                }
+            }
+            self.week = week;
         }
         Ok(())
     }
@@ -781,6 +801,7 @@ mod tests {
             reported: BTreeMap::new(),
             next_full: Instant::now(),
             pending: false,
+            week: Vec::new(),
             time_asked: Some((SystemTime::now(), 9)),
             next_time: Instant::now(),
         };
