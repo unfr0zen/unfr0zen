@@ -153,7 +153,7 @@ data:
             <p>Home Assistant gets the thermostat (modes, setpoints and range, action, eco as a preset, humidity, outdoor temperature), occupancy, °C/°F, backplate temperature, battery, fan and its timer, the fan schedule's run time, start and end, and the switches below. The other MQTT entities aren't offered over Matter.</p>
             <p>The climate entity shows the enabled Eco limits for the current mode while Eco is active and restores the regular setpoints when Eco clears.</p>
             <p>The weekly heating schedule can be read and written as the thermostat's Schedules (Matter 1.4). With hot water control there is a water heater too, with the hot water schedule, its on/off and its boost: Home Assistant shows the boost's state and a button that ends it, and a water heater entity (off, eco, high demand for a boost) only where the unit reports its hot water temperature. See <a href="/protocols/#matter-water-heater">Protocols</a>.</p>
-            <p>The switches are on/off plugs, one per endpoint from 10 up, in this order; a switch the equipment doesn't call for is left out and the ones after it move up. A thermostat has 4 to 12: 5 heating only, 6 heating and cooling, 7 with a fan as well.</p>
+            <p>The switches are on/off plugs, one per endpoint from 10 up, in this order; a switch the equipment doesn't call for is left out and the ones after it move up. The two hot water switches are always endpoints 30 and 31, so hot water reported later moves none of the others. A thermostat with hot water control paired on a version that numbered them among the others shows them as new switches after its update: point automations and dashboards at the new entities and delete the old ones. A thermostat has 4 to 12: 5 heating only, 6 heating and cooling, 7 with a fan as well.</p>
             <div class="table-scroll">
                 <table>
                     <thead><tr><th>Switch</th><th>Present</th></tr></thead>
@@ -165,11 +165,11 @@ data:
                         <tr><td data-label="Switch">Eco heat limit</td><td data-label="Present">Heating</td></tr>
                         <tr><td data-label="Switch">Eco cool limit</td><td data-label="Present">Cooling</td></tr>
                         <tr><td data-label="Switch">Humidity control</td><td data-label="Present">Humidifier or dehumidifier</td></tr>
-                        <tr><td data-label="Switch">Hot water boost (30 minutes when on)</td><td data-label="Present">Hot water control</td></tr>
-                        <tr><td data-label="Switch">Hot water schedule</td><td data-label="Present">Hot water control</td></tr>
                         <tr><td data-label="Switch">Filter reminder</td><td data-label="Present">Air filter</td></tr>
                         <tr><td data-label="Switch">Filter reset (reads off; turning it on resets the filter)</td><td data-label="Present">Air filter</td></tr>
                         <tr><td data-label="Switch">Fan schedule</td><td data-label="Present">Fan</td></tr>
+                        <tr><td data-label="Switch">Hot water boost (30 minutes when on), endpoint 30</td><td data-label="Present">Hot water control</td></tr>
+                        <tr><td data-label="Switch">Hot water schedule, endpoint 31</td><td data-label="Present">Hot water control</td></tr>
                     </tbody>
                 </table>
             </div>

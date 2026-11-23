@@ -28,6 +28,10 @@ pub const EXTERNAL_TEMPERATURE: u16 = 6;
 pub const TEMPERATURE_SOURCE: u16 = 7;
 /// The first switch's endpoint; the others follow.
 pub const SWITCHES: u16 = 10;
+/// The hot water switches' endpoints, past the others: a Heat Link can
+/// report hot water after Matter starts, and its switches must not move
+/// the others, whose endpoints Home Assistant then drops.
+pub const HOT_WATER_SWITCHES: u16 = 30;
 /// The fan schedule's run time; its start and end follow. Past the switches.
 pub const FAN_SCHEDULE: u16 = 40;
 
@@ -60,10 +64,6 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     if view.device_flag("has_humidifier") || view.device_flag("has_dehumidifier") {
         all.push(("target_humidity_enabled", "Humidity control"));
     }
-    if view.device_flag("has_hot_water_control") {
-        all.push(("hot_water_boost", "Hot water boost"));
-        all.push(("hot_water_schedule", "Hot water schedule"));
-    }
     if view.device_flag("has_air_filter") {
         all.push(("filter_reminder_enabled", "Filter reminder"));
         // Reads off: turning it on says the filter was changed.
@@ -73,7 +73,17 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     if view.device_flag("has_fan") {
         all.push(("fan_schedule", "Fan schedule"));
     }
-    all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect()
+    let mut switches: Vec<_> =
+        all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect();
+    if view.device_flag("has_hot_water_control") {
+        let hot_water = [("hot_water_boost", "Hot water boost"), ("hot_water_schedule", "Hot water schedule")];
+        switches.extend(hot_water.into_iter().zip(HOT_WATER_SWITCHES..).map(|((key, name), endpoint)| Switch {
+            endpoint,
+            key,
+            name,
+        }));
+    }
+    switches
 }
 
 macro_rules! dataver {
@@ -770,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn switches_follow_the_equipment_on_consecutive_endpoints() {
+    fn switches_follow_the_equipment_on_consecutive_endpoints_but_hot_waters() {
         let keys =
             |dev: Fields, sh: Fields| switches(&nest(dev, sh)).iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>();
         let common = [
@@ -789,9 +799,10 @@ mod tests {
                 (16, "target_humidity_enabled")
             ]
         );
+        // Hot water's switches on endpoints of their own, past the others.
         assert_eq!(
             keys(fields! {"has_hot_water_control" => true}, fields! {"can_heat" => true})[4..],
-            [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]
+            [(14, "away_temperature_low_enabled"), (30, "hot_water_boost"), (31, "hot_water_schedule")]
         );
         assert_eq!(
             keys(fields! {"has_air_filter" => true}, fields! {})[4..],

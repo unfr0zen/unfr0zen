@@ -335,6 +335,21 @@ struct Shape {
 }
 
 impl Shape {
+    /// The endpoints it builds.
+    fn endpoints(&self, thread: bool, external: bool) -> Vec<u16> {
+        let all = endpoints_for(self.has_fan, self.equipment, self.hot_water, &self.switches, thread, external);
+        all.iter().map(|e| e.id).collect()
+    }
+
+    /// Whether to serve `now` in place of this: a change that removes no
+    /// endpoint. Home Assistant drops the whole device, every entity with
+    /// it, when an endpoint goes, so equipment the unit stops reporting
+    /// keeps its endpoints until nestlocal restarts.
+    fn grows_into(&self, now: &Shape, thread: bool, external: bool) -> bool {
+        let served = self.endpoints(thread, external);
+        self != now && served.iter().all(|e| now.endpoints(thread, external).contains(e))
+    }
+
     fn of(nest: &Nest) -> Self {
         let view = nest.view();
         Self {
@@ -351,10 +366,17 @@ const SHAPE_FILE: &str = "node-shape";
 
 /// Bumps ConfigurationVersion when the node's endpoints differ from those
 /// served before, as Matter asks, so controllers read its structure again;
-/// whether it did.
-fn note_shape<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, storage: &Path, shape: &Shape) -> bool {
+/// whether it did. `endpoints` are the shape's on this network, which the
+/// settings change too (Thread, the external temperature).
+fn note_shape<S: rs_matter::persist::KvBlobStoreAccess>(
+    matter: &Matter,
+    kv: S,
+    storage: &Path,
+    shape: &Shape,
+    endpoints: &[u16],
+) -> bool {
     let path = storage.join(SHAPE_FILE);
-    let now = format!("{shape:?}");
+    let now = format!("{shape:?} {endpoints:?}");
     if std::fs::read_to_string(&path).is_ok_and(|before| before == now) {
         return false;
     }
@@ -447,17 +469,12 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let rand = crypto.rand()?;
     let ota = ota::Ota::new();
     let shape = Shape::of(&nest);
-    if note_shape(&matter, &kv, &settings.storage, &shape) {
+    let external = nest.bridge.sensor.get().is_some();
+    if note_shape(&matter, &kv, &settings.storage, &shape, &shape.endpoints(settings.thread, external)) {
         logf!("matter: the node's endpoints changed; configuration version bumped");
     }
-    let node = node_for_network(
-        shape.has_fan,
-        shape.equipment,
-        shape.hot_water,
-        &shape.switches,
-        settings.thread,
-        nest.bridge.sensor.get().is_some(),
-    );
+    let node =
+        node_for_network(shape.has_fan, shape.equipment, shape.hot_water, &shape.switches, settings.thread, external);
     let im = InteractionModel::new_with_net_ctl(
         &matter,
         &crypto,
@@ -536,7 +553,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     let reshaped = std::cell::Cell::new(false);
     let mut report = pin!(async {
         while changes.recv().await.is_ok() {
-            if Shape::of(&nest) != shape {
+            if shape.grows_into(&Shape::of(&nest), settings.thread, external) {
                 reshaped.set(true);
                 break;
             }
@@ -731,6 +748,19 @@ fn node_for_network(
     thread: bool,
     external: bool,
 ) -> Node<'static> {
+    let endpoints = endpoints_for(has_fan, equipment, hot_water, switches, thread, external);
+    Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
+}
+
+/// The node's endpoints, ascending.
+fn endpoints_for(
+    has_fan: bool,
+    equipment: Equipment,
+    hot_water: bool,
+    switches: &[Switch],
+    thread: bool,
+    external: bool,
+) -> Vec<Endpoint<'static>> {
     use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut endpoints = vec![
         if thread { THREAD_ROOT } else { ROOT },
@@ -804,7 +834,7 @@ fn node_for_network(
             ));
         }
     }
-    Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
+    endpoints
 }
 
 /// Identify on any endpoint lights the display, as a press does; its end
@@ -1423,6 +1453,29 @@ mod tests {
     }
 
     #[test]
+    fn hot_water_adds_endpoints_and_moves_none() {
+        let dev = |hot_water| crate::fields! {"has_fan" => true, "has_air_filter" => true, "has_hot_water_control" => hot_water};
+        let sh = crate::fields! {"can_heat" => true, "can_cool" => true};
+        let without = Shape::of(&nest(dev(false), sh.clone()));
+        let with = Shape::of(&nest(dev(true), sh));
+        let endpoint = |shape: &Shape, key| shape.switches.iter().find(|s| s.key == key).map(|s| s.endpoint);
+        for key in ["filter_reminder_enabled", "filter_reset", "fan_schedule"] {
+            assert_eq!(endpoint(&without, key), endpoint(&with, key), "{key}");
+        }
+        assert_eq!((endpoint(&with, "hot_water_boost"), endpoint(&with, "hot_water_schedule")), (Some(30), Some(31)));
+        let ids = with.endpoints(false, false);
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "ascending: {ids:?}");
+        // Hot water reported later is served at once; hot water gone waits for a restart.
+        assert!(without.grows_into(&with, false, false));
+        assert!(!with.grows_into(&without, false, false));
+        assert!(!with.grows_into(
+            &Shape::of(&nest(dev(true), crate::fields! {"can_heat" => true, "can_cool" => true})),
+            false,
+            false
+        ));
+    }
+
+    #[test]
     fn a_new_shape_bumps_the_configuration_version_once() {
         use rs_matter::dm::devices::test::TEST_DEV_ATT;
         use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
@@ -1442,12 +1495,19 @@ mod tests {
         let version = || matter.with_state(|state| state.basic_info_settings.configuration_version);
         let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
         let first = version();
-        assert!(note_shape(&matter, &kv, &dir, &Shape::of(&unit)), "none served before");
-        assert!(!note_shape(&matter, &kv, &dir, &Shape::of(&unit)), "the same again");
+        let note = |thread, external| {
+            let shape = Shape::of(&unit);
+            note_shape(&matter, &kv, &dir, &shape, &shape.endpoints(thread, external))
+        };
+        assert!(note(false, false), "none served before");
+        assert!(!note(false, false), "the same again");
         let device = format!("device.{}", unit.bridge.serial);
         unit.bridge.store.merge(&device, &crate::fields! {"has_hot_water_control" => true}, 0, 0, true);
-        assert!(note_shape(&matter, &kv, &dir, &Shape::of(&unit)));
-        assert_eq!(version(), first + 2);
+        assert!(note(false, false));
+        // The external temperature's endpoints, with the unit's own unchanged.
+        assert!(note(false, true));
+        assert!(!note(false, true));
+        assert_eq!(version(), first + 3);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
