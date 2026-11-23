@@ -310,6 +310,7 @@ async fn run(config: flags::Config) {
     if let Some(bridge) = &bridge {
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());
         brightness::watch(bridge.brightness.clone());
+        bridge.wake_for_boost();
     }
     let mut broker_port = None;
     if let (false, Some(bridge)) = (config.mqtt.is_empty(), &bridge) {

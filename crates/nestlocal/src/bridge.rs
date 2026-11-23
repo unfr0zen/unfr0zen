@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::clock;
 use crate::commands::{ECO_HIGH, ECO_LOW};
@@ -87,6 +87,9 @@ pub struct Bridge {
     time_asked: Mutex<Option<SystemTime>>, // when ask_time last asked, wall clock
     time_ok: mpsc::Sender<()>,             // Home Assistant answered in time
     time_ok_rx: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Has keep_boost look at the running hot water boost again: a bucket
+    /// changed, or the unit woke.
+    boost_check: Notify,
 }
 
 impl Bridge {
@@ -126,6 +129,7 @@ impl Bridge {
             time_asked: Mutex::new(None),
             time_ok,
             time_ok_rx: Mutex::new(Some(time_ok_rx)),
+            boost_check: Notify::new(),
         })
     }
 
@@ -244,6 +248,7 @@ impl Bridge {
             live.on_change(move |alive| bridge.publish_availability(alive));
         }
         tokio::spawn(self.clone().keep_time());
+        tokio::spawn(self.clone().keep_boost());
         tokio::spawn(connection.run(self.clone()));
     }
 
@@ -284,6 +289,63 @@ impl Bridge {
             tokio::select! {
                 Some(()) = answered.recv() => tokio::time::sleep(clock::RECHECK).await,
                 _ = tokio::time::sleep(clock::RETRY) => {}
+            }
+        }
+    }
+
+    /// Wakes the unit when the running hot water boost's length steps down or
+    /// ends, so that Matter, Zigbee and MQTT report it then: asleep, nothing
+    /// runs until the next wake, which can be minutes away.
+    pub fn wake_for_boost(self: &Arc<Self>) {
+        let alarm = match crate::wake::Alarm::new() {
+            Ok(alarm) => Arc::new(alarm),
+            Err(e) => {
+                logf!("wake: no alarm clock ({e}): a hot water boost's step is reported at the next wake");
+                return;
+            }
+        };
+        let key = format!("device.{}", self.serial);
+        let arm = {
+            let (store, alarm, key) = (self.store.clone(), alarm.clone(), key.clone());
+            move || {
+                let dev = store.get(&key).map(|o| o.value).unwrap_or_default();
+                // Past the step, as the others' timers are.
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                let at = hot_water_boost_step(&dev).map(|left| now + left + 2.0);
+                if let Err(e) = alarm.set(at) {
+                    logf!("wake: boost alarm: {e}");
+                }
+            }
+        };
+        arm();
+        let watched = arm.clone();
+        self.store.watch(move |o| {
+            if o.key == key {
+                watched();
+            }
+        });
+        std::thread::spawn(move || {
+            while alarm.wait().is_ok() {
+                arm();
+            }
+        });
+    }
+
+    /// Publishes the state when the running hot water boost's length steps
+    /// down or ends, which no bucket change marks. The boost ends on the
+    /// wall clock and tokio's timers stop while the unit sleeps: each wake
+    /// looks again.
+    async fn keep_boost(self: Arc<Self>) {
+        let mut seen = None;
+        loop {
+            let dev = self.store.get(&format!("device.{}", self.serial)).map(|o| o.value).unwrap_or_default();
+            if boost_stepped(&dev, &mut seen) {
+                self.publish_state();
+            }
+            let step = hot_water_boost_step(&dev).map(|left| Duration::from_secs_f64(left + 1.0));
+            tokio::select! {
+                _ = self.boost_check.notified() => {}
+                _ = tokio::time::sleep(step.unwrap_or(Duration::ZERO)), if step.is_some() => {}
             }
         }
     }
@@ -338,6 +400,7 @@ impl Bridge {
     /// The unit woke (wake.rs): the connection checks its keepalive.
     pub fn woke(&self) {
         self.wakes.fetch_add(1, Ordering::Relaxed);
+        self.boost_check.notify_one();
         if let Some(c) = self.mqtt.get() {
             c.woke();
         }
@@ -368,6 +431,7 @@ impl Bridge {
     fn changed(&self, o: &Object) {
         self.publish_raw(o);
         self.publish_state();
+        self.boost_check.notify_one();
     }
 
     fn publish_raw(&self, o: &Object) {
@@ -1022,9 +1086,33 @@ impl mqtt::Handler for Bridge {
 pub const HOT_WATER_BOOST_MINUTES: [i64; 3] = [30, 60, 120];
 
 /// The running boost as the choice that covers the time it has left, if one runs.
-fn hot_water_boost(dev: &Fields) -> Option<i64> {
+pub(crate) fn hot_water_boost(dev: &Fields) -> Option<i64> {
+    let left = hot_water_boost_left(dev)?;
+    Some(HOT_WATER_BOOST_MINUTES.into_iter().find(|m| (*m * 60) as f64 >= left).unwrap_or(120))
+}
+
+/// Seconds until the running boost's choice (hot_water_boost) next changes:
+/// it steps down to the next shorter length, or ends.
+pub(crate) fn hot_water_boost_step(dev: &Fields) -> Option<f64> {
+    let left = hot_water_boost_left(dev)?;
+    let shown = hot_water_boost(dev)?;
+    let shorter = HOT_WATER_BOOST_MINUTES.into_iter().filter(|m| *m < shown).max().unwrap_or(0);
+    Some(left - (shorter * 60) as f64)
+}
+
+/// Whether the boost length shown differs from the one `seen` holds, which
+/// it then takes; the first look sees no change.
+fn boost_stepped(dev: &Fields, seen: &mut Option<Option<i64>>) -> bool {
+    let now = Some(hot_water_boost(dev));
+    let stepped = seen.is_some() && *seen != now;
+    *seen = now;
+    stepped
+}
+
+/// Seconds the running boost has left, if one runs.
+fn hot_water_boost_left(dev: &Fields) -> Option<f64> {
     let left = number(dev.get("hot_water_boost_time_to_end"))? - chrono::Utc::now().timestamp() as f64;
-    (left > 0.0).then(|| HOT_WATER_BOOST_MINUTES.into_iter().find(|m| (*m * 60) as f64 >= left).unwrap_or(120))
+    (left > 0.0).then_some(left)
 }
 
 /// Whether hot water follows its schedule: "off" is the unit's one other mode.
@@ -1533,6 +1621,19 @@ pub mod tests {
         b.store.merge("custom_schedule.hotwater", &fields! {"mode" => "heat"}, 0, 0, true);
         b.publish_hot_water_times(&fields! {"has_hot_water_control" => true});
         assert_eq!(sent(&b).as_deref(), Some(""), "cleared without the schedule");
+    }
+
+    #[test]
+    fn a_boost_stepping_down_or_ending_is_seen_once() {
+        let now = chrono::Utc::now().timestamp();
+        let boost = |left: i64| obj(json!({"hot_water_boost_time_to_end": now + left}));
+        let mut seen = None;
+        assert!(!boost_stepped(&boost(3000), &mut seen), "the first look");
+        assert!(!boost_stepped(&boost(2000), &mut seen), "60 min shown still");
+        assert!(boost_stepped(&boost(1700), &mut seen), "down to 30 min");
+        assert!(!boost_stepped(&boost(1600), &mut seen));
+        assert!(boost_stepped(&boost(-1), &mut seen), "ended");
+        assert!(!boost_stepped(&Fields::new(), &mut seen), "none, as before");
     }
 
     #[test]

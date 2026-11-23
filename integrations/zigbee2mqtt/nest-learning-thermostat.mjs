@@ -24,7 +24,7 @@
 //   14  eco heat limit          Binary Output (to heat)
 //   15  eco cool limit          Binary Output (to cool)
 //   16  humidity control        Binary Output (with a humidifier or dehumidifier)
-//   17  hot water boost         Binary Output (with hot water control): on is 30 minutes
+//   17  hot water boost         Binary Output (with hot water control): on is 30 minutes; not exposed, 44 has the lengths
 //   18  hot water schedule      Binary Output (with hot water control): off stops it
 //   19  filter reminder         Binary Output (with an air filter)
 //   20  leaf                    Binary Input
@@ -51,6 +51,8 @@
 //   41  screen always on        Binary Output
 //   42  screen brightness       Analog Output, %, 0-100; writing it turns 43 off
 //   43  screen brightness auto  Binary Output
+//   44  hot water boost length  Analog Output, minutes (with hot water control): 30, 60 or 120 while a boost runs,
+//                               0 without; writing 1-120 boosts that long, 0 ends it
 //
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
@@ -123,6 +125,9 @@ const OUTPUTS = {
   screen_brightness: 42,
 };
 const INPUTS = { time_to_target: 5, filter_runtime: 6 };
+const HOT_WATER_BOOST = 44;
+// The boost lengths, minutes, as MQTT's select offers them; "off" is 0.
+const HOT_WATER_BOOSTS = ["30", "60", "120"];
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
   auto_schedule: 10,
@@ -132,7 +137,6 @@ const SWITCHES = {
   eco_heat_limit: 14,
   eco_cool_limit: 15,
   humidity_control: 16,
-  hot_water_boost: 17,
   hot_water_schedule: 18,
   filter_reminder: 19,
   fan_schedule: 29,
@@ -148,7 +152,6 @@ const SWITCH_LABELS = {
   eco_heat_limit: ["Eco heat limit", "mdi:leaf", "Heats to the eco heat temperature while in eco"],
   eco_cool_limit: ["Eco cool limit", "mdi:leaf", "Cools to the eco cool temperature while in eco"],
   humidity_control: ["Humidity control", "mdi:water-percent", "Runs the (de)humidifier"],
-  hot_water_boost: ["Hot water boost", "mdi:water-boiler-alert", "Heats the hot water for 30 minutes"],
   hot_water_schedule: ["Hot water schedule", "mdi:water-boiler", "Hot water follows its schedule; off stops it"],
   filter_reminder: ["Filter reminder", "mdi:air-filter", "The thermostat reminds you to change the air filter"],
   fan_schedule: [
@@ -533,7 +536,35 @@ const nest = {
       }
     },
   },
+  // The running boost's length, minutes; 0 is none.
+  hot_water_boost: {
+    cluster: "genAnalogOutput",
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      if (msg.endpoint.ID === HOT_WATER_BOOST && msg.data.presentValue !== undefined) {
+        return { hot_water_boost: boostName(msg.data.presentValue) };
+      }
+    },
+  },
 };
+
+/** A boost length as the enum names it: off, 30, 60 or 120. */
+function boostName(minutes) {
+  const name = String(Math.round(minutes));
+  return HOT_WATER_BOOSTS.includes(name) ? name : "off";
+}
+
+/** The minutes a boost enum value writes: 0 for off. */
+function boostMinutes(value) {
+  const name = String(value).toLowerCase();
+  if (name === "off") {
+    return 0;
+  }
+  if (!HOT_WATER_BOOSTS.includes(name)) {
+    throw new Error(`hot_water_boost: expected off, ${HOT_WATER_BOOSTS.join(", ")}, got '${value}'`);
+  }
+  return Number(name);
+}
 
 async function setWeeklySchedule(entity, payload, options) {
   const reply = await entity.command("hvacThermostat", "setWeeklySchedule", payload, options);
@@ -806,6 +837,17 @@ const set = {
       await meta.device.getEndpoint(SWITCHES[key]).read("genBinaryOutput", ["presentValue"]);
     },
   },
+  hot_water_boost: {
+    key: ["hot_water_boost"],
+    convertSet: async (entity, key, value, meta) => {
+      const minutes = boostMinutes(value);
+      await meta.device.getEndpoint(HOT_WATER_BOOST).write("genAnalogOutput", { presentValue: minutes });
+      return { state: { hot_water_boost: boostName(minutes) } };
+    },
+    convertGet: async (entity, key, meta) => {
+      await meta.device.getEndpoint(HOT_WATER_BOOST).read("genAnalogOutput", ["presentValue"]);
+    },
+  },
 };
 
 /** Whether the unit has an endpoint, or a cluster on it (all, for the docs' dummy device). */
@@ -847,6 +889,7 @@ const definition = {
     nest.inputs,
     nest.states,
     nest.switches,
+    nest.hot_water_boost,
   ],
   toZigbee: [
     tz.thermostat_occupied_heating_setpoint,
@@ -867,6 +910,7 @@ const definition = {
     set.filter_reset,
     set.wake_screen,
     set.switches,
+    set.hot_water_boost,
     set.weather,
     set.external_temperature,
   ],
@@ -1105,6 +1149,15 @@ const definition = {
         .withHomeAssistant({ icon: "mdi:calendar-remove" })
         .withDescription("Empties the schedule and turns Auto-Schedule off: Home Assistant schedules"),
     );
+    if (has(device, HOT_WATER_BOOST)) {
+      result.push(
+        e
+          .enum("hot_water_boost", ea.ALL, ["off", ...HOT_WATER_BOOSTS])
+          .withLabel("Hot water boost")
+          .withHomeAssistant({ icon: "mdi:water-boiler-alert" })
+          .withDescription("Heats the hot water for 30, 60 or 120 minutes; off ends a boost"),
+      );
+    }
     for (const [name, id] of Object.entries(SWITCHES)) {
       if (has(device, id)) {
         const [label, icon, description] = SWITCH_LABELS[name];
@@ -1151,6 +1204,21 @@ const definition = {
       }
       payload.preset_modes = payload.preset_modes.filter((preset) => preset !== "none");
     },
+  },
+  // The boost's length has no state until the unit reports it: read it
+  // when Zigbee2MQTT starts or meets the thermostat without one, so Home
+  // Assistant's select never shows unknown.
+  onEvent: async (event) => {
+    const start = ["start", "deviceAnnounce"].includes(event.type);
+    const interviewed = event.type === "deviceInterview" && event.data.status === "successful";
+    const endpoint = event.data.device?.getEndpoint?.(HOT_WATER_BOOST);
+    if ((start || interviewed) && event.data.state?.hot_water_boost === undefined && endpoint) {
+      try {
+        await endpoint.read("genAnalogOutput", ["presentValue"]);
+      } catch (error) {
+        logger.debug(`Hot water boost read: ${error}`, "zhc:nest");
+      }
+    }
   },
   configure: async (device, coordinatorEndpoint) => {
     // The binding table survives firmware updates and can hold genOnOff
@@ -1218,6 +1286,7 @@ const definition = {
         await report(id, "genBinaryOutput", ["presentValue"]);
       }
     }
+    await read(HOT_WATER_BOOST, "genAnalogOutput");
     for (const id of Object.values(INPUTS)) {
       await read(id, "genAnalogInput");
     }

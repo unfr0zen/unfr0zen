@@ -208,6 +208,7 @@ fn run(
         next_full: Instant::now() + FIRST_REPORT,
         pending: false,
         week: Vec::new(),
+        boost_step: None,
         time_asked: None,
         next_time: Instant::now() + FIRST_REPORT,
     };
@@ -304,7 +305,8 @@ fn run(
         if reported && nest.grown().is_some() {
             return Ok(());
         }
-        if up && (reported || server.pending) {
+        let stepped = server.boost_step.is_some_and(|at| SystemTime::now() >= at);
+        if up && (reported || stepped || server.pending) {
             server.report(&mut ezsp, nest, false)?;
         }
         if up && Instant::now() >= server.next_full {
@@ -567,6 +569,10 @@ struct Server {
     pending: bool,
     /// The weekly schedule last sent, as its Get Weekly Schedule Responses.
     week: Vec<Vec<u8>>,
+    /// When a running hot water boost's length next changes, stepping down
+    /// or ending with no bucket changing: a report is due then. On the wall
+    /// clock, as the boost's end is: it counts the time the unit sleeps.
+    boost_step: Option<SystemTime>,
     /// The time read on its way: when it was sent (wall clock) and its sequence.
     time_asked: Option<(SystemTime, u8)>,
     /// When to ask for the time: a minute after a read that got no time,
@@ -610,6 +616,9 @@ impl Server {
             self.next_full = Instant::now() + FULL_REPORT;
         }
         self.pending = false;
+        // A second past the step, so the length read is the new one.
+        self.boost_step =
+            nest.hot_water_boost_step().map(|left| SystemTime::now() + Duration::from_secs_f64(left + 1.0));
         for (endpoint, cluster, attributes) in nest.reported() {
             let changed: Vec<(u16, Value)> = attributes
                 .iter()
@@ -819,6 +828,7 @@ mod tests {
             next_full: Instant::now(),
             pending: false,
             week: Vec::new(),
+            boost_step: None,
             time_asked: Some((SystemTime::now(), 9)),
             next_time: Instant::now(),
         };

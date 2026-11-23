@@ -36,6 +36,10 @@
 //!   42  the screen's brightness, %: Analog Output (brightness.rs)
 //!   43  whether the screen's brightness is automatic: Binary Output, in
 //!       SWITCHES
+//!   44  the hot water boost's length, minutes (with hot water control):
+//!       Analog Output, 30, 60 or 120 as the boost running covers its time
+//!       left, 0 without one; writing 1-120 boosts that long, 0 ends it.
+//!       Switch 17 stays: on is the shortest boost
 //!
 //! The Thermostat cluster's weekly schedule is the unit's (schedule.rs): Set
 //! Weekly Schedule replaces the days it names, Get Weekly Schedule answers
@@ -135,6 +139,7 @@ const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 /// Past the stages' endpoints (STAGE_ENDPOINTS, ten of them).
 const SCREEN_TIMEOUT_ENDPOINT: u8 = 40;
 const SCREEN_BRIGHTNESS_ENDPOINT: u8 = 42;
+const HOT_WATER_BOOST_ENDPOINT: u8 = 44;
 const STAGE_ENDPOINTS: u8 = 30;
 
 /// The switches, by endpoint: their bucket field and description.
@@ -206,6 +211,8 @@ const ECONOMY: u8 = 0x04;
 /// A weekly schedule's mode: its transitions' heating or cooling setpoints.
 const HEAT_SETPOINTS: u8 = 0x01;
 const COOL_SETPOINTS: u8 = 0x02;
+/// The longest hot water boost, minutes: the last length MQTT's select offers.
+const HOT_WATER_BOOST_LONGEST: i64 = bridge::HOT_WATER_BOOST_MINUTES[bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
 // BACnet engineering units, Analog Output's.
 const SECONDS: u16 = 73;
 const MINUTES: u16 = 72;
@@ -311,6 +318,13 @@ impl Nest {
         for id in [SCREEN_TIMEOUT_ENDPOINT, SCREEN_BRIGHTNESS_ENDPOINT] {
             endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
         }
+        if has("has_hot_water_control") {
+            endpoints.push(Endpoint {
+                id: HOT_WATER_BOOST_ENDPOINT,
+                device: LEVEL_CONTROLLABLE_OUTPUT,
+                clusters: vec![ANALOG_OUTPUT],
+            });
+        }
         for &(id, key, _) in SWITCHES {
             let present = match key {
                 "away_temperature_low_enabled" => has("can_heat"),
@@ -357,6 +371,16 @@ impl Nest {
             .iter()
             .all(|e| now.iter().any(|n| n.id == e.id && e.clusters.iter().all(|c| n.clusters.contains(c))));
         (kept && now != self.endpoints).then_some(now)
+    }
+
+    /// Seconds until the running hot water boost's length (endpoint 44)
+    /// next changes, with that endpoint.
+    pub fn hot_water_boost_step(&self) -> Option<f64> {
+        self.endpoints
+            .iter()
+            .any(|e| e.id == HOT_WATER_BOOST_ENDPOINT)
+            .then(|| bridge::hot_water_boost_step(&self.view().dev))
+            .flatten()
     }
 
     /// What changes reports go out for: endpoint, cluster, attributes.
@@ -690,7 +714,7 @@ impl Nest {
     /// An Analog Output: the fan timer's minutes, the fan schedule's, its
     /// start and end hours, the screen timeout's seconds, the screen's
     /// brightness (with it automatic, the percentage stored for manual, else
-    /// full), or the target humidity.
+    /// full), the hot water boost's length, or the target humidity.
     fn analog_output(&self, endpoint: u8, attribute: u16) -> Option<Value> {
         let dev = self.view().dev;
         let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
@@ -721,6 +745,10 @@ impl Nest {
                     *crate::brightness::PERCENTS.end() as f32,
                     percent.unwrap_or(100) as f64,
                 )
+            }
+            HOT_WATER_BOOST_ENDPOINT => {
+                let minutes = bridge::hot_water_boost(&dev).unwrap_or(0);
+                ("Hot water boost length", MINUTES, 0.0, HOT_WATER_BOOST_LONGEST as f32, minutes as f64)
             }
             _ => ("Target humidity", PERCENT, 10.0, 60.0, number(dev.get("target_humidity")).unwrap_or(35.0)),
         };
@@ -757,6 +785,14 @@ impl Nest {
             (0x0055, Value::F32(v)) if endpoint == SCREEN_BRIGHTNESS_ENDPOINT => {
                 self.apply("screen_brightness", &(v.round() as i64).to_string())
             }
+            // Whole minutes only: 0 ends the boost, as MQTT's "off".
+            (0x0055, Value::F32(v)) if endpoint == HOT_WATER_BOOST_ENDPOINT => match v {
+                0.0 => self.apply("hot_water_boost", "off"),
+                v if v.fract() == 0.0 && (1.0..=HOT_WATER_BOOST_LONGEST as f32).contains(&v) => {
+                    self.apply("hot_water_boost", &(v as i64).to_string())
+                }
+                _ => status::INVALID_VALUE,
+            },
             (0x0055, Value::F32(v)) => self.apply("target_humidity", &format!("{}", v.round())),
             _ => status::READ_ONLY,
         }
@@ -1680,6 +1716,57 @@ mod tests {
         assert_eq!(n.write(18, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
         assert_eq!(n.read(18, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert_eq!(n.view().dev["hot_water_mode"], "off");
+    }
+
+    #[test]
+    fn the_hot_water_boost_length_is_an_analog_output_in_minutes() {
+        assert!(nest(fields! {}, fields! {}).attributes(44, ANALOG_OUTPUT).is_none(), "no hot water control");
+        let n = nest(fields! {"has_hot_water_control" => true}, fields! {});
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x001C), Some(Value::Str("Hot water boost length".into())));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(MINUTES)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0045), Some(Value::F32(0.0)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0041), Some(Value::F32(120.0)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(0.0)), "no boost");
+        let device = format!("device.{}", n.bridge.serial);
+        let now = chrono::Utc::now().timestamp();
+        let ends_in = |seconds: i64| {
+            n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + seconds}, 0, 0, true);
+            n.read(44, ANALOG_OUTPUT, 0x0055)
+        };
+        // The length that covers the time left, as MQTT's select shows it.
+        for (seconds, minutes) in [(7000, 120.0), (3000, 60.0), (600, 30.0), (-5, 0.0)] {
+            assert_eq!(ends_in(seconds), Some(Value::F32(minutes)), "{seconds} s left");
+        }
+        // 60 boosts an hour; 0 ends it.
+        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(60.0)), status::SUCCESS);
+        let end = number(n.view().dev.get("hot_water_boost_time_to_end")).unwrap() - now as f64;
+        assert!((3598.0..=3602.0).contains(&end), "{end}");
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
+        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(0.0)), status::SUCCESS);
+        assert_eq!(number(n.view().dev.get("hot_water_boost_time_to_end")), Some(0.0));
+        for bad in [121.0, -1.0, 30.5] {
+            assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(bad)), status::INVALID_VALUE, "{bad}");
+        }
+        assert_eq!(number(n.view().dev.get("hot_water_boost_time_to_end")), Some(0.0), "refused writes change nothing");
+        // Switch 17 is as it was: on boosts the shortest length.
+        assert_eq!(n.write(17, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.read(17, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(30.0)));
+    }
+
+    #[test]
+    fn a_running_boost_reports_when_its_length_steps_down() {
+        let n = nest(fields! {"has_hot_water_control" => true}, fields! {});
+        assert_eq!(n.hot_water_boost_step(), None, "no boost");
+        let device = format!("device.{}", n.bridge.serial);
+        let now = chrono::Utc::now().timestamp();
+        for (left, step) in [(3700, 100.0), (3000, 1200.0), (1000, 1000.0)] {
+            n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + left}, 0, 0, true);
+            let due = n.hot_water_boost_step().unwrap();
+            assert!((step - 2.0..=step).contains(&due), "{left} s left: {due}");
+        }
+        let without = nest(fields! {"hot_water_boost_time_to_end" => now + 1000}, fields! {});
+        assert_eq!(without.hot_water_boost_step(), None, "no endpoint 44");
     }
 
     #[test]

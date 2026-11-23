@@ -482,6 +482,66 @@ impl SleepClient {
     }
 }
 
+/// A wake at a wall-clock time, whether the unit sleeps or not: a timer on
+/// the kernel's alarm clock, which arms the RTC before each suspend. The
+/// gen 1's and gen 2's kernel (2.6.37) has none.
+#[cfg(target_os = "linux")]
+pub struct Alarm(std::os::fd::OwnedFd);
+#[cfg(not(target_os = "linux"))]
+pub struct Alarm;
+
+#[cfg(target_os = "linux")]
+impl Alarm {
+    pub fn new() -> std::io::Result<Alarm> {
+        use std::os::fd::FromRawFd;
+        let fd = unsafe { libc::timerfd_create(libc::CLOCK_REALTIME_ALARM, libc::TFD_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Alarm(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
+    }
+
+    /// Fires at `at`, seconds since 1970, or never.
+    pub fn set(&self, at: Option<f64>) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let at = at.map_or(0.0, |at| at.max(1.0));
+        let value = libc::timespec { tv_sec: at.trunc() as _, tv_nsec: (at.fract() * 1e9) as _ };
+        let spec = libc::itimerspec { it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 }, it_value: value };
+        if unsafe { libc::timerfd_settime(self.0.as_raw_fd(), libc::TFD_TIMER_ABSTIME, &spec, std::ptr::null_mut()) }
+            != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Waits until it fires.
+    pub fn wait(&self) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let mut expirations = 0u64;
+        let n = unsafe { libc::read(self.0.as_raw_fd(), (&mut expirations as *mut u64).cast(), 8) };
+        if n != 8 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Alarm {
+    pub fn new() -> std::io::Result<Alarm> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    pub fn set(&self, _at: Option<f64>) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    pub fn wait(&self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod capture {
     use std::sync::Arc;
