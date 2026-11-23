@@ -213,6 +213,7 @@ const HOURS: u16 = 71;
 const PERCENT: u16 = 98;
 
 /// An endpoint: its number, device type and server clusters.
+#[derive(Debug, PartialEq)]
 pub struct Endpoint {
     pub id: u8,
     pub device: u16,
@@ -343,6 +344,19 @@ impl Nest {
             });
         }
         Nest { bridge, endpoints, weather: Mutex::new(BTreeMap::new()) }
+    }
+
+    /// The endpoints the unit's equipment calls for now, when they differ
+    /// from these and keep all of them: equipment reported after Zigbee
+    /// started, such as a Heat Link's hot water. Equipment that goes keeps
+    /// its endpoints until nestlocal restarts, as on Matter.
+    pub fn grown(&self) -> Option<Vec<Endpoint>> {
+        let now = Nest::new(self.bridge.clone()).endpoints;
+        let kept = self
+            .endpoints
+            .iter()
+            .all(|e| now.iter().any(|n| n.id == e.id && e.clusters.iter().all(|c| n.clusters.contains(c))));
+        (kept && now != self.endpoints).then_some(now)
     }
 
     /// What changes reports go out for: endpoint, cluster, attributes.
@@ -1518,6 +1532,22 @@ mod tests {
         );
         // Sent unasked, as the cluster's command 0x00 to the client.
         assert_eq!(super::super::zcl::server_command_out(7, 0x00, &n.week()[0])[..4], [0x19, 7, 0x00, 1]);
+    }
+
+    #[test]
+    fn hot_water_reported_later_grows_the_endpoints_and_going_keeps_them() {
+        let n = nest(fields! {}, fields! {"can_heat" => true});
+        assert_eq!(n.grown(), None, "nothing new");
+        let device = format!("device.{}", n.bridge.serial);
+        n.bridge.store.merge(&device, &fields! {"has_hot_water_control" => true}, 0, 0, true);
+        let grown = n.grown().expect("hot water adds endpoints");
+        assert!(grown.iter().any(|e| e.id == THERMOSTAT_ENDPOINT && e.clusters.contains(&HOT_WATER)));
+        assert!(grown.iter().any(|e| e.id == 17) && grown.iter().any(|e| e.id == 18));
+        let mut with = nest(fields! {"has_hot_water_control" => true}, fields! {"can_heat" => true});
+        with.endpoints = grown;
+        let device = format!("device.{}", with.bridge.serial);
+        with.bridge.store.merge(&device, &fields! {"has_hot_water_control" => false}, 0, 0, true);
+        assert_eq!(with.grown(), None, "hot water gone keeps its endpoints");
     }
 
     #[test]

@@ -114,7 +114,8 @@ impl PairingAttempt {
 }
 
 /// Runs the unit on Zigbee, on a thread of its own, once it has reported
-/// (its equipment decides what it offers); again after the radio fails.
+/// (its equipment decides what it offers); again after the radio fails, or
+/// when equipment it reports later adds endpoints.
 pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
     // OTA downloads over Wi-Fi run on the caller's runtime.
     let runtime = tokio::runtime::Handle::try_current().ok();
@@ -128,7 +129,7 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
             std::thread::sleep(Duration::from_secs(5));
         }
         let mut ota = ota::Ota::new(bridge.updates().cloned(), runtime);
-        let nest = Nest::new(bridge);
+        let mut nest = Nest::new(bridge);
         let changed = Arc::new(AtomicBool::new(true));
         let flag = changed.clone();
         nest.bridge.store.watch(move |_| flag.store(true, Ordering::Relaxed));
@@ -144,10 +145,20 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         let mut attempt = PairingAttempt::default();
         attempt.look(Instant::now());
         loop {
-            if let Err(e) = run(&nest, &mut ota, &store, &changed, &mut failed_install, &mut attempt) {
-                ota.offline();
-                logf!("zigbee: {e}");
-                crate::settings_ui::status("zigbee", "Radio unavailable. Try again.");
+            match run(&nest, &mut ota, &store, &changed, &mut failed_install, &mut attempt) {
+                // The radio takes endpoints only after a reset: start it again with them.
+                Ok(()) => {
+                    if let Some(endpoints) = nest.grown() {
+                        nest.endpoints = endpoints;
+                    }
+                    logf!("zigbee: the unit's equipment changed; serving its new endpoints");
+                    continue;
+                }
+                Err(e) => {
+                    ota.offline();
+                    logf!("zigbee: {e}");
+                    crate::settings_ui::status("zigbee", "Radio unavailable. Try again.");
+                }
             }
             std::thread::sleep(JOIN_RETRY);
         }
@@ -162,6 +173,8 @@ fn reported(bridge: &Bridge) -> bool {
     buckets.contains_key("device") && buckets.contains_key("shared")
 }
 
+/// Runs the radio until it fails (an error), or until equipment the unit
+/// reports adds endpoints (Ok), which only a reset radio takes.
 fn run(
     nest: &Nest,
     ota: &mut ota::Ota,
@@ -287,7 +300,11 @@ fn run(
                 }
             }
         }
-        if up && (changed.swap(false, Ordering::Relaxed) || server.pending) {
+        let reported = changed.swap(false, Ordering::Relaxed);
+        if reported && nest.grown().is_some() {
+            return Ok(());
+        }
+        if up && (reported || server.pending) {
             server.report(&mut ezsp, nest, false)?;
         }
         if up && Instant::now() >= server.next_full {
