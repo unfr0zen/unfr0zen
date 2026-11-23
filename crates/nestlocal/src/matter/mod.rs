@@ -28,7 +28,7 @@ pub mod timer;
 pub mod wake_patterns;
 mod water_heater;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -263,8 +263,12 @@ pub fn start(settings: Settings, bridge: Arc<Bridge>) {
                 wait = RESTART_WAIT;
             }
             match result {
+                Ok(true) => {
+                    logf!("matter: the unit's equipment changed; serving its new endpoints");
+                    continue;
+                }
                 Err(e) => logf!("matter: stopped: {e:?}; again in {} s", wait.as_secs()),
-                Ok(()) => logf!("matter: stopped; again in {} s", wait.as_secs()),
+                Ok(false) => logf!("matter: stopped; again in {} s", wait.as_secs()),
             }
             std::thread::sleep(wait);
             wait = (wait * 2).min(RESTART_WAIT_MAX);
@@ -301,7 +305,9 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-fn run(settings: &Settings, nest: Arc<Nest>) -> Result<(), Error> {
+/// Serves the unit until an error, or until its equipment changes the node
+/// (true).
+fn run(settings: &Settings, nest: Arc<Nest>) -> Result<bool, Error> {
     if settings.thread {
         run_network(settings, nest, thread::ThreadNetworks::new(), thread::Controller::default())
     } else {
@@ -309,17 +315,63 @@ fn run(settings: &Settings, nest: Arc<Nest>) -> Result<(), Error> {
     }
 }
 
+/// Before the interaction model starts, nothing is subscribed.
+struct Unsubscribed;
+
+impl AttrChangeNotifier for Unsubscribed {
+    fn notify_attr_changed(&self, _: u16, _: u32, _: u32) {}
+    fn notify_cluster_changed(&self, _: u16, _: u32) {}
+    fn notify_endpoint_changed(&self, _: u16) {}
+    fn notify_all_changed(&self) {}
+}
+
+/// What the node's endpoints are built from, as the unit reports it.
+#[derive(Debug, PartialEq)]
+struct Shape {
+    has_fan: bool,
+    equipment: Equipment,
+    hot_water: bool,
+    switches: Vec<Switch>,
+}
+
+impl Shape {
+    fn of(nest: &Nest) -> Self {
+        let view = nest.view();
+        Self {
+            has_fan: view.device_flag("has_fan"),
+            equipment: Equipment::of(nest),
+            hot_water: view.device_flag("has_hot_water_control"),
+            switches: extras::switches(nest),
+        }
+    }
+}
+
+/// The shape last served, in the storage directory.
+const SHAPE_FILE: &str = "node-shape";
+
+/// Bumps ConfigurationVersion when the node's endpoints differ from those
+/// served before, as Matter asks, so controllers read its structure again;
+/// whether it did.
+fn note_shape<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, storage: &Path, shape: &Shape) -> bool {
+    let path = storage.join(SHAPE_FILE);
+    let now = format!("{shape:?}");
+    if std::fs::read_to_string(&path).is_ok_and(|before| before == now) {
+        return false;
+    }
+    if let Err(e) = matter.bump_configuration_version(kv, &Unsubscribed) {
+        logf!("matter: configuration version: {e:?}");
+        return false;
+    }
+    if let Err(e) = std::fs::write(&path, now) {
+        logf!("matter: {}: {e}", path.display());
+    }
+    true
+}
+
 /// Gives Matter's NodeLabel, the name controllers show, the name the
 /// install gave, and whether it took it. Bumping ConfigurationVersion stores
 /// the basic information, the label with it, and has controllers read it again.
 fn label_node<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, label: &str) -> bool {
-    struct Unsubscribed; // nothing is subscribed yet
-    impl AttrChangeNotifier for Unsubscribed {
-        fn notify_attr_changed(&self, _: u16, _: u32, _: u32) {}
-        fn notify_cluster_changed(&self, _: u16, _: u32) {}
-        fn notify_endpoint_changed(&self, _: u16) {}
-        fn notify_all_changed(&self) {}
-    }
     if label.len() > 32 {
         logf!("matter: device name {label:?} is longer than Matter's 32 bytes");
         return false;
@@ -346,8 +398,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     nest: Arc<Nest>,
     networks: N,
     controller: C,
-) -> Result<(), Error> {
-    let view = nest.view();
+) -> Result<bool, Error> {
     let attestation = attestation::of(crate::device::current().name);
     let installed = nest.bridge.updates().and_then(|u| u.installed()).unwrap_or("").to_string();
     let info: &'static BasicInfoConfig = Box::leak(Box::new(BasicInfoConfig {
@@ -395,13 +446,15 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         default_crypto(rand::rng(), rs_matter::dm::clusters::dev_att::DeviceAttestation::dac_priv_key(attestation));
     let rand = crypto.rand()?;
     let ota = ota::Ota::new();
-    let switches = extras::switches(&nest);
-    let equipment = Equipment::of(&nest);
+    let shape = Shape::of(&nest);
+    if note_shape(&matter, &kv, &settings.storage, &shape) {
+        logf!("matter: the node's endpoints changed; configuration version bumped");
+    }
     let node = node_for_network(
-        view.device_flag("has_fan"),
-        equipment,
-        view.device_flag("has_hot_water_control"),
-        &switches,
+        shape.has_fan,
+        shape.equipment,
+        shape.hot_water,
+        &shape.switches,
         settings.thread,
         nest.bridge.sensor.get().is_some(),
     );
@@ -409,7 +462,16 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         &matter,
         &crypto,
         &buffers,
-        data_model(node, rand, nest.clone(), equipment, switches, &controller, &ota, settings.thread),
+        data_model(
+            node,
+            rand,
+            nest.clone(),
+            shape.equipment,
+            shape.switches.clone(),
+            &controller,
+            &ota,
+            settings.thread,
+        ),
         &kv,
         &controller,
         &state,
@@ -469,8 +531,15 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
             let _ = reading.try_send(());
         });
     }
+    // The node is built once a start: equipment the unit reports later (a
+    // Heat Link's hot water, a fan) stops it, to be served again at once.
+    let reshaped = std::cell::Cell::new(false);
     let mut report = pin!(async {
         while changes.recv().await.is_ok() {
+            if Shape::of(&nest) != shape {
+                reshaped.set(true);
+                break;
+            }
             im.notify_all_changed();
         }
         Ok::<(), Error>(())
@@ -593,7 +662,8 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         select4(&mut respond, &mut im_job, &mut report, &mut updates).coalesce(),
         &mut commissionable,
     );
-    futures_lite::future::block_on(all.coalesce())
+    futures_lite::future::block_on(all.coalesce())?;
+    Ok(reshaped.get())
 }
 
 // Device types rs-matter does not name.
@@ -1335,6 +1405,50 @@ mod tests {
             ),
             [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]
         );
+    }
+
+    #[test]
+    fn hot_water_reported_later_changes_the_shape() {
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let before = Shape::of(&unit);
+        assert_eq!(before, Shape::of(&unit), "unchanged without a change");
+        let device = format!("device.{}", unit.bridge.serial);
+        unit.bridge.store.merge(&device, &crate::fields! {"has_hot_water_control" => true}, 0, 0, true);
+        let after = Shape::of(&unit);
+        assert!(after.hot_water && after.switches.iter().any(|s| s.key == "hot_water_boost"));
+        assert_ne!(before, after);
+        // Ordinary readings leave it.
+        unit.bridge.store.merge(&device, &crate::fields! {"current_humidity" => 41}, 0, 0, true);
+        assert_eq!(after, Shape::of(&unit));
+    }
+
+    #[test]
+    fn a_new_shape_bumps_the_configuration_version_once() {
+        use rs_matter::dm::devices::test::TEST_DEV_ATT;
+        use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
+        let dir = std::env::temp_dir().join(format!("nestlocal-matter-shape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let comm = BasicCommData {
+            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(
+                &20202021u32.to_le_bytes(),
+            )),
+            discriminator: 3840,
+        };
+        let info = BasicInfoConfig::new();
+        let matter = Matter::new(&info, comm, &TEST_DEV_ATT, MATTER_PORT);
+        let kv = matter.kv(DirKvBlobStore::new(dir.clone()));
+        matter.startup(&kv).unwrap();
+        let version = || matter.with_state(|state| state.basic_info_settings.configuration_version);
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let first = version();
+        assert!(note_shape(&matter, &kv, &dir, &Shape::of(&unit)), "none served before");
+        assert!(!note_shape(&matter, &kv, &dir, &Shape::of(&unit)), "the same again");
+        let device = format!("device.{}", unit.bridge.serial);
+        unit.bridge.store.merge(&device, &crate::fields! {"has_hot_water_control" => true}, 0, 0, true);
+        assert!(note_shape(&matter, &kv, &dir, &Shape::of(&unit)));
+        assert_eq!(version(), first + 2);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

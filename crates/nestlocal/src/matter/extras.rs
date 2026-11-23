@@ -35,7 +35,7 @@ pub const FAN_SCHEDULE: u16 = 40;
 const FAN_TIMER_MINUTES: [u32; 8] = [15, 30, 45, 60, 120, 240, 480, 720];
 
 /// A switch: its endpoint, the command (and device field) it sets, its name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switch {
     pub endpoint: u16,
     pub key: &'static str,
