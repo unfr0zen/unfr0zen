@@ -81,6 +81,11 @@ pub struct Bridge {
     /// Held while a command reads a bucket and writes its change, so two
     /// commands editing one bucket don't undo each other.
     pub(crate) applying: Mutex<()>,
+    pub(crate) schedule_alarm: OnceLock<Arc<crate::wake::Alarm>>,
+    /// Serializes reading the next deadline with programming its wake alarm.
+    pub(crate) schedule_programming: Mutex<()>,
+    /// The wake alarm retries a failed hold expiry no earlier than this, Unix seconds.
+    pub(crate) hold_retry: Mutex<i64>,
     naming: Mutex<Naming>,
     /// The entities are removed, waiting out RENAME_WAIT.
     renaming: AtomicBool,
@@ -124,6 +129,9 @@ impl Bridge {
             announced: Mutex::new(None),
             hot_water_times: Mutex::new(None),
             applying: Mutex::new(()),
+            schedule_alarm: OnceLock::new(),
+            schedule_programming: Mutex::new(()),
+            hold_retry: Mutex::new(0),
             naming: Mutex::new(naming),
             renaming: AtomicBool::new(false),
             time_asked: Mutex::new(None),
@@ -160,6 +168,11 @@ impl Bridge {
     /// regulates: nlclient updates shared's only in steps of half a degree.
     pub fn state(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut s = state(dev, sh);
+        let schedule = self.schedule_status();
+        s.insert("schedule_enabled".into(), schedule.enabled.into());
+        s.insert("hold".into(), schedule.hold_until.is_some().into());
+        s.insert("hold_duration".into(), schedule.hold_minutes.into());
+        s.insert("hold_until".into(), schedule.hold_until.map_or(Value::Null, Value::from));
         if self.temperature_source() == Some("external") {
             if let Some(reading) = self.sensor.get().and_then(|sensor| sensor.reading()) {
                 s.insert("current_temperature".into(), shown(Some(&reading.into())));
@@ -438,6 +451,8 @@ impl Bridge {
         let typ = o.key.split_once('.').map_or(o.key.as_str(), |(t, _)| t);
         self.publish(&format!("{}/raw/{typ}", self.base), true, Value::Object(o.value.clone()).to_string().as_bytes());
         if o.key == format!("schedule.{}", self.serial) {
+            let configured = self.configured_schedule();
+            let o = configured.as_ref().unwrap_or(o);
             let times = crate::schedule::shown(&o.value);
             self.publish(
                 &format!("{}/schedule", self.base),
@@ -785,6 +800,36 @@ impl Bridge {
                 },
             );
         };
+        for (key, name, icon) in
+            [("schedule_enabled", "Schedule", "mdi:calendar-clock"), ("hold", "Timed hold", "mdi:timer-pause")]
+        {
+            add(
+                "switch",
+                key,
+                name,
+                fields! {
+                    "value_template" => on_off(key), "command_topic" => format!("{set}{key}"), "icon" => icon,
+                },
+            );
+        }
+        add(
+            "number",
+            "hold_duration",
+            "Hold duration",
+            fields! {
+                "value_template" => tmpl("hold_duration"), "command_topic" => format!("{set}hold_duration"),
+                "min" => 1, "max" => 1440, "step" => 1, "unit_of_measurement" => "min", "mode" => "box",
+                "icon" => "mdi:timer-edit-outline",
+            },
+        );
+        add(
+            "button",
+            "hold_renew",
+            "Start or renew hold",
+            fields! {
+                "command_topic" => format!("{set}hold"), "payload_press" => "ON", "icon" => "mdi:timer-refresh-outline",
+            },
+        );
         sw(&mut add, "learning_mode", "Auto-Schedule", "mdi:school");
         sw(&mut add, "auto_away_enable", "Home/Away Assist", "mdi:home-account");
         sw(&mut add, "sunlight_correction_enabled", "Sunblock", "mdi:weather-sunny");
@@ -1708,6 +1753,14 @@ pub mod tests {
         let b = test_bridge();
         let (dev, sh) = everything();
         b.store.merge("device.S", &dev, 0, 0, true);
+        b.store.merge("shared.S", &sh, 0, 0, true);
+        b.store.merge(
+            "schedule.S",
+            &fields! {"schedule_mode" => "RANGE", "days" => json!({"0":{"0":{"time":0,"temp-min":18,"temp-max":25}}})},
+            0,
+            0,
+            true,
+        );
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
         let s = b.shown(&dev, &sh);
@@ -1742,7 +1795,7 @@ pub mod tests {
                         "mode" => "heat",
                         "preset" => "eco",
                         "fan_mode" => "auto",
-                        "fan_timer_duration" | "fan_schedule_minutes" => "30",
+                        "fan_timer_duration" | "fan_schedule_minutes" | "hold_duration" => "30",
                         "fan_schedule_start" | "fan_schedule_end" => "07:00",
                         "temperature_scale" => "F",
                         "target_humidity" => "40",
@@ -1753,7 +1806,12 @@ pub mod tests {
                         n if n.starts_with("target") || n.starts_with("away_temperature_") => "20",
                         _ => "ON",
                     };
-                    assert!(b.fields(name, arg).is_ok(), "{topic}: {k} {name} {arg}: {:?}", b.fields(name, arg));
+                    if matches!(name, "hold" | "hold_duration" | "schedule_enabled") {
+                        let arg = c.get("payload_press").and_then(Value::as_str).unwrap_or(arg);
+                        assert!(b.apply("test", name, arg).is_ok(), "{topic}: {name} {arg}");
+                    } else {
+                        assert!(b.fields(name, arg).is_ok(), "{topic}: {k} {name} {arg}: {:?}", b.fields(name, arg));
+                    }
                 }
             }
         }
@@ -1831,6 +1889,15 @@ pub mod tests {
     fn number_entities_offer_what_their_commands_take() {
         let b = test_bridge();
         let (dev, sh) = everything();
+        b.store.merge("device.S", &dev, 0, 0, true);
+        b.store.merge("shared.S", &sh, 0, 0, true);
+        b.store.merge(
+            "schedule.S",
+            &fields! {"schedule_mode" => "RANGE", "days" => json!({"0":{"0":{"time":0,"temp-min":18,"temp-max":25}}})},
+            0,
+            0,
+            true,
+        );
         b.announce(&dev, &sh);
         let configs = b.announced.lock().unwrap().clone().unwrap();
         let numbers: Vec<Value> = configs
@@ -1838,12 +1905,17 @@ pub mod tests {
             .filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
             .map(|(_, c)| serde_json::from_str(c).unwrap())
             .collect();
-        assert_eq!(numbers.len(), 5);
+        assert_eq!(numbers.len(), 6);
         for c in numbers {
             let name = c["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
             let (min, max) = (c["min"].as_f64().unwrap(), c["max"].as_f64().unwrap());
             for (v, ok) in [(min, true), (max, true), (min - 0.5, false), (max + 0.5, false)] {
-                assert_eq!(b.fields(name, &v.to_string()).is_ok(), ok, "{name} {v}");
+                let accepted = if name == "hold_duration" {
+                    b.apply("test", name, &v.to_string()).is_ok()
+                } else {
+                    b.fields(name, &v.to_string()).is_ok()
+                };
+                assert_eq!(accepted, ok, "{name} {v}");
             }
         }
     }

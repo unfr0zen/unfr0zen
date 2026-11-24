@@ -4,11 +4,14 @@
 //! side of a read, for the time.
 
 /// Registered Nest Labs code: the ZDO node descriptor's, and the one the
-/// manufacturer-specific clusters (0xFC00 and up) take in their frames.
+/// manufacturer-specific clusters and attributes take in their frames.
 /// 0xABCD denotes Control4 and causes coordinators to apply its
 /// proprietary-device quirks.
 pub const MANUFACTURER_CODE: u16 = 0x10D6;
 const MANUFACTURER_CLUSTERS: u16 = 0xFC00;
+/// Nest's hold expiry on the standard Thermostat cluster, as UTCTime.
+/// Kept separate from standard attributes in reads, discovery and reports.
+pub const HOLD_EXPIRY: u16 = 0xF000;
 /// The most an answer's ZCL frame may hold: one unfragmented APS message
 /// under network security. The radio refuses a longer one.
 pub const MAX_FRAME: usize = 82;
@@ -166,7 +169,7 @@ pub trait Clusters {
 
 /// The frames answering a ZCL frame for an endpoint's `cluster`: none, one,
 /// or for some commands several. A manufacturer-specific frame is served,
-/// with its code, for the manufacturer's own clusters; the rest are refused.
+/// with its code, for the manufacturer's own clusters and attributes.
 pub fn serve_all(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8]) -> Vec<Vec<u8>> {
     let mut more = Vec::new();
     let first = serve_into(clusters, endpoint, cluster, frame, &mut more);
@@ -208,7 +211,9 @@ fn serve_into(
     // What an answer's records have room for after its header.
     let room = MAX_FRAME - if manufacturer.is_some() { 5 } else { 3 };
     let specific = control & CLUSTER_SPECIFIC != 0;
-    if manufacturer.is_some_and(|code| code != MANUFACTURER_CODE || cluster < MANUFACTURER_CLUSTERS) {
+    if manufacturer.is_some_and(|code| {
+        code != MANUFACTURER_CODE || (cluster < MANUFACTURER_CLUSTERS && (cluster != 0x0201 || specific))
+    }) {
         return default(if specific {
             status::UNSUP_MANUF_CLUSTER_COMMAND
         } else {
@@ -218,6 +223,7 @@ fn serve_into(
     let Some(ids) = clusters.attributes(endpoint, cluster) else {
         return default(status::UNSUPPORTED_CLUSTER);
     };
+    let visible = |id: u16| cluster >= MANUFACTURER_CLUSTERS || attribute_manufacturer(cluster, id) == manufacturer;
     if specific {
         let out = |id, payload: &[u8]| {
             frame_out(CLUSTER_SPECIFIC | TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, id, payload)
@@ -237,7 +243,7 @@ fn serve_into(
             let mut out = Vec::new();
             for id in payload.as_chunks::<2>().0.iter().map(|&c| u16::from_le_bytes(c)) {
                 let mut record = id.to_le_bytes().to_vec();
-                match ids.contains(&id).then(|| clusters.read(endpoint, cluster, id)).flatten() {
+                match (ids.contains(&id) && visible(id)).then(|| clusters.read(endpoint, cluster, id)).flatten() {
                     Some(value) => {
                         record.extend([status::SUCCESS, value.type_id()]);
                         value.write(&mut record);
@@ -265,7 +271,7 @@ fn serve_into(
                     break; // the rest cannot be found without its length
                 };
                 let status = match clusters.read(endpoint, cluster, id) {
-                    _ if !ids.contains(&id) => status::UNSUPPORTED_ATTRIBUTE,
+                    _ if !ids.contains(&id) || !visible(id) => status::UNSUPPORTED_ATTRIBUTE,
                     Some(current) if current.type_id() != type_id => status::INVALID_DATA_TYPE,
                     _ => clusters.write(endpoint, cluster, id, value),
                 };
@@ -286,7 +292,7 @@ fn serve_into(
             let max = payload[2] as usize;
             let found: Vec<(u16, Value)> = ids
                 .iter()
-                .filter(|&&id| id >= start)
+                .filter(|&&id| id >= start && visible(id))
                 .filter_map(|&id| clusters.read(endpoint, cluster, id).map(|v| (id, v)))
                 .collect();
             // A record is 3 bytes, after the complete flag.
@@ -372,7 +378,12 @@ pub fn manufacturer_of(cluster: u16) -> Option<u16> {
     (cluster >= MANUFACTURER_CLUSTERS).then_some(MANUFACTURER_CODE)
 }
 
-/// An attribute report of `cluster`, server to client.
+fn attribute_manufacturer(cluster: u16, attribute: u16) -> Option<u16> {
+    manufacturer_of(cluster).or_else(|| (cluster == 0x0201 && attribute == HOLD_EXPIRY).then_some(MANUFACTURER_CODE))
+}
+
+/// An attribute report of `cluster`, server to client. Standard and
+/// manufacturer-specific attributes go in separate reports.
 pub fn report(sequence: u8, cluster: u16, attributes: &[(u16, Value)]) -> Vec<u8> {
     let mut payload = Vec::new();
     for (id, value) in attributes {
@@ -380,7 +391,8 @@ pub fn report(sequence: u8, cluster: u16, attributes: &[(u16, Value)]) -> Vec<u8
         payload.push(value.type_id());
         value.write(&mut payload);
     }
-    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer_of(cluster), sequence, command::REPORT, &payload)
+    let manufacturer = attributes.first().and_then(|(id, _)| attribute_manufacturer(cluster, *id));
+    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, command::REPORT, &payload)
 }
 
 fn frame_out(control: u8, manufacturer: Option<u16>, sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
@@ -408,12 +420,17 @@ mod tests {
 
     impl Clusters for Fake {
         fn attributes(&self, _endpoint: u8, cluster: u16) -> Option<&'static [u16]> {
-            matches!(cluster, 0x0201 | 0xFC00).then_some(&[0x0000, 0x0012])
+            match cluster {
+                0x0201 => Some(&[0x0000, 0x0012, HOLD_EXPIRY]),
+                0xFC00 => Some(&[0x0000, 0x0012]),
+                _ => None,
+            }
         }
         fn read(&self, _endpoint: u8, _cluster: u16, attribute: u16) -> Option<Value> {
             match attribute {
                 0x0000 => Some(Value::Enum8(4)),
                 0x0012 => Some(Value::I16(*self.0.borrow())),
+                HOLD_EXPIRY => Some(Value::Utc(3600)),
                 _ => None,
             }
         }
@@ -485,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn manufacturer_specific_frames_are_served_for_the_manufacturers_clusters_only() {
+    fn manufacturer_specific_frames_expose_only_the_manufacturers_attributes() {
         let f = Fake(RefCell::new(2150));
         // A read and a write of 0xFC00 with Nest Labs' code, answered with it.
         let out = serve(&f, 1, 0xFC00, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap();
@@ -497,7 +514,7 @@ mod tests {
         // The same read of a standard cluster, and with another code.
         assert_eq!(
             serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 7, 0x00, 0x12, 0x00]).unwrap(),
-            [0x1C, 0xD6, 0x10, 7, 0x0B, 0x00, 0x84]
+            [0x1C, 0xD6, 0x10, 7, 0x01, 0x12, 0x00, 0x86]
         );
         assert_eq!(
             serve(&f, 1, 0xFC00, &[0x04, 0x34, 0x12, 7, 0x00, 0x12, 0x00]).unwrap(),
@@ -505,6 +522,28 @@ mod tests {
         );
         // A code cut short.
         assert!(serve(&f, 1, 0xFC00, &[0x04, 0xD6]).is_none());
+    }
+
+    #[test]
+    fn hold_expiry_uses_manufacturer_reads_discovery_and_reports() {
+        let f = Fake(RefCell::new(2150));
+        assert_eq!(serve(&f, 1, 0x0201, &[0x00, 1, 0, 0, 0xF0]).unwrap(), [0x18, 1, 1, 0, 0xF0, 0x86]);
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 1, 0, 0, 0xF0]).unwrap(),
+            [0x1C, 0xD6, 0x10, 1, 1, 0, 0xF0, 0, 0xE2, 0x10, 0x0E, 0, 0]
+        );
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 1, 0x0C, 0, 0, 10]).unwrap(),
+            [0x1C, 0xD6, 0x10, 1, 0x0D, 1, 0, 0xF0, 0xE2]
+        );
+        assert_eq!(
+            report(1, 0x0201, &[(HOLD_EXPIRY, Value::Utc(3600))]),
+            [0x1C, 0xD6, 0x10, 1, 0x0A, 0, 0xF0, 0xE2, 0x10, 0x0E, 0, 0]
+        );
+        assert_eq!(
+            serve(&f, 1, 0x0201, &[0x04, 0xD6, 0x10, 1, 2, 0, 0xF0, 0xE2, 0, 0, 0, 0]).unwrap(),
+            [0x1C, 0xD6, 0x10, 1, 4, 0x88, 0, 0xF0]
+        );
     }
 
     #[test]

@@ -25,6 +25,18 @@ pub struct Catalog {
     // Each native mode resumes its own active schedule.
     pub active: BTreeMap<String, String>,
     pub native: BTreeMap<String, Fields>,
+    #[serde(default)]
+    pub control: BTreeMap<String, crate::schedule_control::Mode>,
+    /// Learning as it was before suspension; Some(null) when the device bucket had none.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub learning: Option<Value>,
+    /// Minutes a hold lasts, the same in every mode; 120 when never set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_minutes: Option<u16>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

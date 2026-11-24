@@ -30,6 +30,7 @@ mod nlsettings;
 mod occupancy;
 mod package;
 mod schedule;
+mod schedule_control;
 mod scratch;
 mod screen;
 mod sensor;
@@ -283,7 +284,9 @@ async fn run(config: flags::Config) {
     if wwn_boiler {
         logf!("nestlocal: nlclient runs with {}: it heats while it reports can_heat false", heatlink::KEY);
     }
-    let bridge = (!config.mqtt.is_empty() || config.matter || config.zigbee).then(|| {
+    let integrated = !config.mqtt.is_empty() || config.matter || config.zigbee;
+    // Schedule control runs on every unit; the rest serves an integration.
+    let bridge = Some({
         // <serial> in either name stands for the unit's serial, lowercase in entity IDs.
         let root = Some(config.ha_entity_root.replace("<serial>", &config.serial.to_lowercase()))
             .filter(|root| !root.is_empty());
@@ -291,23 +294,35 @@ async fn run(config: flags::Config) {
             logf!("mqtt: -ha-entity-root {root:?}: not an entity ID root (lowercase letters, digits and _); keeping the last");
         }
         let root = root.filter(|root| naming::valid_root(root));
-        let names = naming::Naming::load(&config.ha_store, &config.serial,
-                                         naming::read_device_name(&config.device_name_file)
-                                             .map(|name| name.replace("<serial>", &config.serial)), root);
-        bridge::Bridge::new(&config.topic, &config.discovery, &config.serial, store.clone(), outdoor.clone(),
-                            Some(live.clone()), wwn_boiler, names)
+        let names = naming::Naming::load(
+            &config.ha_store,
+            &config.serial,
+            naming::read_device_name(&config.device_name_file).map(|name| name.replace("<serial>", &config.serial)),
+            root,
+        );
+        bridge::Bridge::new(
+            &config.topic,
+            &config.discovery,
+            &config.serial,
+            store.clone(),
+            outdoor.clone(),
+            Some(live.clone()),
+            wwn_boiler,
+            names,
+        )
     });
-    if let (Some(bridge), Some(sensor)) = (&bridge, &sensor) {
+    let integration = bridge.clone().filter(|_| integrated);
+    if let (Some(bridge), Some(sensor)) = (&integration, &sensor) {
         bridge.attach_sensor(sensor.clone());
     }
     // Before MQTT starts: its first announcement carries the update entity.
-    if let Some(bridge) = &bridge {
+    if let Some(bridge) = &integration {
         let updates =
             update::Updates::new(device::current().name, &config.releases, std::path::Path::new(&config.update_store));
         bridge.attach_updates(updates.clone());
         tokio::spawn(updates.keep_checking());
     }
-    if let Some(bridge) = &bridge {
+    if let Some(bridge) = &integration {
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());
         brightness::watch(bridge.brightness.clone());
         bridge.wake_for_boost();
@@ -351,6 +366,9 @@ async fn run(config: flags::Config) {
     if let Err(e) = settings_ui::init(config.matter, config.zigbee, config.doom, config.themes) {
         logf!("settings UI: {e}");
     }
+    if let Some(bridge) = &bridge {
+        bridge.start_schedule_control();
+    }
     if device::current().name == "diamond3" {
         scratch::check();
     }
@@ -359,7 +377,7 @@ async fn run(config: flags::Config) {
     }
     if config.themes {
         let themes = theme::start(store.clone(), config.serial.clone(), outdoor.clone());
-        if let Some(bridge) = &bridge {
+        if let Some(bridge) = &integration {
             bridge.attach_themes(themes);
         }
     }

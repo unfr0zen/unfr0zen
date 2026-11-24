@@ -45,6 +45,37 @@ pub fn take_request_age(protocol: &str) -> Option<std::time::Duration> {
     Some(age)
 }
 
+/// Claims one complete, current command from the physical screen. Renaming
+/// before reading prevents a later request from being removed with this one.
+pub fn take_schedule_request() -> Option<(String, String)> {
+    take_schedule_request_in(Path::new(DIR))
+}
+
+fn take_schedule_request_in(dir: &Path) -> Option<(String, String)> {
+    let taken = dir.join("schedule.taken");
+    std::fs::rename(dir.join("schedule.request"), &taken).ok()?;
+    let request = (|| {
+        let age = std::fs::metadata(&taken).ok()?.modified().ok()?.elapsed().ok()?;
+        if age > std::time::Duration::from_secs(10) {
+            return None;
+        }
+        let text = std::fs::read_to_string(&taken).ok()?;
+        parse_schedule_request(&text)
+    })();
+    let _ = std::fs::remove_file(taken);
+    request
+}
+
+fn parse_schedule_request(text: &str) -> Option<(String, String)> {
+    let (name, value) = text.trim().split_once(' ')?;
+    let valid = match name {
+        "schedule_enabled" | "hold" => matches!(value, "ON" | "OFF"),
+        "hold_duration" => value.parse::<u16>().is_ok_and(|minutes| (1..=1440).contains(&minutes)),
+        _ => false,
+    };
+    valid.then(|| (name.to_owned(), value.to_owned()))
+}
+
 pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(DIR)?;
@@ -61,6 +92,11 @@ pub fn init(matter: bool, zigbee: bool, doom: bool, theme: bool) -> std::io::Res
         "zigbee.request",
         "doom.request",
         "theme.request",
+        "schedule.request",
+        "schedule.request.tmp",
+        "schedule.taken",
+        "schedule.status",
+        "schedule.status.partial",
         "matter.code",
         "matter.png",
     ] {
@@ -180,6 +216,50 @@ mod tests {
         sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef},
         BasicCommData,
     };
+
+    #[test]
+    fn schedule_requests_are_explicit_and_duration_is_bounded() {
+        for text in [
+            "schedule_enabled ON",
+            "schedule_enabled OFF",
+            "hold ON",
+            "hold OFF",
+            "hold_duration 1",
+            "hold_duration 1440",
+        ] {
+            assert!(parse_schedule_request(text).is_some(), "{text}");
+        }
+        for text in [
+            "schedule_enabled toggle",
+            "hold",
+            "hold ON OFF",
+            "hold_duration 0",
+            "hold_duration 1441",
+            "hold_duration -1",
+            "hold_duration 65536",
+            "unknown ON",
+        ] {
+            assert!(parse_schedule_request(text).is_none(), "{text}");
+        }
+    }
+
+    #[test]
+    fn schedule_request_is_consumed_once_and_stale_requests_are_discarded() {
+        let dir = std::env::temp_dir().join(format!("nestlocal-schedule-request-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("schedule.request");
+        std::fs::write(&path, "hold ON").unwrap();
+        assert_eq!(take_schedule_request_in(&dir), Some(("hold".into(), "ON".into())));
+        assert!(take_schedule_request_in(&dir).is_none());
+        std::fs::write(&path, "hold OFF").unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(11);
+        file.set_times(std::fs::FileTimes::new().set_modified(stale)).unwrap();
+        assert!(take_schedule_request_in(&dir).is_none());
+        assert!(!path.exists());
+        assert!(!dir.join("schedule.taken").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn qr_png_and_manual_code_follow_configured_credentials() {

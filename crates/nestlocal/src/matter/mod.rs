@@ -90,8 +90,8 @@ use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
 use extras::{
-    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HotWaterBoost, Humidity, Labels,
-    Switch, Switches, TemperatureSource,
+    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HoldDuration, HotWaterBoost,
+    Humidity, Labels, Switch, Switches, TemperatureSource,
 };
 use thermostat::{Equipment, Thermostat};
 
@@ -153,7 +153,7 @@ impl Nest {
 
     /// The unit's schedule bucket, once nlclient has synced it.
     pub fn schedule(&self) -> Option<Fields> {
-        self.bridge.buckets().remove("schedule")
+        self.bridge.configured_schedule().map(|o| o.value)
     }
 
     pub fn outdoor_temperature(&self) -> Option<f64> {
@@ -209,7 +209,10 @@ impl View {
 
     /// Whether the switch with this key is on.
     pub fn switch_on(&self, key: &str) -> bool {
-        bridge::switch_on(&self.dev, key)
+        match key {
+            "schedule_enabled" | "hold" => self.state_flag(key),
+            _ => bridge::switch_on(&self.dev, key),
+        }
     }
 
     pub fn device_number(&self, key: &str) -> Option<f64> {
@@ -866,6 +869,12 @@ fn endpoints_for(
             ));
         }
     }
+    endpoints.push(Endpoint::new(
+        extras::HOLD_DURATION,
+        devices!(DEV_TYPE_MODE_SELECT),
+        clusters!(desc::DescHandler::CLUSTER, HoldDuration::CLUSTER, Labels::CLUSTER),
+    ));
+    endpoints.sort_by_key(|e| e.id);
     endpoints
 }
 
@@ -910,6 +919,7 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
         (FAN_SCHEDULE + 2, "Fan schedule end"),
         (water_heater::WATER_HEATER, "Hot water"),
         (extras::HOT_WATER_BOOST, "Hot water boost"),
+        (extras::HOLD_DURATION, "Hold duration"),
     ];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
@@ -994,6 +1004,13 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             .chain(
                 |e, c| e == FAN_TIMER && c == FanTimer::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(FanTimer {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| e == extras::HOLD_DURATION && c == HoldDuration::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(HoldDuration {
                     dataver: Dataver::new_rand(&mut rand),
                     nest: nest.clone(),
                 })),
@@ -1465,7 +1482,7 @@ mod tests {
         };
         assert_eq!(
             ids(false, crate::fields! {}, crate::fields! {"can_heat" => true}),
-            [0, 1, 2, 3, 10, 11, 12, 13, 14]
+            [0, 1, 2, 3, 10, 11, 12, 13, 14, 43, 44, 45]
         );
         assert_eq!(
             ids(
@@ -1473,7 +1490,7 @@ mod tests {
                 crate::fields! {"has_humidifier" => true},
                 crate::fields! {"can_heat" => true, "can_cool" => true}
             ),
-            [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]
+            [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42, 43, 44, 45]
         );
     }
 

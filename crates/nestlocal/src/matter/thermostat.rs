@@ -24,9 +24,9 @@ use std::sync::Arc;
 use rs_matter::dm::clusters::decl::thermostat::{
     self, ClusterHandler, ControlSequenceOfOperationEnum, OccupancyBitmap, PresetScenarioEnum,
     PresetStructArrayBuilder, PresetStructBuilder, PresetTypeFeaturesBitmap, PresetTypeStructArrayBuilder,
-    PresetTypeStructBuilder, RelayStateBitmap, ScheduleStructArrayBuilder, ScheduleStructBuilder,
-    ScheduleTypeFeaturesBitmap, ScheduleTypeStructArrayBuilder, ScheduleTypeStructBuilder, SetpointRaiseLowerModeEnum,
-    SystemModeEnum,
+    PresetTypeStructBuilder, ProgrammingOperationModeBitmap, RelayStateBitmap, ScheduleStructArrayBuilder,
+    ScheduleStructBuilder, ScheduleTypeFeaturesBitmap, ScheduleTypeStructArrayBuilder, ScheduleTypeStructBuilder,
+    SetpointRaiseLowerModeEnum, SystemModeEnum, TemperatureSetpointHoldEnum,
 };
 use rs_matter::dm::{
     ArrayAttributeRead, ArrayAttributeWrite, Attribute, Cluster, Dataver, InvokeContext, Quality, ReadContext,
@@ -124,6 +124,10 @@ fn attributes(attr: &Attribute, _revision: u16, features: u32) -> bool {
             A::OutdoorTemperature
             | A::Occupancy
             | A::ThermostatRunningState
+            | A::TemperatureSetpointHold
+            | A::TemperatureSetpointHoldDuration
+            | A::ThermostatProgrammingOperationMode
+            | A::SetpointHoldExpiryTimestamp
             | A::PresetTypes
             | A::NumberOfPresets
             | A::ActivePresetHandle
@@ -250,7 +254,7 @@ impl Thermostat {
     }
 
     fn snapshot(&self) -> Result<crate::store::Object, ErrorCode> {
-        self.nest.bridge.store.get(&format!("schedule.{}", self.nest.bridge.serial)).ok_or(ErrorCode::InvalidInState)
+        self.nest.bridge.configured_schedule().ok_or(ErrorCode::InvalidInState)
     }
     /// The mode and transitions a controller can read and replace.
     fn schedule(&self) -> Option<(SystemModeEnum, Vec<Transition>)> {
@@ -297,7 +301,18 @@ impl Thermostat {
     fn current(&self) -> Vec<Pending> {
         let Ok(o) = self.snapshot() else { return vec![] };
         let Some((mode, _)) = Self::bucket_schedule(&o.value) else { return vec![] };
-        o.local_schedules.unwrap_or_default().list(&o.value, mode)
+        self.list(&o.local_schedules.unwrap_or_default(), &o.value, mode)
+    }
+
+    fn list(&self, catalog: &Catalog, bucket: &Fields, mode: SystemModeEnum) -> Vec<Pending> {
+        let mut list = catalog.list(bucket, mode);
+        // While ActiveScheduleHandle is null, unfr0zen lists the selected
+        // configured week first so controllers can still edit that week.
+        if !self.nest.bridge.schedule_status().enabled {
+            let selected = catalog.handle(mode).as_bytes();
+            list.sort_by_key(|s| s.handle.as_deref() != Some(selected));
+        }
+        list
     }
 
     /// Schedules as `writer` reads it (schedules.rs).
@@ -331,7 +346,7 @@ impl Thermostat {
         let live = &original.value;
         let (mode, _) = Self::bucket_schedule(live).ok_or(ErrorCode::ConstraintError)?;
         let catalog = original.local_schedules.clone().unwrap_or_default();
-        if catalog.list(live, mode) != initial {
+        if self.list(&catalog, live, mode) != initial {
             return Err(ErrorCode::InvalidInState);
         }
         let active = catalog.handle(mode).to_owned();
@@ -511,7 +526,14 @@ impl Thermostat {
         let catalog = original.local_schedules.clone().unwrap_or_default();
         let old = catalog.handle(mode);
         if handle == old.as_bytes() {
-            return if current.is_empty() && catalog.named.is_empty() { Err(ErrorCode::NotFound) } else { Ok(()) };
+            if current.is_empty() && catalog.named.is_empty() {
+                return Err(ErrorCode::NotFound);
+            }
+            return self
+                .nest
+                .bridge
+                .replace_schedule_active(&original, None, original.local_schedules.clone())
+                .map_err(|_| ErrorCode::InvalidInState);
         }
         let key = std::str::from_utf8(handle).map_err(|_| ErrorCode::NotFound)?;
         let target = if handle == SCHEDULE {
@@ -536,7 +558,10 @@ impl Thermostat {
         } else {
             next.active.insert(mode_key(mode).to_owned(), key.to_owned());
         }
-        self.install(&original, next, Some(&target))
+        self.nest
+            .bridge
+            .replace_schedule_active(&original, target.get("days"), Some(next))
+            .map_err(|_| ErrorCode::InvalidInState)
     }
 
     fn set(&self, name: &str, arg: &str) -> Result<(), Error> {
@@ -682,6 +707,73 @@ impl ClusterHandler for Thermostat {
 
     fn local_temperature(&self, _ctx: impl ReadContext) -> Result<Nullable<i16>, Error> {
         Ok(Nullable::new(self.nest.view().shown_centi("current_temperature")))
+    }
+
+    fn temperature_setpoint_hold(&self, _ctx: impl ReadContext) -> Result<TemperatureSetpointHoldEnum, Error> {
+        Ok(if self.nest.bridge.schedule_status().hold_until.is_some() {
+            TemperatureSetpointHoldEnum::SetpointHoldOn
+        } else {
+            TemperatureSetpointHoldEnum::SetpointHoldOff
+        })
+    }
+
+    fn set_temperature_setpoint_hold(
+        &self,
+        _ctx: impl WriteContext,
+        value: TemperatureSetpointHoldEnum,
+    ) -> Result<(), Error> {
+        self.set("hold", if value == TemperatureSetpointHoldEnum::SetpointHoldOn { "ON" } else { "OFF" })
+    }
+
+    fn temperature_setpoint_hold_duration(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::some(self.nest.bridge.schedule_status().hold_minutes))
+    }
+
+    fn set_temperature_setpoint_hold_duration(
+        &self,
+        _ctx: impl WriteContext,
+        value: Nullable<u16>,
+    ) -> Result<(), Error> {
+        let minutes = value.into_option().filter(|v| (1..=1440).contains(v)).ok_or(ErrorCode::ConstraintError)?;
+        self.set("hold_duration", &minutes.to_string())
+    }
+
+    fn setpoint_hold_expiry_timestamp(&self, _ctx: impl ReadContext) -> Result<Nullable<u32>, Error> {
+        let expiry = self.nest.bridge.schedule_status().hold_until;
+        Ok(Nullable::new(expiry.and_then(|s| u32::try_from(s - 946_684_800).ok())))
+    }
+
+    fn thermostat_programming_operation_mode(
+        &self,
+        _ctx: impl ReadContext,
+    ) -> Result<ProgrammingOperationModeBitmap, Error> {
+        let mut mode = ProgrammingOperationModeBitmap::empty();
+        if self.nest.bridge.schedule_status().enabled {
+            mode |= ProgrammingOperationModeBitmap::SCHEDULE_ACTIVE;
+        }
+        if self.nest.view().state_str("preset") == "eco" {
+            mode |= ProgrammingOperationModeBitmap::ECONOMY;
+        }
+        Ok(mode)
+    }
+
+    fn set_thermostat_programming_operation_mode(
+        &self,
+        _ctx: impl WriteContext,
+        value: ProgrammingOperationModeBitmap,
+    ) -> Result<(), Error> {
+        let supported = ProgrammingOperationModeBitmap::SCHEDULE_ACTIVE | ProgrammingOperationModeBitmap::ECONOMY;
+        if value.bits() & !supported.bits() != 0 {
+            return Err(ErrorCode::ConstraintError.into());
+        }
+        let enabled = value.contains(ProgrammingOperationModeBitmap::SCHEDULE_ACTIVE);
+        let eco = self.nest.view().state_str("preset") == "eco";
+        if enabled != self.nest.bridge.schedule_status().enabled
+            || value.contains(ProgrammingOperationModeBitmap::ECONOMY) == eco
+        {
+            self.set("schedule_enabled", if enabled { "ON" } else { "OFF" })?;
+        }
+        self.set("preset", if value.contains(ProgrammingOperationModeBitmap::ECONOMY) { "eco" } else { "none" })
     }
 
     fn outdoor_temperature(&self, _ctx: impl ReadContext) -> Result<Nullable<i16>, Error> {
@@ -991,6 +1083,9 @@ impl ClusterHandler for Thermostat {
         _ctx: impl ReadContext,
         builder: NullableBuilder<P, OctetsBuilder<P>>,
     ) -> Result<P, Error> {
+        if !self.nest.bridge.schedule_status().enabled {
+            return builder.null();
+        }
         if let Ok(o) = self.snapshot() {
             if let Some((mode, points)) = Self::bucket_schedule(&o.value) {
                 let catalog = o.local_schedules.unwrap_or_default();
@@ -1790,6 +1885,186 @@ mod tests {
         let key = format!("schedule.{}", bridge.serial);
         let days = json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"}}});
         bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days, "ver" => 2}, 0, 0, true);
+    }
+
+    #[test]
+    fn holds_and_schedule_switches_share_the_bridge_state() {
+        let t = thermostat(
+            fields! {"learning_mode" => true},
+            fields! {"can_heat" => true, "target_temperature_type" => "heat", "target_temperature" => 21},
+        );
+        heating(&t);
+        let week = schedules(&t);
+        let changes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = changes.clone();
+        t.nest.bridge.store.watch(move |o| {
+            if o.key.starts_with("schedule.") {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        t.set_temperature_setpoint_hold_duration(ctx(1), Nullable::some(30)).unwrap();
+        assert_eq!(changes.load(std::sync::atomic::Ordering::Relaxed), 1, "metadata-only writes notify subscriptions");
+        assert_eq!(t.temperature_setpoint_hold(ctx(1)).unwrap(), TemperatureSetpointHoldEnum::SetpointHoldOff);
+        t.set_thermostat_programming_operation_mode(ctx(1), ProgrammingOperationModeBitmap::empty()).unwrap();
+        t.set_temperature_setpoint_hold(ctx(1), TemperatureSetpointHoldEnum::SetpointHoldOn).unwrap();
+        assert_eq!(t.temperature_setpoint_hold(ctx(1)).unwrap(), TemperatureSetpointHoldEnum::SetpointHoldOn);
+        assert_eq!(t.temperature_setpoint_hold_duration(ctx(1)).unwrap(), Nullable::some(30));
+        assert_eq!(schedules(&t), week);
+        let expiry = t.nest.bridge.schedule_status().hold_until.unwrap();
+        assert_eq!(t.setpoint_hold_expiry_timestamp(ctx(1)).unwrap(), Nullable::some((expiry - 946_684_800) as u32));
+        t.set_temperature_setpoint_hold_duration(ctx(1), Nullable::some(60)).unwrap();
+        assert!(t.nest.bridge.schedule_status().hold_until.unwrap() >= expiry + 1800);
+        let before = t.snapshot().unwrap();
+        let device = t.nest.bridge.buckets()["device"].clone();
+        for minutes in [Nullable::none(), Nullable::some(0), Nullable::some(1441)] {
+            assert_eq!(code(t.set_temperature_setpoint_hold_duration(ctx(1), minutes)), ErrorCode::ConstraintError);
+        }
+        assert_eq!(
+            code(t.set_thermostat_programming_operation_mode(
+                ctx(1),
+                ProgrammingOperationModeBitmap::from_bits_retain(7)
+            )),
+            ErrorCode::ConstraintError
+        );
+        let after = t.snapshot().unwrap();
+        assert_eq!(after.value, before.value);
+        assert_eq!(after.local_schedules, before.local_schedules);
+        assert_eq!(t.nest.bridge.buckets()["device"], device);
+        t.set_temperature_setpoint_hold(ctx(1), TemperatureSetpointHoldEnum::SetpointHoldOff).unwrap();
+        assert_eq!(
+            t.thermostat_programming_operation_mode(ctx(1)).unwrap(),
+            ProgrammingOperationModeBitmap::SCHEDULE_ACTIVE
+        );
+        assert_eq!(t.setpoint_hold_expiry_timestamp(ctx(1)).unwrap(), Nullable::none());
+        assert_eq!(schedules(&t), week);
+        t.set_thermostat_programming_operation_mode(
+            ctx(1),
+            ProgrammingOperationModeBitmap::SCHEDULE_ACTIVE | ProgrammingOperationModeBitmap::ECONOMY,
+        )
+        .unwrap();
+        assert_eq!(t.thermostat_programming_operation_mode(ctx(1)).unwrap().bits(), 5);
+    }
+
+    #[test]
+    fn programming_mode_eco_changes_preserve_holds_and_repeated_off_cancels_them() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true, "target_temperature_type" => "heat"});
+        heating(&t);
+        for eco in [0, 4] {
+            for scheduled in [0, 1] {
+                t.set("hold", "ON").unwrap();
+                t.set("preset", if eco == 0 { "eco" } else { "none" }).unwrap();
+                let expiry = t.nest.bridge.schedule_status().hold_until;
+                t.set_thermostat_programming_operation_mode(
+                    ctx(1),
+                    ProgrammingOperationModeBitmap::from_bits_retain(scheduled | eco),
+                )
+                .unwrap();
+                assert_eq!(t.nest.bridge.schedule_status().hold_until, if scheduled == 0 { expiry } else { None });
+                if scheduled == 0 {
+                    t.set_thermostat_programming_operation_mode(
+                        ctx(1),
+                        ProgrammingOperationModeBitmap::from_bits_retain(eco),
+                    )
+                    .unwrap();
+                    assert_eq!(t.nest.bridge.schedule_status().hold_until, None);
+                    assert!(!t.nest.bridge.schedule_status().enabled);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn editing_an_inactive_held_named_week_updates_its_resume_target() {
+        let t = thermostat(
+            fields! {},
+            fields! {"can_heat" => true, "can_cool" => true, "target_temperature_type" => "heat"},
+        );
+        heating(&t);
+        let native = t.current().remove(0);
+        let mut named = native.clone();
+        named.handle = None;
+        named.built_in = Some(false);
+        t.commit(&[native, named]).unwrap();
+        t.activate(b"s1").unwrap();
+        t.set("hold", "ON").unwrap();
+        let expiry = t.nest.bridge.schedule_status().hold_until.unwrap();
+        let bridge = &t.nest.bridge;
+        bridge.store.merge(
+            &format!("shared.{}", bridge.serial),
+            &fields! {"target_temperature_type" => "cool"},
+            0,
+            0,
+            true,
+        );
+        bridge.store.merge(
+            &format!("schedule.{}", bridge.serial),
+            &fields! {"schedule_mode" => "COOL", "days" => empty_days()},
+            0,
+            0,
+            true,
+        );
+        let mut list = t.current();
+        let named = list.iter_mut().find(|s| s.handle.as_deref() == Some(b"s1")).unwrap();
+        named.transitions[0].heat = Some(2300);
+        t.commit(&list).unwrap();
+        let mut cleared = list.clone();
+        cleared.iter_mut().find(|s| s.handle.as_deref() == Some(b"s1")).unwrap().transitions = vec![hold_week()];
+        assert!(t.commit(&cleared).is_err());
+        bridge.expire_hold(expiry).unwrap();
+        bridge.store.merge(
+            &format!("shared.{}", bridge.serial),
+            &fields! {"target_temperature_type" => "heat"},
+            0,
+            0,
+            true,
+        );
+        bridge.store.merge(
+            &format!("schedule.{}", bridge.serial),
+            &fields! {"schedule_mode" => "HEAT", "days" => empty_days()},
+            0,
+            0,
+            true,
+        );
+        bridge.expire_hold(expiry).unwrap();
+        assert_eq!(schedule::day(&bridge.configured_schedule().unwrap().value, 0), [(390, 23.0)]);
+    }
+
+    #[test]
+    fn a_paused_named_week_stays_first_and_editable_until_activation() {
+        let t = thermostat(fields! {}, fields! {"can_heat" => true, "target_temperature_type" => "heat"});
+        heating(&t);
+        let native = t.current().remove(0);
+        let mut named = native.clone();
+        named.handle = None;
+        named.built_in = Some(false);
+        named.name = Some("Weekend".into());
+        named.transitions[0].heat = Some(2250);
+        t.commit(&[native, named]).unwrap();
+        t.activate(b"s1").unwrap();
+        t.set("schedule_enabled", "OFF").unwrap();
+        let mut buf = [0u8; 64];
+        let mut wb = WriteBuf::new(&mut buf);
+        t.active_schedule_handle(
+            ctx(1),
+            NullableBuilder::new(TLVWriteParent::new("test", &mut wb), &TLVTag::Anonymous),
+        )
+        .unwrap();
+        let len = wb.get_tail();
+        assert!(Nullable::<Octets>::from_tlv(&TLVElement::new(&buf[..len])).unwrap().into_option().is_none());
+        let mut list = t.current();
+        assert_eq!(list[0].handle.as_deref(), Some(b"s1".as_slice()));
+        list[0].transitions[0].heat = Some(2300);
+        t.commit(&list).unwrap();
+        assert!(!t.nest.bridge.schedule_status().enabled);
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 23.0)]);
+        t.activate(b"s1").unwrap();
+        assert!(t.nest.bridge.schedule_status().enabled);
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 23.0)]);
+        t.set("hold", "ON").unwrap();
+        t.activate(b"nest").unwrap();
+        assert!(t.nest.bridge.schedule_status().enabled);
+        assert_eq!(t.nest.bridge.schedule_status().hold_until, None);
+        assert_eq!(schedule::day(&t.nest.schedule().unwrap(), 0), [(390, 20.5)]);
     }
 
     #[test]
