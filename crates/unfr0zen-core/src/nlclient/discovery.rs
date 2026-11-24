@@ -159,7 +159,7 @@ fn unique<T: Ord>(values: impl IntoIterator<Item = T>, label: &str) -> Result<T>
 fn immediate(w: u32) -> u32 {
     (w & 255).rotate_right(((w >> 8) & 15) * 2)
 }
-fn imported(elf: &Elf) -> Result<BTreeMap<String, u32>> {
+pub(super) fn imported(elf: &Elf) -> Result<BTreeMap<String, u32>> {
     let (rel, sym, strings, plt) =
         (elf.section(".rel.plt")?, elf.section(".dynsym")?, elf.section(".dynstr")?, elf.section(".plt")?);
     require(rel.size % 8 == 0 && sym.size % 16 == 0, "invalid PLT metadata")?;

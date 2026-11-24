@@ -13,6 +13,10 @@ enum custom_page {
     CUSTOM_MATTER_CONFIRM,
     CUSTOM_DOOM,
     CUSTOM_THEMES,
+    CUSTOM_SCHEDULE,
+    CUSTOM_HOLD,
+    CUSTOM_HOLD_DURATION,
+    CUSTOM_SCHEDULE_HOME,
 };
 
 /* The settings menu's entries, each a stock screen whose factory builds
@@ -30,6 +34,7 @@ static inline enum custom_page custom_root(const char *name) {
            : custom_same(name, "update")        ? CUSTOM_MATTER
            : custom_same(name, "proinfoscreen") ? CUSTOM_THEMES
            : custom_same(name, "templock")      ? CUSTOM_DOOM
+           : custom_same(name, "appsetup")      ? CUSTOM_SCHEDULE_HOME
                                                 : CUSTOM_HOME;
 }
 
@@ -40,6 +45,11 @@ enum custom_request {
     REQUEST_ZIGBEE_PAIRING = 1,
     REQUEST_DOOM = 2,
     REQUEST_THEME = 3,
+    REQUEST_SCHEDULE_ON = -1,
+    REQUEST_SCHEDULE_OFF = -2,
+    REQUEST_HOLD_ON = -3,
+    REQUEST_HOLD_OFF = -4,
+    REQUEST_HOLD_DURATION = -5,
 };
 
 /* custom_choose's results: stay on the screen, or leave it. */
@@ -60,7 +70,79 @@ struct custom_flow {
     enum custom_page root;
     int action_failed;
     int theme_count;
+    int hold_minutes;
+    int hold_fraction;
 };
+
+/* Insert before the current entry in the legacy menu's bounded arrays.
+ * Its original name is present, but its screen pointer is not stored yet.
+ * Reserve the trailing Reset and Temperature entries in the 32 name slots. */
+static inline int custom_insert_legacy(const char **names, void **screens, unsigned int *name_count,
+                                       unsigned int *screen_count, unsigned int *next, void *screen) {
+    unsigned int n = *name_count, s = *screen_count;
+    if (!n || n > 29 || s != n + 1 || *next != s + 1)
+        return 0;
+    names[n] = names[n - 1];
+    names[n - 1] = "appsetup";
+    screens[s] = screen;
+    ++*name_count;
+    ++*screen_count;
+    ++*next;
+    return 1;
+}
+
+static inline int custom_menu_vector_valid(unsigned int begin, unsigned int end, unsigned int capacity) {
+    return begin <= end && end <= capacity && !((begin | end | capacity) & 3) && capacity - begin <= 4096 &&
+           (begin || !capacity);
+}
+
+static inline int custom_schedule_page(enum custom_page page) {
+    return page == CUSTOM_SCHEDULE_HOME || page == CUSTOM_SCHEDULE || page == CUSTOM_HOLD ||
+           page == CUSTOM_HOLD_DURATION;
+}
+
+/* The duration picker uses ring steps, with one minute per step. */
+static inline void custom_duration_step(struct custom_flow *flow, int steps) {
+    if (steps > 1440 - flow->hold_minutes)
+        flow->hold_minutes = 1440;
+    else if (steps < 1 - flow->hold_minutes)
+        flow->hold_minutes = 1;
+    else
+        flow->hold_minutes += steps;
+}
+
+/* Native ring deltas are signed 16.16, including fractional motion. */
+static inline int custom_duration_wheel(struct custom_flow *flow, int value) {
+    int before = flow->hold_minutes;
+    long long motion = (long long)flow->hold_fraction + value;
+    flow->hold_fraction = (int)(motion % 65536);
+    custom_duration_step(flow, (int)(motion / 65536));
+    if ((flow->hold_minutes == 1 && flow->hold_fraction < 0) || (flow->hold_minutes == 1440 && flow->hold_fraction > 0))
+        flow->hold_fraction = 0;
+    return flow->hold_minutes != before;
+}
+
+/* Strict numeric fields followed by an optional human-readable error. */
+static inline int custom_schedule_status(const char *text, unsigned int fields[4], const char **error) {
+    for (int i = 0; i < 4; i++) {
+        unsigned int value = 0;
+        if (*text < '0' || *text > '9')
+            return 0;
+        while (*text >= '0' && *text <= '9') {
+            unsigned int digit = (unsigned int)(*text++ - '0');
+            if (value > (0xffffffffu - digit) / 10)
+                return 0;
+            value = value * 10 + digit;
+        }
+        fields[i] = value;
+        if (i < 3 && *text++ != ' ')
+            return 0;
+    }
+    if (*text && *text != '\n')
+        return 0;
+    *error = *text ? text + 1 : text;
+    return fields[0] <= 1 && fields[1] <= 1 && fields[3] >= 1 && fields[3] <= 1440;
+}
 
 /* Whether the page shows an operation in progress (a pairing). */
 static int custom_activity(enum custom_page page) {
@@ -141,9 +223,34 @@ static int custom_choose(struct custom_flow *flow, int choice, int (*request)(in
         return CHOOSE_STAY;
     flow->action_failed = 0;
     if (flow->page == CUSTOM_HOME) {
-        /* Done. */
         if (choice == 0)
             return CHOOSE_EXIT;
+    } else if (flow->page == CUSTOM_SCHEDULE_HOME) {
+        if (choice == 0)
+            return CHOOSE_EXIT;
+        if (choice == 1)
+            flow->page = CUSTOM_SCHEDULE;
+        else if (choice == 2)
+            flow->page = CUSTOM_HOLD;
+        else if (choice == 3) {
+            flow->page = CUSTOM_HOLD_DURATION;
+            flow->hold_fraction = 0;
+        }
+    } else if (flow->page == CUSTOM_SCHEDULE || flow->page == CUSTOM_HOLD) {
+        if (choice == 2)
+            return custom_back_choice(flow);
+        if (choice < 2) {
+            int action = flow->page == CUSTOM_SCHEDULE ? (choice == 0 ? REQUEST_SCHEDULE_ON : REQUEST_SCHEDULE_OFF)
+                                                       : (choice == 0 ? REQUEST_HOLD_ON : REQUEST_HOLD_OFF);
+            flow->action_failed = request(action, context) != 0;
+        }
+    } else if (flow->page == CUSTOM_HOLD_DURATION) {
+        if (choice == 0) {
+            flow->action_failed =
+                flow->hold_minutes < 1 || flow->hold_minutes > 1440 || request(REQUEST_HOLD_DURATION, context) != 0;
+            if (!flow->action_failed)
+                return custom_back_choice(flow);
+        }
     } else if (flow->page == CUSTOM_THEMES) {
         /* A theme choice goes back as Back does; the last entry is Back. */
         if (choice < flow->theme_count)

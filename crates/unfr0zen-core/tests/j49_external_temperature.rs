@@ -124,9 +124,9 @@ fn reviewed_j49_input_is_sensor_only_mapped_and_reversible() {
     assert_eq!(word(&output, offset(&stock, 0x47e94)), 0xe3a00000);
     assert_eq!(word(&output, offset(&stock, 0x11474c)), 0xeaffffbe);
     assert_eq!(target(0xeaffffbe, 0x11474c), 0x11464c);
-    // Settings lookup/context and native screen titles retain their stock code.
+    // The RCS patch preserves the settings insertion hook and native titles.
     for site in [0x11463c, 0x115430, 0x19a838, 0x19a99c] {
-        assert_eq!(word(&output, offset(&stock, site)), word(&stock, offset(&stock, site)));
+        assert_eq!(word(&output, offset(&stock, site)), word(&screen, offset(&stock, site)));
     }
     let mut missing_payload = screen.clone();
     assert!(external_temperature::patch(&stock, &mut missing_payload, b"").is_err());

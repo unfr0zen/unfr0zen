@@ -25,7 +25,11 @@ fn goldens() -> Vec<Value> {
 /// The hand-over's symbols, as the builder links them for the golden's build.
 fn handover(golden: &Value) -> BTreeMap<String, u32> {
     let discovery: nlclient::discovery::Discovery = serde_json::from_value(golden["discovery"].clone()).unwrap();
-    nlclient::discovery::handover_externals(&discovery)
+    let mut externals = nlclient::discovery::handover_externals(&discovery);
+    let menu: BTreeMap<String, u32> =
+        serde_json::from_value(golden["patch"]["settings_menu"]["bindings"].clone()).unwrap();
+    externals.extend(menu);
+    externals
 }
 fn object() -> Option<Vec<u8>> {
     let p =
@@ -502,6 +506,60 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
         let at = file_offset(&stock, bound);
         let add = u32::from_le_bytes(none.1[at..at + 4].try_into().unwrap());
         assert_eq!(add & 0xfff, shown.len() as u32 * 4, "{}", path.display());
+    }
+}
+
+#[test]
+fn schedule_insertion_preserves_every_stock_slot_and_rejects_unknown_menu_abis() {
+    let Some(object) = object() else { return };
+    for (path, stock, _) in samples() {
+        let built = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL).unwrap();
+        let menu = &built.manifest["settings_menu"];
+        let names = menu["names"].as_array().unwrap();
+        let table = file_offset(&stock, menu["address"].as_u64().unwrap() as u32);
+        let mut original = Vec::new();
+        for i in 0..names.len() {
+            let at = file_offset(&stock, w(&stock, table + i * 4));
+            let end = stock[at..].iter().position(|b| *b == 0).unwrap() + at;
+            original.push(std::str::from_utf8(&stock[at..end]).unwrap().to_owned());
+        }
+        let mut arranged: Vec<_> = names.iter().map(|n| n.as_str().unwrap().to_owned()).collect();
+        original.sort();
+        arranged.sort();
+        assert_eq!(arranged, original, "{}: original slots retained", path.display());
+        assert_eq!(names.first().unwrap(), "temperature");
+        assert_eq!(names.last().unwrap(), "temperature");
+        assert_eq!(names.iter().filter(|n| *n == "legalinfo").count(), 1);
+        assert_eq!(names.iter().filter(|n| *n == "appsetup").count(), 0);
+        assert!(built.manifest["factories"].get("appsetup").is_some());
+        let call = menu["insertion"]["call"].as_u64().unwrap() as u32;
+        let hook = built.manifest["symbols"]["custom_menu_lookup"].as_u64().unwrap() as u32;
+        let at = file_offset(&stock, call);
+        let instruction = w(&built.output, at);
+        let relative = ((instruction << 8) as i32) >> 6;
+        assert_eq!(call.wrapping_add(8).wrapping_add(relative as u32), hook);
+        assert_eq!(instruction >> 24, 0xeb);
+        let mut changed = stock.clone();
+        put(&mut changed, at + 4, 0xe1a00000);
+        assert!(nlclient::builder::build(&changed, &object, &[]).is_err(), "{}: corrupt insertion", path.display());
+        let grow = menu["insertion"]["grow"].as_u64().unwrap() as u32;
+        if grow != 0 {
+            let branch = w(&stock, at + 28);
+            let relative = ((branch << 8) as i32) >> 6;
+            let setup = call.wrapping_add(36).wrapping_add(relative as u32);
+            let mut changed = stock.clone();
+            put(&mut changed, file_offset(&stock, setup) + 8, 0xffffffff);
+            assert!(
+                nlclient::builder::build(&changed, &object, &[]).is_err(),
+                "{}: undecodable growth",
+                path.display()
+            );
+            let start = file_offset(&stock, grow);
+            let store = (start..start + 512).step_by(4).find(|&at| w(&stock, at) == 0xe5858004).unwrap();
+            let mut changed = stock.clone();
+            put(&mut changed, store, 0xe585800c);
+            assert!(nlclient::builder::build(&changed, &object, &[]).is_err(), "{}: corrupt growth", path.display());
+        }
     }
 }
 

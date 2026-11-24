@@ -86,6 +86,14 @@ DECLARE_LAYOUT(TIMER_EVENT_FIRST);
 #define TIMER_EVENT_FIRST LAYOUT(TIMER_EVENT_FIRST)
 DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 #define TIMER_EVENT_SECOND LAYOUT(TIMER_EVENT_SECOND)
+DECLARE_LAYOUT(MENU_OBJECT_REGISTER);
+#define MENU_OBJECT_REGISTER LAYOUT(MENU_OBJECT_REGISTER)
+DECLARE_LAYOUT(MENU_NAMES_REGISTER);
+#define MENU_NAMES_REGISTER LAYOUT(MENU_NAMES_REGISTER)
+DECLARE_LAYOUT(MENU_SCREENS_REGISTER);
+#define MENU_SCREENS_REGISTER LAYOUT(MENU_SCREENS_REGISTER)
+DECLARE_LAYOUT(MENU_NEXT_REGISTER);
+#define MENU_NEXT_REGISTER LAYOUT(MENU_NEXT_REGISTER)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
 #define VTABLE_MAX         0x400
 
@@ -178,24 +186,26 @@ DECLARE_LAYOUT(TIMER_EVENT_SECOND);
 #define OPAQUE    255
 
 /* --- Files --------------------------------------------------------------- */
-#define IMAGES         "/nestlabs/share/images/"
-#define CUSTOM_IMAGE   IMAGES "G_unfr0zen_192px.png"
+#define IMAGES           "/nestlabs/share/images/"
+#define CUSTOM_IMAGE     IMAGES "G_unfr0zen_192px.png"
 /* The menu glyphs: each entry's, 80 px. */
-#define MENU_GLYPH     IMAGES "G_unfr0zen_glyph_80px.png"
-#define ZIGBEE_GLYPH   IMAGES "G_unfr0zen_zigbee_80px.png"
-#define MATTER_GLYPH   IMAGES "G_unfr0zen_matter_80px.png"
-#define THEMES_GLYPH   IMAGES "G_unfr0zen_themes_80px.png"
-#define DOOM_GLYPH     IMAGES "G_unfr0zen_doom_80px.png"
+#define MENU_GLYPH       IMAGES "G_unfr0zen_glyph_80px.png"
+#define ZIGBEE_GLYPH     IMAGES "G_unfr0zen_zigbee_80px.png"
+#define MATTER_GLYPH     IMAGES "G_unfr0zen_matter_80px.png"
+#define THEMES_GLYPH     IMAGES "G_unfr0zen_themes_80px.png"
+#define DOOM_GLYPH       IMAGES "G_unfr0zen_doom_80px.png"
 /* Doom's title, made from the WAD when the app installs Doom (246x120). */
-#define DOOM_IMAGE     IMAGES "G_unfr0zen_doom.png"
+#define DOOM_IMAGE       IMAGES "G_unfr0zen_doom.png"
 /* nestlocal's files. */
-#define RUN            "/var/run/unfr0zen/"
-#define MATTER_STATUS  RUN "matter.status"
-#define ZIGBEE_STATUS  RUN "zigbee.status"
-#define MATTER_CODE    RUN "matter.code"
-#define MATTER_REQUEST RUN "matter-reset.request"
-#define THEME_REQUEST  RUN "theme.request"
-#define NOT_ENABLED    "Not enabled or service unavailable"
+#define RUN              "/var/run/unfr0zen/"
+#define MATTER_STATUS    RUN "matter.status"
+#define ZIGBEE_STATUS    RUN "zigbee.status"
+#define MATTER_CODE      RUN "matter.code"
+#define MATTER_REQUEST   RUN "matter-reset.request"
+#define THEME_REQUEST    RUN "theme.request"
+#define SCHEDULE_STATUS  RUN "schedule.status"
+#define SCHEDULE_REQUEST RUN "schedule.request"
+#define NOT_ENABLED      "Not enabled or service unavailable"
 
 /* The largest images shown: Doom's title is wider than the others. */
 #define IMAGE_MAX            192
@@ -237,6 +247,8 @@ extern const u8 native_screen_vtable[] __attribute__((visibility("hidden")));
 extern int native_layer_init(void *, void *, void *, const char *, int, int);
 extern int native_screen_init(void *, void *, void *, const char *, void *);
 extern void *native_layer_lookup(void *, const char *);
+extern void *native_menu_lookup(void *, const char *);
+extern void native_menu_grow(void *, void *, void *);
 extern int native_attach(void *, void *);
 extern void native_string_ctor(nl_string *);
 extern void native_string_copy(nl_string *, const char *);
@@ -402,7 +414,13 @@ static void trace(void *raw, u32 type, u32 value) {
     native_fclose(file);
 }
 #endif
+static void show(void *raw, int opening);
 static int custom_wheel(void *raw, int value) {
+    if (state(raw)->flow.page == CUSTOM_HOLD_DURATION) {
+        if (custom_duration_wheel(&state(raw)->flow, value))
+            show(raw, 0);
+        return RESULT_HANDLED;
+    }
     if (value)
         state(raw)->at_top = 0;
     int result = native_layer_wheel(raw, value);
@@ -876,6 +894,34 @@ static int service_unready(const char *status) {
  * file once its service is ready. 0 once written, else nonzero. */
 static int request_action(int which, void *context) {
     struct custom_state *s = context;
+    if (which < 0) {
+        char status[192], command[32];
+        unsigned int fields[4];
+        const char *error;
+        read_text(SCHEDULE_STATUS, status, sizeof(status), "");
+        if (!custom_schedule_status(status, fields, &error))
+            return -1;
+        /* Do not overwrite a command the worker has not consumed. */
+        void *pending = native_fopen(SCHEDULE_REQUEST, "r");
+        if (pending) {
+            native_fclose(pending);
+            return -1;
+        }
+        const char *text = which == REQUEST_HOLD_DURATION                                  ? "hold_duration "
+                           : which == REQUEST_SCHEDULE_ON || which == REQUEST_SCHEDULE_OFF ? "schedule_enabled "
+                                                                                           : "hold ";
+        unsigned int length = 0;
+        while (*text)
+            command[length++] = *text++;
+        if (which == REQUEST_HOLD_DURATION) {
+            length += put_number(command + length, s->flow.hold_minutes);
+        } else {
+            text = which == REQUEST_SCHEDULE_ON || which == REQUEST_HOLD_ON ? "ON" : "OFF";
+            while (*text)
+                command[length++] = *text++;
+        }
+        return write_request(SCHEDULE_REQUEST ".tmp", SCHEDULE_REQUEST, command, length);
+    }
     if (which >= REQUEST_THEME) {
         if (which - REQUEST_THEME >= s->themes.count)
             return -1;
@@ -986,6 +1032,41 @@ static void clear_choices(struct custom_state *s, int from) {
     for (int i = from; i < CHOICE_ROWS; i++)
         native_string_copy(&s->choices[i], "");
 }
+/* The schedule state is authoritative; rendering never changes it. */
+static void schedule_detail(struct custom_state *s) {
+    unsigned int fields[4];
+    const char *error;
+    read_text(SCHEDULE_STATUS, s->status, sizeof(s->status), "");
+    const char *label = "Schedule unavailable";
+    unsigned int remaining = 0;
+    if (custom_schedule_status(s->status, fields, &error)) {
+        if (s->flow.page != CUSTOM_HOLD_DURATION)
+            s->flow.hold_minutes = fields[3];
+        label = !fields[0]  ? "No saved schedule"
+                : fields[2] ? "Schedule held"
+                : fields[1] ? "Schedule on"
+                            : "Schedule off (indefinite)";
+        if (*error)
+            label = error;
+        else if (fields[2]) {
+            unsigned int now = native_time(0);
+            remaining = fields[2] > now ? (fields[2] - now + 59) / 60 : 0;
+        }
+    }
+    if (s->flow.action_failed)
+        label = "Request failed. Try again.";
+    unsigned int n = 0;
+    while (*label && n < sizeof(s->detail) - 32)
+        s->detail[n++] = *label++;
+    if (remaining && !s->flow.action_failed) {
+        s->detail[n++] = '\n';
+        n += put_number(s->detail + n, remaining);
+        const char *suffix = " min remaining";
+        while (*suffix)
+            s->detail[n++] = *suffix++;
+    }
+    s->detail[n] = 0;
+}
 /* Lays out the current page: its texts, choices, selection and scroll.
  * `opening` is entering the page; otherwise its status refreshed and the
  * selection and scroll stay. */
@@ -994,7 +1075,10 @@ static void show(void *raw, int opening) {
     int old_selection = WORD(common(raw), COMMON_SELECTION);
     struct custom_state *s = state(raw);
     int doom = s->flow.page == CUSTOM_DOOM, theme = s->flow.page == CUSTOM_THEMES;
-    if (s->flow.page != CUSTOM_HOME && !doom && !theme) {
+    int schedule = custom_schedule_page(s->flow.page);
+    if (schedule)
+        schedule_detail(s);
+    if (s->flow.page != CUSTOM_HOME && !schedule && !doom && !theme) {
         read_status(s->flow.page, s->status, sizeof(s->status));
         if (s->flow.page == CUSTOM_MATTER && !s->flow.action_failed &&
             custom_matter_refresh(&s->flow, s->status, 0, &s->activity_started, 0))
@@ -1008,7 +1092,12 @@ static void show(void *raw, int opening) {
     choices_capacity(s, theme && s->themes.count + 1 > CHOICE_ROWS ? s->themes.count + 1 : CHOICE_ROWS);
     int activity = custom_activity(s->flow.page);
     int matter_pairing = s->flow.page == CUSTOM_MATTER_PAIRING;
-    int choice_count = s->flow.page == CUSTOM_HOME ? 1 : theme ? s->themes.count + 1 : activity ? 1 : 2;
+    int choice_count = s->flow.page == CUSTOM_SCHEDULE_HOME                                  ? 4
+                       : s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_HOLD_DURATION ? 1
+                       : schedule                                                            ? 3
+                       : theme                                                               ? s->themes.count + 1
+                       : activity                                                            ? 1
+                                                                                             : 2;
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
     s->config.text_count = activity ? 3 : 2;
     /* Text row 0 reserves the image's room in blank lines, so images
@@ -1026,6 +1115,45 @@ static void show(void *raw, int opening) {
         native_string_copy(&s->text[1], name);
         native_string_copy(&s->choices[0], "Done");
         clear_choices(s, 1);
+    } else if (s->flow.page == CUSTOM_SCHEDULE_HOME) {
+        native_string_copy(&s->text[0], s->detail);
+        native_string_copy(&s->text[1], "Pause the schedule or hold your current temperature.");
+        native_string_copy(&s->choices[0], "Done");
+        native_string_copy(&s->choices[1], "Schedule");
+        native_string_copy(&s->choices[2], "Hold");
+        native_string_copy(&s->choices[3], "Hold duration");
+        clear_choices(s, 4);
+    } else if (schedule) {
+        native_string_copy(&s->text[0], s->detail);
+        const char *hint = s->flow.page == CUSTOM_SCHEDULE
+                               ? "On resumes the saved schedule. Off pauses it indefinitely."
+                           : s->flow.page == CUSTOM_HOLD
+                               ? "Hold keeps your temperature until expiry. Cancel resumes the saved schedule."
+                               : "Turn the ring to choose 1-1440 minutes. Click to save; Back cancels.";
+        native_string_copy(&s->text[1], hint);
+        if (s->flow.page == CUSTOM_HOLD_DURATION) {
+            char label[32];
+            unsigned int n = 0;
+            const char *prefix = "Save ";
+            while (*prefix)
+                label[n++] = *prefix++;
+            n += put_number(label + n, s->flow.hold_minutes);
+            bytes_copy(label + n, " min", 5);
+            native_string_copy(&s->choices[0], label);
+            clear_choices(s, 1);
+        } else {
+            char label[40];
+            const char *prefix = "Start / renew: ";
+            unsigned int n = 0;
+            while (*prefix)
+                label[n++] = *prefix++;
+            n += put_number(label + n, s->flow.hold_minutes);
+            bytes_copy(label + n, " min", 5);
+            native_string_copy(&s->choices[0], s->flow.page == CUSTOM_SCHEDULE ? "On" : label);
+            native_string_copy(&s->choices[1], s->flow.page == CUSTOM_SCHEDULE ? "Off" : "Cancel hold");
+            native_string_copy(&s->choices[2], "Back");
+            clear_choices(s, 3);
+        }
     } else if (theme) {
         native_string_copy(&s->text[0], s->flow.action_failed ? "nestlocal is unavailable. Try again."
                                                               : "The theme used on the home screen.");
@@ -1134,6 +1262,15 @@ static int click(void *raw) {
  * timeout, and lays the page out again when it changed. */
 static void refresh_status(void *raw) {
     struct custom_state *s = state(raw);
+    if (custom_schedule_page(s->flow.page)) {
+        char previous[sizeof(s->detail)];
+        bytes_copy(previous, s->detail, sizeof(previous));
+        int minutes = s->flow.hold_minutes;
+        schedule_detail(s);
+        if (!same_text(previous, s->detail) || minutes != s->flow.hold_minutes)
+            show(raw, 0);
+        return;
+    }
     if (s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_ZIGBEE_CONFIRM || s->flow.page == CUSTOM_MATTER_CONFIRM ||
         s->flow.page == CUSTOM_DOOM || s->flow.page == CUSTOM_THEMES)
         return;
@@ -1318,11 +1455,20 @@ static int draw(void *raw, void *context) {
 static int draw_common(void *base, void *context) { return draw((u8 *)base - COMMON_OFFSET, context); }
 static void title(void *screen) {
     enum custom_page root = state(raw_layer(screen))->flow.root;
-    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE), root == CUSTOM_ZIGBEE   ? "\nZIGBEE"
-                                                                   : root == CUSTOM_MATTER ? "\nMATTER"
-                                                                   : root == CUSTOM_THEMES ? "\nTHEMES"
-                                                                   : root == CUSTOM_DOOM   ? "\nDOOM"
-                                                                                           : "\nUNFR0ZEN");
+    /* Local volatile stores prevent an absolute-pointer lookup table: the
+     * injected PIE payload has no loader-relocated data section. */
+    const char *volatile heading = "\nUNFR0ZEN";
+    if (root == CUSTOM_ZIGBEE)
+        heading = "\nZIGBEE";
+    if (root == CUSTOM_MATTER)
+        heading = "\nMATTER";
+    if (root == CUSTOM_THEMES)
+        heading = "\nTHEMES";
+    if (root == CUSTOM_DOOM)
+        heading = "\nDOOM";
+    if (root == CUSTOM_SCHEDULE_HOME)
+        heading = "\nSCHEDULE";
+    native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE), heading);
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE), "");
     native_rebuild_title(screen);
 }
@@ -1429,6 +1575,42 @@ static int screen_event(void *screen, void *event, void *target) {
     return native_screen_event(screen, event, target);
 }
 
+/* Insert a borrowed screen before Legal Info without changing the stock
+ * menu table or its sentinels. The caller's insertion and lookup own no
+ * screen references; its native vector helper owns its buffer allocation. */
+__attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
+    if (!custom_same((const char *)registers[1], "legalinfo"))
+        return;
+    void *menu = (void *)registers[MENU_OBJECT_REGISTER];
+    void *screen = native_menu_lookup((void *)registers[0], "appsetup");
+    if (!screen)
+        return;
+    if (MENU_NAMES_REGISTER) {
+        custom_insert_legacy((const char **)((u8 *)menu + 0x70), (void **)((u8 *)menu + 0xf0),
+                             &registers[MENU_NAMES_REGISTER], &registers[MENU_SCREENS_REGISTER],
+                             &registers[MENU_NEXT_REGISTER], screen);
+    } else {
+        u32 begin = WORD(menu, 0x70), end = WORD(menu, 0x74), capacity = WORD(menu, 0x78);
+        if (!custom_menu_vector_valid(begin, end, capacity))
+            return;
+        if (end == capacity) {
+            native_menu_grow((u8 *)menu + 0x70, (void *)end, &screen);
+        } else {
+            *(void **)end = screen;
+            WORD(menu, 0x74) = end + 4;
+        }
+    }
+}
+/* Preserve the lookup arguments and caller's live registers. The legacy
+ * menu's validated counters are adjusted in the saved register frame. */
+__attribute__((naked)) void custom_menu_lookup(void) {
+    __asm__ volatile("push {r0-r12, lr}\n"
+                     "mov r0, sp\n"
+                     "bl custom_menu_insert\n"
+                     "pop {r0-r12, lr}\n"
+                     "b native_menu_lookup\n");
+}
+
 /* --- The factory -------------------------------------------------------- */
 /* Replaces the factories of the stock screens the entries take the names
  * of (custom_root): builds the screen and its layer, their vtables copies of
@@ -1464,6 +1646,7 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     struct custom_state *s = state(raw);
     s->screen = screen;
     s->flow.root = custom_root(name);
+    s->flow.hold_minutes = 120;
     s->display = display_width();
     s->config.text_count = 2;
     s->config.text = s->text;

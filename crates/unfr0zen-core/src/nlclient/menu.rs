@@ -9,7 +9,9 @@
 //! rewritten in place and the loop's bound, an `add Rend, Rbase, #4*count`
 //! after the list's address is loaded, shortened to match. The slots past the
 //! bound keep valid names, since nlclient's lookup of a screen by name walks
-//! the whole list.
+//! the whole list. SCHEDULE uses the unused cloud-setup child registration;
+//! a validated native insertion adds it before UNFR0ZEN at runtime, retaining
+//! every stock slot and both sentinels without relocating the pointer table.
 use super::{
     discovery,
     elf::{word, Elf},
@@ -19,6 +21,129 @@ use crate::{device, Result};
 /// The stock screens the entries take the place of, in the order of
 /// [`Section`], then UNFR0ZEN's.
 pub const HOSTS: [&str; 5] = ["account", "update", "proinfoscreen", "templock", "legalinfo"];
+
+/// The unused cloud-setup child supplies SCHEDULE's distinct registration.
+pub const SCHEDULE_HOST: &str = "appsetup";
+
+/// A native menu insertion site. Modern clients use a non-owning pointer
+/// vector; older ones use bounded inline name and screen arrays.
+#[derive(serde::Serialize)]
+pub(super) struct Insertion {
+    pub call: u32,
+    pub lookup: u32,
+    pub grow: u32,
+    pub object_register: u32,
+    pub names_register: u32,
+    pub screens_register: u32,
+    pub next_register: u32,
+}
+
+pub(super) fn insertion(elf: &Elf) -> Result<Insertion> {
+    use super::arm::Arm;
+    let (list, names) = discovery::settings(elf)?;
+    if names.len() < 3 || names[names.len() - 3..] != ["legalinfo", "reset", "temperature"] {
+        return device("settings menu insertion requires Legal Info before Reset and Temperature");
+    }
+    let arm = Arm::new(elf)?;
+    let code = arm.code(bound(elf, list, names.len())?, None)?;
+    let words: Vec<u32> = code.iter().map(|i| i.word).collect();
+    let mut found = Vec::new();
+    for (i, ins) in code.iter().enumerate() {
+        if ins.name != "bl" || i < 7 {
+            continue;
+        }
+        let Some(lookup) = ins.ops.first().and_then(|o| o.imm()) else { continue };
+        let after = &words[i + 1..];
+        let before = &words[i - 7..i];
+        if after.len() >= 9 && after[0] == 0xe3500000 && after[1] == 0xe58d0008 {
+            let object = (after[3] >> 16) & 15;
+            if after[2] >> 24 != 0x0a
+                || after[3] != 0xe5901074 | (object << 16)
+                || after[4] != 0xe5903078 | (object << 16)
+                || after[5] != 0xe1510003
+                || after[6] >> 24 != 0x0a
+                || after[7] != 0xe4810004
+                || after[8] != 0xe5801074 | (object << 16)
+            {
+                continue;
+            }
+            let target = code[i + 7].ops[0].imm().unwrap();
+            let grow = arm.code(target, Some(12))?;
+            if grow.len() != 3 || grow[0].word != 0xe59d0004 || grow[1].word != 0xe28d2008 || grow[2].name != "bl" {
+                continue;
+            }
+            found.push(Insertion {
+                call: ins.address,
+                lookup,
+                grow: grow[2].ops[0].imm().unwrap(),
+                object_register: object,
+                names_register: 0,
+                screens_register: 0,
+                next_register: 0,
+            });
+        } else if after.len() >= 3 && after[0] & 0xfff0ffff == 0xe280303c && after[2] & 0xfff0ffff == 0xe7800103 {
+            let screens = (after[0] >> 16) & 15;
+            let object = (after[2] >> 16) & 15;
+            let next = after[1] & 15;
+            if after[1] != 0xe1a00000 | (screens << 12) | next
+                || !before.contains(&(0xe2800001 | (screens << 16) | (next << 12)))
+                || !before.contains(&(0xe5900060 | (object << 16)))
+            {
+                continue;
+            }
+            for names in 4..12 {
+                if before.contains(&(0xe2800001 | (names << 16) | (names << 12)))
+                    && before.contains(&(0xe280301c | (names << 16)))
+                {
+                    found.push(Insertion {
+                        call: ins.address,
+                        lookup,
+                        grow: 0,
+                        object_register: object,
+                        names_register: names,
+                        screens_register: screens,
+                        next_register: next,
+                    });
+                }
+            }
+        }
+    }
+    if found.len() != 1 {
+        return device(format!("settings menu insertion: expected one safe shape, found {}", found.len()));
+    }
+    let found = found.pop().unwrap();
+    if !(4..12).contains(&found.object_register) {
+        return device("settings menu object is not in a preserved register");
+    }
+    // A successful lookup returns the hash table's borrowed pointer directly.
+    let lookup = arm.code(found.lookup, None)?;
+    let imports = discovery::imported(elf)?;
+    let first = lookup
+        .iter()
+        .position(|i| i.name == "bl")
+        .ok_or_else(|| crate::Error::Device("menu lookup has no call".into()))?;
+    if lookup[first].ops[0].imm() != imports.get("PL_HashTableLookupConst").copied()
+        || lookup.get(first + 1).map(|i| i.word) != Some(0xe2504000)
+        || lookup.get(first + 2).map(|i| i.word >> 24) != Some(0x0a)
+        || lookup.get(first + 3).map(|i| i.word) != Some(0xe1a00004)
+        || !lookup.get(first + 4).is_some_and(|i| [0xe8bd8070, 0xe89da830, 0xe8bd8038].contains(&i.word))
+    {
+        return device("settings menu lookup does not return a borrowed screen");
+    }
+    if found.grow != 0 {
+        let grow = arm.code(found.grow, None)?;
+        let calls = arm.calls(found.grow)?;
+        if ![0xe8900180, 0xe585b000, 0xe5858004, 0xe5854008].iter().all(|w| grow.iter().any(|i| i.word == *w))
+            || !imports.get("_Znwj").is_some_and(|address| calls.contains(address))
+            || !["_ZdlPv", "_ZdlPvj"]
+                .iter()
+                .any(|name| imports.get(*name).is_some_and(|address| calls.contains(address)))
+        {
+            return device("settings menu growth does not have the native pointer-vector ABI");
+        }
+    }
+    Ok(found)
+}
 
 /// An entry shown only with its feature on, in the menu's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
