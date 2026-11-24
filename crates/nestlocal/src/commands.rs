@@ -73,7 +73,27 @@ impl Bridge {
 
     /// Applies one command, from MQTT, Matter or Zigbee (`from`, for the log).
     pub fn apply(&self, from: &str, name: &str, arg: &str) -> Result<(), String> {
-        let (bucket, fields) = match self.fields(name, arg) {
+        self.apply_in_mode(from, name, arg, None)
+    }
+
+    pub fn apply_in_mode(
+        &self,
+        from: &str,
+        name: &str,
+        arg: &str,
+        expected: Option<crate::schedule::Kind>,
+    ) -> Result<(), String> {
+        let _applying = self.applying.lock().unwrap();
+        let schedule = if matches!(name, "heating_times" | "schedule") {
+            let snapshot = self.store.get(&format!("schedule.{}", self.serial)).ok_or("no schedule bucket yet")?;
+            if expected.is_some() && crate::schedule::kind(&snapshot.value) != expected {
+                return Err("schedule mode changed during the write".into());
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
+        let (bucket, fields) = match self.command_fields(from, name, arg, schedule.as_ref().map(|s| &s.value)) {
             Err(e) => {
                 logf!("{from}: {name} {arg:?}: {e}");
                 return Err(e);
@@ -81,9 +101,17 @@ impl Bridge {
             Ok(None) => return Ok(()),
             Ok(Some(change)) => change,
         };
-        let mut changes = vec![(format!("{bucket}.{}", self.serial), fields)];
+        if let Some(snapshot) = schedule {
+            return self
+                .replace_schedule(&snapshot, fields.get("days"), snapshot.local_schedules.clone())
+                .inspect_err(|e| logf!("{from}: {name}: {e}"));
+        }
+        // The hot water schedule's bucket is named whole (custom_schedule.<name>),
+        // not after the serial; every other command is the serial's.
+        let key = if name == "hot_water_times" { bucket.clone() } else { format!("{bucket}.{}", self.serial) };
+        let mut changes = vec![(key, fields)];
         if name == "clear_schedule" {
-            // Learning off too, or the unit would build a new schedule.
+            // Learning off too, or the unit would rebuild the schedule.
             changes.push((format!("device.{}", self.serial), fields! {"learning_mode" => false}));
         }
         if let Some((key, _)) = changes.iter().find(|(key, _)| self.store.get(key).is_none()) {
@@ -115,6 +143,55 @@ impl Bridge {
         Ok(())
     }
 
+    /// Installs the days and the Matter handles naming them as one store change.
+    pub fn replace_schedule(
+        &self,
+        expected: &crate::store::Object,
+        days: Option<&Value>,
+        catalog: Option<crate::schedule::Catalog>,
+    ) -> Result<(), String> {
+        let shared_key = format!("shared.{}", self.serial);
+        self.store.update(&expected.key, 0, 0, false, |objects, o| {
+            if o.revision != expected.revision || o.local_schedules != expected.local_schedules {
+                return Err("schedule changed during the write".into());
+            }
+            let empty = Fields::new();
+            Self::schedule_mode(&o.value, objects.get(&shared_key).map_or(&empty, |s| &s.value))?;
+            if let Some(days) = days {
+                let days = crate::json::canonical(days.clone());
+                if o.value.get("days") != Some(&days) {
+                    let _ = crate::settings_ui::request_wake();
+                }
+                o.value.insert("days".into(), days);
+            }
+            o.local_schedules = catalog;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    fn schedule_mode(bucket: &Fields, shared: &Fields) -> Result<&'static str, String> {
+        let kind = crate::schedule::kind(bucket).ok_or("unknown schedule mode")?;
+        let (mode, needs_heat, needs_cool) = match kind {
+            crate::schedule::Kind::Heat => ("heat", true, false),
+            crate::schedule::Kind::Cool => ("cool", false, true),
+            crate::schedule::Kind::Range => ("range", true, true),
+        };
+        if let Some(running @ ("heat" | "cool" | "range")) =
+            shared.get("target_temperature_type").and_then(Value::as_str)
+        {
+            if mode != running {
+                return Err(format!("waiting for the {running} schedule"));
+            }
+        }
+        let heat = crate::json::truthy(shared.get("can_heat"));
+        let cool = crate::json::truthy(shared.get("can_cool"));
+        if (heat || cool) && ((needs_heat && !heat) || (needs_cool && !cool)) {
+            return Err(format!("the equipment cannot run the {mode} schedule"));
+        }
+        Ok(mode)
+    }
+
     fn display_change(&self, key: &str, fields: &Fields) -> bool {
         if !["device.", "shared.", "schedule."].iter().any(|prefix| key.starts_with(prefix)) {
             return false;
@@ -132,7 +209,13 @@ impl Bridge {
         })
     }
 
+    #[cfg(test)]
     pub fn fields(&self, name: &str, arg: &str) -> Result<Change, String> {
+        let bucket = self.store.get(&format!("schedule.{}", self.serial));
+        self.command_fields("mqtt", name, arg, bucket.as_ref().map(|s| &s.value))
+    }
+
+    fn command_fields(&self, from: &str, name: &str, arg: &str, schedule: Option<&Fields>) -> Result<Change, String> {
         let now = chrono::Utc::now().timestamp();
         if let Some(bucket) = name.strip_prefix("raw/") {
             return match unmarshal_object(arg.as_bytes()) {
@@ -199,14 +282,17 @@ impl Bridge {
                 device(fields! {field => num((hour(arg)? * 3600) as f64)})
             }
 
-            // ON is the shortest boost, for On/Off endpoints; the rest are minutes.
+            // ON is the shortest boost, for On/Off endpoints; the rest are
+            // minutes, up to the longest the select offers (Matter's Boost
+            // takes any duration).
             "hot_water_boost" => {
+                let longest = crate::bridge::HOT_WATER_BOOST_MINUTES[crate::bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
                 let minutes = match arg.to_uppercase().as_str() {
                     "ON" => crate::bridge::HOT_WATER_BOOST_MINUTES[0],
                     "OFF" => 0,
                     other => match other.parse() {
-                        Ok(m) if crate::bridge::HOT_WATER_BOOST_MINUTES.contains(&m) => m,
-                        _ => return Err("expected off, 30, 60 or 120".into()),
+                        Ok(m) if (1..=longest).contains(&m) => m,
+                        _ => return Err(format!("expected off, or minutes 1-{longest}")),
                     },
                 };
                 let end = if minutes == 0 { 0 } else { now + minutes * 60 };
@@ -326,6 +412,35 @@ impl Bridge {
                     return Ok(None);
                 }
                 device(fields! {"filter_changed_date" => num(now as f64)})
+            }
+
+            "heating_times" | "schedule" => {
+                // The days the command names replace theirs (schedule.rs).
+                let empty = Fields::new();
+                let bucket = schedule.unwrap_or(&empty);
+                let dev = self.store.get(&format!("device.{}", self.serial)).map(|o| o.value).unwrap_or_default();
+                let shared = self.store.get(&format!("shared.{}", self.serial)).map(|o| o.value).unwrap_or_default();
+                let mode = Self::schedule_mode(bucket, &shared)?;
+                let fahrenheit = dev.get("temperature_scale").and_then(Value::as_str) == Some("F");
+                let limits = if matches!(from, "zigbee" | "matter") { (9., 32.) } else { (4.5, 35.) };
+                let translated;
+                let arg = if name == "schedule" {
+                    translated = crate::schedule::schedule_days(arg, mode, bucket)?;
+                    &translated
+                } else {
+                    arg
+                };
+                Ok(Some(("schedule".into(), crate::schedule::write(bucket, arg, now, fahrenheit, limits)?)))
+            }
+
+            "hot_water_times" => {
+                // The days the command names replace theirs (hotwater.rs).
+                let dev = self.store.get(&format!("device.{}", self.serial)).map(|o| o.value).unwrap_or_default();
+                if !crate::json::truthy(dev.get("has_hot_water_control")) {
+                    return Err("no hot water control".into());
+                }
+                let hw = self.hot_water_schedule().ok_or("no hot water schedule yet")?;
+                Ok(Some((hw.key, crate::hotwater::write(&hw.value, arg, now)?)))
             }
 
             "clear_schedule" => {
@@ -692,13 +807,13 @@ mod tests {
             field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
                 - chrono::Utc::now().timestamp() as f64
         };
-        for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("60", 3600.0), ("120", 7200.0)] {
+        for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("45", 2700.0), ("60", 3600.0), ("120", 7200.0)] {
             assert!((seconds - 2.0..=seconds).contains(&left(arg)), "{arg}");
         }
         for arg in ["off", "OFF"] {
             assert_eq!(field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64(), Some(0.0), "{arg}");
         }
-        for arg in ["45", "-1", "", "maybe"] {
+        for arg in ["0", "121", "-1", "", "maybe"] {
             assert!(b.fields("hot_water_boost", arg).is_err(), "{arg}");
         }
         assert_eq!(field("hot_water_schedule", "ON", "hot_water_mode"), json!("schedule"));
@@ -735,6 +850,55 @@ mod tests {
         assert_eq!(schedule["days"], json!({"0": {}, "1": {}, "2": {}, "3": {}, "4": {}, "5": {}, "6": {}}));
         assert_eq!(schedule["ver"], json!(2));
         assert_eq!(b.store.get("device.S").unwrap().value["learning_mode"], json!(false));
+    }
+
+    #[test]
+    fn heating_times_write_the_named_days_and_keep_the_learning_preference() {
+        let b = test_bridge();
+        b.store.merge("device.S", &fields! {"learning_mode" => true}, 0, 0, true);
+        assert!(b.apply("mqtt", "heating_times", r#"{"mon": []}"#).is_err(), "no schedule bucket yet");
+        b.store.merge("schedule.S", &fields! {"days" => json!({}), "schedule_mode" => "HEAT", "ver" => 2}, 0, 0, true);
+        b.apply("mqtt", "heating_times", r#"{"tue": [{"time": "06:30", "temp": 20}]}"#).unwrap();
+        let schedule = b.store.get("schedule.S").unwrap().value;
+        assert_eq!(crate::schedule::day(&schedule, 1), [(390, 20.0)]);
+        assert_eq!(b.store.get("device.S").unwrap().value["learning_mode"], json!(true));
+        assert!(b.apply("mqtt", "heating_times", r#"{"tue": [{"time": "06:30", "temp": 99}]}"#).is_err());
+    }
+
+    #[test]
+    fn a_stale_mode_or_unsupported_equipment_cannot_overwrite_a_week() {
+        let b = test_bridge();
+        b.store.merge("schedule.S", &fields! {"schedule_mode"=>"HEAT","days"=>json!({})}, 0, 0, true);
+        let edit = r#"{"mon":[{"time":"07:00","temp":21}]}"#;
+        b.store.merge(
+            "shared.S",
+            &fields! {"can_heat"=>true,"can_cool"=>true,"target_temperature_type"=>"cool"},
+            0,
+            0,
+            true,
+        );
+        assert!(b.apply("mqtt", "heating_times", edit).is_err());
+        b.store.merge("shared.S", &fields! {"can_heat"=>false,"target_temperature_type"=>"off"}, 0, 0, true);
+        assert!(b.apply("zigbee", "heating_times", edit).is_err());
+        b.store.merge("shared.S", &fields! {"can_heat"=>true}, 0, 0, true);
+        assert!(b.apply("mqtt", "schedule", r#"{"mode":"cool","days":{"monday":[]}}"#).is_err());
+        b.apply("mqtt", "schedule", r#"{"mode":"heat","days":{"monday":[{"time":"07:00","temperature":21}]}}"#)
+            .unwrap();
+        assert_eq!(crate::schedule::day(&b.store.get("schedule.S").unwrap().value, 0), [(420, 21.)]);
+    }
+
+    #[test]
+    fn hot_water_times_write_the_hot_water_schedules_bucket() {
+        let b = test_bridge();
+        let cmd = r#"{"tue": [{"on": "06:30", "off": "07:30"}]}"#;
+        assert_eq!(b.apply("mqtt", "hot_water_times", cmd), Err("no hot water control".into()));
+        b.store.merge("device.S", &fields! {"has_hot_water_control" => true}, 0, 0, true);
+        assert_eq!(b.apply("mqtt", "hot_water_times", cmd), Err("no hot water schedule yet".into()));
+        b.store.merge("custom_schedule.hotwater", &fields! {"mode" => "hotwater", "name" => "HOTWATER"}, 0, 0, true);
+        b.apply("mqtt", "hot_water_times", cmd).unwrap();
+        let hw = b.store.get("custom_schedule.hotwater").unwrap().value;
+        assert_eq!(crate::hotwater::day(&hw, 1), [(390, 450)]);
+        assert_eq!(hw["name"], json!("HOTWATER"), "the rest of the bucket stays");
     }
 
     #[test]

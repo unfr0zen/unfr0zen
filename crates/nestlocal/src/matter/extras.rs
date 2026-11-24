@@ -28,6 +28,12 @@ pub const EXTERNAL_TEMPERATURE: u16 = 6;
 pub const TEMPERATURE_SOURCE: u16 = 7;
 /// The first switch's endpoint; the others follow.
 pub const SWITCHES: u16 = 10;
+/// The hot water switches' endpoints, past the others: a Heat Link can
+/// report hot water after Matter starts, and its switches must not move
+/// the others, whose endpoints Home Assistant then drops.
+pub const HOT_WATER_SWITCHES: u16 = 30;
+/// The hot water boost's length, after its switches.
+pub const HOT_WATER_BOOST: u16 = 32;
 /// The fan schedule's run time; its start and end follow. Past the switches.
 pub const FAN_SCHEDULE: u16 = 40;
 
@@ -35,7 +41,7 @@ pub const FAN_SCHEDULE: u16 = 40;
 const FAN_TIMER_MINUTES: [u32; 8] = [15, 30, 45, 60, 120, 240, 480, 720];
 
 /// A switch: its endpoint, the command (and device field) it sets, its name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switch {
     pub endpoint: u16,
     pub key: &'static str,
@@ -60,10 +66,6 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     if view.device_flag("has_humidifier") || view.device_flag("has_dehumidifier") {
         all.push(("target_humidity_enabled", "Humidity control"));
     }
-    if view.device_flag("has_hot_water_control") {
-        all.push(("hot_water_boost", "Hot water boost"));
-        all.push(("hot_water_schedule", "Hot water schedule"));
-    }
     if view.device_flag("has_air_filter") {
         all.push(("filter_reminder_enabled", "Filter reminder"));
         // Reads off: turning it on says the filter was changed.
@@ -73,7 +75,17 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     if view.device_flag("has_fan") {
         all.push(("fan_schedule", "Fan schedule"));
     }
-    all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect()
+    let mut switches: Vec<_> =
+        all.into_iter().zip(SWITCHES..).map(|((key, name), endpoint)| Switch { endpoint, key, name }).collect();
+    if view.device_flag("has_hot_water_control") {
+        let hot_water = [("hot_water_boost", "Hot water boost"), ("hot_water_schedule", "Hot water schedule")];
+        switches.extend(hot_water.into_iter().zip(HOT_WATER_SWITCHES..).map(|((key, name), endpoint)| Switch {
+            endpoint,
+            key,
+            name,
+        }));
+    }
+    switches
 }
 
 macro_rules! dataver {
@@ -396,6 +408,79 @@ impl mode_select::ClusterHandler for FanTimer {
     ) -> Result<(), Error> {
         let minutes = FAN_TIMER_MINUTES.get(request.new_mode()? as usize).ok_or(ErrorCode::ConstraintError)?;
         self.nest.apply("fan_timer_duration", &minutes.to_string()).map_err(failed)
+    }
+}
+
+/// The hot water boost, as a choice of lengths as MQTT's select offers
+/// them: mode 0 is off, the others boost for bridge::HOT_WATER_BOOST_MINUTES.
+/// The current mode is the shortest length covering the boost's time left.
+pub struct HotWaterBoost {
+    pub dataver: Dataver,
+    pub nest: Arc<Nest>,
+}
+
+impl mode_select::ClusterHandler for HotWaterBoost {
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
+
+    dataver!();
+
+    fn description<P: TLVBuilderParent>(&self, _ctx: impl ReadContext, builder: Utf8StrBuilder<P>) -> Result<P, Error> {
+        builder.set("Hot water boost")
+    }
+
+    fn standard_namespace(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::none())
+    }
+
+    fn supported_modes<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
+    ) -> Result<P, Error> {
+        let label = |i: usize| match i {
+            0 => "Off".to_string(),
+            i => format!("{} min", bridge::HOT_WATER_BOOST_MINUTES[i - 1]),
+        };
+        let modes = bridge::HOT_WATER_BOOST_MINUTES.len() + 1;
+        macro_rules! option {
+            ($b:expr, $i:expr) => {
+                $b.label(&label($i))?.mode($i as u8)?.semantic_tags()?.end()?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for i in 0..modes {
+                    array = option!(array.push()?, i)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) if (i as usize) < modes => option!(item, i as usize),
+            ArrayAttributeRead::ReadOne(..) => Err(ErrorCode::ConstraintError.into()),
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn current_mode(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
+        let running = bridge::hot_water_boost(&self.nest.view().dev);
+        let mode =
+            running.and_then(|m| bridge::HOT_WATER_BOOST_MINUTES.iter().position(|l| *l == m)).map_or(0, |i| i + 1);
+        Ok(mode as u8)
+    }
+
+    fn handle_change_to_mode(
+        &self,
+        _ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
+        let arg = match request.new_mode()? as usize {
+            0 => "off".to_string(),
+            i => bridge::HOT_WATER_BOOST_MINUTES.get(i - 1).ok_or(ErrorCode::ConstraintError)?.to_string(),
+        };
+        self.nest.apply("hot_water_boost", &arg).map_err(failed)
     }
 }
 
@@ -770,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn switches_follow_the_equipment_on_consecutive_endpoints() {
+    fn switches_follow_the_equipment_on_consecutive_endpoints_but_hot_waters() {
         let keys =
             |dev: Fields, sh: Fields| switches(&nest(dev, sh)).iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>();
         let common = [
@@ -789,9 +874,10 @@ mod tests {
                 (16, "target_humidity_enabled")
             ]
         );
+        // Hot water's switches on endpoints of their own, past the others.
         assert_eq!(
             keys(fields! {"has_hot_water_control" => true}, fields! {"can_heat" => true})[4..],
-            [(14, "away_temperature_low_enabled"), (15, "hot_water_boost"), (16, "hot_water_schedule")]
+            [(14, "away_temperature_low_enabled"), (30, "hot_water_boost"), (31, "hot_water_schedule")]
         );
         assert_eq!(
             keys(fields! {"has_air_filter" => true}, fields! {})[4..],
@@ -1015,6 +1101,38 @@ mod tests {
         }
         assert_eq!(code(change(FAN_TIMER_MINUTES.len() as u8)), ErrorCode::ConstraintError);
         assert_eq!(timer.current_mode(ctx(5)).unwrap(), 7);
+    }
+
+    #[test]
+    fn the_hot_water_boost_is_a_choice_of_lengths_as_on_mqtt() {
+        let now = chrono::Utc::now().timestamp();
+        for (left, mode) in [(None, 0), (Some(-5), 0), (Some(600), 1), (Some(3000), 2), (Some(7000), 3)] {
+            let dev = left.map_or_else(
+                || fields! {"has_hot_water_control" => true},
+                |l| fields! {"has_hot_water_control" => true, "hot_water_boost_time_to_end" => now + l},
+            );
+            let boost = HotWaterBoost { dataver: Dataver::new(0), nest: nest(dev, fields! {}) };
+            assert_eq!(boost.current_mode(ctx(HOT_WATER_BOOST)).unwrap(), mode, "{left:?} s left");
+        }
+        let boost = HotWaterBoost {
+            dataver: Dataver::new(0),
+            nest: nest(fields! {"has_hot_water_control" => true}, fields! {}),
+        };
+        let change = |mode: u8| {
+            boost.handle_change_to_mode(
+                ctx(HOT_WATER_BOOST),
+                mode_select::ChangeToModeRequest::new(TLVElement::new(&[0x15, 0x24, 0x00, mode, 0x18])),
+            )
+        };
+        let left = || field(&boost.nest, "device", "hot_water_boost_time_to_end").as_f64().unwrap() - now as f64;
+        // Mode 2 boosts an hour; mode 0 ends it.
+        change(2).unwrap();
+        assert!((3598.0..=3602.0).contains(&left()), "{}", left());
+        assert_eq!(boost.current_mode(ctx(HOT_WATER_BOOST)).unwrap(), 2);
+        change(0).unwrap();
+        assert_eq!(field(&boost.nest, "device", "hot_water_boost_time_to_end").as_f64(), Some(0.0));
+        assert_eq!(boost.current_mode(ctx(HOT_WATER_BOOST)).unwrap(), 0);
+        assert_eq!(code(change(4)), ErrorCode::ConstraintError);
     }
 
     #[test]

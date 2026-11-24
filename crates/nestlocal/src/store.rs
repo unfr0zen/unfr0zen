@@ -25,6 +25,9 @@ pub struct Object {
     pub timestamp: i64,
     #[serde(default, deserialize_with = "deserialize_fields")]
     pub value: Fields,
+    /// Local Matter schedule handles and inactive weeks. Cloud responses only carry value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_schedules: Option<crate::schedule::Catalog>,
 }
 
 fn deserialize_fields<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Fields, D::Error> {
@@ -42,11 +45,17 @@ struct Inner {
     subs: BTreeMap<u64, mpsc::Sender<Vec<Object>>>, // held subscribes: server-side changes
     next_sub: u64,
     watch: Vec<Watcher>, // every change, device or server side
+    catalog_writes: u64, // the file's writes made within an update
 }
 
 pub struct Store {
     path: PathBuf,
     inner: Mutex<Inner>,
+    /// Held to write the file, with the count of the writes made within an
+    /// update that it holds. Taken after `inner`, or without it: the
+    /// periodic save writes with `inner` free, so nothing waits on the NAND
+    /// to read a bucket.
+    file: Mutex<u64>,
     dirty: Notify,
 }
 
@@ -79,7 +88,7 @@ impl Store {
             }
             logf!("store: loaded {} buckets from {}", inner.objects.len(), path.display());
         }
-        Arc::new(Store { path, inner: Mutex::new(inner), dirty: Notify::new() })
+        Arc::new(Store { path, inner: Mutex::new(inner), file: Mutex::new(0), dirty: Notify::new() })
     }
 
     pub fn get(&self, key: &str) -> Option<Object> {
@@ -97,39 +106,72 @@ impl Store {
     /// from_device marks changes the device made itself: they are not pushed
     /// back to it.
     pub fn merge(&self, key: &str, fields: &Fields, rev: i64, ts: i64, from_device: bool) -> (Object, bool) {
-        let (object, subs, watch, changed) = {
-            let mut inner = self.inner.lock().unwrap();
-            let existed = inner.objects.contains_key(key);
-            let o = inner
-                .objects
-                .entry(key.to_string())
-                .or_insert_with(|| Object { key: key.to_string(), ..Default::default() });
-            let mut changed = !existed;
+        self.update(key, rev, ts, from_device, |_, o| {
             for (k, v) in fields {
-                let v = canonical(v.clone());
-                if o.value.get(k) != Some(&v) {
-                    o.value.insert(k.clone(), v);
-                    changed = true;
+                o.value.insert(k.clone(), canonical(v.clone()));
+            }
+            Ok(())
+        })
+        .expect("ordinary bucket updates only mark the store dirty")
+    }
+
+    /// Edits and checks a single bucket under the same lock used for device updates.
+    pub fn update(
+        &self,
+        key: &str,
+        rev: i64,
+        ts: i64,
+        from_device: bool,
+        edit: impl FnOnce(&BTreeMap<String, Object>, &mut Object) -> Result<(), String>,
+    ) -> Result<(Object, bool), String> {
+        let (object, subs, watch) = {
+            let mut inner = self.inner.lock().unwrap();
+            let old = inner.objects.get(key);
+            let mut o = old.cloned().unwrap_or_else(|| Object { key: key.into(), ..Default::default() });
+            edit(&inner.objects, &mut o)?;
+            let changed = old.is_none_or(|old| old.value != o.value);
+            let catalog = old.and_then(|o| o.local_schedules.as_ref()) != o.local_schedules.as_ref();
+            if let (Some(previous), Some(weeks)) = (old, &mut o.local_schedules) {
+                if previous.value.get("schedule_mode") != o.value.get("schedule_mode") {
+                    if let Some(week) = previous
+                        .value
+                        .get("schedule_mode")
+                        .and_then(|m| m.as_str())
+                        .and_then(|m| weeks.active.get(m))
+                        .and_then(|h| weeks.named.get_mut(h))
+                    {
+                        week.bucket = previous.value.clone();
+                    }
                 }
+            }
+            if !changed && !catalog {
+                return Ok((o, false));
             }
             if changed {
                 o.revision = if rev > o.revision { rev } else { o.revision + 1 };
                 o.timestamp = if ts > 0 { ts } else { now_ms() };
             }
-            let object = o.clone();
-            let subs: Vec<_> = if changed && !from_device { inner.subs.values().cloned().collect() } else { vec![] };
-            (object, subs, inner.watch.clone(), changed)
+            if catalog {
+                // The active handle and the days it selects must survive a restart together.
+                let snapshot: Vec<_> =
+                    inner.objects.values().filter(|other| other.key != key).chain(std::iter::once(&o)).collect();
+                let mut file = self.file.lock().unwrap();
+                self.write(&snapshot).map_err(|e| e.to_string())?;
+                *file += 1;
+                inner.catalog_writes = *file;
+            }
+            inner.objects.insert(key.to_owned(), o.clone());
+            let subs = if changed && !from_device { inner.subs.values().cloned().collect() } else { vec![] };
+            (o, subs, inner.watch.clone())
         };
-        if changed {
-            self.dirty.notify_one();
-            for sub in subs {
-                let _ = sub.try_send(vec![object.clone()]);
-            }
-            for w in watch {
-                w(&object);
-            }
+        self.dirty.notify_one();
+        for sub in subs {
+            let _ = sub.try_send(vec![object.clone()]);
         }
-        (object, changed)
+        for w in watch {
+            w(&object);
+        }
+        Ok((object, true))
     }
 
     /// Sends the bucket `key` to the held subscribes again, unchanged but for
@@ -172,16 +214,31 @@ impl Store {
         loop {
             self.dirty.notified().await;
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let objects = self.all();
             let store = self.clone();
-            let saved = tokio::task::spawn_blocking(move || store.write(&objects)).await;
+            let saved = tokio::task::spawn_blocking(move || store.save()).await;
             if let Ok(Err(e)) = saved {
                 logf!("store: {e}");
             }
         }
     }
 
-    fn write(&self, objects: &[Object]) -> std::io::Result<()> {
+    /// Writes the buckets as they are, read with the store free for others
+    /// while the file is written. An update that wrote the file since they
+    /// were read holds newer ones: they are read again, never written over.
+    fn save(&self) -> std::io::Result<()> {
+        loop {
+            let (objects, catalog_writes) = {
+                let inner = self.inner.lock().unwrap();
+                (inner.objects.values().cloned().collect::<Vec<_>>(), inner.catalog_writes)
+            };
+            let file = self.file.lock().unwrap();
+            if *file == catalog_writes {
+                return self.write(&objects);
+            }
+        }
+    }
+
+    fn write(&self, objects: &[impl Serialize]) -> std::io::Result<()> {
         let mut bytes = Vec::new();
         let mut ser =
             serde_json::Serializer::with_formatter(&mut bytes, serde_json::ser::PrettyFormatter::with_indent(b" "));
@@ -258,6 +315,40 @@ pub mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&s.path).unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn a_save_leaves_the_buckets_free_and_keeps_what_an_update_wrote() {
+        let s = temp_store();
+        s.merge("schedule.S", &fields! {"days" => json!({})}, 0, 0, true);
+        let file = s.file.lock().unwrap();
+        let saving = std::thread::spawn({
+            let s = s.clone();
+            move || s.save()
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        // The save waits to write with the buckets free.
+        assert!(s.get("schedule.S").is_some());
+        // An update that writes the file itself, after the save read the buckets.
+        let updating = std::thread::spawn({
+            let s = s.clone();
+            move || {
+                s.update("schedule.S", 0, 0, false, |_, o| {
+                    o.local_schedules = Some(crate::schedule::Catalog {
+                        active: [("HEAT".to_owned(), "s1".to_owned())].into(),
+                        ..Default::default()
+                    });
+                    Ok(())
+                })
+            }
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        drop(file);
+        saving.join().unwrap().unwrap();
+        updating.join().unwrap().unwrap();
+        let again = Store::new(s.path.clone());
+        assert_eq!(again.get("schedule.S").unwrap().local_schedules, s.get("schedule.S").unwrap().local_schedules);
+        assert!(again.get("schedule.S").unwrap().local_schedules.is_some());
     }
 
     #[test]

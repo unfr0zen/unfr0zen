@@ -20,13 +20,15 @@ mod extras;
 mod netifs;
 mod ota;
 mod pairing;
+mod schedules;
 mod srp;
 mod thermostat;
 mod thread;
 pub mod timer;
 pub mod wake_patterns;
+mod water_heater;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,9 +36,12 @@ use std::time::Duration;
 use embassy_futures::select::select4;
 use rs_matter::crypto::{default_crypto, Crypto};
 use rs_matter::dm::clusters::decl::thermostat as thermostat_cluster;
+use rs_matter::dm::clusters::decl::water_heater_management::ClusterHandler as _;
+use rs_matter::dm::clusters::decl::water_heater_mode::ClusterHandler as _;
 use rs_matter::dm::clusters::decl::{
     fan_control, fixed_label, mode_select, on_off, power_source, relative_humidity_measurement,
-    temperature_measurement, thermostat_user_interface_configuration as ui_config,
+    temperature_measurement, thermostat_user_interface_configuration as ui_config, water_heater_management,
+    water_heater_mode,
 };
 use rs_matter::dm::clusters::desc::{self, ClusterHandler as _};
 use rs_matter::dm::clusters::identify::{self, IdentifyAction, IdentifyHandler, IdentifyHooks};
@@ -85,8 +90,8 @@ use crate::json::{number, sprint, truthy, Fields};
 use crate::logf;
 
 use extras::{
-    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, Humidity, Labels, Switch, Switches,
-    TemperatureSource,
+    Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HotWaterBoost, Humidity, Labels,
+    Switch, Switches, TemperatureSource,
 };
 use thermostat::{Equipment, Thermostat};
 
@@ -139,6 +144,16 @@ impl Nest {
     /// Runs a command, as MQTT's set/<name> would.
     pub fn apply(&self, name: &str, arg: &str) -> Result<(), String> {
         self.bridge.apply("matter", name, arg)
+    }
+
+    /// The unit's hot water schedule bucket, once nlclient has synced it.
+    pub fn hot_water(&self) -> Option<Fields> {
+        self.bridge.hot_water_schedule().map(|o| o.value)
+    }
+
+    /// The unit's schedule bucket, once nlclient has synced it.
+    pub fn schedule(&self) -> Option<Fields> {
+        self.bridge.buckets().remove("schedule")
     }
 
     pub fn outdoor_temperature(&self) -> Option<f64> {
@@ -248,8 +263,12 @@ pub fn start(settings: Settings, bridge: Arc<Bridge>) {
                 wait = RESTART_WAIT;
             }
             match result {
+                Ok(true) => {
+                    logf!("matter: the unit's equipment changed; serving its new endpoints");
+                    continue;
+                }
                 Err(e) => logf!("matter: stopped: {e:?}; again in {} s", wait.as_secs()),
-                Ok(()) => logf!("matter: stopped; again in {} s", wait.as_secs()),
+                Ok(false) => logf!("matter: stopped; again in {} s", wait.as_secs()),
             }
             std::thread::sleep(wait);
             wait = (wait * 2).min(RESTART_WAIT_MAX);
@@ -286,7 +305,9 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-fn run(settings: &Settings, nest: Arc<Nest>) -> Result<(), Error> {
+/// Serves the unit until an error, or until its equipment changes the node
+/// (true).
+fn run(settings: &Settings, nest: Arc<Nest>) -> Result<bool, Error> {
     if settings.thread {
         run_network(settings, nest, thread::ThreadNetworks::new(), thread::Controller::default())
     } else {
@@ -294,17 +315,85 @@ fn run(settings: &Settings, nest: Arc<Nest>) -> Result<(), Error> {
     }
 }
 
+/// Before the interaction model starts, nothing is subscribed.
+struct Unsubscribed;
+
+impl AttrChangeNotifier for Unsubscribed {
+    fn notify_attr_changed(&self, _: u16, _: u32, _: u32) {}
+    fn notify_cluster_changed(&self, _: u16, _: u32) {}
+    fn notify_endpoint_changed(&self, _: u16) {}
+    fn notify_all_changed(&self) {}
+}
+
+/// What the node's endpoints are built from, as the unit reports it.
+#[derive(Debug, PartialEq)]
+struct Shape {
+    has_fan: bool,
+    equipment: Equipment,
+    hot_water: bool,
+    switches: Vec<Switch>,
+}
+
+impl Shape {
+    /// The endpoints it builds.
+    fn endpoints(&self, thread: bool, external: bool) -> Vec<u16> {
+        let all = endpoints_for(self.has_fan, self.equipment, self.hot_water, &self.switches, thread, external);
+        all.iter().map(|e| e.id).collect()
+    }
+
+    /// Whether to serve `now` in place of this: a change that removes no
+    /// endpoint. Home Assistant drops the whole device, every entity with
+    /// it, when an endpoint goes, so equipment the unit stops reporting
+    /// keeps its endpoints until nestlocal restarts.
+    fn grows_into(&self, now: &Shape, thread: bool, external: bool) -> bool {
+        let served = self.endpoints(thread, external);
+        self != now && served.iter().all(|e| now.endpoints(thread, external).contains(e))
+    }
+
+    fn of(nest: &Nest) -> Self {
+        let view = nest.view();
+        Self {
+            has_fan: view.device_flag("has_fan"),
+            equipment: Equipment::of(nest),
+            hot_water: view.device_flag("has_hot_water_control"),
+            switches: extras::switches(nest),
+        }
+    }
+}
+
+/// The shape last served, in the storage directory.
+const SHAPE_FILE: &str = "node-shape";
+
+/// Bumps ConfigurationVersion when the node's endpoints differ from those
+/// served before, as Matter asks, so controllers read its structure again;
+/// whether it did. `endpoints` are the shape's on this network, which the
+/// settings change too (Thread, the external temperature).
+fn note_shape<S: rs_matter::persist::KvBlobStoreAccess>(
+    matter: &Matter,
+    kv: S,
+    storage: &Path,
+    shape: &Shape,
+    endpoints: &[u16],
+) -> bool {
+    let path = storage.join(SHAPE_FILE);
+    let now = format!("{shape:?} {endpoints:?}");
+    if std::fs::read_to_string(&path).is_ok_and(|before| before == now) {
+        return false;
+    }
+    if let Err(e) = matter.bump_configuration_version(kv, &Unsubscribed) {
+        logf!("matter: configuration version: {e:?}");
+        return false;
+    }
+    if let Err(e) = std::fs::write(&path, now) {
+        logf!("matter: {}: {e}", path.display());
+    }
+    true
+}
+
 /// Gives Matter's NodeLabel, the name controllers show, the name the
 /// install gave, and whether it took it. Bumping ConfigurationVersion stores
 /// the basic information, the label with it, and has controllers read it again.
 fn label_node<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, label: &str) -> bool {
-    struct Unsubscribed; // nothing is subscribed yet
-    impl AttrChangeNotifier for Unsubscribed {
-        fn notify_attr_changed(&self, _: u16, _: u32, _: u32) {}
-        fn notify_cluster_changed(&self, _: u16, _: u32) {}
-        fn notify_endpoint_changed(&self, _: u16) {}
-        fn notify_all_changed(&self) {}
-    }
     if label.len() > 32 {
         logf!("matter: device name {label:?} is longer than Matter's 32 bytes");
         return false;
@@ -331,8 +420,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     nest: Arc<Nest>,
     networks: N,
     controller: C,
-) -> Result<(), Error> {
-    let view = nest.view();
+) -> Result<bool, Error> {
     let attestation = attestation::of(crate::device::current().name);
     let installed = nest.bridge.updates().and_then(|u| u.installed()).unwrap_or("").to_string();
     let info: &'static BasicInfoConfig = Box::leak(Box::new(BasicInfoConfig {
@@ -380,20 +468,27 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         default_crypto(rand::rng(), rs_matter::dm::clusters::dev_att::DeviceAttestation::dac_priv_key(attestation));
     let rand = crypto.rand()?;
     let ota = ota::Ota::new();
-    let switches = extras::switches(&nest);
-    let equipment = Equipment::of(&nest);
-    let node = node_for_network(
-        view.device_flag("has_fan"),
-        equipment,
-        &switches,
-        settings.thread,
-        nest.bridge.sensor.get().is_some(),
-    );
+    let shape = Shape::of(&nest);
+    let external = nest.bridge.sensor.get().is_some();
+    if note_shape(&matter, &kv, &settings.storage, &shape, &shape.endpoints(settings.thread, external)) {
+        logf!("matter: the node's endpoints changed; configuration version bumped");
+    }
+    let node =
+        node_for_network(shape.has_fan, shape.equipment, shape.hot_water, &shape.switches, settings.thread, external);
     let im = InteractionModel::new_with_net_ctl(
         &matter,
         &crypto,
         &buffers,
-        data_model(node, rand, nest.clone(), equipment, switches, &controller, &ota, settings.thread),
+        data_model(
+            node,
+            rand,
+            nest.clone(),
+            shape.equipment,
+            shape.switches.clone(),
+            &controller,
+            &ota,
+            settings.thread,
+        ),
         &kv,
         &controller,
         &state,
@@ -453,8 +548,40 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
             let _ = reading.try_send(());
         });
     }
+    // The node is built once a start: equipment the unit reports later (a
+    // Heat Link's hot water, a fan) stops it, to be served again at once.
+    let reshaped = std::cell::Cell::new(false);
+    // A running hot water boost also changes with time alone, stepping down
+    // to a shorter length or ending: reported then too.
+    let mut boosting = None;
     let mut report = pin!(async {
-        while changes.recv().await.is_ok() {
+        loop {
+            if shape.hot_water {
+                if let Err(e) = water_heater::report_boost(&im, &nest, &mut boosting) {
+                    logf!("matter: hot water boost event: {e:?}");
+                }
+            }
+            let step = bridge::hot_water_boost_step(&nest.view().dev);
+            let stepped = async {
+                match step {
+                    // On the clock that counts the time the unit sleeps (timer.rs).
+                    Some(left) => {
+                        embassy_time::Timer::after(embassy_time::Duration::from_millis((left * 1000.0) as u64 + 1000))
+                            .await;
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            match embassy_futures::select::select(changes.recv(), stepped).await {
+                embassy_futures::select::Either::First(Err(_)) => break,
+                embassy_futures::select::Either::First(Ok(())) => {
+                    if shape.grows_into(&Shape::of(&nest), settings.thread, external) {
+                        reshaped.set(true);
+                        break;
+                    }
+                }
+                embassy_futures::select::Either::Second(()) => {}
+            }
             im.notify_all_changed();
         }
         Ok::<(), Error>(())
@@ -577,7 +704,8 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         select4(&mut respond, &mut im_job, &mut report, &mut updates).coalesce(),
         &mut commissionable,
     );
-    futures_lite::future::block_on(all.coalesce())
+    futures_lite::future::block_on(all.coalesce())?;
+    Ok(reshaped.get())
 }
 
 // Device types rs-matter does not name.
@@ -630,19 +758,34 @@ const COOLING_THERMOSTAT: Endpoint<'static> = thermostat_endpoint!(Equipment::Co
 const THERMOSTAT_ENDPOINT: Endpoint<'static> = thermostat_endpoint!(Equipment::Both);
 
 /// The node: the thermostat, with the features of what the unit's equipment
-/// does, and the endpoints beside it that it calls for (a fan, its switches).
+/// does, and the endpoints beside it that it calls for (a fan, hot water,
+/// its switches).
 #[cfg(test)]
 fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
-    node_for_network(has_fan, Equipment::Both, switches, false, false)
+    node_for_network(has_fan, Equipment::Both, false, switches, false, false)
 }
 
 fn node_for_network(
     has_fan: bool,
     equipment: Equipment,
+    hot_water: bool,
     switches: &[Switch],
     thread: bool,
     external: bool,
 ) -> Node<'static> {
+    let endpoints = endpoints_for(has_fan, equipment, hot_water, switches, thread, external);
+    Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
+}
+
+/// The node's endpoints, ascending.
+fn endpoints_for(
+    has_fan: bool,
+    equipment: Equipment,
+    hot_water: bool,
+    switches: &[Switch],
+    thread: bool,
+    external: bool,
+) -> Vec<Endpoint<'static>> {
     use extras::{BACKPLATE, BATTERY, EXTERNAL_TEMPERATURE, FAN, FAN_SCHEDULE, FAN_TIMER, TEMPERATURE_SOURCE};
     let mut endpoints = vec![
         if thread { THREAD_ROOT } else { ROOT },
@@ -686,11 +829,32 @@ fn node_for_network(
             clusters!(desc::DescHandler::CLUSTER, TemperatureSource::CLUSTER, Labels::CLUSTER),
         ));
     }
+    if hot_water {
+        endpoints.push(Endpoint::new(
+            water_heater::WATER_HEATER,
+            devices!(water_heater::DEV_TYPE_WATER_HEATER),
+            clusters!(
+                desc::DescHandler::CLUSTER,
+                identify::CLUSTER,
+                water_heater::HotWater::CLUSTER,
+                water_heater::Management::CLUSTER,
+                water_heater::Mode::CLUSTER,
+                Labels::CLUSTER
+            ),
+        ));
+    }
     for switch in switches {
         endpoints.push(Endpoint::new(
             switch.endpoint,
             devices!(DEV_TYPE_ON_OFF_PLUG_IN_UNIT),
             clusters!(desc::DescHandler::CLUSTER, identify::CLUSTER, Switches::CLUSTER, Labels::CLUSTER),
+        ));
+    }
+    if hot_water {
+        endpoints.push(Endpoint::new(
+            extras::HOT_WATER_BOOST,
+            devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, HotWaterBoost::CLUSTER, Labels::CLUSTER),
         ));
     }
     if has_fan {
@@ -702,7 +866,7 @@ fn node_for_network(
             ));
         }
     }
-    Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
+    endpoints
 }
 
 /// Identify on any endpoint lights the display, as a press does; its end
@@ -744,6 +908,8 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
         (FAN_SCHEDULE, "Fan schedule run time"),
         (FAN_SCHEDULE + 1, "Fan schedule start"),
         (FAN_SCHEDULE + 2, "Fan schedule end"),
+        (water_heater::WATER_HEATER, "Hot water"),
+        (extras::HOT_WATER_BOOST, "Hot water boost"),
     ];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
@@ -774,6 +940,27 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
                     nest.clone(),
                     equipment,
                 ))),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::HotWater::CLUSTER.id,
+                Async(thermostat_cluster::HandlerAdaptor(water_heater::HotWater::new(
+                    Dataver::new_rand(&mut rand),
+                    nest.clone(),
+                ))),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::Management::CLUSTER.id,
+                Async(water_heater_management::HandlerAdaptor(water_heater::Management {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| e == water_heater::WATER_HEATER && c == water_heater::Mode::CLUSTER.id,
+                Async(water_heater_mode::HandlerAdaptor(water_heater::Mode {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
             )
             .chain(
                 |e, c| e == THERMOSTAT && c == Humidity::CLUSTER.id,
@@ -807,6 +994,13 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             .chain(
                 |e, c| e == FAN_TIMER && c == FanTimer::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(FanTimer {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| e == extras::HOT_WATER_BOOST && c == HotWaterBoost::CLUSTER.id,
+                Async(mode_select::HandlerAdaptor(HotWaterBoost {
                     dataver: Dataver::new_rand(&mut rand),
                     nest: nest.clone(),
                 })),
@@ -1075,6 +1269,14 @@ mod tests {
         cmd: CmdDetails,
     }
 
+    /// A context for a peer on another fabric.
+    pub(super) fn ctx_on(endpoint: u16, fabric: u8) -> Ctx {
+        let mut c = ctx(endpoint);
+        c.attr.fab_idx = fabric;
+        c.cmd.fab_idx = fabric;
+        c
+    }
+
     pub(super) fn ctx(endpoint: u16) -> Ctx {
         Ctx {
             attr: AttrDetails {
@@ -1200,6 +1402,10 @@ mod tests {
         fn exchange(&self) -> &Exchange<'_> {
             unreachable!()
         }
+        // No session: no peer node.
+        fn accessor(&self) -> Result<rs_matter::acl::Accessor<'_>, Error> {
+            Err(ErrorCode::NotFound.into())
+        }
     }
 
     impl ReadContext for Ctx {
@@ -1269,6 +1475,84 @@ mod tests {
             ),
             [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42]
         );
+    }
+
+    #[test]
+    fn hot_water_reported_later_changes_the_shape() {
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let before = Shape::of(&unit);
+        assert_eq!(before, Shape::of(&unit), "unchanged without a change");
+        let device = format!("device.{}", unit.bridge.serial);
+        unit.bridge.store.merge(&device, &crate::fields! {"has_hot_water_control" => true}, 0, 0, true);
+        let after = Shape::of(&unit);
+        assert!(after.hot_water && after.switches.iter().any(|s| s.key == "hot_water_boost"));
+        assert_ne!(before, after);
+        // Ordinary readings leave it.
+        unit.bridge.store.merge(&device, &crate::fields! {"current_humidity" => 41}, 0, 0, true);
+        assert_eq!(after, Shape::of(&unit));
+    }
+
+    #[test]
+    fn hot_water_adds_endpoints_and_moves_none() {
+        let dev = |hot_water| crate::fields! {"has_fan" => true, "has_air_filter" => true, "has_hot_water_control" => hot_water};
+        let sh = crate::fields! {"can_heat" => true, "can_cool" => true};
+        let without = Shape::of(&nest(dev(false), sh.clone()));
+        let with = Shape::of(&nest(dev(true), sh));
+        let endpoint = |shape: &Shape, key| shape.switches.iter().find(|s| s.key == key).map(|s| s.endpoint);
+        for key in ["filter_reminder_enabled", "filter_reset", "fan_schedule"] {
+            assert_eq!(endpoint(&without, key), endpoint(&with, key), "{key}");
+        }
+        assert_eq!((endpoint(&with, "hot_water_boost"), endpoint(&with, "hot_water_schedule")), (Some(30), Some(31)));
+        let ids = with.endpoints(false, false);
+        assert!(
+            ids.contains(&extras::HOT_WATER_BOOST)
+                && !without.endpoints(false, false).contains(&extras::HOT_WATER_BOOST)
+        );
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "ascending: {ids:?}");
+        // Hot water reported later is served at once; hot water gone waits for a restart.
+        assert!(without.grows_into(&with, false, false));
+        assert!(!with.grows_into(&without, false, false));
+        assert!(!with.grows_into(
+            &Shape::of(&nest(dev(true), crate::fields! {"can_heat" => true, "can_cool" => true})),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn a_new_shape_bumps_the_configuration_version_once() {
+        use rs_matter::dm::devices::test::TEST_DEV_ATT;
+        use rs_matter::sc::pase::{Spake2pVerifierPassword, Spake2pVerifierPasswordRef};
+        let dir = std::env::temp_dir().join(format!("nestlocal-matter-shape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let comm = BasicCommData {
+            password: Spake2pVerifierPassword::new_from_ref(Spake2pVerifierPasswordRef::new(
+                &20202021u32.to_le_bytes(),
+            )),
+            discriminator: 3840,
+        };
+        let info = BasicInfoConfig::new();
+        let matter = Matter::new(&info, comm, &TEST_DEV_ATT, MATTER_PORT);
+        let kv = matter.kv(DirKvBlobStore::new(dir.clone()));
+        matter.startup(&kv).unwrap();
+        let version = || matter.with_state(|state| state.basic_info_settings.configuration_version);
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let first = version();
+        let note = |thread, external| {
+            let shape = Shape::of(&unit);
+            note_shape(&matter, &kv, &dir, &shape, &shape.endpoints(thread, external))
+        };
+        assert!(note(false, false), "none served before");
+        assert!(!note(false, false), "the same again");
+        let device = format!("device.{}", unit.bridge.serial);
+        unit.bridge.store.merge(&device, &crate::fields! {"has_hot_water_control" => true}, 0, 0, true);
+        assert!(note(false, false));
+        // The external temperature's endpoints, with the unit's own unchanged.
+        assert!(note(false, true));
+        assert!(!note(false, true));
+        assert_eq!(version(), first + 3);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::bridge::Bridge;
 use crate::{clock, logf};
 
-use clusters::{Nest, THERMOSTAT_ENDPOINT, TIME};
+use clusters::{Nest, THERMOSTAT, THERMOSTAT_ENDPOINT, TIME};
 use ezsp::{id, status, Aps, Callback, Ezsp, Incoming, Network, Reader};
 use zcl::Value;
 
@@ -58,6 +58,8 @@ const INSTALL_RETRY: Duration = Duration::from_secs(3600);
 /// the coordinator has asked what the thermostat is), and how often joining
 /// is tried without a network.
 const FULL_REPORT: Duration = Duration::from_secs(600);
+/// The Thermostat cluster's command to the client with a day's transitions.
+const GET_WEEKLY_SCHEDULE_RESPONSE: u8 = 0x00;
 const FIRST_REPORT: Duration = Duration::from_secs(10);
 const JOIN_RETRY: Duration = Duration::from_secs(30);
 /// How long a unit on no network looks for one by itself, from when Zigbee
@@ -112,7 +114,8 @@ impl PairingAttempt {
 }
 
 /// Runs the unit on Zigbee, on a thread of its own, once it has reported
-/// (its equipment decides what it offers); again after the radio fails.
+/// (its equipment decides what it offers); again after the radio fails, or
+/// when equipment it reports later adds endpoints.
 pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
     // OTA downloads over Wi-Fi run on the caller's runtime.
     let runtime = tokio::runtime::Handle::try_current().ok();
@@ -126,7 +129,7 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
             std::thread::sleep(Duration::from_secs(5));
         }
         let mut ota = ota::Ota::new(bridge.updates().cloned(), runtime);
-        let nest = Nest::new(bridge);
+        let mut nest = Nest::new(bridge);
         let changed = Arc::new(AtomicBool::new(true));
         let flag = changed.clone();
         nest.bridge.store.watch(move |_| flag.store(true, Ordering::Relaxed));
@@ -142,10 +145,20 @@ pub fn start(bridge: Arc<Bridge>, store: PathBuf) {
         let mut attempt = PairingAttempt::default();
         attempt.look(Instant::now());
         loop {
-            if let Err(e) = run(&nest, &mut ota, &store, &changed, &mut failed_install, &mut attempt) {
-                ota.offline();
-                logf!("zigbee: {e}");
-                crate::settings_ui::status("zigbee", "Radio unavailable. Try again.");
+            match run(&nest, &mut ota, &store, &changed, &mut failed_install, &mut attempt) {
+                // The radio takes endpoints only after a reset: start it again with them.
+                Ok(()) => {
+                    if let Some(endpoints) = nest.grown() {
+                        nest.endpoints = endpoints;
+                    }
+                    logf!("zigbee: the unit's equipment changed; serving its new endpoints");
+                    continue;
+                }
+                Err(e) => {
+                    ota.offline();
+                    logf!("zigbee: {e}");
+                    crate::settings_ui::status("zigbee", "Radio unavailable. Try again.");
+                }
             }
             std::thread::sleep(JOIN_RETRY);
         }
@@ -160,6 +173,8 @@ fn reported(bridge: &Bridge) -> bool {
     buckets.contains_key("device") && buckets.contains_key("shared")
 }
 
+/// Runs the radio until it fails (an error), or until equipment the unit
+/// reports adds endpoints (Ok), which only a reset radio takes.
 fn run(
     nest: &Nest,
     ota: &mut ota::Ota,
@@ -192,6 +207,8 @@ fn run(
         reported: BTreeMap::new(),
         next_full: Instant::now() + FIRST_REPORT,
         pending: false,
+        week: Vec::new(),
+        boost_step: None,
         time_asked: None,
         next_time: Instant::now() + FIRST_REPORT,
     };
@@ -284,7 +301,12 @@ fn run(
                 }
             }
         }
-        if up && (changed.swap(false, Ordering::Relaxed) || server.pending) {
+        let reported = changed.swap(false, Ordering::Relaxed);
+        if reported && nest.grown().is_some() {
+            return Ok(());
+        }
+        let stepped = server.boost_step.is_some_and(|at| SystemTime::now() >= at);
+        if up && (reported || stepped || server.pending) {
             server.report(&mut ezsp, nest, false)?;
         }
         if up && Instant::now() >= server.next_full {
@@ -545,6 +567,12 @@ struct Server {
     next_full: Instant,
     /// Reports the radio had no room for yet.
     pending: bool,
+    /// The weekly schedule last sent, as its Get Weekly Schedule Responses.
+    week: Vec<Vec<u8>>,
+    /// When a running hot water boost's length next changes, stepping down
+    /// or ending with no bucket changing: a report is due then. On the wall
+    /// clock, as the boost's end is: it counts the time the unit sleeps.
+    boost_step: Option<SystemTime>,
     /// The time read on its way: when it was sent (wall clock) and its sequence.
     time_asked: Option<(SystemTime, u8)>,
     /// When to ask for the time: a minute after a read that got no time,
@@ -564,8 +592,9 @@ impl Server {
         if message.aps.cluster == ota::CLUSTER && message.aps.destination_endpoint == THERMOSTAT_ENDPOINT {
             ota.message(ezsp, (message.sender, message.aps.source_endpoint), &message.payload)?;
         }
-        if let Some((endpoint, answer)) = answer(nest, &message) {
-            let to = (message.sender, message.aps.source_endpoint);
+        let (endpoint, answers) = answer(nest, &message);
+        let to = (message.sender, message.aps.source_endpoint);
+        for answer in answers {
             // A read unanswered now is a failed read: wait briefly for room.
             let until = Instant::now() + ANSWER_RETRY;
             while !send(ezsp, to, endpoint, message.aps.cluster, &answer)? && Instant::now() < until {
@@ -576,32 +605,56 @@ impl Server {
     }
 
     /// Reports to the coordinator what changed, or everything; what the
-    /// radio has no room for goes on the next round.
+    /// radio has no room for goes on the next round. The weekly schedule has
+    /// no attributes: a change sends the week as Get Weekly Schedule
+    /// Responses, which Zigbee2MQTT's converter takes as answers.
     fn report(&mut self, ezsp: &mut Ezsp, nest: &Nest, everything: bool) -> Result<(), String> {
         use zcl::Clusters as _;
         if everything {
             self.reported.clear();
+            self.week.clear();
             self.next_full = Instant::now() + FULL_REPORT;
         }
         self.pending = false;
+        // A second past the step, so the length read is the new one.
+        self.boost_step =
+            nest.hot_water_boost_step().map(|left| SystemTime::now() + Duration::from_secs_f64(left + 1.0));
         for (endpoint, cluster, attributes) in nest.reported() {
             let changed: Vec<(u16, Value)> = attributes
                 .iter()
                 .filter_map(|&a| nest.read(endpoint, cluster, a).map(|v| (a, v)))
                 .filter(|(a, v)| self.reported.get(&(endpoint, cluster, *a)) != Some(v))
                 .collect();
-            if changed.is_empty() {
-                continue;
+            // As many attributes a frame as fit in it.
+            let mut rest = changed.as_slice();
+            while !rest.is_empty() {
+                let fit = (1..=rest.len())
+                    .take_while(|&n| zcl::report(0, cluster, &rest[..n]).len() <= zcl::MAX_FRAME)
+                    .last()
+                    .unwrap_or(1);
+                self.sequence = self.sequence.wrapping_add(1);
+                let report = zcl::report(self.sequence, cluster, &rest[..fit]);
+                if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), endpoint, cluster, &report)? {
+                    self.pending = true;
+                    return Ok(());
+                }
+                for (a, v) in &rest[..fit] {
+                    self.reported.insert((endpoint, cluster, *a), v.clone());
+                }
+                rest = &rest[fit..];
             }
-            self.sequence = self.sequence.wrapping_add(1);
-            let report = zcl::report(self.sequence, &changed);
-            if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), endpoint, cluster, &report)? {
-                self.pending = true;
-                return Ok(());
+        }
+        let week = nest.week();
+        if week != self.week {
+            for response in &week {
+                self.sequence = self.sequence.wrapping_add(1);
+                let frame = zcl::server_command_out(self.sequence, GET_WEEKLY_SCHEDULE_RESPONSE, response);
+                if !send(ezsp, (COORDINATOR, COORDINATOR_ENDPOINT), THERMOSTAT_ENDPOINT, THERMOSTAT, &frame)? {
+                    self.pending = true;
+                    return Ok(());
+                }
             }
-            for (a, v) in changed {
-                self.reported.insert((endpoint, cluster, a), v);
-            }
+            self.week = week;
         }
         Ok(())
     }
@@ -664,9 +717,9 @@ impl Server {
     }
 }
 
-/// The answer to a message, if one is due, and the endpoint it is from: a
+/// The answers due to a message, and the endpoint they are from: a
 /// broadcast or multicast gets no default response.
-fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
+fn answer(nest: &Nest, message: &Incoming) -> (u8, Vec<Vec<u8>>) {
     // EmberIncomingMessageType: unicast, unicast reply; multicast, broadcast
     // and their loopbacks above.
     const UNICAST_REPLY: u8 = 0x01;
@@ -675,10 +728,11 @@ fn answer(nest: &Nest, message: &Incoming) -> Option<(u8, Vec<u8>)> {
         e => e,
     };
     if message.aps.profile != PROFILE_HA || !nest.endpoints.iter().any(|e| e.id == endpoint) {
-        return None;
+        return (endpoint, Vec::new());
     }
-    let answer = zcl::serve(nest, endpoint, message.aps.cluster, &message.payload)?;
-    (message.kind <= UNICAST_REPLY || !zcl::is_default_response(&answer)).then_some((endpoint, answer))
+    let mut answers = zcl::serve_all(nest, endpoint, message.aps.cluster, &message.payload);
+    answers.retain(|answer| message.kind <= UNICAST_REPLY || !zcl::is_default_response(answer));
+    (endpoint, answers)
 }
 
 /// A ZCL frame from one of the unit's endpoints to a node's endpoint,
@@ -773,6 +827,8 @@ mod tests {
             reported: BTreeMap::new(),
             next_full: Instant::now(),
             pending: false,
+            week: Vec::new(),
+            boost_step: None,
             time_asked: Some((SystemTime::now(), 9)),
             next_time: Instant::now(),
         };
@@ -815,16 +871,16 @@ mod tests {
             sender: COORDINATOR,
             payload: payload.to_vec(),
         };
-        let unknown = [0x01, 7, 0x01]; // a command the Thermostat cluster does not have
+        let unknown = [0x01, 7, 0x04]; // a command the Thermostat cluster does not have
         let read = [0x00, 8, 0x00, 0x03, 0x00]; // AbsMinHeatSetpointLimit
         for kind in [0x00, 0x01] {
-            assert_eq!(answer(&nest, &message(kind, &unknown)), Some((1, vec![0x18, 7, 0x0B, 0x01, 0x81])), "{kind}");
+            assert_eq!(answer(&nest, &message(kind, &unknown)), (1, vec![vec![0x18, 7, 0x0B, 0x04, 0x81]]), "{kind}");
         }
         for kind in 0x02..=0x05 {
-            assert_eq!(answer(&nest, &message(kind, &unknown)), None, "{kind}");
+            assert_eq!(answer(&nest, &message(kind, &unknown)), (1, vec![]), "{kind}");
             assert_eq!(
                 answer(&nest, &message(kind, &read)),
-                Some((1, vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03])),
+                (1, vec![vec![0x18, 8, 0x01, 0x03, 0x00, 0x00, 0x29, 0x84, 0x03]]),
                 "{kind}"
             );
         }

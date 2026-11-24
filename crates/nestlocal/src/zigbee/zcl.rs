@@ -24,7 +24,9 @@ pub mod status {
     pub const INVALID_FIELD: u8 = 0x85;
     pub const UNSUPPORTED_ATTRIBUTE: u8 = 0x86;
     pub const INVALID_VALUE: u8 = 0x87;
+    pub const NOT_FOUND: u8 = 0x8B;
     pub const READ_ONLY: u8 = 0x88;
+    pub const INSUFFICIENT_SPACE: u8 = 0x89;
     pub const INVALID_DATA_TYPE: u8 = 0x8D;
     pub const UNSUPPORTED_CLUSTER: u8 = 0xC3;
 }
@@ -133,6 +135,22 @@ impl Value {
     }
 }
 
+/// What a cluster-specific command answers.
+#[derive(Debug, PartialEq)]
+pub enum Answer {
+    /// A status, as a default response.
+    Status(u8),
+    /// One of the cluster's own commands to the client, a frame for each
+    /// payload: its ID and their payloads.
+    Command(u8, Vec<Vec<u8>>),
+}
+
+impl From<u8> for Answer {
+    fn from(status: u8) -> Self {
+        Answer::Status(status)
+    }
+}
+
 /// The attributes and commands of a node's server clusters, by endpoint.
 pub trait Clusters {
     /// The endpoint's clusters, and in each its attribute IDs, ascending.
@@ -142,14 +160,33 @@ pub trait Clusters {
     /// Writes an attribute, which the caller has checked is one of the
     /// cluster's: a ZCL status.
     fn write(&self, endpoint: u8, cluster: u16, attribute: u16, value: Value) -> u8;
-    /// A cluster-specific command: a ZCL status.
-    fn command(&self, endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> u8;
+    /// A cluster-specific command.
+    fn command(&self, endpoint: u8, cluster: u16, command: u8, payload: &[u8]) -> Answer;
 }
 
-/// The answer to a ZCL frame for an endpoint's `cluster`, if one is due.
-/// A manufacturer-specific frame is served, with its code, for the
-/// manufacturer's own clusters; the rest are refused.
+/// The frames answering a ZCL frame for an endpoint's `cluster`: none, one,
+/// or for some commands several. A manufacturer-specific frame is served,
+/// with its code, for the manufacturer's own clusters; the rest are refused.
+pub fn serve_all(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8]) -> Vec<Vec<u8>> {
+    let mut more = Vec::new();
+    let first = serve_into(clusters, endpoint, cluster, frame, &mut more);
+    first.into_iter().chain(more).collect()
+}
+
+/// The first frame answering `frame`, if one is due.
+#[cfg(test)]
 pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8]) -> Option<Vec<u8>> {
+    serve_all(clusters, endpoint, cluster, frame).into_iter().next()
+}
+
+/// The first answer to `frame`, with any after it in `more`.
+fn serve_into(
+    clusters: &impl Clusters,
+    endpoint: u8,
+    cluster: u16,
+    frame: &[u8],
+    more: &mut Vec<Vec<u8>>,
+) -> Option<Vec<u8>> {
     let (&control, rest) = frame.split_first()?;
     if control & TO_CLIENT != 0 {
         return None; // a response or report to us: nothing to answer
@@ -182,7 +219,18 @@ pub fn serve(clusters: &impl Clusters, endpoint: u8, cluster: u16, frame: &[u8])
         return default(status::UNSUPPORTED_CLUSTER);
     };
     if specific {
-        return default(clusters.command(endpoint, cluster, cmd, payload));
+        let out = |id, payload: &[u8]| {
+            frame_out(CLUSTER_SPECIFIC | TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer, sequence, id, payload)
+        };
+        return match clusters.command(endpoint, cluster, cmd, payload) {
+            Answer::Status(status) => default(status),
+            Answer::Command(id, payloads) => {
+                let mut frames = payloads.iter().map(|p| out(id, p));
+                let first = frames.next();
+                more.extend(frames);
+                first
+            }
+        };
     }
     match cmd {
         command::READ => {
@@ -303,6 +351,12 @@ pub fn client_command(sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
     frame_out(CLUSTER_SPECIFIC | NO_DEFAULT_RESPONSE, None, sequence, cmd, payload)
 }
 
+/// A cluster command, server to client, standard and asking no default
+/// response: one the server sends unasked.
+pub fn server_command_out(sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
+    frame_out(CLUSTER_SPECIFIC | TO_CLIENT | NO_DEFAULT_RESPONSE, None, sequence, cmd, payload)
+}
+
 /// A standard cluster command from a server to us: its command and payload.
 pub fn server_command(frame: &[u8]) -> Option<(u8, &[u8])> {
     let [control, _sequence, cmd, payload @ ..] = frame else {
@@ -312,15 +366,21 @@ pub fn server_command(frame: &[u8]) -> Option<(u8, &[u8])> {
         .then_some((*cmd, payload))
 }
 
-/// An attribute report, server to client.
-pub fn report(sequence: u8, attributes: &[(u16, Value)]) -> Vec<u8> {
+/// The manufacturer code a cluster's frames carry: the manufacturer's own
+/// clusters' do.
+pub fn manufacturer_of(cluster: u16) -> Option<u16> {
+    (cluster >= MANUFACTURER_CLUSTERS).then_some(MANUFACTURER_CODE)
+}
+
+/// An attribute report of `cluster`, server to client.
+pub fn report(sequence: u8, cluster: u16, attributes: &[(u16, Value)]) -> Vec<u8> {
     let mut payload = Vec::new();
     for (id, value) in attributes {
         payload.extend(id.to_le_bytes());
         payload.push(value.type_id());
         value.write(&mut payload);
     }
-    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, None, sequence, command::REPORT, &payload)
+    frame_out(TO_CLIENT | NO_DEFAULT_RESPONSE, manufacturer_of(cluster), sequence, command::REPORT, &payload)
 }
 
 fn frame_out(control: u8, manufacturer: Option<u16>, sequence: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
@@ -366,11 +426,11 @@ mod tests {
                 _ => status::READ_ONLY,
             }
         }
-        fn command(&self, _endpoint: u8, _cluster: u16, command: u8, _payload: &[u8]) -> u8 {
-            if command == 0 {
-                status::SUCCESS
-            } else {
-                status::UNSUP_CLUSTER_COMMAND
+        fn command(&self, _endpoint: u8, _cluster: u16, command: u8, payload: &[u8]) -> Answer {
+            match command {
+                0x00 => status::SUCCESS.into(),
+                0x02 => Answer::Command(0x00, vec![payload.to_vec()]),
+                _ => status::UNSUP_CLUSTER_COMMAND.into(),
             }
         }
     }
@@ -408,6 +468,8 @@ mod tests {
         assert_eq!(serve(&f, 1, 0x0201, &[0x01, 3, 0x00, 0x00, 0x05]).unwrap(), [0x18, 3, 0x0B, 0x00, 0x00]);
         assert!(serve(&f, 1, 0x0201, &[0x11, 4, 0x00]).is_none());
         assert_eq!(serve(&f, 1, 0x0201, &[0x11, 5, 0x07]).unwrap(), [0x18, 5, 0x0B, 0x07, 0x81]);
+        // One answered by a command of the cluster's, with the request's sequence.
+        assert_eq!(serve(&f, 1, 0x0201, &[0x01, 9, 0x02, 0x7F, 0x01]).unwrap(), [0x19, 9, 0x00, 0x7F, 0x01]);
         // Configure reporting, discover.
         assert_eq!(serve(&f, 1, 0x0201, &[0x00, 6, 0x06, 0x00, 0x12, 0x00, 0x29]).unwrap(), [0x18, 6, 0x07, 0x00]);
         assert_eq!(
@@ -604,8 +666,8 @@ mod tests {
         fn write(&self, _endpoint: u8, _cluster: u16, _attribute: u16, _value: Value) -> u8 {
             status::READ_ONLY
         }
-        fn command(&self, _endpoint: u8, _cluster: u16, _command: u8, _payload: &[u8]) -> u8 {
-            status::UNSUP_CLUSTER_COMMAND
+        fn command(&self, _endpoint: u8, _cluster: u16, _command: u8, _payload: &[u8]) -> Answer {
+            status::UNSUP_CLUSTER_COMMAND.into()
         }
     }
 
@@ -650,16 +712,21 @@ mod tests {
 
     #[test]
     fn reports() {
+        // The manufacturer's own clusters' carry its code.
         assert_eq!(
-            report(1, &[(0x0000, Value::I16(1800)), (0x001C, Value::Enum8(4))]),
+            report(4, 0xFC01, &[(0x0000, Value::Str(String::new()))]),
+            [0x1C, 0xD6, 0x10, 4, 0x0A, 0x00, 0x00, 0x42, 0]
+        );
+        assert_eq!(
+            report(1, 0x0201, &[(0x0000, Value::I16(1800)), (0x001C, Value::Enum8(4))]),
             [0x18, 1, 0x0A, 0x00, 0x00, 0x29, 0x08, 0x07, 0x1C, 0x00, 0x30, 0x04]
         );
         assert_eq!(
-            report(2, &[(0x0005, Value::Str("Nest".into()))]),
+            report(2, 0x0201, &[(0x0005, Value::Str("Nest".into()))]),
             [0x18, 2, 0x0A, 0x05, 0x00, 0x42, 4, b'N', b'e', b's', b't']
         );
         assert_eq!(
-            report(3, &[(0x0055, Value::F32(30.0)), (0x0000, Value::Bool(true))]),
+            report(3, 0x0201, &[(0x0055, Value::F32(30.0)), (0x0000, Value::Bool(true))]),
             [0x18, 3, 0x0A, 0x55, 0x00, 0x39, 0x00, 0x00, 0xF0, 0x41, 0x00, 0x00, 0x10, 0x01]
         );
     }

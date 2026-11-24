@@ -24,7 +24,7 @@
 //   14  eco heat limit          Binary Output (to heat)
 //   15  eco cool limit          Binary Output (to cool)
 //   16  humidity control        Binary Output (with a humidifier or dehumidifier)
-//   17  hot water boost         Binary Output (with hot water control): on is 30 minutes
+//   17  hot water boost         Binary Output (with hot water control): on is 30 minutes; not exposed, 44 has the lengths
 //   18  hot water schedule      Binary Output (with hot water control): off stops it
 //   19  filter reminder         Binary Output (with an air filter)
 //   20  leaf                    Binary Input
@@ -51,11 +51,33 @@
 //   41  screen always on        Binary Output
 //   42  screen brightness       Analog Output, %, 0-100; writing it turns 43 off
 //   43  screen brightness auto  Binary Output
+//   44  hot water boost length  Analog Output, minutes (with hot water control): 30, 60 or 120 while a boost runs,
+//                               0 without; writing 1-120 boosts that long, 0 ends it
 //
 // The Thermostat cluster's running state also sets heat stage 2 (0x0008) and
 // cool stage 2 (0x0010) beside heat or cool.
 //
-// The Thermostat cluster's Clear Weekly Schedule clears the unit's schedule.
+// The Thermostat cluster's weekly schedule is the unit's: Clear Weekly
+// Schedule clears it, and heating_times reads and writes it by day, as the
+// MQTT relay's <base>/heating_times does, in the state with no entity:
+//
+//   zigbee2mqtt/<thermostat>/set  {"heating_times": {"mon": [{"time": "06:00", "temp": 20.5}], "sat": []}}
+//   zigbee2mqtt/<thermostat>/get  {"heating_times": ""}
+//   zigbee2mqtt/<thermostat>      {"heating_times": {"mode": "heat", "days": {"mon": [...], ...}}, ...}
+//
+// The schedule is the one for the unit's mode: heat, cool, or range (its
+// heat-cool mode), whose setpoints are a low and a high instead of a temp,
+// {"time": "06:00", "low": 19, "high": 24}. A set replaces the days it
+// names, at most 10 setpoints each, keeping the learning setting. The state is
+// published once every day has been read. A mode change reads the new week.
+//
+// On a unit with hot water control, the hot water schedule's on periods go
+// the same way as hot_water_times, through the manufacturer-specific Hot
+// water cluster (HOT_WATER below), which reports each day as it changes:
+//
+//   zigbee2mqtt/<thermostat>/set  {"hot_water_times": {"mon": [{"on": "06:00", "off": "08:00"}], "sat": []}}
+//   zigbee2mqtt/<thermostat>/get  {"hot_water_times": ""}
+//   zigbee2mqtt/<thermostat>      {"hot_water_times": {"days": {"mon": [...], ...}}, ...}
 //
 // Home Assistant gets the entities unfr0zen's MQTT relay announces, under
 // the same names: the climate has one target in heat or cool and the range
@@ -85,6 +107,7 @@
 import * as exposes from "zigbee-herdsman-converters/lib/exposes";
 import * as fz from "zigbee-herdsman-converters/converters/fromZigbee";
 import * as tz from "zigbee-herdsman-converters/converters/toZigbee";
+import { logger } from "zigbee-herdsman-converters/lib/logger";
 import { isDummyDevice } from "zigbee-herdsman-converters/lib/utils";
 
 const e = exposes.presets;
@@ -102,6 +125,9 @@ const OUTPUTS = {
   screen_brightness: 42,
 };
 const INPUTS = { time_to_target: 5, filter_runtime: 6 };
+const HOT_WATER_BOOST = 44;
+// The boost lengths, minutes, as MQTT's select offers them; "off" is 0.
+const HOT_WATER_BOOSTS = ["30", "60", "120"];
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
   auto_schedule: 10,
@@ -111,7 +137,6 @@ const SWITCHES = {
   eco_heat_limit: 14,
   eco_cool_limit: 15,
   humidity_control: 16,
-  hot_water_boost: 17,
   hot_water_schedule: 18,
   filter_reminder: 19,
   fan_schedule: 29,
@@ -127,7 +152,6 @@ const SWITCH_LABELS = {
   eco_heat_limit: ["Eco heat limit", "mdi:leaf", "Heats to the eco heat temperature while in eco"],
   eco_cool_limit: ["Eco cool limit", "mdi:leaf", "Cools to the eco cool temperature while in eco"],
   humidity_control: ["Humidity control", "mdi:water-percent", "Runs the (de)humidifier"],
-  hot_water_boost: ["Hot water boost", "mdi:water-boiler-alert", "Heats the hot water for 30 minutes"],
   hot_water_schedule: ["Hot water schedule", "mdi:water-boiler", "Hot water follows its schedule; off stops it"],
   filter_reminder: ["Filter reminder", "mdi:air-filter", "The thermostat reminds you to change the air filter"],
   fan_schedule: [
@@ -227,6 +251,22 @@ const ZIGBEE_EPOCH = 946684800;
 // ThermostatProgrammingOperationMode: following its schedule, economy.
 const SCHEDULE = 0x01;
 const ECONOMY = 0x04;
+// Weekly schedule days, from Monday as heating_times names them; the ZCL
+// day bit of each is bit 0 Sunday to bit 6 Saturday.
+const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const FULL_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const dayBit = (index) => 1 << ((index + 1) % 7);
+const HEAT_SETPOINTS = 0x01;
+const COOL_SETPOINTS = 0x02;
+
+// Hot water schedule, manufacturer-specific: attribute d (0 Monday to 6
+// Sunday) is that day's on periods, a string "06:00-08:00,17:00-20:00".
+const HOT_WATER = 0xfc01;
+const HOT_WATER_NAME = String(HOT_WATER); // the cluster's name in Zigbee2MQTT's messages
+const heatingWeeks = new WeakMap();
+const scheduleReads = new WeakMap();
+const hotWaterWeeks = new WeakMap();
+
 // ThermostatRunningState: heat, cool and fan on.
 const RUNNING = { heating: 0x0001, cooling: 0x0002, fan_running: 0x0004 };
 
@@ -285,6 +325,57 @@ async function writeWeather(endpoint, attributes) {
   }
 }
 
+/** nest.heating_times collects the responses for the requested days. */
+function readDays(entity, days) {
+  return entity.command("hvacThermostat", "getWeeklySchedule", {
+    daystoreturn: days,
+    modetoreturn: HEAT_SETPOINTS | COOL_SETPOINTS,
+  });
+}
+
+// The thermostat reports systemMode before it switches weekly schedules.
+async function readModeSchedule(endpoint, systemMode) {
+  const mode = { 1: "range", 3: "cool", 4: "heat" }[systemMode];
+  const previous = scheduleReads.get(endpoint);
+  if (previous?.mode === mode && mode) {
+    return;
+  }
+  if (!mode) {
+    scheduleReads.delete(endpoint);
+    return;
+  }
+  const request = { mode };
+  scheduleReads.set(endpoint, request);
+  for (const delay of [1000, 2000, 4000, 8000, 16000]) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (scheduleReads.get(endpoint) !== request || request.complete) {
+      return;
+    }
+    try {
+      await readDays(endpoint, 0x7f);
+    } catch (error) {
+      logger.debug(`Weekly schedule read: ${error}`, "zhc:nest");
+    }
+  }
+  // A later report can retry if the thermostat never supplied the full week.
+  if (scheduleReads.get(endpoint) === request && !request.complete) {
+    scheduleReads.delete(endpoint);
+  }
+}
+
+/** Publish a week once every day has answered, including days that are empty. */
+function updatedWeek(cache, endpoint, mode, changes) {
+  let week = cache.get(endpoint);
+  if (!week || week.mode !== mode) {
+    week = { mode, days: {} };
+    cache.set(endpoint, week);
+  }
+  Object.assign(week.days, changes);
+  if (WEEK.every((name) => Object.hasOwn(week.days, name))) {
+    return { ...week.days };
+  }
+}
+
 const nest = {
   // Eco, as the climate's preset.
   preset: {
@@ -317,6 +408,73 @@ const nest = {
           running_state: action,
           ...Object.fromEntries(Object.entries(RUNNING).map(([name, bit]) => [name, Boolean(state & bit)])),
         };
+      }
+    },
+  },
+  schedule_mode: {
+    cluster: "hvacThermostat",
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      if (msg.data.systemMode !== undefined) {
+        void readModeSchedule(msg.endpoint, msg.data.systemMode);
+      }
+    },
+  },
+  // A weekly schedule response can cover several days with the same setpoints.
+  heating_times: {
+    cluster: "hvacThermostat",
+    type: ["commandGetWeeklyScheduleRsp"],
+    convert: (model, msg) => {
+      const names = WEEK.filter((_, i) => msg.data.dayofweek & dayBit(i));
+      if (!names.length) {
+        return;
+      }
+      const heat = msg.data.mode & HEAT_SETPOINTS;
+      const cool = msg.data.mode & COOL_SETPOINTS;
+      const mode = heat && cool ? "range" : heat ? "heat" : "cool";
+      const points = msg.data.transitions.map((t) => {
+        const time = `${String(Math.floor(t.transitionTime / 60)).padStart(2, "0")}:${String(t.transitionTime % 60).padStart(2, "0")}`;
+        if (mode === "range") {
+          return { time, low: t.heatSetpoint / 100, high: t.coolSetpoint / 100 };
+        }
+        return { time, temp: (heat ? t.heatSetpoint : t.coolSetpoint) / 100 };
+      });
+      const changes = Object.fromEntries(names.map((name) => [name, points]));
+      const days = updatedWeek(heatingWeeks, msg.endpoint, mode, changes);
+      if (days) {
+        const request = scheduleReads.get(msg.endpoint);
+        if (request?.mode === mode) {
+          request.complete = true;
+        }
+        const byDay = Object.fromEntries(
+          WEEK.map((day, i) => [
+            FULL_DAYS[i],
+            days[day].map((p) => ({
+              time: p.time,
+              ...(mode !== "cool" && { heating_setpoint: p.low ?? p.temp }),
+              ...(mode !== "heat" && { cooling_setpoint: p.high ?? p.temp }),
+            })),
+          ]),
+        );
+        return { heating_times: { mode, days }, weekly_schedule_by_day: byDay };
+      }
+    },
+  },
+  // Each reported hot water attribute covers one day.
+  hot_water_times: {
+    cluster: HOT_WATER_NAME,
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      const changes = {};
+      for (const [id, text] of Object.entries(msg.data)) {
+        const name = WEEK[Number(id)];
+        if (name && typeof text === "string") {
+          changes[name] = text ? text.split(",").map((p) => ({ on: p.slice(0, 5), off: p.slice(6, 11) })) : [];
+        }
+      }
+      const days = updatedWeek(hotWaterWeeks, msg.endpoint, undefined, changes);
+      if (days && Object.keys(changes).length) {
+        return { hot_water_times: { days } };
       }
     },
   },
@@ -378,7 +536,42 @@ const nest = {
       }
     },
   },
+  // The running boost's length, minutes; 0 is none.
+  hot_water_boost: {
+    cluster: "genAnalogOutput",
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      if (msg.endpoint.ID === HOT_WATER_BOOST && msg.data.presentValue !== undefined) {
+        return { hot_water_boost: boostName(msg.data.presentValue) };
+      }
+    },
+  },
 };
+
+/** A boost length as the enum names it: off, 30, 60 or 120. */
+function boostName(minutes) {
+  const name = String(Math.round(minutes));
+  return HOT_WATER_BOOSTS.includes(name) ? name : "off";
+}
+
+/** The minutes a boost enum value writes: 0 for off. */
+function boostMinutes(value) {
+  const name = String(value).toLowerCase();
+  if (name === "off") {
+    return 0;
+  }
+  if (!HOT_WATER_BOOSTS.includes(name)) {
+    throw new Error(`hot_water_boost: expected off, ${HOT_WATER_BOOSTS.join(", ")}, got '${value}'`);
+  }
+  return Number(name);
+}
+
+async function setWeeklySchedule(entity, payload, options) {
+  const reply = await entity.command("hvacThermostat", "setWeeklySchedule", payload, options);
+  if (reply?.statusCode) {
+    throw new Error(`Set Weekly Schedule refused (ZCL status 0x${reply.statusCode.toString(16)})`);
+  }
+}
 
 const set = {
   preset: {
@@ -411,6 +604,173 @@ const set = {
     key: ["wake_screen"],
     convertSet: async (entity) => {
       await entity.command("genIdentify", "identify", { identifytime: 5 });
+    },
+  },
+  weekly_schedule: {
+    key: ["weekly_schedule"],
+    convertSet: async (entity, key, value, meta) => {
+      // The stock converter builds the standard Z2M payload, one group of days per command.
+      const target = Object.create(entity);
+      target.command = (_cluster, _command, payload, options) => setWeeklySchedule(entity, payload, options);
+      await tz.thermostat_weekly_schedule.convertSet(target, key, value, meta);
+      await readDays(entity, 0x7f);
+    },
+    convertGet: (entity) => readDays(entity, 0x7f).then(() => undefined),
+  },
+  heating_times: {
+    key: ["heating_times"],
+    // Send the setpoint mask for the last week read so a mode change can refuse a stale edit.
+    convertSet: async (entity, key, value, meta) => {
+      // Every day checked before the first is sent.
+      const mode = meta.state?.heating_times?.mode;
+      const mask =
+        mode === "heat" ? HEAT_SETPOINTS : mode === "cool" ? COOL_SETPOINTS : HEAT_SETPOINTS | COOL_SETPOINTS;
+      // The thermostat reports its mode before it switches schedules, and a
+      // range's mask passes on a heat or cool schedule: an edit of the week
+      // read for another mode waits for the mode's own.
+      const running = { heat: "heat", cool: "cool", auto: "range" }[meta.state?.system_mode];
+      if (mode && running && running !== mode) {
+        await readDays(entity, 0x7f).catch((error) => logger.debug(`Weekly schedule read: ${error}`, "zhc:nest"));
+        throw new Error(
+          `heating_times: the schedule read is the ${mode} one and the thermostat is in ${running}: try again once its schedule is read`,
+        );
+      }
+      const named = Object.entries(value ?? {}).map(([name, points]) => {
+        if (!WEEK.includes(name) || !Array.isArray(points) || points.length > 10) {
+          throw new Error(`heating_times: ${name}: expected a day mon-sun of at most 10 setpoints`);
+        }
+        // A temp (heat or cool schedule), or a range schedule's low and high:
+        // the shape of the schedule last read, which the unit takes alone.
+        const transitions = points.map(({ time, temp, low, high } = {}) => {
+          const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(time ?? "");
+          const range = low !== undefined || high !== undefined;
+          if (mode && range !== (mode === "range")) {
+            throw new Error(
+              `heating_times: ${name}: the schedule is ${mode}: ${mode === "range" ? "a low and a high" : "a temp"} for each setpoint`,
+            );
+          }
+          const values = range ? [number(low), number(high)] : [number(temp), number(temp)];
+          if (!match || values.some((v) => v === undefined)) {
+            throw new Error(`heating_times: ${name}: each setpoint needs a time HH:MM and a temp, or a low and a high`);
+          }
+          const [heatSetpoint, coolSetpoint] = values.map((v) => Math.round(v * 100));
+          // A setpoint the day holds goes back as it is, outside the limits too.
+          const echoed = (heatingWeeks.get(entity)?.days[name] ?? []).some(
+            (p) =>
+              p.time === time &&
+              Math.round((p.low ?? p.temp) * 100) === heatSetpoint &&
+              Math.round((p.high ?? p.temp) * 100) === coolSetpoint,
+          );
+          for (const [v, setpoint] of [
+            [values[0], heatSetpoint],
+            [values[1], coolSetpoint],
+          ]) {
+            if (!echoed && (setpoint < 900 || setpoint > 3200)) {
+              throw new Error(`heating_times: ${name}: ${v} °C outside 9-32 °C`);
+            }
+          }
+          if (range && coolSetpoint - heatSetpoint < 150) {
+            throw new Error(`heating_times: ${name}: ${low}-${high} °C: the high must be 1.5 °C or more above the low`);
+          }
+          return {
+            transitionTime: Number(match[1]) * 60 + Number(match[2]),
+            ...(mask & HEAT_SETPOINTS ? { heatSetpoint } : {}),
+            ...(mask & COOL_SETPOINTS ? { coolSetpoint } : {}),
+          };
+        });
+        const times = transitions.map((t) => t.transitionTime);
+        if (new Set(times).size !== times.length) {
+          throw new Error(`heating_times: ${name}: two setpoints at one time`);
+        }
+        return [name, transitions];
+      });
+      for (const [name, transitions] of named) {
+        await setWeeklySchedule(entity, {
+          numoftrans: transitions.length,
+          dayofweek: dayBit(WEEK.indexOf(name)),
+          mode: mask,
+          transitions,
+        });
+      }
+      const written = new Set(named.map(([name]) => name));
+      for (const [index, name] of WEEK.entries()) {
+        if (written.has(name) || !heatingWeeks.get(entity)?.days[name]) {
+          await readDays(entity, dayBit(index));
+        }
+      }
+    },
+    convertGet: async (entity) => {
+      for (let index = 0; index < WEEK.length; index++) {
+        await readDays(entity, dayBit(index));
+      }
+    },
+  },
+  hot_water_times: {
+    key: ["hot_water_times"],
+    convertSet: async (entity, key, value, meta) => {
+      const endpoint = meta.device.getEndpoint(THERMOSTAT);
+      const named = Object.entries(value ?? {});
+      const hhmm = /^([01]\d|2[0-3]):([0-5]\d)$/;
+      const days = {};
+      for (const [name, periods] of named) {
+        if (!WEEK.includes(name) || !Array.isArray(periods) || periods.length > 6) {
+          throw new Error(`hot_water_times: ${name}: expected a day mon-sun of at most 6 periods`);
+        }
+        if (periods.some((p) => !hhmm.test(p?.on ?? "") || !hhmm.test(p?.off ?? "") || p.on === p.off)) {
+          throw new Error(`hot_water_times: ${name}: each period needs an on and a different off, HH:MM`);
+        }
+        days[WEEK.indexOf(name)] = periods.map((p) => `${p.on}-${p.off}`).join(",");
+      }
+      // A day a frame (a day can fill one). The unit checks each day against
+      // the whole week, so several days named are cleared first: a period
+      // moving across midnight never meets the one it replaces. If one is
+      // refused, restore the values read from the unit before clearing it.
+      const write = (id, value) =>
+        endpoint.write(HOT_WATER, { [id]: { value, type: STRING } }, { manufacturerCode: NEST_LABS });
+      const replace = async (week) => {
+        const ids = Object.keys(week);
+        if (ids.length > 1) {
+          for (const id of ids) {
+            await write(id, "");
+          }
+        }
+        for (const id of ids) {
+          if (week[id] || ids.length === 1) {
+            await write(id, week[id]);
+          }
+        }
+      };
+      const ids = Object.keys(days);
+      const before = {};
+      if (ids.length > 1) {
+        for (const id of ids) {
+          const values = await endpoint.read(HOT_WATER, [Number(id)], { manufacturerCode: NEST_LABS });
+          if (typeof values[id] !== "string") {
+            throw new Error(`hot_water_times: no schedule for ${WEEK[id]}`);
+          }
+          before[id] = values[id];
+        }
+      }
+      try {
+        await replace(days);
+      } catch (error) {
+        if (ids.length > 1) {
+          await replace(before);
+        }
+        throw error;
+      } finally {
+        for (const [id, name] of WEEK.entries()) {
+          if (Object.hasOwn(days, id) || !hotWaterWeeks.get(endpoint)?.days[name]) {
+            await endpoint.read(HOT_WATER, [id], { manufacturerCode: NEST_LABS });
+          }
+        }
+      }
+    },
+    convertGet: async (entity, key, meta) => {
+      const endpoint = meta.device.getEndpoint(THERMOSTAT);
+      for (let id = 0; id < WEEK.length; id++) {
+        await endpoint.read(HOT_WATER, [id], { manufacturerCode: NEST_LABS });
+      }
     },
   },
   filter_reset: {
@@ -477,6 +837,17 @@ const set = {
       await meta.device.getEndpoint(SWITCHES[key]).read("genBinaryOutput", ["presentValue"]);
     },
   },
+  hot_water_boost: {
+    key: ["hot_water_boost"],
+    convertSet: async (entity, key, value, meta) => {
+      const minutes = boostMinutes(value);
+      await meta.device.getEndpoint(HOT_WATER_BOOST).write("genAnalogOutput", { presentValue: minutes });
+      return { state: { hot_water_boost: boostName(minutes) } };
+    },
+    convertGet: async (entity, key, meta) => {
+      await meta.device.getEndpoint(HOT_WATER_BOOST).read("genAnalogOutput", ["presentValue"]);
+    },
+  },
 };
 
 /** Whether the unit has an endpoint, or a cluster on it (all, for the docs' dummy device). */
@@ -509,12 +880,16 @@ const definition = {
     fz.battery,
     fz.hvac_user_interface,
     nest.preset,
+    nest.schedule_mode,
+    nest.heating_times,
+    nest.hot_water_times,
     nest.running,
     nest.backplate,
     nest.outputs,
     nest.inputs,
     nest.states,
     nest.switches,
+    nest.hot_water_boost,
   ],
   toZigbee: [
     tz.thermostat_occupied_heating_setpoint,
@@ -529,9 +904,13 @@ const definition = {
     set.preset,
     set.outputs,
     set.clear_schedule,
+    set.heating_times,
+    set.weekly_schedule,
+    set.hot_water_times,
     set.filter_reset,
     set.wake_screen,
     set.switches,
+    set.hot_water_boost,
     set.weather,
     set.external_temperature,
   ],
@@ -553,6 +932,7 @@ const definition = {
       .withSetpoint("occupied_heating_setpoint", 9, 32, 0.5)
       .withSetpoint("occupied_cooling_setpoint", 9, 32, 0.5)
       .withSystemMode(modes)
+      .withWeeklySchedule([...(canHeat ? ["heat"] : []), ...(canCool ? ["cool"] : [])])
       .withRunningState(["idle", "heat", "cool", "fan_only"])
       .withPreset(["none", "eco"], "Eco: the eco temperatures apply");
     if (has(device, THERMOSTAT, "hvacFanCtrl")) {
@@ -769,6 +1149,15 @@ const definition = {
         .withHomeAssistant({ icon: "mdi:calendar-remove" })
         .withDescription("Empties the schedule and turns Auto-Schedule off: Home Assistant schedules"),
     );
+    if (has(device, HOT_WATER_BOOST)) {
+      result.push(
+        e
+          .enum("hot_water_boost", ea.ALL, ["off", ...HOT_WATER_BOOSTS])
+          .withLabel("Hot water boost")
+          .withHomeAssistant({ icon: "mdi:water-boiler-alert" })
+          .withDescription("Heats the hot water for 30, 60 or 120 minutes; off ends a boost"),
+      );
+    }
     for (const [name, id] of Object.entries(SWITCHES)) {
       if (has(device, id)) {
         const [label, icon, description] = SWITCH_LABELS[name];
@@ -815,6 +1204,21 @@ const definition = {
       }
       payload.preset_modes = payload.preset_modes.filter((preset) => preset !== "none");
     },
+  },
+  // The boost's length has no state until the unit reports it: read it
+  // when Zigbee2MQTT starts or meets the thermostat without one, so Home
+  // Assistant's select never shows unknown.
+  onEvent: async (event) => {
+    const start = ["start", "deviceAnnounce"].includes(event.type);
+    const interviewed = event.type === "deviceInterview" && event.data.status === "successful";
+    const endpoint = event.data.device?.getEndpoint?.(HOT_WATER_BOOST);
+    if ((start || interviewed) && event.data.state?.hot_water_boost === undefined && endpoint) {
+      try {
+        await endpoint.read("genAnalogOutput", ["presentValue"]);
+      } catch (error) {
+        logger.debug(`Hot water boost read: ${error}`, "zhc:nest");
+      }
+    }
   },
   configure: async (device, coordinatorEndpoint) => {
     // The binding table survives firmware updates and can hold genOnOff
@@ -882,6 +1286,7 @@ const definition = {
         await report(id, "genBinaryOutput", ["presentValue"]);
       }
     }
+    await read(HOT_WATER_BOOST, "genAnalogOutput");
     for (const id of Object.values(INPUTS)) {
       await read(id, "genAnalogInput");
     }
