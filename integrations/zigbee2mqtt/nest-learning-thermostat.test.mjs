@@ -93,6 +93,45 @@ test("hold and duration use separate standard attributes", async () => {
   ]);
 });
 
+test("hot water boost accepts whole minutes instead of preset choices", async () => {
+  const entity = endpoint(1);
+  const meta = {
+    device: {
+      getEndpoint: (id) => {
+        assert.equal(id, 44);
+        return entity;
+      },
+    },
+  };
+  for (const minutes of [0, 1, 37, 75, 120]) {
+    const result = await writer("hot_water_boost").convertSet(null, "hot_water_boost", minutes, meta);
+    assert.equal(result.state.hot_water_boost, minutes);
+    assert.deepEqual(entity.writes.at(-1), ["genAnalogOutput", { presentValue: minutes }]);
+  }
+  assert.equal(
+    (await writer("hot_water_boost").convertSet(null, "hot_water_boost", "off", meta)).state.hot_water_boost,
+    0,
+  );
+  for (const bad of [-1, 121, 1.5, "", "37junk", true, null, NaN, Infinity]) {
+    const before = entity.writes.length;
+    await assert.rejects(writer("hot_water_boost").convertSet(null, "hot_water_boost", bad, meta));
+    assert.equal(entity.writes.length, before);
+  }
+});
+
+test("hot water boost reports exact numeric minutes and zero when stopped", () => {
+  const message = (minutes) => ({ endpoint: { ID: 44 }, data: { presentValue: minutes } });
+  const converter = definition.fromZigbee.find(
+    (c) => c?.cluster === "genAnalogOutput" && c.convert(null, message(30))?.hot_water_boost !== undefined,
+  );
+  for (const minutes of [0, 1, 37, 75, 120]) {
+    assert.equal(converter.convert(null, message(minutes)).hot_water_boost, minutes);
+  }
+  for (const bad of [NaN, Infinity, -1, 1.5]) {
+    assert.equal(converter.convert(null, message(bad)), undefined);
+  }
+});
+
 test("hold expiry reads Nest's manufacturer attribute and converts its epoch", async () => {
   const requests = [];
   await writer("hold_until").convertGet({ read: async (...args) => requests.push(args) });

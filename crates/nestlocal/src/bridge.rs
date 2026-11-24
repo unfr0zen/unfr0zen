@@ -306,25 +306,25 @@ impl Bridge {
         }
     }
 
-    /// Wakes the unit when the running hot water boost's length steps down or
-    /// ends, so that Matter, Zigbee and MQTT report it then: asleep, nothing
-    /// runs until the next wake, which can be minutes away.
+    /// Wakes at hot water boost expiry. Remaining-minute reports must not
+    /// wake a sleeping thermostat every minute.
     pub fn wake_for_boost(self: &Arc<Self>) {
         let alarm = match crate::wake::Alarm::new() {
             Ok(alarm) => Arc::new(alarm),
             Err(e) => {
-                logf!("wake: no alarm clock ({e}): a hot water boost's step is reported at the next wake");
+                logf!("wake: no alarm clock ({e}): hot water boost expiry is reported at the next wake");
                 return;
             }
         };
         let key = format!("device.{}", self.serial);
         let arm = {
             let (store, alarm, key) = (self.store.clone(), alarm.clone(), key.clone());
+            let programming = Arc::new(Mutex::new(()));
             move || {
+                let _programming = programming.lock().unwrap();
                 let dev = store.get(&key).map(|o| o.value).unwrap_or_default();
-                // Past the step, as the others' timers are.
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
-                let at = hot_water_boost_step(&dev).map(|left| now + left + 2.0);
+                let at = number(dev.get("hot_water_boost_time_to_end")).filter(|end| *end > now).map(|end| end + 2.0);
                 if let Err(e) = alarm.set(at) {
                     logf!("wake: boost alarm: {e}");
                 }
@@ -332,14 +332,27 @@ impl Bridge {
         };
         arm();
         let watched = arm.clone();
+        let (store, timed_key) = (self.store.clone(), key.clone());
         self.store.watch(move |o| {
             if o.key == key {
                 watched();
             }
         });
+        let runtime = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
-            while alarm.wait().is_ok() {
-                arm();
+            let _runtime = runtime.enter();
+            loop {
+                match alarm.wait() {
+                    Ok(()) => {
+                        store.notify_time_changed(&timed_key);
+                        arm();
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        logf!("wake: boost alarm wait: {e}");
+                        break;
+                    }
+                }
             }
         });
     }
@@ -846,13 +859,13 @@ impl Bridge {
                 },
             );
             add(
-                "select",
+                "number",
                 "hot_water_boost",
                 "Hot water boost",
                 fields! {
                     "value_template" => tmpl("hot_water_boost"),
                     "command_topic" => format!("{set}hot_water_boost"),
-                    "options" => vec!["off", "30", "60", "120"],
+                    "min" => 0, "max" => HOT_WATER_BOOST_MAX_MINUTES, "step" => 1, "mode" => "box",
                     "unit_of_measurement" => "min",
                     "icon" => "mdi:water-boiler-alert",
                 },
@@ -1072,6 +1085,12 @@ impl Bridge {
         }
         // Publish what changed; remove what the equipment no longer offers.
         let old = self.announced.lock().unwrap().replace(configs.clone()).unwrap_or_default();
+        if old.is_empty() {
+            // Only the numeric boost entity owns this setting.
+            for component in ["select", "switch"] {
+                self.publish(&format!("{}/{component}/{id}/hot_water_boost/config", self.discovery), true, b"");
+            }
+        }
         for topic in old.keys().filter(|t| !configs.contains_key(*t)) {
             self.publish(topic, true, b"");
         }
@@ -1127,22 +1146,21 @@ impl mqtt::Handler for Bridge {
     }
 }
 
-/// The boost lengths the unit's screen offers, minutes.
+/// Convenience presets for the native Matter select, in minutes.
 pub const HOT_WATER_BOOST_MINUTES: [i64; 3] = [30, 60, 120];
+/// The boost command's limit, independent of the convenience presets.
+pub const HOT_WATER_BOOST_MAX_MINUTES: i64 = 120;
 
-/// The running boost as the choice that covers the time it has left, if one runs.
+/// Whole minutes remaining, rounding a partial minute up; none after expiry.
 pub(crate) fn hot_water_boost(dev: &Fields) -> Option<i64> {
-    let left = hot_water_boost_left(dev)?;
-    Some(HOT_WATER_BOOST_MINUTES.into_iter().find(|m| (*m * 60) as f64 >= left).unwrap_or(120))
+    Some((hot_water_boost_left(dev)? / 60.0).ceil() as i64)
 }
 
-/// Seconds until the running boost's choice (hot_water_boost) next changes:
-/// it steps down to the next shorter length, or ends.
+/// Seconds until the reported remaining minutes next change, or the boost ends.
 pub(crate) fn hot_water_boost_step(dev: &Fields) -> Option<f64> {
     let left = hot_water_boost_left(dev)?;
-    let shown = hot_water_boost(dev)?;
-    let shorter = HOT_WATER_BOOST_MINUTES.into_iter().filter(|m| *m < shown).max().unwrap_or(0);
-    Some(left - (shorter * 60) as f64)
+    let shown = (left / 60.0).ceil();
+    Some(left - (shown - 1.0) * 60.0)
 }
 
 /// Whether the boost length shown differs from the one `seen` holds, which
@@ -1327,7 +1345,7 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
             s.insert(key.into(), fan_schedule_time(t).into());
         }
     }
-    s.insert("hot_water_boost".into(), hot_water_boost(dev).map_or("off".to_string(), |m| m.to_string()).into());
+    s.insert("hot_water_boost".into(), hot_water_boost(dev).unwrap_or(0).into());
     s.insert("hot_water_schedule".into(), hot_water_schedule(dev).into());
     // This nestlocal reads and writes heating_times and hot_water_times: a
     // retained schedule from older firmware can't say so, as the state,
@@ -1677,10 +1695,10 @@ pub mod tests {
         let now = chrono::Utc::now().timestamp();
         let boost = |left: i64| obj(json!({"hot_water_boost_time_to_end": now + left}));
         let mut seen = None;
-        assert!(!boost_stepped(&boost(3000), &mut seen), "the first look");
-        assert!(!boost_stepped(&boost(2000), &mut seen), "60 min shown still");
-        assert!(boost_stepped(&boost(1700), &mut seen), "down to 30 min");
-        assert!(!boost_stepped(&boost(1600), &mut seen));
+        assert!(!boost_stepped(&boost(2220), &mut seen), "the first look");
+        assert!(!boost_stepped(&boost(2210), &mut seen), "37 min shown still");
+        assert!(boost_stepped(&boost(2160), &mut seen), "down to 36 min");
+        assert!(!boost_stepped(&boost(2150), &mut seen));
         assert!(boost_stepped(&boost(-1), &mut seen), "ended");
         assert!(!boost_stepped(&Fields::new(), &mut seen), "none, as before");
     }
@@ -1691,7 +1709,7 @@ pub mod tests {
             let b = test_bridge();
             b.announce(&dev, &Fields::new());
             let configs = b.announced.lock().unwrap().clone().unwrap();
-            [("select", "hot_water_boost"), ("switch", "hot_water_schedule")]
+            [("number", "hot_water_boost"), ("switch", "hot_water_schedule")]
                 .map(|(component, key)| configs.keys().any(|t| t.contains(component) && t.contains(key)))
         };
         assert_eq!(announced(Fields::new()), [false, false]);
@@ -1700,17 +1718,14 @@ pub mod tests {
         let now = chrono::Utc::now().timestamp();
         let read = |dev: Value| {
             let s = state(&obj(dev), &Fields::new());
-            (s["hot_water_boost"].as_str().unwrap().to_string(), s["hot_water_schedule"].as_bool().unwrap())
+            (s["hot_water_boost"].as_i64().unwrap(), s["hot_water_schedule"].as_bool().unwrap())
         };
-        assert_eq!(read(json!({})), ("off".to_string(), true), "a unit that has said nothing follows its schedule");
-        assert_eq!(
-            read(json!({"hot_water_mode": "off", "hot_water_boost_time_to_end": 0})),
-            ("off".to_string(), false)
-        );
-        for (left, shown) in [(60, "30"), (1800, "30"), (1801, "60"), (3700, "120"), (90000, "120")] {
+        assert_eq!(read(json!({})), (0, true), "a unit that has said nothing follows its schedule");
+        assert_eq!(read(json!({"hot_water_mode": "off", "hot_water_boost_time_to_end": 0})), (0, false));
+        for (left, shown) in [(60, 1), (90, 2), (1800, 30), (1830, 31), (2220, 37), (4500, 75), (90000, 1500)] {
             assert_eq!(read(json!({"hot_water_boost_time_to_end": now + left})).0, shown, "{left} s left");
         }
-        assert_eq!(read(json!({"hot_water_boost_time_to_end": now - 5})).0, "off", "a boost that ended");
+        assert_eq!(read(json!({"hot_water_boost_time_to_end": now - 5})).0, 0, "a boost that ended");
         assert!(switch_on(&obj(json!({"hot_water_boost_time_to_end": now + 60})), "hot_water_boost"));
         assert!(!switch_on(&obj(json!({"hot_water_mode": "off"})), "hot_water_schedule"));
         assert!(switch_on(&obj(json!({"learning_mode": true})), "learning_mode"));
@@ -1905,7 +1920,7 @@ pub mod tests {
             .filter(|(topic, _)| topic.starts_with("homeassistant/number/"))
             .map(|(_, c)| serde_json::from_str(c).unwrap())
             .collect();
-        assert_eq!(numbers.len(), 6);
+        assert_eq!(numbers.len(), 7);
         for c in numbers {
             let name = c["command_topic"].as_str().unwrap().strip_prefix("nestlocal/S/set/").unwrap();
             let (min, max) = (c["min"].as_f64().unwrap(), c["max"].as_f64().unwrap());
@@ -1976,6 +1991,36 @@ pub mod tests {
             }
         };
         tokio::time::timeout(Duration::from_secs(5), read).await.expect("no such publish")
+    }
+
+    #[tokio::test]
+    async fn numeric_boost_discovery_retires_legacy_control_types() {
+        let b = test_bridge();
+        b.store.merge("device.S", &fields! {"has_hot_water_control" => true}, 0, 0, true);
+        b.store.merge("shared.S", &Fields::new(), 0, 0, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let broker = mqtt::Broker::parse(&format!("tcp://{}", listener.local_addr().unwrap())).unwrap();
+        b.run(&broker, "", "", None);
+        let (mut conn, _) = listener.accept().await.unwrap();
+        let mut buf = bytes::BytesMut::new();
+        crate::mqtt::tests::read_packet(&mut conn, &mut buf).await;
+        tokio::io::AsyncWriteExt::write_all(&mut conn, &[0x20, 2, 0, 0]).await.unwrap();
+        let (_, payload, retain) =
+            published(&mut conn, &mut buf, |t, _| t == "homeassistant/select/nestlocal_s/hot_water_boost/config").await;
+        assert!(payload.is_empty() && retain);
+        let (_, payload, retain) =
+            published(&mut conn, &mut buf, |t, _| t == "homeassistant/switch/nestlocal_s/hot_water_boost/config").await;
+        assert!(payload.is_empty() && retain);
+        let (_, payload, retain) =
+            published(&mut conn, &mut buf, |t, _| t == "homeassistant/number/nestlocal_s/hot_water_boost/config").await;
+        let config: Value = serde_json::from_slice(&payload).unwrap();
+        assert!(retain);
+        assert_eq!(
+            (config["min"].as_i64(), config["max"].as_i64(), config["step"].as_i64()),
+            (Some(0), Some(120), Some(1))
+        );
+        assert_eq!(config["command_topic"], "nestlocal/S/set/hot_water_boost");
+        assert!(config.get("options").is_none());
     }
 
     #[test]

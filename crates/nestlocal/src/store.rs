@@ -355,6 +355,19 @@ impl Store {
         self.inner.lock().unwrap().device_watch.push(Arc::new(f));
     }
 
+    /// Refreshes time-derived protocol state without rewriting or resending a native bucket.
+    pub fn notify_time_changed(&self, key: &str) {
+        let (object, watch) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.objects.get(key).cloned(), inner.watch.clone())
+        };
+        if let Some(object) = object {
+            for watcher in watch {
+                watcher(&object);
+            }
+        }
+    }
+
     /// Writes the file at most every 5 s: NAND wears, and the device
     /// resends anything lost on its next subscribe anyway.
     pub async fn save_changes(self: Arc<Self>) {
@@ -410,6 +423,27 @@ pub mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
         N.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[test]
+    fn time_refresh_notifies_watchers_without_changing_or_resending_the_bucket() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let s = temp_store();
+        s.merge("device.S", &fields! {"hot_water_boost_time_to_end" => 1234}, 7, 5678, true);
+        let before = serde_json::to_value(s.all()).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let watched = calls.clone();
+        s.watch(move |o| {
+            assert_eq!(o.key, "device.S");
+            watched.fetch_add(1, Ordering::SeqCst);
+        });
+        let (mut rx, _subscription) = s.subscribe();
+        s.notify_time_changed("missing");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        s.notify_time_changed("device.S");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(serde_json::to_value(s.all()).unwrap(), before);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

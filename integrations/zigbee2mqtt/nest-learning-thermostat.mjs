@@ -126,8 +126,8 @@ const OUTPUTS = {
 };
 const INPUTS = { time_to_target: 5, filter_runtime: 6 };
 const HOT_WATER_BOOST = 44;
-// The boost lengths, minutes, as MQTT's select offers them; "off" is 0.
-const HOT_WATER_BOOSTS = ["30", "60", "120"];
+// Whole minutes, with zero stopping the boost.
+const HOT_WATER_BOOST_MAX_MINUTES = 120;
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
   auto_schedule: 10,
@@ -563,29 +563,25 @@ const nest = {
     cluster: "genAnalogOutput",
     type: ["attributeReport", "readResponse"],
     convert: (model, msg) => {
-      if (msg.endpoint.ID === HOT_WATER_BOOST && msg.data.presentValue !== undefined) {
-        return { hot_water_boost: boostName(msg.data.presentValue) };
+      const minutes = msg.data.presentValue;
+      if (msg.endpoint.ID === HOT_WATER_BOOST && Number.isInteger(minutes) && minutes >= 0) {
+        return { hot_water_boost: minutes };
       }
     },
   },
 };
 
-/** A boost length as the enum names it: off, 30, 60 or 120. */
-function boostName(minutes) {
-  const name = String(Math.round(minutes));
-  return HOT_WATER_BOOSTS.includes(name) ? name : "off";
-}
-
-/** The minutes a boost enum value writes: 0 for off. */
+/** Whole boost minutes; the legacy off command remains an alias for zero. */
 function boostMinutes(value) {
-  const name = String(value).toLowerCase();
-  if (name === "off") {
-    return 0;
+  if (typeof value === "string") {
+    value = value.trim();
+    if (value.toLowerCase() === "off") return 0;
+    if (/^\d+$/.test(value)) value = Number(value);
   }
-  if (!HOT_WATER_BOOSTS.includes(name)) {
-    throw new Error(`hot_water_boost: expected off, ${HOT_WATER_BOOSTS.join(", ")}, got '${value}'`);
+  if (!Number.isInteger(value) || value < 0 || value > HOT_WATER_BOOST_MAX_MINUTES) {
+    throw new Error(`hot_water_boost: expected whole minutes 0-${HOT_WATER_BOOST_MAX_MINUTES}, got '${value}'`);
   }
-  return Number(name);
+  return value;
 }
 
 async function setWeeklySchedule(entity, payload, options) {
@@ -918,7 +914,7 @@ const set = {
     convertSet: async (entity, key, value, meta) => {
       const minutes = boostMinutes(value);
       await meta.device.getEndpoint(HOT_WATER_BOOST).write("genAnalogOutput", { presentValue: minutes });
-      return { state: { hot_water_boost: boostName(minutes) } };
+      return { state: { hot_water_boost: minutes } };
     },
     convertGet: async (entity, key, meta) => {
       await meta.device.getEndpoint(HOT_WATER_BOOST).read("genAnalogOutput", ["presentValue"]);
@@ -1255,10 +1251,14 @@ const definition = {
     if (has(device, HOT_WATER_BOOST)) {
       result.push(
         e
-          .enum("hot_water_boost", ea.ALL, ["off", ...HOT_WATER_BOOSTS])
+          .numeric("hot_water_boost", ea.ALL)
           .withLabel("Hot water boost")
+          .withUnit("min")
+          .withValueMin(0)
+          .withValueMax(HOT_WATER_BOOST_MAX_MINUTES)
+          .withValueStep(1)
           .withHomeAssistant({ icon: "mdi:water-boiler-alert" })
-          .withDescription("Heats the hot water for 30, 60 or 120 minutes; off ends a boost"),
+          .withDescription("Whole minutes remaining; set 1-120 to start a boost, or 0 to stop it"),
       );
     }
     for (const [name, id] of Object.entries(SWITCHES)) {
@@ -1310,12 +1310,12 @@ const definition = {
   },
   // The boost's length has no state until the unit reports it: read it
   // when Zigbee2MQTT starts or meets the thermostat without one, so Home
-  // Assistant's select never shows unknown.
+  // Assistant's number never shows unknown.
   onEvent: async (event) => {
     const start = ["start", "deviceAnnounce"].includes(event.type);
     const interviewed = event.type === "deviceInterview" && event.data.status === "successful";
     const endpoint = event.data.device?.getEndpoint?.(HOT_WATER_BOOST);
-    if ((start || interviewed) && event.data.state?.hot_water_boost === undefined && endpoint) {
+    if ((start || interviewed) && !Number.isInteger(event.data.state?.hot_water_boost) && endpoint) {
       try {
         await endpoint.read("genAnalogOutput", ["presentValue"]);
       } catch (error) {

@@ -549,7 +549,7 @@ impl management::ClusterHandler for Management {
         // fill (an emergency boost is the one it has).
         let info = request.boost_info()?;
         let seconds = info.duration()?;
-        let longest = crate::bridge::HOT_WATER_BOOST_MINUTES[crate::bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
+        let longest = crate::bridge::HOT_WATER_BOOST_MAX_MINUTES;
         let minutes = seconds / 60;
         let unsupported = info.one_shot()? == Some(true)
             || info.temporary_setpoint()?.is_some()
@@ -838,13 +838,18 @@ mod tests {
             w.handle_boost(ctx(8), management::BoostRequest::new(TLVElement::new(&tlv)))
         };
         assert_eq!(w.boost_state(ctx(8)).unwrap(), BoostStateEnum::Inactive);
-        boost(2700).unwrap();
-        let left = field(&n, "device", "hot_water_boost_time_to_end").as_f64().unwrap()
-            - chrono::Utc::now().timestamp() as f64;
-        assert!((2698.0..=2700.0).contains(&left), "{left}");
-        assert_eq!(w.boost_state(ctx(8)).unwrap(), BoostStateEnum::Active);
-        assert!(boost(3 * 3600).is_err() && boost(0).is_err());
-        assert!(boost(90).is_err(), "not whole minutes");
+        for minutes in [1, 37, 75, 120] {
+            boost(minutes * 60).unwrap();
+            let left = field(&n, "device", "hot_water_boost_time_to_end").as_f64().unwrap()
+                - chrono::Utc::now().timestamp() as f64;
+            assert!((f64::from(minutes * 60) - 2.0..=f64::from(minutes * 60)).contains(&left), "{left}");
+            assert_eq!(w.boost_state(ctx(8)).unwrap(), BoostStateEnum::Active);
+        }
+        let end = field(&n, "device", "hot_water_boost_time_to_end");
+        for seconds in [0, 90, 121 * 60, u32::MAX] {
+            assert!(boost(seconds).is_err(), "{seconds} seconds");
+            assert_eq!(field(&n, "device", "hot_water_boost_time_to_end"), end);
+        }
         let one_shot = {
             let mut tlv = vec![0x15, 0x35, 0x00, 0x26, 0x00];
             tlv.extend(1800u32.to_le_bytes());

@@ -504,12 +504,21 @@ impl mode_select::ClusterHandler for HoldDuration {
     }
 }
 
-/// The hot water boost, as a choice of lengths as MQTT's select offers
-/// them: mode 0 is off, the others boost for bridge::HOT_WATER_BOOST_MINUTES.
-/// The current mode is the shortest length covering the boost's time left.
+/// Compatibility presets for hot water boosts. Water Heater Management
+/// accepts arbitrary durations; a non-preset countdown reads Custom duration.
 pub struct HotWaterBoost {
     pub dataver: Dataver,
     pub nest: Arc<Nest>,
+}
+
+impl HotWaterBoost {
+    const CUSTOM: u8 = (bridge::HOT_WATER_BOOST_MINUTES.len() + 1) as u8;
+
+    fn mode(&self) -> u8 {
+        bridge::hot_water_boost(&self.nest.view().dev).map_or(0, |minutes| {
+            bridge::HOT_WATER_BOOST_MINUTES.iter().position(|m| *m == minutes).map_or(Self::CUSTOM, |i| (i + 1) as u8)
+        })
+    }
 }
 
 impl mode_select::ClusterHandler for HotWaterBoost {
@@ -536,9 +545,10 @@ impl mode_select::ClusterHandler for HotWaterBoost {
     ) -> Result<P, Error> {
         let label = |i: usize| match i {
             0 => "Off".to_string(),
+            i if i == Self::CUSTOM as usize => "Custom duration".to_string(),
             i => format!("{} min", bridge::HOT_WATER_BOOST_MINUTES[i - 1]),
         };
-        let modes = bridge::HOT_WATER_BOOST_MINUTES.len() + 1;
+        let modes = Self::CUSTOM as usize + 1;
         macro_rules! option {
             ($b:expr, $i:expr) => {
                 $b.label(&label($i))?.mode($i as u8)?.semantic_tags()?.end()?.end()
@@ -558,10 +568,7 @@ impl mode_select::ClusterHandler for HotWaterBoost {
     }
 
     fn current_mode(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
-        let running = bridge::hot_water_boost(&self.nest.view().dev);
-        let mode =
-            running.and_then(|m| bridge::HOT_WATER_BOOST_MINUTES.iter().position(|l| *l == m)).map_or(0, |i| i + 1);
-        Ok(mode as u8)
+        Ok(self.mode())
     }
 
     fn handle_change_to_mode(
@@ -569,8 +576,12 @@ impl mode_select::ClusterHandler for HotWaterBoost {
         _ctx: impl InvokeContext,
         request: mode_select::ChangeToModeRequest<'_>,
     ) -> Result<(), Error> {
-        let arg = match request.new_mode()? as usize {
-            0 => "off".to_string(),
+        let mode = request.new_mode()?;
+        if mode == Self::CUSTOM {
+            return if self.mode() == Self::CUSTOM { Ok(()) } else { Err(ErrorCode::InvalidInState.into()) };
+        }
+        let arg = match mode as usize {
+            0 => "0".to_string(),
             i => bridge::HOT_WATER_BOOST_MINUTES.get(i - 1).ok_or(ErrorCode::ConstraintError)?.to_string(),
         };
         self.nest.apply("hot_water_boost", &arg).map_err(failed)
@@ -1295,9 +1306,17 @@ mod tests {
     }
 
     #[test]
-    fn the_hot_water_boost_is_a_choice_of_lengths_as_on_mqtt() {
+    fn hot_water_presets_do_not_misreport_nonpreset_boosts() {
         let now = chrono::Utc::now().timestamp();
-        for (left, mode) in [(None, 0), (Some(-5), 0), (Some(600), 1), (Some(3000), 2), (Some(7000), 3)] {
+        for (left, mode) in [
+            (None, 0),
+            (Some(-5), 0),
+            (Some(600), 4),
+            (Some(1800), 1),
+            (Some(2220), 4),
+            (Some(3600), 2),
+            (Some(7200), 3),
+        ] {
             let dev = left.map_or_else(
                 || fields! {"has_hot_water_control" => true},
                 |l| fields! {"has_hot_water_control" => true, "hot_water_boost_time_to_end" => now + l},
@@ -1323,7 +1342,51 @@ mod tests {
         change(0).unwrap();
         assert_eq!(field(&boost.nest, "device", "hot_water_boost_time_to_end").as_f64(), Some(0.0));
         assert_eq!(boost.current_mode(ctx(HOT_WATER_BOOST)).unwrap(), 0);
-        assert_eq!(code(change(4)), ErrorCode::ConstraintError);
+        assert_eq!(code(change(4)), ErrorCode::InvalidInState);
+        assert_eq!(code(change(5)), ErrorCode::ConstraintError);
+        boost.nest.apply("hot_water_boost", "37").unwrap();
+        let end = field(&boost.nest, "device", "hot_water_boost_time_to_end");
+        assert_eq!(boost.current_mode(ctx(HOT_WATER_BOOST)).unwrap(), 4);
+        change(4).unwrap();
+        assert_eq!(
+            field(&boost.nest, "device", "hot_water_boost_time_to_end"),
+            end,
+            "selecting the current custom state never renews a boost"
+        );
+        let read_modes = || {
+            let mut buf = [0u8; 512];
+            let mut wb = WriteBuf::new(&mut buf);
+            boost
+                .supported_modes(
+                    ctx(HOT_WATER_BOOST),
+                    ArrayAttributeRead::ReadAll(
+                        mode_select::ModeOptionStructArrayBuilder::new(
+                            TLVWriteParent::new("test", &mut wb),
+                            &TLVTag::Anonymous,
+                        )
+                        .unwrap(),
+                    ),
+                )
+                .unwrap();
+            let len = wb.get_tail();
+            let modes: TLVArray<'_, mode_select::ModeOptionStruct<'_>> =
+                TLVArray::new(TLVElement::new(&buf[..len])).unwrap();
+            modes
+                .iter()
+                .map(|m| {
+                    let m = m.unwrap();
+                    (m.mode().unwrap(), m.label().unwrap().to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        let modes = read_modes();
+        assert_eq!(
+            modes,
+            [(0, "Off"), (1, "30 min"), (2, "60 min"), (3, "120 min"), (4, "Custom duration")]
+                .map(|(id, label)| (id, label.to_string()))
+        );
+        boost.nest.apply("hot_water_boost", "75").unwrap();
+        assert_eq!(read_modes(), modes, "SupportedModes is fixed");
     }
 
     #[test]

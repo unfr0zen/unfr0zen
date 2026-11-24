@@ -37,8 +37,8 @@
 //!   43  whether the screen's brightness is automatic: Binary Output, in
 //!       SWITCHES
 //!   44  the hot water boost's length, minutes (with hot water control):
-//!       Analog Output, 30, 60 or 120 as the boost running covers its time
-//!       left, 0 without one; writing 1-120 boosts that long, 0 ends it.
+//!       Analog Output, whole remaining minutes (partial minutes rounded up),
+//!       0 without one; writing 1-120 boosts that long, 0 ends it.
 //!       Switch 17 stays: on is the shortest boost
 //!
 //! The Thermostat cluster's weekly schedule is the unit's (schedule.rs): Set
@@ -239,8 +239,8 @@ const ECONOMY: u8 = 0x04;
 /// A weekly schedule's mode: its transitions' heating or cooling setpoints.
 const HEAT_SETPOINTS: u8 = 0x01;
 const COOL_SETPOINTS: u8 = 0x02;
-/// The longest hot water boost, minutes: the last length MQTT's select offers.
-const HOT_WATER_BOOST_LONGEST: i64 = bridge::HOT_WATER_BOOST_MINUTES[bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
+/// The hot water boost limit, in whole minutes.
+const HOT_WATER_BOOST_LONGEST: i64 = bridge::HOT_WATER_BOOST_MAX_MINUTES;
 // BACnet engineering units, Analog Output's.
 const SECONDS: u16 = 73;
 const MINUTES: u16 = 72;
@@ -819,7 +819,7 @@ impl Nest {
             0x0041 => Value::F32(max),
             0x0045 => Value::F32(min),
             0x0051 => Value::Bool(false), // in service
-            0x006A if endpoint == HOLD_DURATION_ENDPOINT => Value::F32(1.0),
+            0x006A if matches!(endpoint, HOLD_DURATION_ENDPOINT | HOT_WATER_BOOST_ENDPOINT) => Value::F32(1.0),
             0x0055 => Value::F32(value as f32),
             0x006F => Value::Bitmap8(0), // status flags: all well
             0x0075 => Value::Enum16(units),
@@ -1025,7 +1025,9 @@ impl Clusters for Nest {
             THERMOSTAT => THERMOSTAT_ATTRIBUTES,
             FAN | DISPLAY => &[0x0000, 0x0001],
             TEMPERATURE | HUMIDITY => MEASUREMENT_ATTRIBUTES,
-            ANALOG_OUTPUT if endpoint == HOLD_DURATION_ENDPOINT => HOLD_DURATION_ATTRIBUTES,
+            ANALOG_OUTPUT if matches!(endpoint, HOLD_DURATION_ENDPOINT | HOT_WATER_BOOST_ENDPOINT) => {
+                HOLD_DURATION_ATTRIBUTES
+            }
             ANALOG_OUTPUT => ANALOG_OUTPUT_ATTRIBUTES,
             ANALOG_INPUT => ANALOG_INPUT_ATTRIBUTES,
             BINARY_INPUT | BINARY_OUTPUT => BINARY_ATTRIBUTES,
@@ -1915,6 +1917,8 @@ mod tests {
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(MINUTES)));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0045), Some(Value::F32(0.0)));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0041), Some(Value::F32(120.0)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x006A), Some(Value::F32(1.0)));
+        assert!(n.attributes(44, ANALOG_OUTPUT).unwrap().contains(&0x006A));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(0.0)), "no boost");
         let device = format!("device.{}", n.bridge.serial);
         let now = chrono::Utc::now().timestamp();
@@ -1922,15 +1926,13 @@ mod tests {
             n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + seconds}, 0, 0, true);
             n.read(44, ANALOG_OUTPUT, 0x0055)
         };
-        // The length that covers the time left, as MQTT's select shows it.
-        for (seconds, minutes) in [(7000, 120.0), (3000, 60.0), (600, 30.0), (-5, 0.0)] {
+        for (seconds, minutes) in [(7000, 117.0), (3000, 50.0), (2220, 37.0), (600, 10.0), (-5, 0.0)] {
             assert_eq!(ends_in(seconds), Some(Value::F32(minutes)), "{seconds} s left");
         }
-        // 60 boosts an hour; 0 ends it.
-        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(60.0)), status::SUCCESS);
+        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(37.0)), status::SUCCESS);
         let end = number(n.view().dev.get("hot_water_boost_time_to_end")).unwrap() - now as f64;
-        assert!((3598.0..=3602.0).contains(&end), "{end}");
-        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
+        assert!((2218.0..=2222.0).contains(&end), "{end}");
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(37.0)));
         assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(0.0)), status::SUCCESS);
         assert_eq!(number(n.view().dev.get("hot_water_boost_time_to_end")), Some(0.0));
         for bad in [121.0, -1.0, 30.5] {
@@ -1949,7 +1951,7 @@ mod tests {
         assert_eq!(n.hot_water_boost_step(), None, "no boost");
         let device = format!("device.{}", n.bridge.serial);
         let now = chrono::Utc::now().timestamp();
-        for (left, step) in [(3700, 100.0), (3000, 1200.0), (1000, 1000.0)] {
+        for (left, step) in [(3700, 40.0), (3000, 60.0), (1000, 40.0)] {
             n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + left}, 0, 0, true);
             let due = n.hot_water_boost_step().unwrap();
             assert!((step - 2.0..=step).contains(&due), "{left} s left: {due}");

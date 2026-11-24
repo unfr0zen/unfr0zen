@@ -370,17 +370,15 @@ impl Bridge {
                 device(fields! {field => num((hour(arg)? * 3600) as f64)})
             }
 
-            // ON is the shortest boost, for On/Off endpoints; the rest are
-            // minutes, up to the longest the select offers (Matter's Boost
-            // takes any duration).
+            // Whole minutes: zero cancels. On/Off endpoints keep their default boost.
             "hot_water_boost" => {
-                let longest = crate::bridge::HOT_WATER_BOOST_MINUTES[crate::bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
+                let longest = crate::bridge::HOT_WATER_BOOST_MAX_MINUTES;
                 let minutes = match arg.to_uppercase().as_str() {
                     "ON" => crate::bridge::HOT_WATER_BOOST_MINUTES[0],
                     "OFF" => 0,
                     other => match other.parse() {
-                        Ok(m) if (1..=longest).contains(&m) => m,
-                        _ => return Err(format!("expected off, or minutes 1-{longest}")),
+                        Ok(m) if (0..=longest).contains(&m) => m,
+                        _ => return Err(format!("expected whole minutes 0-{longest}, or off")),
                     },
                 };
                 let end = if minutes == 0 { 0 } else { now + minutes * 60 };
@@ -895,13 +893,13 @@ mod tests {
             field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
                 - chrono::Utc::now().timestamp() as f64
         };
-        for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("45", 2700.0), ("60", 3600.0), ("120", 7200.0)] {
+        for (arg, seconds) in [("ON", 1800.0), ("1", 60.0), ("37", 2220.0), ("75", 4500.0), ("120", 7200.0)] {
             assert!((seconds - 2.0..=seconds).contains(&left(arg)), "{arg}");
         }
-        for arg in ["off", "OFF"] {
+        for arg in ["0", "off", "OFF"] {
             assert_eq!(field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64(), Some(0.0), "{arg}");
         }
-        for arg in ["0", "121", "-1", "", "maybe"] {
+        for arg in ["121", "-1", "30.5", "NaN", "", "maybe"] {
             assert!(b.fields("hot_water_boost", arg).is_err(), "{arg}");
         }
         assert_eq!(field("hot_water_schedule", "ON", "hot_water_mode"), json!("schedule"));
