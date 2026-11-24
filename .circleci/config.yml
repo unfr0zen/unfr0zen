@@ -49,6 +49,7 @@ jobs:
             utils/ci/Dockerfile build-image true
             .* lint true
             (crates|platform|utils|\.circleci|\.cargo)/.* app true
+            integrations/zigbee2mqtt/.* app true
             Cargo\.(toml|lock) app true
           output-path: /tmp/pipeline-parameters.json
       - run:
