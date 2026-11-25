@@ -37,8 +37,8 @@
 //!   43  whether the screen's brightness is automatic: Binary Output, in
 //!       SWITCHES
 //!   44  the hot water boost's length, minutes (with hot water control):
-//!       Analog Output, 30, 60 or 120 as the boost running covers its time
-//!       left, 0 without one; writing 1-120 boosts that long, 0 ends it.
+//!       Analog Output, whole remaining minutes (partial minutes rounded up),
+//!       0 without one; writing 1-120 boosts that long, 0 ends it.
 //!       Switch 17 stays: on is the shortest boost
 //!
 //! The Thermostat cluster's weekly schedule is the unit's (schedule.rs): Set
@@ -58,7 +58,7 @@ use crate::bridge::{self, Bridge};
 use crate::json::{number, sprint, truthy, Fields};
 use crate::weather::{HAForecast, HAWeather};
 
-use super::zcl::{status, Answer, Clusters, Value};
+use super::zcl::{status, Answer, Clusters, Value, HOLD_EXPIRY};
 use crate::hotwater;
 use crate::schedule::{self, Kind};
 
@@ -140,6 +140,7 @@ const TEMPERATURE_SOURCE_ENDPOINT: u8 = 28;
 const SCREEN_TIMEOUT_ENDPOINT: u8 = 40;
 const SCREEN_BRIGHTNESS_ENDPOINT: u8 = 42;
 const HOT_WATER_BOOST_ENDPOINT: u8 = 44;
+const HOLD_DURATION_ENDPOINT: u8 = 47;
 const STAGE_ENDPOINTS: u8 = 30;
 
 /// The switches, by endpoint: their bucket field and description.
@@ -157,6 +158,8 @@ const SWITCHES: &[(u8, &str, &str)] = &[
     (29, "fan_schedule", "Fan schedule"),               // with a fan
     (41, "screen_always_on", "Screen always on"),
     (43, "screen_brightness_auto", "Screen brightness auto"),
+    (45, "schedule_enabled", "Schedule enabled"),
+    (46, "hold", "Hold"),
 ];
 
 /// The states, by endpoint: their bucket field, description and, past the
@@ -186,10 +189,35 @@ const SIMPLE_SENSOR: u16 = 0x000C;
 
 const BASIC_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0007, 0x4000];
 const THERMOSTAT_ATTRIBUTES: &[u16] = &[
-    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
-    0x0018, 0x0019, 0x001B, 0x001C, 0x0020, 0x0021, 0x0022, 0x0025, 0x0029,
+    0x0000,
+    0x0001,
+    0x0002,
+    0x0003,
+    0x0004,
+    0x0005,
+    0x0006,
+    0x0011,
+    0x0012,
+    0x0013,
+    0x0014,
+    0x0015,
+    0x0016,
+    0x0017,
+    0x0018,
+    0x0019,
+    0x001B,
+    0x001C,
+    0x0020,
+    0x0021,
+    0x0022,
+    0x0023,
+    0x0024,
+    0x0025,
+    0x0029,
+    HOLD_EXPIRY,
 ];
 const ANALOG_OUTPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0041, 0x0045, 0x0051, 0x0055, 0x006F, 0x0075];
+const HOLD_DURATION_ATTRIBUTES: &[u16] = &[0x001C, 0x0041, 0x0045, 0x0051, 0x0055, 0x006A, 0x006F, 0x0075];
 const ANALOG_INPUT_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F, 0x0075];
 const BINARY_ATTRIBUTES: &[u16] = &[0x001C, 0x0051, 0x0055, 0x006F];
 const MEASUREMENT_ATTRIBUTES: &[u16] = &[0x0000, 0x0001, 0x0002];
@@ -211,8 +239,8 @@ const ECONOMY: u8 = 0x04;
 /// A weekly schedule's mode: its transitions' heating or cooling setpoints.
 const HEAT_SETPOINTS: u8 = 0x01;
 const COOL_SETPOINTS: u8 = 0x02;
-/// The longest hot water boost, minutes: the last length MQTT's select offers.
-const HOT_WATER_BOOST_LONGEST: i64 = bridge::HOT_WATER_BOOST_MINUTES[bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
+/// The hot water boost limit, in whole minutes.
+const HOT_WATER_BOOST_LONGEST: i64 = bridge::HOT_WATER_BOOST_MAX_MINUTES;
 // BACnet engineering units, Analog Output's.
 const SECONDS: u16 = 73;
 const MINUTES: u16 = 72;
@@ -315,7 +343,7 @@ impl Nest {
                 endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
             }
         }
-        for id in [SCREEN_TIMEOUT_ENDPOINT, SCREEN_BRIGHTNESS_ENDPOINT] {
+        for id in [SCREEN_TIMEOUT_ENDPOINT, SCREEN_BRIGHTNESS_ENDPOINT, HOLD_DURATION_ENDPOINT] {
             endpoints.push(Endpoint { id, device: LEVEL_CONTROLLABLE_OUTPUT, clusters: vec![ANALOG_OUTPUT] });
         }
         if has("has_hot_water_control") {
@@ -389,9 +417,10 @@ impl Nest {
         for e in &self.endpoints {
             for &cluster in &e.clusters {
                 let attributes: &'static [u16] = match cluster {
-                    THERMOSTAT => {
-                        &[0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0025, 0x0029]
-                    }
+                    THERMOSTAT => &[
+                        0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0023, 0x0024, 0x0025,
+                        0x0029,
+                    ],
                     POWER => &[0x0020],
                     FAN | DISPLAY | HUMIDITY | TEMPERATURE => &[0x0000],
                     ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT | BINARY_OUTPUT => &[0x0055],
@@ -399,6 +428,9 @@ impl Nest {
                     _ => continue,
                 };
                 out.push((e.id, cluster, attributes));
+                if cluster == THERMOSTAT {
+                    out.push((e.id, cluster, &[HOLD_EXPIRY]));
+                }
             }
         }
         out
@@ -445,7 +477,7 @@ impl Nest {
     /// range schedule's are both, its low the heating setpoint and its high
     /// the cooling one.
     fn schedule(&self) -> (Option<Fields>, Option<u8>) {
-        let bucket = self.bridge.buckets().remove("schedule");
+        let bucket = self.bridge.configured_schedule().map(|o| o.value);
         let mode = schedule::kind(bucket.as_ref().unwrap_or(&Fields::new())).map(|k| match k {
             Kind::Heat => HEAT_SETPOINTS,
             Kind::Cool => COOL_SETPOINTS,
@@ -633,9 +665,19 @@ impl Nest {
                 "heat_cool" => 0x01,
                 _ => 0x00,
             }),
+            HOLD_EXPIRY => Value::Utc(
+                self.bridge
+                    .schedule_status()
+                    .hold_until
+                    .and_then(|s| u32::try_from(s - ZIGBEE_EPOCH).ok())
+                    .unwrap_or(NO_TIME),
+            ),
+            0x0023 => Value::Enum8(u8::from(self.bridge.schedule_status().hold_until.is_some())),
+            0x0024 => Value::U16(self.bridge.schedule_status().hold_minutes),
             0x0025 => {
                 let eco = view.state.get("preset").and_then(Json::as_str) == Some("eco");
-                Value::Bitmap8(if eco { ECONOMY } else { SCHEDULE })
+                let scheduled = self.bridge.schedule_status().enabled;
+                Value::Bitmap8(if eco { ECONOMY } else { 0 } | if scheduled { SCHEDULE } else { 0 })
             }
             0x0029 => {
                 let mut running = match view.state.get("action").and_then(Json::as_str) {
@@ -673,7 +715,24 @@ impl Nest {
                 0x04 => self.apply("mode", "heat"),
                 _ => status::INVALID_VALUE,
             },
-            (0x0025, Value::Bitmap8(mode)) => self.apply("preset", if mode & ECONOMY != 0 { "eco" } else { "none" }),
+            (0x0023, Value::Enum8(hold)) if hold <= 1 => self.apply("hold", if hold == 1 { "ON" } else { "OFF" }),
+            (0x0024, Value::U16(minutes)) if (1..=1440).contains(&minutes) => {
+                self.apply("hold_duration", &minutes.to_string())
+            }
+            // A write that changes Eco changes Eco alone: an older converter
+            // writes 0x04 or 0x01 for the preset, with no schedule bit meant.
+            (0x0025, Value::Bitmap8(mode)) if mode & !(SCHEDULE | ECONOMY) == 0 => {
+                let enabled = mode & SCHEDULE != 0;
+                let eco = view.state.get("preset").and_then(Json::as_str) == Some("eco");
+                if (mode & ECONOMY != 0) == eco {
+                    let result = self.apply("schedule_enabled", if enabled { "ON" } else { "OFF" });
+                    if result != status::SUCCESS {
+                        return result;
+                    }
+                }
+                self.apply("preset", if mode & ECONOMY != 0 { "eco" } else { "none" })
+            }
+            (0x0023..=0x0025, _) => status::INVALID_VALUE,
             _ => status::READ_ONLY,
         }
     }
@@ -719,6 +778,9 @@ impl Nest {
         let dev = self.view().dev;
         let hour = |field: &str| number(dev.get(field)).map_or(0.0, |s| (s / 3600.0).floor());
         let (description, units, min, max, value) = match endpoint {
+            HOLD_DURATION_ENDPOINT => {
+                ("Hold duration", MINUTES, 1.0, 1440.0, f64::from(self.bridge.schedule_status().hold_minutes))
+            }
             FAN_TIMER_ENDPOINT => {
                 let minutes = number(dev.get("fan_timer_duration")).map_or(15.0, |s| s / 60.0);
                 ("Fan timer duration", MINUTES, 15.0, 1440.0, minutes)
@@ -757,6 +819,7 @@ impl Nest {
             0x0041 => Value::F32(max),
             0x0045 => Value::F32(min),
             0x0051 => Value::Bool(false), // in service
+            0x006A if matches!(endpoint, HOLD_DURATION_ENDPOINT | HOT_WATER_BOOST_ENDPOINT) => Value::F32(1.0),
             0x0055 => Value::F32(value as f32),
             0x006F => Value::Bitmap8(0), // status flags: all well
             0x0075 => Value::Enum16(units),
@@ -766,6 +829,13 @@ impl Nest {
 
     fn write_analog_output(&self, endpoint: u8, attribute: u16, value: Value) -> u8 {
         match (attribute, value) {
+            (0x0055, Value::F32(v)) if endpoint == HOLD_DURATION_ENDPOINT => {
+                if v.fract() == 0.0 && (1.0..=1440.0).contains(&v) {
+                    self.apply("hold_duration", &(v as u16).to_string())
+                } else {
+                    status::INVALID_VALUE
+                }
+            }
             (0x0055, Value::F32(v)) if endpoint == FAN_TIMER_ENDPOINT => {
                 self.apply("fan_timer_duration", &(v.round() as i64).to_string())
             }
@@ -955,6 +1025,9 @@ impl Clusters for Nest {
             THERMOSTAT => THERMOSTAT_ATTRIBUTES,
             FAN | DISPLAY => &[0x0000, 0x0001],
             TEMPERATURE | HUMIDITY => MEASUREMENT_ATTRIBUTES,
+            ANALOG_OUTPUT if matches!(endpoint, HOLD_DURATION_ENDPOINT | HOT_WATER_BOOST_ENDPOINT) => {
+                HOLD_DURATION_ATTRIBUTES
+            }
             ANALOG_OUTPUT => ANALOG_OUTPUT_ATTRIBUTES,
             ANALOG_INPUT => ANALOG_INPUT_ATTRIBUTES,
             BINARY_INPUT | BINARY_OUTPUT => BINARY_ATTRIBUTES,
@@ -1024,6 +1097,7 @@ impl Clusters for Nest {
                     "screen_brightness_auto" => {
                         crate::brightness::reported(&self.view().dev, self.bridge.brightness.shown()).1
                     }
+                    "schedule_enabled" | "hold" => truthy(self.view().state.get(key)),
                     _ => bridge::switch_on(&self.view().dev, key),
                 })
             }),
@@ -1108,7 +1182,7 @@ mod tests {
     fn endpoints_follow_the_equipment() {
         let ids = |n: &Nest| n.endpoints.iter().map(|e| e.id).collect::<Vec<_>>();
         let n = nest(fields! {}, fields! {"can_heat" => true});
-        assert_eq!(ids(&n), [1, 2, 5, 40, 42, 10, 11, 12, 13, 14, 41, 43, 20, 21, 22, 23]);
+        assert_eq!(ids(&n), [1, 2, 5, 40, 42, 47, 10, 11, 12, 13, 14, 41, 43, 45, 46, 20, 21, 22, 23]);
         assert!(!n.has(1, FAN));
         let n = nest(
             fields! {"has_fan" => true, "has_humidifier" => true, "has_air_filter" => true},
@@ -1116,7 +1190,10 @@ mod tests {
         );
         assert_eq!(
             ids(&n),
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 42, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 43, 20, 21, 22, 23, 24, 26]
+            [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 40, 42, 47, 10, 11, 12, 13, 14, 15, 16, 19, 29, 41, 43, 45, 46, 20, 21, 22,
+                23, 24, 26
+            ]
         );
         assert!(n.has(1, FAN));
     }
@@ -1148,6 +1225,120 @@ mod tests {
         assert_eq!(n.read(2, TEMPERATURE, 0x0000), Some(Value::I16(2210)));
         assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert!(n.attributes(3, ANALOG_OUTPUT).is_none()); // no fan
+    }
+
+    #[test]
+    fn native_schedule_outputs_share_thermostat_state_and_report_changes() {
+        let n = nest(
+            fields! {"hold" => false, "schedule_enabled" => false},
+            fields! {"can_heat" => true, "target_temperature_type" => "heat", "target_temperature" => 21},
+        );
+        let key = format!("schedule.{}", n.bridge.serial);
+        n.bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => serde_json::json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"}}})}, 0, 0, true);
+        for (ep, cluster) in [(45, BINARY_OUTPUT), (46, BINARY_OUTPUT), (47, ANALOG_OUTPUT)] {
+            assert!(n.has(ep, cluster));
+            assert!(n.reported().contains(&(ep, cluster, &[0x0055][..])));
+        }
+        assert_eq!(n.read(45, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(47, ANALOG_OUTPUT, 0x0045), Some(Value::F32(1.0)));
+        assert_eq!(n.read(47, ANALOG_OUTPUT, 0x0041), Some(Value::F32(1440.0)));
+        assert_eq!(n.read(47, ANALOG_OUTPUT, 0x006A), Some(Value::F32(1.0)));
+        assert_eq!(n.read(47, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(MINUTES)));
+        for minutes in [1, 37, 1440] {
+            assert_eq!(n.write(47, ANALOG_OUTPUT, 0x0055, Value::F32(f32::from(minutes))), status::SUCCESS);
+            assert_eq!(n.read(1, THERMOSTAT, 0x0024), Some(Value::U16(minutes)));
+        }
+        assert_eq!(n.write(1, THERMOSTAT, 0x0024, Value::U16(37)), status::SUCCESS);
+        assert_eq!(n.read(47, ANALOG_OUTPUT, 0x0055), Some(Value::F32(37.0)));
+        let before = n.bridge.store.get(&key).unwrap();
+        for invalid in [0.0, 1441.0, 1.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(n.write(47, ANALOG_OUTPUT, 0x0055, Value::F32(invalid)), status::INVALID_VALUE);
+            let after = n.bridge.store.get(&key).unwrap();
+            assert_eq!(before.revision, after.revision);
+            assert_eq!(before.local_schedules, after.local_schedules);
+        }
+        n.bridge.control_schedule("hold", "ON", chrono::Utc::now().timestamp() - 60).unwrap();
+        let expiry = n.bridge.schedule_status().hold_until.unwrap();
+        assert_eq!(n.write(46, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert!(n.bridge.schedule_status().hold_until.unwrap() >= expiry + 60);
+        assert_eq!(n.read(46, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0023), Some(Value::Enum8(1)));
+        assert_eq!(n.write(45, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
+        assert_eq!(n.bridge.schedule_status().hold_until, None);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(0)));
+        assert_eq!(n.write(46, BINARY_OUTPUT, 0x0055, Value::Bool(true)), status::SUCCESS);
+        assert_eq!(n.write(46, BINARY_OUTPUT, 0x0055, Value::Bool(false)), status::SUCCESS);
+        assert_eq!(n.read(45, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(46, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn schedule_and_hold_attributes_preserve_the_configured_week() {
+        let n = nest(
+            fields! {"learning_mode" => true},
+            fields! {"can_heat" => true, "target_temperature_type" => "heat", "target_temperature" => 21},
+        );
+        let key = format!("schedule.{}", n.bridge.serial);
+        let days =
+            serde_json::json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"}}});
+        n.bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days}, 0, 0, true);
+        let week = n.week();
+        assert!(!week.is_empty());
+        assert!(n.reported().iter().any(|(_, c, a)| *c == THERMOSTAT && a.contains(&0x0023) && a.contains(&0x0024)));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(0)), status::SUCCESS);
+        assert_eq!(n.week(), week);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(0)));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0024, Value::U16(30)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0023), Some(Value::Enum8(0)));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0023, Value::Enum8(1)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0023), Some(Value::Enum8(1)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0024), Some(Value::U16(30)));
+        assert_eq!(n.week(), week);
+        let before = n.bridge.schedule_status().hold_until.unwrap();
+        assert_eq!(n.read(1, THERMOSTAT, HOLD_EXPIRY), Some(Value::Utc((before - ZIGBEE_EPOCH) as u32)));
+        assert!(n.reported().iter().any(|(_, c, a)| *c == THERMOSTAT && *a == [HOLD_EXPIRY]));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0024, Value::U16(60)), status::SUCCESS);
+        assert!(n.bridge.schedule_status().hold_until.unwrap() >= before + 1800);
+        let snapshot = n.bridge.store.get(&key).unwrap();
+        for (id, value) in [
+            (0x0025, Value::Bitmap8(7)),
+            (0x0023, Value::Enum8(2)),
+            (0x0024, Value::U16(0)),
+            (0x0024, Value::U16(1441)),
+        ] {
+            assert_eq!(n.write(1, THERMOSTAT, id, value), status::INVALID_VALUE);
+            let after = n.bridge.store.get(&key).unwrap();
+            assert_eq!(after.revision, snapshot.revision);
+            assert_eq!(after.value, snapshot.value);
+            assert_eq!(after.local_schedules, snapshot.local_schedules);
+        }
+        assert_eq!(n.write(1, THERMOSTAT, 0x0023, Value::Enum8(0)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, HOLD_EXPIRY), Some(Value::Utc(NO_TIME)));
+        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(SCHEDULE)));
+        assert_eq!(n.week(), week);
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(SCHEDULE | ECONOMY)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(SCHEDULE | ECONOMY)));
+    }
+
+    #[test]
+    fn programming_mode_eco_changes_change_eco_alone_and_other_writes_apply_the_schedule_bit() {
+        let n = nest(fields! {}, fields! {"can_heat" => true, "target_temperature_type" => "heat"});
+        let key = format!("schedule.{}", n.bridge.serial);
+        let days =
+            serde_json::json!({"0": {"1": {"entry_type": "setpoint", "time": 23400, "temp": 20.5, "type": "HEAT"}}});
+        n.bridge.store.merge(&key, &fields! {"schedule_mode" => "HEAT", "days" => days}, 0, 0, true);
+        for eco in [0, ECONOMY] {
+            for scheduled in [0, SCHEDULE] {
+                assert_eq!(n.apply("hold", "ON"), status::SUCCESS);
+                assert_eq!(n.apply("preset", if eco == 0 { "eco" } else { "none" }), status::SUCCESS);
+                let expiry = n.bridge.schedule_status().hold_until;
+                assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(scheduled | eco)), status::SUCCESS);
+                assert_eq!(n.bridge.schedule_status().hold_until, expiry, "an Eco change keeps the hold");
+                assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(scheduled | eco)), status::SUCCESS);
+                assert_eq!(n.bridge.schedule_status().hold_until, None);
+                assert_eq!(n.bridge.schedule_status().enabled, scheduled != 0);
+            }
+        }
     }
 
     #[test]
@@ -1291,7 +1482,7 @@ mod tests {
         let targets = || (n.read(1, THERMOSTAT, 0x0012), n.read(1, THERMOSTAT, 0x0011));
         let i16s = |low, high| (Some(Value::I16(low)), Some(Value::I16(high)));
         assert_eq!(targets(), i16s(2000, 2400));
-        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(SCHEDULE | ECONOMY)), status::SUCCESS);
         assert_eq!(targets(), i16s(1600, 2900));
         assert_eq!(n.apply("away_temperature_high_enabled", "off"), status::SUCCESS);
         assert_eq!(targets(), i16s(1600, 2400));
@@ -1299,7 +1490,7 @@ mod tests {
         assert_eq!(targets(), i16s(2000, 2400));
         assert_eq!(n.write(1, THERMOSTAT, 0x001C, Value::Enum8(0x03)), status::SUCCESS);
         assert_eq!(n.apply("away_temperature_high_enabled", "on"), status::SUCCESS);
-        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(SCHEDULE | ECONOMY)), status::SUCCESS);
         assert_eq!(targets(), i16s(2900, 2900));
     }
 
@@ -1659,8 +1850,8 @@ mod tests {
         assert_eq!(n.command(1, THERMOSTAT, 0x00, &[0x00, 5]), status::SUCCESS.into());
         assert_eq!(n.write(1, THERMOSTAT, 0x0011, Value::I16(9000)), status::INVALID_VALUE);
         // Eco, the fan timer, a switch.
-        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(ECONOMY)), status::SUCCESS);
-        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(ECONOMY)));
+        assert_eq!(n.write(1, THERMOSTAT, 0x0025, Value::Bitmap8(SCHEDULE | ECONOMY)), status::SUCCESS);
+        assert_eq!(n.read(1, THERMOSTAT, 0x0025), Some(Value::Bitmap8(SCHEDULE | ECONOMY)));
         assert_eq!(n.read(3, ANALOG_OUTPUT, 0x0055), Some(Value::F32(15.0)));
         assert_eq!(n.write(3, ANALOG_OUTPUT, 0x0055, Value::F32(60.0)), status::SUCCESS);
         assert_eq!(n.read(3, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
@@ -1726,6 +1917,8 @@ mod tests {
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(MINUTES)));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0045), Some(Value::F32(0.0)));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0041), Some(Value::F32(120.0)));
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x006A), Some(Value::F32(1.0)));
+        assert!(n.attributes(44, ANALOG_OUTPUT).unwrap().contains(&0x006A));
         assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(0.0)), "no boost");
         let device = format!("device.{}", n.bridge.serial);
         let now = chrono::Utc::now().timestamp();
@@ -1733,15 +1926,13 @@ mod tests {
             n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + seconds}, 0, 0, true);
             n.read(44, ANALOG_OUTPUT, 0x0055)
         };
-        // The length that covers the time left, as MQTT's select shows it.
-        for (seconds, minutes) in [(7000, 120.0), (3000, 60.0), (600, 30.0), (-5, 0.0)] {
+        for (seconds, minutes) in [(7000, 117.0), (3000, 50.0), (2220, 37.0), (600, 10.0), (-5, 0.0)] {
             assert_eq!(ends_in(seconds), Some(Value::F32(minutes)), "{seconds} s left");
         }
-        // 60 boosts an hour; 0 ends it.
-        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(60.0)), status::SUCCESS);
+        assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(37.0)), status::SUCCESS);
         let end = number(n.view().dev.get("hot_water_boost_time_to_end")).unwrap() - now as f64;
-        assert!((3598.0..=3602.0).contains(&end), "{end}");
-        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(60.0)));
+        assert!((2218.0..=2222.0).contains(&end), "{end}");
+        assert_eq!(n.read(44, ANALOG_OUTPUT, 0x0055), Some(Value::F32(37.0)));
         assert_eq!(n.write(44, ANALOG_OUTPUT, 0x0055, Value::F32(0.0)), status::SUCCESS);
         assert_eq!(number(n.view().dev.get("hot_water_boost_time_to_end")), Some(0.0));
         for bad in [121.0, -1.0, 30.5] {
@@ -1760,7 +1951,7 @@ mod tests {
         assert_eq!(n.hot_water_boost_step(), None, "no boost");
         let device = format!("device.{}", n.bridge.serial);
         let now = chrono::Utc::now().timestamp();
-        for (left, step) in [(3700, 100.0), (3000, 1200.0), (1000, 1000.0)] {
+        for (left, step) in [(3700, 40.0), (3000, 60.0), (1000, 40.0)] {
             n.bridge.store.merge(&device, &fields! {"hot_water_boost_time_to_end" => now + left}, 0, 0, true);
             let due = n.hot_water_boost_step().unwrap();
             assert!((step - 2.0..=step).contains(&due), "{left} s left: {due}");

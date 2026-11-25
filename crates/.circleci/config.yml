@@ -41,6 +41,9 @@ jobs:
       - cargo-target-store:
           cache: test
       - run:
+          name: Zigbee2MQTT schedule controls
+          command: node --test integrations/zigbee2mqtt/nest-learning-thermostat.test.mjs
+      - run:
           name: radio
           command: python3 -m pytest platform/common/radio/tests --junitxml=.work/test-results/radio/junit.xml
       # The built image's ARM code under Unicorn: source matching and the PHY's

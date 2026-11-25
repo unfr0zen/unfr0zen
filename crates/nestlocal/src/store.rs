@@ -28,6 +28,17 @@ pub struct Object {
     /// Local Matter schedule handles and inactive weeks. Cloud responses only carry value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_schedules: Option<crate::schedule::Catalog>,
+    /// Learning restored after suspension, protected until the device reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_learning: Option<RestoredLearning>,
+}
+
+/// Until `until` (Unix seconds), a device report of another learning value is
+/// a late echo of the suspension's and is corrected; after it, the unit's own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RestoredLearning {
+    pub value: serde_json::Value,
+    pub until: i64,
 }
 
 fn deserialize_fields<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Fields, D::Error> {
@@ -38,14 +49,16 @@ fn deserialize_fields<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Fields, 
 }
 
 type Watcher = Arc<dyn Fn(&Object) + Send + Sync>;
+type DeviceWatcher = Arc<dyn Fn(&Fields, &Object) + Send + Sync>;
 
 #[derive(Default)]
 struct Inner {
     objects: BTreeMap<String, Object>,
     subs: BTreeMap<u64, mpsc::Sender<Vec<Object>>>, // held subscribes: server-side changes
     next_sub: u64,
-    watch: Vec<Watcher>, // every change, device or server side
-    catalog_writes: u64, // the file's writes made within an update
+    watch: Vec<Watcher>,              // every change, device or server side
+    device_watch: Vec<DeviceWatcher>, // the device's own changes, with the value before
+    catalog_writes: u64,              // the file's writes made within an update
 }
 
 pub struct Store {
@@ -106,13 +119,50 @@ impl Store {
     /// from_device marks changes the device made itself: they are not pushed
     /// back to it.
     pub fn merge(&self, key: &str, fields: &Fields, rev: i64, ts: i64, from_device: bool) -> (Object, bool) {
-        self.update(key, rev, ts, from_device, |_, o| {
-            for (k, v) in fields {
-                o.value.insert(k.clone(), canonical(v.clone()));
-            }
-            Ok(())
-        })
-        .expect("ordinary bucket updates only mark the store dirty")
+        let mut learning_corrected = false;
+        let result = self
+            .update(key, rev, ts, from_device, |objects, o| {
+                for (k, v) in fields {
+                    o.value.insert(k.clone(), canonical(v.clone()));
+                }
+                if fields.contains_key("learning_mode")
+                    && (!from_device || o.value.get("learning_mode") == o.restored_learning.as_ref().map(|r| &r.value))
+                {
+                    o.restored_learning = None;
+                }
+                if from_device {
+                    if fields.contains_key("days") {
+                        if let Some(name) = crate::schedule_control::mode(&o.value) {
+                            if let Some(control) = o.local_schedules.as_mut().and_then(|c| c.control.get_mut(name)) {
+                                if control.saved.is_none()
+                                    && control.restored.as_ref().and_then(|b| b.get("days")) == o.value.get("days")
+                                {
+                                    control.restored = None;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(serial) = key.strip_prefix("device.") {
+                        let suspended = objects
+                            .get(&format!("schedule.{serial}"))
+                            .and_then(|o| o.local_schedules.as_ref())
+                            .is_some_and(|c| c.control.values().any(|s| s.saved.is_some()));
+                        if suspended {
+                            learning_corrected = o.value.get("learning_mode") != Some(&false.into());
+                            o.value.insert("learning_mode".into(), false.into());
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|e| {
+                logf!("store: rejected {key}: {e}");
+                (self.get(key).unwrap_or_else(|| Object { key: key.into(), ..Default::default() }), false)
+            });
+        if learning_corrected {
+            self.resend(key);
+        }
+        result
     }
 
     /// Edits and checks a single bucket under the same lock used for device updates.
@@ -124,13 +174,33 @@ impl Store {
         from_device: bool,
         edit: impl FnOnce(&BTreeMap<String, Object>, &mut Object) -> Result<(), String>,
     ) -> Result<(Object, bool), String> {
-        let (object, subs, watch) = {
+        let (object, subs, watch, devices, before) = {
             let mut inner = self.inner.lock().unwrap();
             let old = inner.objects.get(key);
+            let before = if from_device { old.map(|old| old.value.clone()).unwrap_or_default() } else { Fields::new() };
             let mut o = old.cloned().unwrap_or_else(|| Object { key: key.into(), ..Default::default() });
             edit(&inner.objects, &mut o)?;
-            let changed = old.is_none_or(|old| old.value != o.value);
-            let catalog = old.and_then(|o| o.local_schedules.as_ref()) != o.local_schedules.as_ref();
+            if !from_device && old.is_some_and(|old| old.value.get("days") != o.value.get("days")) {
+                if let Some(name) = crate::schedule_control::mode(&o.value) {
+                    if let Some(control) = o.local_schedules.as_mut().and_then(|c| c.control.get_mut(name)) {
+                        if control.saved.is_none() {
+                            control.restored = None;
+                        }
+                    }
+                }
+            }
+            let mut corrected = from_device && old.is_some_and(|old| crate::schedule_control::reconcile(old, &mut o));
+            if from_device {
+                if let Some(learning) = &o.restored_learning {
+                    if learning.until <= chrono::Utc::now().timestamp() {
+                        o.restored_learning = None;
+                    } else if o.value.get("learning_mode") != Some(&learning.value) {
+                        o.value.insert("learning_mode".into(), learning.value.clone());
+                        corrected = true;
+                    }
+                }
+            }
+            let changed = corrected || old.is_none_or(|old| old.value != o.value);
             if let (Some(previous), Some(weeks)) = (old, &mut o.local_schedules) {
                 if previous.value.get("schedule_mode") != o.value.get("schedule_mode") {
                     if let Some(week) = previous
@@ -140,16 +210,29 @@ impl Store {
                         .and_then(|m| weeks.active.get(m))
                         .and_then(|h| weeks.named.get_mut(h))
                     {
-                        week.bucket = previous.value.clone();
+                        week.bucket = previous
+                            .local_schedules
+                            .as_ref()
+                            .and_then(|c| crate::schedule_control::mode(&previous.value).and_then(|m| c.control.get(m)))
+                            .and_then(|c| c.saved.clone())
+                            .unwrap_or_else(|| previous.value.clone());
                     }
                 }
             }
+            let catalog = old.and_then(|o| o.local_schedules.as_ref()) != o.local_schedules.as_ref()
+                || old.and_then(|o| o.restored_learning.as_ref()) != o.restored_learning.as_ref();
             if !changed && !catalog {
                 return Ok((o, false));
             }
             if changed {
                 o.revision = if rev > o.revision { rev } else { o.revision + 1 };
-                o.timestamp = if ts > 0 { ts } else { now_ms() };
+                o.timestamp = if corrected {
+                    now_ms().max(ts.saturating_add(1))
+                } else if ts > 0 {
+                    ts
+                } else {
+                    now_ms()
+                };
             }
             if catalog {
                 // The active handle and the days it selects must survive a restart together.
@@ -161,8 +244,10 @@ impl Store {
                 inner.catalog_writes = *file;
             }
             inner.objects.insert(key.to_owned(), o.clone());
-            let subs = if changed && !from_device { inner.subs.values().cloned().collect() } else { vec![] };
-            (o, subs, inner.watch.clone())
+            let subs =
+                if changed && (!from_device || corrected) { inner.subs.values().cloned().collect() } else { vec![] };
+            let devices = if changed && from_device { inner.device_watch.clone() } else { vec![] };
+            (o, subs, inner.watch.clone(), devices, before)
         };
         self.dirty.notify_one();
         for sub in subs {
@@ -171,7 +256,64 @@ impl Store {
         for w in watch {
             w(&object);
         }
+        for w in devices {
+            w(&before, &object);
+        }
         Ok((object, true))
+    }
+
+    /// Commits related buckets and local schedule state together before notifying the unit.
+    pub fn transaction(
+        &self,
+        edit: impl FnOnce(&mut BTreeMap<String, Object>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let (changed, subs, watch) = {
+            let mut inner = self.inner.lock().unwrap();
+            let mut objects = inner.objects.clone();
+            edit(&mut objects)?;
+            let mut changed = Vec::new();
+            let mut local = false;
+            for (key, o) in &mut objects {
+                let old = inner.objects.get(key);
+                let value_changed = old.is_none_or(|old| old.value != o.value);
+                let local_changed = old.and_then(|old| old.local_schedules.as_ref()) != o.local_schedules.as_ref()
+                    || old.and_then(|old| old.restored_learning.as_ref()) != o.restored_learning.as_ref();
+                if value_changed || local_changed {
+                    if value_changed {
+                        o.revision += 1;
+                        o.timestamp = now_ms();
+                    }
+                    local |= local_changed;
+                    changed.push((o.clone(), value_changed));
+                }
+            }
+            if changed.is_empty() {
+                return Ok(());
+            }
+            // Local state exists nowhere else: it is on the NAND before anyone
+            // sees it. Buckets alone the device resends, and the batch saves.
+            if local {
+                let mut file = self.file.lock().unwrap();
+                self.write(&objects.values().collect::<Vec<_>>()).map_err(|e| e.to_string())?;
+                *file += 1;
+                inner.catalog_writes = *file;
+            }
+            inner.objects = objects;
+            (changed, inner.subs.values().cloned().collect::<Vec<_>>(), inner.watch.clone())
+        };
+        self.dirty.notify_one();
+        let native: Vec<_> = changed.iter().filter(|(_, value)| *value).map(|(o, _)| o.clone()).collect();
+        for sub in subs {
+            if !native.is_empty() {
+                let _ = sub.try_send(native.clone());
+            }
+        }
+        for (o, _) in changed {
+            for w in &watch {
+                w(&o);
+            }
+        }
+        Ok(())
     }
 
     /// Sends the bucket `key` to the held subscribes again, unchanged but for
@@ -206,6 +348,24 @@ impl Store {
 
     pub fn watch(&self, f: impl Fn(&Object) + Send + Sync + 'static) {
         self.inner.lock().unwrap().watch.push(Arc::new(f));
+    }
+
+    /// Calls `f` with the value before and the bucket after each change the device made itself.
+    pub fn watch_device(&self, f: impl Fn(&Fields, &Object) + Send + Sync + 'static) {
+        self.inner.lock().unwrap().device_watch.push(Arc::new(f));
+    }
+
+    /// Refreshes time-derived protocol state without rewriting or resending a native bucket.
+    pub fn notify_time_changed(&self, key: &str) {
+        let (object, watch) = {
+            let inner = self.inner.lock().unwrap();
+            (inner.objects.get(key).cloned(), inner.watch.clone())
+        };
+        if let Some(object) = object {
+            for watcher in watch {
+                watcher(&object);
+            }
+        }
     }
 
     /// Writes the file at most every 5 s: NAND wears, and the device
@@ -263,6 +423,27 @@ pub mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
         N.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[test]
+    fn time_refresh_notifies_watchers_without_changing_or_resending_the_bucket() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let s = temp_store();
+        s.merge("device.S", &fields! {"hot_water_boost_time_to_end" => 1234}, 7, 5678, true);
+        let before = serde_json::to_value(s.all()).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let watched = calls.clone();
+        s.watch(move |o| {
+            assert_eq!(o.key, "device.S");
+            watched.fetch_add(1, Ordering::SeqCst);
+        });
+        let (mut rx, _subscription) = s.subscribe();
+        s.notify_time_changed("missing");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        s.notify_time_changed("device.S");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(serde_json::to_value(s.all()).unwrap(), before);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

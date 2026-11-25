@@ -22,7 +22,17 @@ tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
 `G_unfr0zen_glyph_80px.png`) above its name. An entry opens its page
 directly, and Back on that page returns to the menu. The UNFR0ZEN page has the
 **192×192 unfr0zen icon**, the line “unfr0zen” with the version of the app
-that set up the unit (`/etc/unfr0zen/version`), and Done. Pages open at the
+that set up the unit (`/etc/unfr0zen/version`), and Done only. A separate
+**SCHEDULE** tile before UNFR0ZEN uses the generic unfr0zen glyph and offers
+Schedule, Hold, Hold duration and Done. Schedule offers explicit On and Off: Off pauses indefinitely;
+On restores the saved schedule. Hold offers Start / renew and Cancel; renewal
+moves only the expiry, and cancellation restores the saved schedule. The duration
+picker uses the ring for 1–1440 minutes, click to save and Back to cancel.
+A timed hold started while off also restores the schedule at expiry. Turning
+the home-screen dial during a timed hold ends it at the saved week's next
+scheduled change, which renewal cannot move.
+Status shows On, Off, or Held with minutes remaining, and unavailable/error states.
+These pages poll status without keeping the display awake. Pages open at the
 top; status updates preserve the viewport unless pairing completes. The larger
 QR has 10px of extra spacing above its manual code. **DOOM** opens its page:
 Doom's title (`G_unfr0zen_doom.png`, which the app makes from the WAD when it
@@ -74,6 +84,16 @@ the list from the chosen options and shortens the loop's bound to match
 (`crates/unfr0zen-core/src/nlclient/menu.rs`); the stock entries keep their
 order, and the slots past the bound keep valid names for nlclient's lookup of
 a screen by name.
+
+SCHEDULE uses the unused cloud-setup child registration (`appsetup`). The
+native menu's screen lookup is wrapped at its validated construction-loop call:
+when it reaches Legal Info, the wrapper inserts SCHEDULE before returning the
+original screen. All original list slots and both temperature sentinels stay.
+Modern clients use a non-owning screen-pointer vector, grown through the native
+vector helper; older clients use fixed name and screen arrays with checked
+capacity and live counter invariants. Unknown insertion, lookup or growth shapes
+are refused before patching. No ELF data relocations or additional writable
+payload segments are needed.
 
 ## Screen hand-over
 
@@ -258,6 +278,13 @@ consumed by its worker. Startup removes stale requests and credentials.
 Disabled/unavailable services report an error on action. Native timer events
 refresh status once per second while the screen is open, even with the ring idle;
 pairing activity animates four times per second.
+
+`schedule.status` holds `available enabled hold_until hold_minutes` as decimal
+fields (boolean 0/1, Unix seconds or 0, and 1–1440 minutes), followed by an
+optional error on the next line. `schedule.request` holds one explicit command:
+`schedule_enabled ON|OFF`, `hold ON|OFF`, or `hold_duration MINUTES`. The worker
+claims it by rename, removes it after reading, and rejects requests older than
+10 seconds. Neither this protocol nor schedule control requires MQTT.
 
 ## Build locally and verify
 

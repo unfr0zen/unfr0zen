@@ -126,8 +126,8 @@ const OUTPUTS = {
 };
 const INPUTS = { time_to_target: 5, filter_runtime: 6 };
 const HOT_WATER_BOOST = 44;
-// The boost lengths, minutes, as MQTT's select offers them; "off" is 0.
-const HOT_WATER_BOOSTS = ["30", "60", "120"];
+// Whole minutes, with zero stopping the boost.
+const HOT_WATER_BOOST_MAX_MINUTES = 120;
 const TEMPERATURE_SOURCE = 28;
 const SWITCHES = {
   auto_schedule: 10,
@@ -251,6 +251,8 @@ const ZIGBEE_EPOCH = 946684800;
 // ThermostatProgrammingOperationMode: following its schedule, economy.
 const SCHEDULE = 0x01;
 const ECONOMY = 0x04;
+// Nest manufacturer attribute on Thermostat: UTCTime, 0xFFFFFFFF when not held.
+const HOLD_EXPIRY = 0xf000;
 // Weekly schedule days, from Monday as heating_times names them; the ZCL
 // day bit of each is bit 0 Sunday to bit 6 Saturday.
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -383,8 +385,28 @@ const nest = {
     type: ["attributeReport", "readResponse"],
     convert: (model, msg) => {
       if (msg.data.programingOperMode !== undefined) {
-        return { preset: msg.data.programingOperMode & ECONOMY ? "eco" : "none" };
+        return {
+          preset: msg.data.programingOperMode & ECONOMY ? "eco" : "none",
+          schedule_enabled: msg.data.programingOperMode & SCHEDULE ? "ON" : "OFF",
+        };
       }
+    },
+  },
+  hold: {
+    cluster: "hvacThermostat",
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      const state = {};
+      if (msg.data.tempSetpointHold !== undefined) {
+        state.hold = msg.data.tempSetpointHold ? "ON" : "OFF";
+      }
+      if (msg.data.tempSetpointHoldDuration !== undefined) {
+        state.hold_duration = msg.data.tempSetpointHoldDuration;
+      }
+      if (msg.data[HOLD_EXPIRY] !== undefined) {
+        state.hold_until = msg.data[HOLD_EXPIRY] === 0xffffffff ? 0 : msg.data[HOLD_EXPIRY] + ZIGBEE_EPOCH;
+      }
+      return state;
     },
   },
   // What runs, as binary sensors beside the climate's action. The action
@@ -541,29 +563,25 @@ const nest = {
     cluster: "genAnalogOutput",
     type: ["attributeReport", "readResponse"],
     convert: (model, msg) => {
-      if (msg.endpoint.ID === HOT_WATER_BOOST && msg.data.presentValue !== undefined) {
-        return { hot_water_boost: boostName(msg.data.presentValue) };
+      const minutes = msg.data.presentValue;
+      if (msg.endpoint.ID === HOT_WATER_BOOST && Number.isInteger(minutes) && minutes >= 0) {
+        return { hot_water_boost: minutes };
       }
     },
   },
 };
 
-/** A boost length as the enum names it: off, 30, 60 or 120. */
-function boostName(minutes) {
-  const name = String(Math.round(minutes));
-  return HOT_WATER_BOOSTS.includes(name) ? name : "off";
-}
-
-/** The minutes a boost enum value writes: 0 for off. */
+/** Whole boost minutes; the legacy off command remains an alias for zero. */
 function boostMinutes(value) {
-  const name = String(value).toLowerCase();
-  if (name === "off") {
-    return 0;
+  if (typeof value === "string") {
+    value = value.trim();
+    if (value.toLowerCase() === "off") return 0;
+    if (/^\d+$/.test(value)) value = Number(value);
   }
-  if (!HOT_WATER_BOOSTS.includes(name)) {
-    throw new Error(`hot_water_boost: expected off, ${HOT_WATER_BOOSTS.join(", ")}, got '${value}'`);
+  if (!Number.isInteger(value) || value < 0 || value > HOT_WATER_BOOST_MAX_MINUTES) {
+    throw new Error(`hot_water_boost: expected whole minutes 0-${HOT_WATER_BOOST_MAX_MINUTES}, got '${value}'`);
   }
-  return Number(name);
+  return value;
 }
 
 async function setWeeklySchedule(entity, payload, options) {
@@ -577,11 +595,65 @@ const set = {
   preset: {
     key: ["preset"],
     convertSet: async (entity, key, value) => {
-      await entity.write("hvacThermostat", { programingOperMode: value === "eco" ? ECONOMY : SCHEDULE });
+      if (!["eco", "none"].includes(value)) {
+        throw new Error("preset: expected eco or none");
+      }
+      const current = await entity.read("hvacThermostat", ["programingOperMode"]);
+      if (!Number.isInteger(current.programingOperMode)) {
+        throw new Error("preset: programming mode unavailable");
+      }
+      const mode = (current.programingOperMode & ~ECONOMY) | (value === "eco" ? ECONOMY : 0);
+      if (mode !== current.programingOperMode) {
+        await entity.write("hvacThermostat", { programingOperMode: mode });
+      }
       return { state: { preset: value } };
     },
     convertGet: async (entity) => {
       await entity.read("hvacThermostat", ["programingOperMode"]);
+    },
+  },
+  schedule_enabled: {
+    key: ["schedule_enabled"],
+    convertSet: async (entity, key, value) => {
+      if (!["ON", "OFF"].includes(value)) {
+        throw new Error("schedule_enabled: expected ON or OFF");
+      }
+      const current = await entity.read("hvacThermostat", ["programingOperMode"]);
+      if (!Number.isInteger(current.programingOperMode)) {
+        throw new Error("schedule_enabled: programming mode unavailable");
+      }
+      const mode = (current.programingOperMode & ~SCHEDULE) | (value === "ON" ? SCHEDULE : 0);
+      await entity.write("hvacThermostat", { programingOperMode: mode });
+      return { state: { schedule_enabled: value } };
+    },
+    convertGet: async (entity) => {
+      await entity.read("hvacThermostat", ["programingOperMode"]);
+    },
+  },
+  hold_until: {
+    key: ["hold_until"],
+    convertGet: async (entity) => {
+      await entity.read("hvacThermostat", [HOLD_EXPIRY], { manufacturerCode: NEST_LABS });
+    },
+  },
+  hold: {
+    key: ["hold", "hold_duration"],
+    convertSet: async (entity, key, value) => {
+      if (key === "hold") {
+        if (!["ON", "OFF"].includes(value)) {
+          throw new Error("hold: expected ON or OFF");
+        }
+        await entity.write("hvacThermostat", { tempSetpointHold: value === "ON" ? 1 : 0 });
+      } else {
+        if (!Number.isInteger(value) || value < 1 || value > 1440) {
+          throw new Error("hold_duration: expected 1-1440 minutes");
+        }
+        await entity.write("hvacThermostat", { tempSetpointHoldDuration: value });
+      }
+      return { state: { [key]: value } };
+    },
+    convertGet: async (entity, key) => {
+      await entity.read("hvacThermostat", [key === "hold" ? "tempSetpointHold" : "tempSetpointHoldDuration"]);
     },
   },
   outputs: {
@@ -842,7 +914,7 @@ const set = {
     convertSet: async (entity, key, value, meta) => {
       const minutes = boostMinutes(value);
       await meta.device.getEndpoint(HOT_WATER_BOOST).write("genAnalogOutput", { presentValue: minutes });
-      return { state: { hot_water_boost: boostName(minutes) } };
+      return { state: { hot_water_boost: minutes } };
     },
     convertGet: async (entity, key, meta) => {
       await meta.device.getEndpoint(HOT_WATER_BOOST).read("genAnalogOutput", ["presentValue"]);
@@ -880,6 +952,7 @@ const definition = {
     fz.battery,
     fz.hvac_user_interface,
     nest.preset,
+    nest.hold,
     nest.schedule_mode,
     nest.heating_times,
     nest.hot_water_times,
@@ -902,6 +975,9 @@ const definition = {
     tz.fan_mode,
     tz.thermostat_temperature_display_mode,
     set.preset,
+    set.schedule_enabled,
+    set.hold,
+    set.hold_until,
     set.outputs,
     set.clear_schedule,
     set.heating_times,
@@ -1149,13 +1225,40 @@ const definition = {
         .withHomeAssistant({ icon: "mdi:calendar-remove" })
         .withDescription("Empties the schedule and turns Auto-Schedule off: Home Assistant schedules"),
     );
+    result.push(
+      e
+        .binary("schedule_enabled", ea.ALL, "ON", "OFF")
+        .withLabel("Schedule enabled")
+        .withDescription("Run the saved schedule; off pauses it without deleting its setpoints"),
+      e
+        .binary("hold", ea.ALL, "ON", "OFF")
+        .withLabel("Hold")
+        .withDescription("Hold the current temperature for the hold duration; off resumes the saved schedule now"),
+      e
+        .numeric("hold_duration", ea.ALL)
+        .withLabel("Hold duration")
+        .withUnit("min")
+        .withValueMin(1)
+        .withValueMax(1440)
+        .withValueStep(1)
+        .withDescription("Minutes for a hold; changing this during a hold renews it from now"),
+      e
+        .numeric("hold_until", ea.STATE_GET)
+        .withLabel("Hold until")
+        .withUnit("s")
+        .withDescription("Hold expiry as Unix seconds; 0 when no timed hold is active"),
+    );
     if (has(device, HOT_WATER_BOOST)) {
       result.push(
         e
-          .enum("hot_water_boost", ea.ALL, ["off", ...HOT_WATER_BOOSTS])
+          .numeric("hot_water_boost", ea.ALL)
           .withLabel("Hot water boost")
+          .withUnit("min")
+          .withValueMin(0)
+          .withValueMax(HOT_WATER_BOOST_MAX_MINUTES)
+          .withValueStep(1)
           .withHomeAssistant({ icon: "mdi:water-boiler-alert" })
-          .withDescription("Heats the hot water for 30, 60 or 120 minutes; off ends a boost"),
+          .withDescription("Whole minutes remaining; set 1-120 to start a boost, or 0 to stop it"),
       );
     }
     for (const [name, id] of Object.entries(SWITCHES)) {
@@ -1207,12 +1310,12 @@ const definition = {
   },
   // The boost's length has no state until the unit reports it: read it
   // when Zigbee2MQTT starts or meets the thermostat without one, so Home
-  // Assistant's select never shows unknown.
+  // Assistant's number never shows unknown.
   onEvent: async (event) => {
     const start = ["start", "deviceAnnounce"].includes(event.type);
     const interviewed = event.type === "deviceInterview" && event.data.status === "successful";
     const endpoint = event.data.device?.getEndpoint?.(HOT_WATER_BOOST);
-    if ((start || interviewed) && event.data.state?.hot_water_boost === undefined && endpoint) {
+    if ((start || interviewed) && !Number.isInteger(event.data.state?.hot_water_boost) && endpoint) {
       try {
         await endpoint.read("genAnalogOutput", ["presentValue"]);
       } catch (error) {
@@ -1254,8 +1357,15 @@ const definition = {
       "ctrlSeqeOfOper",
       "systemMode",
       "programingOperMode",
+      "tempSetpointHold",
+      "tempSetpointHoldDuration",
       "runningState",
     ]);
+    // Firmware without holds refuses the manufacturer attribute.
+    await device
+      .getEndpoint(THERMOSTAT)
+      .read("hvacThermostat", [HOLD_EXPIRY], { manufacturerCode: NEST_LABS })
+      .catch((error) => logger.debug(`Hold expiry read: ${error}`, "zhc:nest"));
     await report(THERMOSTAT, "hvacFanCtrl", ["fanMode"]);
     await report(THERMOSTAT, "hvacUserInterfaceCfg", ["tempDisplayMode"]);
     await report(THERMOSTAT, "msRelativeHumidity", ["measuredValue"]);

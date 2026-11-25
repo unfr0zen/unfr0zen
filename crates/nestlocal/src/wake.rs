@@ -483,8 +483,8 @@ impl SleepClient {
 }
 
 /// A wake at a wall-clock time, whether the unit sleeps or not: a timer on
-/// the kernel's alarm clock, which arms the RTC before each suspend. The
-/// gen 1's and gen 2's kernel (2.6.37) has none.
+/// the kernel's alarm clock, which arms the RTC before each suspend.
+/// Availability depends on the kernel's alarmtimer support, including backports.
 #[cfg(target_os = "linux")]
 pub struct Alarm(std::os::fd::OwnedFd);
 #[cfg(not(target_os = "linux"))]

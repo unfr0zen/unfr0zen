@@ -158,6 +158,7 @@ CHECK = {
     "needs": list(MODULES),
 }
 CHECKS = dict.fromkeys(["test", "clippy"] + ["app-" + platform for platform in PLATFORMS], CHECK)
+CHECKS["test"] = {**CHECK, "paths": [*CHECK["paths"], "integrations/zigbee2mqtt"]}
 
 # The jobs the app workflow lists, the ones the setup job looks for in the cache.
 APP_JOBS = list(MODULES) + ["test", "clippy", "app-linux-x86_64", "app-windows-x86_64", "app-macos"]

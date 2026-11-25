@@ -24,7 +24,7 @@ pub const ECO_HIGH: (f64, f64) = (24.0, 32.0);
 /// weather, which is no bucket).
 pub type Change = Option<(String, Fields)>;
 
-fn on_off(arg: &str) -> Result<bool, String> {
+pub(crate) fn on_off(arg: &str) -> Result<bool, String> {
     match arg.to_uppercase().as_str() {
         "ON" | "TRUE" | "1" => Ok(true),
         "OFF" | "FALSE" | "0" => Ok(false),
@@ -38,7 +38,7 @@ fn float(arg: &str) -> Option<f64> {
 }
 
 /// A temperature in °C within (low, high), to the unit's half degrees.
-fn temperature(arg: &str, (low, high): (f64, f64)) -> Result<f64, String> {
+pub(crate) fn temperature(arg: &str, (low, high): (f64, f64)) -> Result<f64, String> {
     match float(arg) {
         Some(t) if (low..=high).contains(&t) => Ok((t * 2.0).round() / 2.0),
         _ => Err(format!("expected a temperature, {low}-{high} °C")),
@@ -84,8 +84,27 @@ impl Bridge {
         expected: Option<crate::schedule::Kind>,
     ) -> Result<(), String> {
         let _applying = self.applying.lock().unwrap();
+        if matches!(name, "schedule_enabled" | "hold" | "hold_duration") {
+            return self
+                .control_schedule(name, arg, chrono::Utc::now().timestamp())
+                .inspect_err(|e| logf!("{from}: {name} {arg:?}: {e}"));
+        }
+        let raw_learning = name == "raw/device"
+            && unmarshal_object(arg.as_bytes()).ok().flatten().is_some_and(|f| f.contains_key("learning_mode"));
+        if matches!(name, "raw/schedule" | "clear_schedule" | "learning_mode") || raw_learning {
+            let suspended = self
+                .store
+                .get(&format!("schedule.{}", self.serial))
+                .and_then(|o| o.local_schedules)
+                .is_some_and(|c| c.control.values().any(|s| s.saved.is_some()));
+            if suspended {
+                let error = "resume the schedule before changing raw schedule or learning settings";
+                logf!("{from}: {name}: {error}");
+                return Err(error.into());
+            }
+        }
         let schedule = if matches!(name, "heating_times" | "schedule") {
-            let snapshot = self.store.get(&format!("schedule.{}", self.serial)).ok_or("no schedule bucket yet")?;
+            let snapshot = self.configured_schedule().ok_or("no schedule bucket yet")?;
             if expected.is_some() && crate::schedule::kind(&snapshot.value) != expected {
                 return Err("schedule mode changed during the write".into());
             }
@@ -150,27 +169,96 @@ impl Bridge {
         days: Option<&Value>,
         catalog: Option<crate::schedule::Catalog>,
     ) -> Result<(), String> {
+        self.replace_schedule_inner(expected, days, catalog, false)
+    }
+
+    /// Selecting a Matter schedule installs and resumes it in one durable write.
+    pub fn replace_schedule_active(
+        &self,
+        expected: &crate::store::Object,
+        days: Option<&Value>,
+        catalog: Option<crate::schedule::Catalog>,
+    ) -> Result<(), String> {
+        self.replace_schedule_inner(expected, days, catalog, true)
+    }
+
+    fn replace_schedule_inner(
+        &self,
+        expected: &crate::store::Object,
+        days: Option<&Value>,
+        mut catalog: Option<crate::schedule::Catalog>,
+        resume: bool,
+    ) -> Result<(), String> {
         let shared_key = format!("shared.{}", self.serial);
-        self.store.update(&expected.key, 0, 0, false, |objects, o| {
+        self.store.transaction(|objects| {
+            let shared = objects.get(&shared_key).map(|o| o.value.clone()).unwrap_or_default();
+            let o = objects.get_mut(&expected.key).ok_or("no schedule bucket yet")?;
             if o.revision != expected.revision || o.local_schedules != expected.local_schedules {
                 return Err("schedule changed during the write".into());
             }
-            let empty = Fields::new();
-            Self::schedule_mode(&o.value, objects.get(&shared_key).map_or(&empty, |s| &s.value))?;
-            if let Some(days) = days {
-                let days = crate::json::canonical(days.clone());
-                if o.value.get("days") != Some(&days) {
-                    let _ = crate::settings_ui::request_wake();
+            Self::schedule_mode(&o.value, &shared)?;
+            let native = o.value.clone();
+            let name = crate::schedule_control::mode(&o.value).ok_or("unknown schedule mode")?;
+            if let Some(previous) = &o.local_schedules {
+                if !previous.control.is_empty() || previous.learning.is_some() {
+                    let c = catalog.get_or_insert_with(Default::default);
+                    c.control = previous.control.clone();
+                    c.learning = previous.learning.clone();
+                    for (mode, handle) in &previous.active {
+                        if mode == name {
+                            continue;
+                        }
+                        let Some(week) = c.named.get(handle) else { continue };
+                        let Some(control) = c.control.get_mut(mode) else { continue };
+                        if previous.named.get(handle).map(|w| &w.bucket) == Some(&week.bucket) {
+                            continue;
+                        }
+                        if control.saved.is_some() {
+                            if control.until.is_some() && !crate::schedule_control::has_targets(&week.bucket) {
+                                return Err(
+                                    "resume the schedule before removing its last target during a timed hold".into()
+                                );
+                            }
+                            control.saved = Some(week.bucket.clone());
+                        }
+                        if control.restored.is_some() {
+                            control.restored = Some(week.bucket.clone());
+                        }
+                    }
                 }
-                o.value.insert("days".into(), days);
             }
             o.local_schedules = catalog;
+            if let Some(days) = days {
+                let days = crate::json::canonical(days.clone());
+                let timed =
+                    o.local_schedules.as_ref().and_then(|c| c.control.get(name)).is_some_and(|c| c.until.is_some());
+                let saved =
+                    o.local_schedules.as_mut().and_then(|c| c.control.get_mut(name)).and_then(|c| c.saved.as_mut());
+                if let Some(saved) = saved {
+                    saved.insert("days".into(), days);
+                    if timed && !resume && !crate::schedule_control::has_targets(saved) {
+                        return Err("resume the schedule before removing its last target during a timed hold".into());
+                    }
+                } else {
+                    o.value.insert("days".into(), days);
+                    if let Some(control) = o.local_schedules.as_mut().and_then(|c| c.control.get_mut(name)) {
+                        control.restored = None;
+                    }
+                }
+            }
+            if resume {
+                crate::schedule_control::resume(objects, &self.serial, chrono::Utc::now().timestamp())?;
+            }
+            if objects[&expected.key].value != native || objects.get(&shared_key).is_some_and(|o| o.value != shared) {
+                let _ = crate::settings_ui::request_wake();
+            }
             Ok(())
         })?;
+        self.rearm_hold();
         Ok(())
     }
 
-    fn schedule_mode(bucket: &Fields, shared: &Fields) -> Result<&'static str, String> {
+    pub(crate) fn schedule_mode(bucket: &Fields, shared: &Fields) -> Result<&'static str, String> {
         let kind = crate::schedule::kind(bucket).ok_or("unknown schedule mode")?;
         let (mode, needs_heat, needs_cool) = match kind {
             crate::schedule::Kind::Heat => ("heat", true, false),
@@ -282,17 +370,15 @@ impl Bridge {
                 device(fields! {field => num((hour(arg)? * 3600) as f64)})
             }
 
-            // ON is the shortest boost, for On/Off endpoints; the rest are
-            // minutes, up to the longest the select offers (Matter's Boost
-            // takes any duration).
+            // Whole minutes: zero cancels. On/Off endpoints keep their default boost.
             "hot_water_boost" => {
-                let longest = crate::bridge::HOT_WATER_BOOST_MINUTES[crate::bridge::HOT_WATER_BOOST_MINUTES.len() - 1];
+                let longest = crate::bridge::HOT_WATER_BOOST_MAX_MINUTES;
                 let minutes = match arg.to_uppercase().as_str() {
                     "ON" => crate::bridge::HOT_WATER_BOOST_MINUTES[0],
                     "OFF" => 0,
                     other => match other.parse() {
-                        Ok(m) if (1..=longest).contains(&m) => m,
-                        _ => return Err(format!("expected off, or minutes 1-{longest}")),
+                        Ok(m) if (0..=longest).contains(&m) => m,
+                        _ => return Err(format!("expected whole minutes 0-{longest}, or off")),
                     },
                 };
                 let end = if minutes == 0 { 0 } else { now + minutes * 60 };
@@ -807,13 +893,13 @@ mod tests {
             field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64().unwrap()
                 - chrono::Utc::now().timestamp() as f64
         };
-        for (arg, seconds) in [("ON", 1800.0), ("30", 1800.0), ("45", 2700.0), ("60", 3600.0), ("120", 7200.0)] {
+        for (arg, seconds) in [("ON", 1800.0), ("1", 60.0), ("37", 2220.0), ("75", 4500.0), ("120", 7200.0)] {
             assert!((seconds - 2.0..=seconds).contains(&left(arg)), "{arg}");
         }
-        for arg in ["off", "OFF"] {
+        for arg in ["0", "off", "OFF"] {
             assert_eq!(field("hot_water_boost", arg, "hot_water_boost_time_to_end").as_f64(), Some(0.0), "{arg}");
         }
-        for arg in ["0", "121", "-1", "", "maybe"] {
+        for arg in ["121", "-1", "30.5", "NaN", "", "maybe"] {
             assert!(b.fields("hot_water_boost", arg).is_err(), "{arg}");
         }
         assert_eq!(field("hot_water_schedule", "ON", "hot_water_mode"), json!("schedule"));
