@@ -272,7 +272,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         // Its Sensors view lists the sensor under the room, so it follows a move.
         sensor::keep_location(store, &config.serial, &sensor.bucket);
     } else {
-        sensor::keep_selected(store, &config.serial, &sensor);
+        sensor::keep_selected(store, &config.serial, Some(&sensor));
     }
     let (known, shared) = (store.clone(), format!("shared.{}", config.serial));
     sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
@@ -302,6 +302,9 @@ async fn run(config: flags::Config) {
         let room = sensor_room(&config, sensor.is_some());
         let roster = sensor::roster::Roster::new(std::path::Path::new(&config.sensors), room);
         roster.watch(&store, &config.serial);
+        if sensor.is_none() {
+            sensor::keep_selected(&store, &config.serial, None);
+        }
         roster
     });
     #[cfg(target_os = "linux")]
