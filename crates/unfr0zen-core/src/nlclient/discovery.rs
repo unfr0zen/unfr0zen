@@ -1294,15 +1294,16 @@ fn activity(
     let vtable = unique(vtables, "globals primary vtable")?;
     let mark_shape = arm.fingerprint(mark)?;
     let mut getters = Vec::new();
-    for slot in [0x10, 0x18] {
+    for slot in [0x10, 0x18, 0x20] {
         let getter = elf.read(vtable + slot)?;
         let shapes = serde_json::json!({"mark": mark_shape, "client": arm.fingerprint(getter)?});
         if known["activity_variants"].as_array().is_some_and(|v| v.contains(&shapes)) {
             getters.push(getter);
         }
     }
-    // The client accessor's slot differs by generation (0x18 on the gen 3,
-    // 0x10 on the gen 2) and both slots hold plain getters, so a build no
+    // The client accessor's slot differs by build (0x18 on the gen 3, 0x20
+    // on its 6.0-6, whose globals' vtable starts with two more methods, 0x10
+    // on the gen 2) and all hold plain getters, so a build no
     // reviewed shapes name gets the gen 3's: the screen checks the client's
     // back-pointer before using it, so a wrong slot costs the display wake,
     // not a crash.
