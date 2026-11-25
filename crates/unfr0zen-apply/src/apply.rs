@@ -314,7 +314,8 @@ fn run(
         .remove(bundle::NESTLOCAL)
         .map(|(_, data)| data)
         .ok_or_else(|| failure(format!("bundle: no {}", bundle::NESTLOCAL)))?;
-    let screen = &bundle.file(bundle::SCREEN)?.to_vec();
+    let screen = bundle.take(bundle::SCREEN).ok_or_else(|| failure(format!("bundle: no {}", bundle::SCREEN)))?;
+    let screen_legacy = bundle.take(bundle::SCREEN_LEGACY);
     // The rest is in options now: the 64 MB OMAP units cannot hold a second copy.
     let post_setup = bundle.file(bundle::POST_SETUP)?.to_vec();
     drop(bundle);
@@ -322,7 +323,12 @@ fn run(
     let build_screen = |source: &[u8], sections: &[nlclient::menu::Section]| -> Result<Vec<u8>> {
         log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens");
         let stock = out.join("nlclient.stock");
-        match nlclient::builder::build(source, screen, sections) {
+        let object = if nlclient::legacy_abi(source) {
+            screen_legacy.as_deref().ok_or_else(|| failure(format!("bundle: no {}", bundle::SCREEN_LEGACY)))?
+        } else {
+            &screen
+        };
+        match nlclient::builder::build(source, object, sections) {
             Ok(built) => {
                 if built.manifest["reviewed"] == false || (themes && !nlclient::theme::supported(source)) {
                     fs::write(&stock, source)?;

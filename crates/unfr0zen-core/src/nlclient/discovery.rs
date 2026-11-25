@@ -1,5 +1,6 @@
-//! Resolve native addresses from this ELF's imports, registrations and code.
-//! Reviewed instruction shapes name the build, never select addresses.
+//! Resolve modern native addresses from this ELF's imports, registrations and code.
+//! Reviewed instruction shapes name modern builds, never select addresses.
+//! The distinct 5.6-7 ABI uses bindings guarded by the complete stock hash.
 use super::{
     arm::{Arm, Ins, Op, Value},
     elf::{bytes, half, string, word, Elf},
@@ -8,6 +9,7 @@ use crate::shell::sha256_hex;
 use crate::{device, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod legacy;
 const IMPORTS: [(&str, &str); 11] = [
     ("native_new", "_Znwj"),
     ("native_string_ctor", "_ZN8nlStringC1Ev"),
@@ -114,9 +116,10 @@ pub struct Discovery {
     /// Per reviewed variant, how many natives' evidence it matches.
     pub matches: BTreeMap<String, usize>,
     /// The reviewed variant whose instruction shapes this build has, if any.
-    /// Every build must pass the structural discovery: addresses, layouts,
-    /// call shapes, each native's own shape and the library calls it makes.
-    /// A build no variant's shapes match is patched on that alone.
+    /// Modern builds pass structural discovery: addresses, layouts, call shapes,
+    /// each native's own shape and the library calls it makes. A modern build
+    /// no variant's shapes match is patched on that alone. The 5.6-7 variant
+    /// requires the complete reviewed executable's hash instead.
     pub variant: Option<String>,
     pub stock_sha256: String,
     pub validation: String,
@@ -566,6 +569,9 @@ pub fn discover(data: &[u8]) -> Result<Discovery> {
 /// targets of calls, so this holds a reviewed build too. A review of a new
 /// build starts from the findings whatever the objection.
 pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
+    if super::legacy_abi(data) {
+        return legacy::survey(data).map(|found| (found, None));
+    }
     survey_with(data, brightness)
 }
 

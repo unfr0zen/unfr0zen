@@ -346,7 +346,8 @@ pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8], &[nlclient::menu:
     move |source, sections| {
         log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens in memory");
         let path = run_dir.join("nlclient.stock");
-        match nlclient::builder::build(source, assets::CUSTOM_SCREEN, sections) {
+        let screen = if nlclient::legacy_abi(source) { assets::CUSTOM_SCREEN_LEGACY } else { assets::CUSTOM_SCREEN };
+        match nlclient::builder::build(source, screen, sections) {
             Ok(built) => {
                 fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", built.manifest))?;
                 let status = built.manifest["status"].as_str().unwrap_or_default();

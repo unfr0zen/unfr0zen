@@ -33,6 +33,7 @@ fn common() -> Files {
         (bundle::WAKE_FILTER.to_string(), (0o755, assets::WAKE_FILTER.to_vec())),
         (bundle::LOCAL_CLOUD.to_string(), (0o755, assets::LOCAL_CLOUD.to_vec())),
         (bundle::SCREEN.to_string(), (0o644, assets::CUSTOM_SCREEN.to_vec())),
+        (bundle::SCREEN_LEGACY.to_string(), (0o644, assets::CUSTOM_SCREEN_LEGACY.to_vec())),
     ])
 }
 
@@ -98,6 +99,8 @@ mod tests {
         let data = pack(Device::Diamond3, "1.0.0", None).unwrap();
         let bundle = Bundle::unpack(&data).unwrap();
         assert_eq!(bundle.manifest.device, "diamond3");
+        assert_eq!(bundle.file(bundle::SCREEN).unwrap(), assets::CUSTOM_SCREEN);
+        assert_eq!(bundle.file(bundle::SCREEN_LEGACY).unwrap(), assets::CUSTOM_SCREEN_LEGACY);
         assert!(bundle.file(bundle::APPLY).unwrap().starts_with(b"\x7fELF"));
         let settings = Settings {
             thread: true,

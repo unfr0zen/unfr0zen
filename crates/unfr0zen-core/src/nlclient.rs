@@ -14,6 +14,13 @@ use crate::{device, Result};
 use sha2::Digest;
 use std::io::Read;
 
+/// The reviewed 5.6-7 build uses 32-byte strings and a distinct native UI ABI.
+pub const LEGACY_SHA256: &str = "e9b4f67b1e6c422a1bbe0c9bfd5aa6a63184010cc663b64374132553d393d741";
+
+pub fn legacy_abi(source: &[u8]) -> bool {
+    sha256_hex(source) == LEGACY_SHA256
+}
+
 pub const BINARY: &str = "nestlabs/sbin/nlclient";
 pub const ORIGINAL: &str = "etc/unfr0zen/nlclient.original";
 pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";

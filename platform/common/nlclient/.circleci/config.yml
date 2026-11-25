@@ -16,7 +16,7 @@ jobs:
           command: sh platform/common/nlclient/build.sh build
       - module-store:
           module: nlclient
-          outputs: build/custom-screen.o build/j49-rcs-screen.o
+          outputs: build/custom-screen.o build/custom-screen-legacy.o build/j49-rcs-screen.o
       - run:
           name: nlclient navigation
           command: |

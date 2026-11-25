@@ -11,9 +11,24 @@ set -eu
 }
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$1"
-for name in custom_screen rcs_screen; do
-    case "$name" in custom_screen) output=custom-screen.o ;; rcs_screen) output=j49-rcs-screen.o ;; esac
+for variant in custom_screen custom_screen_legacy rcs_screen; do
+    flags=
+    case "$variant" in
+        custom_screen)
+            name=custom_screen
+            output=custom-screen.o
+            ;;
+        custom_screen_legacy)
+            name=custom_screen
+            output=custom-screen-legacy.o
+            flags=-DCUSTOM_LEGACY_ABI
+            ;;
+        rcs_screen)
+            name=rcs_screen
+            output=j49-rcs-screen.o
+            ;;
+    esac
     clang --target=arm-linux-gnueabihf -march=armv7-a -marm -mfpu=vfpv3-d16 -mfloat-abi=hard \
         -std=c11 -O2 -fPIE -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables \
-        -fno-asynchronous-unwind-tables -Wall -Wextra -Werror -c "$dir/src/$name.c" -o "$1/$output"
+        -fno-asynchronous-unwind-tables -Wall -Wextra -Werror $flags -c "$dir/src/$name.c" -o "$1/$output"
 done

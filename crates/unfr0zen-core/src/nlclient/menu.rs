@@ -23,9 +23,26 @@ use crate::{device, Result};
 /// The stock screens the entries take the place of, in the order of
 /// [`Section`], then UNFR0ZEN's.
 pub const HOSTS: [&str; 5] = ["account", "update", "proinfoscreen", "templock", "legalinfo"];
+const LEGACY_HOSTS: [&str; 4] = ["account", "proinfoscreen", "templock", "legalinfo"];
+
+pub(super) fn hosts(source: &[u8]) -> &'static [&'static str] {
+    if super::legacy_abi(source) {
+        &LEGACY_HOSTS
+    } else {
+        &HOSTS
+    }
+}
 
 /// The unused cloud-setup child supplies SCHEDULE's distinct registration.
 pub const SCHEDULE_HOST: &str = "appsetup";
+
+pub(super) fn schedule_host(source: &[u8]) -> &'static str {
+    if super::legacy_abi(source) {
+        "update"
+    } else {
+        SCHEDULE_HOST
+    }
+}
 
 /// A native menu insertion site. Modern clients use a non-owning pointer
 /// vector; older ones use bounded inline name and screen arrays.
@@ -54,10 +71,13 @@ pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
         return device(format!("settings menu insertion: expected one safe shape, found {}", found.len()));
     }
     let found = found.pop().unwrap();
-    let arranged = arranged(&names, sections)?;
+    let arranged = arranged_with_abi(&names, sections, super::legacy_abi(elf.data))?;
     let section_count = Section::ALL.iter().filter(|section| sections.contains(section)).count();
     if !sections.contains(&Section::Doom) && arranged.get(1 + section_count).map(String::as_str) != Some("slideshow") {
         return device("settings menu insertion requires Slideshow after the optional sections");
+    }
+    if super::legacy_abi(elf.data) && arranged.len() + 1 > 27 {
+        return device("5.6-7 settings name capacity: choose at most two of Zigbee, Matter and Doom");
     }
     if found.grow == 0 && arranged.len() > 32 {
         return device("settings menu insertion exceeds legacy name capacity");
@@ -217,7 +237,21 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
 fn menu_loop(elf: &Elf, arm: &Arm, list: u32, count: usize) -> Result<(u32, Vec<Insertion>)> {
     let mut found = Vec::new();
     for at in bounds(elf, list, count) {
-        let sites = sites(arm, at)?;
+        let mut sites = sites(arm, at)?;
+        // The reviewed 5.6-7 build fills bounded inline name and screen
+        // arrays (names at +0x68, screens at +0xd4) in its own loop shape.
+        if super::legacy_abi(elf.data) && at == 0x100b88 && sites.is_empty() {
+            sites.push(Insertion {
+                call: 0x100c54,
+                lookup: 0x4d098,
+                grow: 0,
+                object_register: 5,
+                names_register: 8,
+                screens_register: 7,
+                next_register: 4,
+                appends: false,
+            });
+        }
         if !sites.is_empty() {
             found.push((at, sites));
         }
@@ -241,6 +275,9 @@ impl Section {
     /// Every section, in the menu's order.
     pub const ALL: [Section; 4] = [Section::Zigbee, Section::Matter, Section::Themes, Section::Doom];
 
+    /// The 5.6-7 ABI has no reviewed theme preload and holds two optional tiles.
+    pub const LEGACY: [Section; 2] = [Section::Zigbee, Section::Matter];
+
     fn host(self) -> &'static str {
         HOSTS[self as usize]
     }
@@ -250,19 +287,29 @@ impl Section {
 /// screens the entries replace, the sections in order after its first
 /// entry, and Legal Info's name (UNFR0ZEN) where it was.
 pub fn arranged(stock: &[String], sections: &[Section]) -> Result<Vec<String>> {
+    arranged_with_abi(stock, sections, false)
+}
+
+fn arranged_with_abi(stock: &[String], sections: &[Section], legacy: bool) -> Result<Vec<String>> {
+    if legacy && sections.contains(&Section::Themes) {
+        return device("5.6-7 has no reviewed theme preload");
+    }
+    let hosts: &[&str] = if legacy { &LEGACY_HOSTS } else { &HOSTS };
     if stock.first().map(String::as_str) != Some("temperature")
         || stock.last().map(String::as_str) != Some("temperature")
     {
         return device("settings menu does not run between temperature entries");
     }
-    for host in HOSTS {
+    for &host in hosts {
         if stock.iter().filter(|n| *n == host).count() != 1 {
             return device(format!("settings menu does not hold {host} once"));
         }
     }
-    let mut names: Vec<String> = stock.iter().filter(|n| !HOSTS[..4].contains(&n.as_str())).cloned().collect();
+    let mut names: Vec<String> =
+        stock.iter().filter(|n| !hosts[..hosts.len() - 1].contains(&n.as_str())).cloned().collect();
     for (at, section) in Section::ALL.iter().filter(|s| sections.contains(s)).enumerate() {
-        names.insert(1 + at, section.host().to_string());
+        let name = if legacy && *section == Section::Matter { "proinfoscreen" } else { section.host() };
+        names.insert(1 + at, name.to_string());
     }
     Ok(names)
 }
@@ -272,7 +319,7 @@ pub fn arranged(stock: &[String], sections: &[Section]) -> Result<Vec<String>> {
 pub fn arrange(source: &[u8], output: &mut [u8], sections: &[Section]) -> Result<serde_json::Value> {
     let elf = Elf::parse(source)?;
     let (address, stock) = discovery::settings(&elf)?;
-    let names = arranged(&stock, sections)?;
+    let names = arranged_with_abi(&stock, sections, super::legacy_abi(source))?;
     let at = elf.offset(address)?;
     let words: Vec<u32> = (0..stock.len()).map(|i| word(source, at + i * 4)).collect::<Result<_>>()?;
     let (bound, _) = menu_loop(&elf, &Arm::new(&elf)?, address, stock.len())?;

@@ -79,14 +79,18 @@ struct custom_flow {
 
 /* Insert before the current entry in the legacy menu's bounded arrays.
  * Its original name is present, but its screen pointer is not stored yet.
- * The builder bounds the entire menu to fit the 32 name slots. */
+ * The builder bounds the entire menu to fit its ABI's name slots. */
 static inline int custom_insert_legacy(const char **names, void **screens, unsigned int *name_count,
                                        unsigned int *screen_count, unsigned int *next, void *screen) {
     unsigned int n = *name_count, s = *screen_count;
     if (!n || n > 29 || s != n + 1 || *next != s + 1)
         return 0;
     names[n] = names[n - 1];
+#ifdef CUSTOM_LEGACY_ABI
+    names[n - 1] = "update";
+#else
     names[n - 1] = "appsetup";
+#endif
     screens[s] = screen;
     ++*name_count;
     ++*screen_count;

@@ -11,6 +11,8 @@ const NESTLOCAL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nestlocal.gz"
 const APPLY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/unfr0zen-apply.gz"));
 /// unfr0zen's settings screens, compiled once, for linking into the unit's nlclient.
 pub const CUSTOM_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen.o"));
+/// The settings screens for nlclient's legacy ABI.
+pub const CUSTOM_SCREEN_LEGACY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/custom-screen-legacy.o"));
 /// The gen 1's and gen 2's Sensors views' registration helper, compiled for in-memory linking.
 pub const J49_RCS_SCREEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/j49-rcs-screen.o"));
 /// The library nlsleepd preloads for Matter, every generation's.

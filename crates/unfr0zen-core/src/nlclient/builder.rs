@@ -70,7 +70,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
     // Each entry's stock screen builds unfr0zen's instead (custom_root).
     let factories = discovery::screen_factories(&elf)?;
     let mut branches = Vec::new();
-    for name in super::menu::HOSTS.into_iter().chain([super::menu::SCHEDULE_HOST]) {
+    for name in super::menu::hosts(source).iter().copied().chain([super::menu::schedule_host(source)]) {
         let factory =
             *factories.get(name).ok_or_else(|| crate::Error::Device(format!("no {name} screen registration")))?;
         let factory_offset = elf.offset(factory)?;

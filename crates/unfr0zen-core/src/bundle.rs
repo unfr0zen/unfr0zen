@@ -32,6 +32,7 @@ pub const WAKE_FILTER: &str = "assets/libwakefilter.so";
 /// Preloaded into nlclient on a unit running nestlocal (setup::Options::local_cloud).
 pub const LOCAL_CLOUD: &str = "assets/liblocalcloud.so";
 pub const SCREEN: &str = "assets/custom-screen.o";
+pub const SCREEN_LEGACY: &str = "assets/custom-screen-legacy.o";
 /// The gen 2's native Sensors view helper, for the external temperature.
 pub const RCS_SCREEN: &str = "assets/j49-rcs-screen.o";
 /// Run before the setup reads the volume; failing, it stops the run with
@@ -587,6 +588,8 @@ mod tests {
             (NESTLOCAL.to_string(), (0o755, b"\x7fELF nestlocal".to_vec())),
             (WAKE_FILTER.to_string(), (0o755, b"\x7fELF wake".to_vec())),
             (LOCAL_CLOUD.to_string(), (0o755, b"\x7fELF local cloud".to_vec())),
+            (SCREEN.to_string(), (0o644, b"\x7fELF screen".to_vec())),
+            (SCREEN_LEGACY.to_string(), (0o644, b"\x7fELF legacy screen".to_vec())),
             (PRE_SETUP.to_string(), (0o755, b"#!/bin/sh\n".to_vec())),
         ]);
         let mut directories = BTreeMap::new();
@@ -627,6 +630,16 @@ mod tests {
         assert!(bundle.verify(&key(2).verifying_key()).unwrap_err().to_string().contains("bad signature"));
         let unsigned = Bundle::unpack(&pack(Device::Diamond3, "1.2.3", &files, &directories, None)).unwrap();
         assert!(unsigned.verify(&key(1).verifying_key()).unwrap_err().to_string().contains("unsigned"));
+    }
+
+    #[test]
+    fn bundles_without_the_legacy_screen_still_unpack() {
+        let (mut files, directories) = contents();
+        files.remove(SCREEN_LEGACY);
+        let mut bundle = Bundle::unpack(&pack(Device::Diamond3, "1.2.3", &files, &directories, None)).unwrap();
+        assert_eq!(bundle.file(SCREEN).unwrap(), b"\x7fELF screen");
+        assert!(bundle.take(SCREEN_LEGACY).is_none());
+        Settings::default().take_options(&mut bundle).unwrap();
     }
 
     #[test]
