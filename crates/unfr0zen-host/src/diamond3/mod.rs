@@ -3,3 +3,4 @@
 
 pub mod assets;
 pub mod usb;
+pub use unfr0zen_core::diamond3::sensors;

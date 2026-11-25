@@ -157,7 +157,7 @@ press **Start** and follow the prompts.
 
 **CLI (Linux and macOS):** the same executable, run with arguments, works from a
 terminal, over SSH or headless, with a few things the app doesn't have
-(`--nand-image`, `verify`, `uboot`, `nlclient`). On macOS it is
+(`--nand-image`, `verify`, `sensors`, `uboot`, `nlclient`). On macOS it is
 `unfr0zen.app/Contents/MacOS/unfr0zen`. Windows has the app only.
 
 ```text
@@ -167,6 +167,7 @@ Commands:
   backup    Back up the whole NAND to a file, with its SHA-256
   verify    Compare a NAND backup with the NAND
   restore   Write a verified NAND backup back to the NAND
+  sensors   Write the paired Nest Temperature Sensors in a NAND backup, with their keys, to a file (3rd generation)
   boot      Boot the application firmware
   uboot     Load recovery U-Boot over USB and leave it at its prompt (diamond3 and onyx)
   nlclient  Patch a local stock nlclient, or restore it from its undo journal

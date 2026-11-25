@@ -6,7 +6,7 @@
 mod ui;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -160,6 +160,9 @@ enum Command {
     Verify { image: PathBuf },
     /// Write IMAGE, a backup verified against its .sha256, back to NAND (asks first)
     Restore { image: PathBuf },
+    /// diamond3: write the paired Nest Temperature Sensors in IMAGE, a NAND backup, to OUT, with their keys, for
+    /// the unit's /media/data/nestlocal-sensors.json. Keep OUT private
+    Sensors { image: PathBuf, out: PathBuf },
     /// Replace this executable with the latest release from GitHub, if newer
     Update,
 }
@@ -307,6 +310,9 @@ pub fn main() {
     if !args.skip_logo {
         ui::logo();
     }
+    if let Some(Command::Sensors { image, out }) = &args.command {
+        finish(sensors(image, out));
+    }
     if let Some(Command::Update) = args.command {
         finish(update());
     }
@@ -328,7 +334,7 @@ pub fn main() {
             Some(image) => unfr0zen_host::j49::run_image(&config, image, &mut progress),
             None => run(&config, &mut progress, &cancel),
         },
-        Some(Command::Nlclient { .. }) => unreachable!("handled before USB setup"),
+        Some(Command::Nlclient { .. } | Command::Sensors { .. }) => unreachable!("handled before USB setup"),
         Some(Command::Uboot) => boot::uboot(config.wait_usb, config.omap, &mut progress),
         Some(Command::Boot) => unfr0zen_host::flow::boot(config.wait_usb, config.omap, &mut progress),
         Some(Command::Backup { out }) => {
@@ -354,6 +360,21 @@ pub fn main() {
         Some(Command::Update) => update(),
     };
     finish(result);
+}
+
+/// The paired sensors in a NAND backup, written where only its user reads them.
+fn sensors(image: &Path, out: &Path) -> unfr0zen_host::Result<String> {
+    let sensors = unfr0zen_host::diamond3::sensors::from_backup(&mut std::fs::File::open(image)?)?;
+    if sensors.is_empty() {
+        return Err(unfr0zen_host::Error::Device("the backup has no paired sensors".into()));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(out)?.write_all(unfr0zen_host::diamond3::sensors::file(&sensors).as_bytes())?;
+    let ids: Vec<&str> = sensors.iter().map(|sensor| sensor.id.as_str()).collect();
+    Ok(format!("Wrote {} ({}) with their keys to {}: keep it private", ids.len(), ids.join(", "), out.display()))
 }
 
 fn finish(result: unfr0zen_host::Result<String>) -> ! {
@@ -483,5 +504,29 @@ mod logged_arguments_tests {
             "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
                     --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem"
         );
+    }
+}
+
+#[cfg(test)]
+mod sensors_tests {
+    use super::{sensors, Args};
+    use clap::Parser;
+
+    #[test]
+    fn sensors_takes_a_backup_and_a_file_to_write() {
+        assert!(Args::try_parse_from(["unfr0zen", "sensors", "nand.bin", "out.json"]).is_ok());
+        assert!(Args::try_parse_from(["unfr0zen", "sensors", "nand.bin"]).is_err());
+    }
+
+    #[test]
+    fn what_is_no_backup_writes_no_file() {
+        let dir = std::env::temp_dir().join(format!("unfr0zen-sensors-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (image, out) = (dir.join("nand.bin"), dir.join("out.json"));
+        std::fs::write(&image, vec![0u8; 1 << 20]).unwrap();
+        assert!(sensors(&image, &out).is_err());
+        assert!(!out.exists(), "no file, so no empty key file left");
+        assert!(sensors(&dir.join("missing.bin"), &out).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
