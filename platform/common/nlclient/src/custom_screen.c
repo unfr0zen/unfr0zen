@@ -190,6 +190,7 @@ DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define CUSTOM_IMAGE     IMAGES "G_unfr0zen_192px.png"
 /* The menu glyphs: each entry's, 80 px. */
 #define MENU_GLYPH       IMAGES "G_unfr0zen_glyph_80px.png"
+#define SCHEDULE_GLYPH   IMAGES "G_unfr0zen_schedule_80px.png"
 #define ZIGBEE_GLYPH     IMAGES "G_unfr0zen_zigbee_80px.png"
 #define MATTER_GLYPH     IMAGES "G_unfr0zen_matter_80px.png"
 #define THEMES_GLYPH     IMAGES "G_unfr0zen_themes_80px.png"
@@ -1511,11 +1512,12 @@ static int screen_draw(void *screen, void *context) {
         if (!s->menu_glyph) {
             int error = 0;
             enum custom_page root = s->flow.root;
-            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE   ? ZIGBEE_GLYPH
-                                              : root == CUSTOM_MATTER ? MATTER_GLYPH
-                                              : root == CUSTOM_THEMES ? THEMES_GLYPH
-                                              : root == CUSTOM_DOOM   ? DOOM_GLYPH
-                                                                      : MENU_GLYPH,
+            s->menu_glyph = native_image_load(root == CUSTOM_SCHEDULE_HOME ? SCHEDULE_GLYPH
+                                              : root == CUSTOM_ZIGBEE      ? ZIGBEE_GLYPH
+                                              : root == CUSTOM_MATTER      ? MATTER_GLYPH
+                                              : root == CUSTOM_THEMES      ? THEMES_GLYPH
+                                              : root == CUSTOM_DOOM        ? DOOM_GLYPH
+                                                                           : MENU_GLYPH,
                                               &error);
         }
         if (s->menu_glyph) {

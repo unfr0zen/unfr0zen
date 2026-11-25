@@ -23,8 +23,9 @@ tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
 directly, and Back on that page returns to the menu. The UNFR0ZEN page has the
 **192×192 unfr0zen icon**, the line “unfr0zen” with the version of the app
 that set up the unit (`/etc/unfr0zen/version`), and Done only. A separate
-**SCHEDULE** tile before UNFR0ZEN uses the generic unfr0zen glyph and offers
-Schedule, Hold, Hold duration and Done. Schedule offers explicit On and Off: Off pauses indefinitely;
+**SCHEDULE** tile before UNFR0ZEN shows the
+[Material Design Icons calendar-clock](https://pictogrammers.com/library/mdi/icon/calendar-clock/)
+glyph and offers Schedule, Hold, Hold duration and Done. Schedule offers explicit On and Off: Off pauses indefinitely;
 On restores the saved schedule. Hold offers Start / renew and Cancel; renewal
 moves only the expiry, and cancellation restores the saved schedule. The duration
 picker uses the ring for 1–1440 minutes, click to save and Back to cancel.
