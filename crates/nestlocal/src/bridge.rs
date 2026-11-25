@@ -159,16 +159,39 @@ impl Bridge {
         self.naming.lock().unwrap().matter_labelled();
     }
 
-    /// What regulates, with the stand-in sensor: it, or the backplate.
+    /// What regulates: the stand-in sensor, a paired one, or the backplate,
+    /// which it is when the one chosen is silent. None without sensors.
     pub fn temperature_source(&self) -> Option<&'static str> {
-        let sensor = self.sensor.get()?;
-        let active = crate::sensor::selected(&self.store, &self.serial, &sensor.bucket);
-        Some(if active { sensor.source() } else { "backplate" })
+        self.regulating().map(|(source, _)| source)
+    }
+
+    /// temperature_source, and the sensor's bucket.
+    fn regulating(&self) -> Option<(&'static str, Option<String>)> {
+        let stand_in = self.sensor.get();
+        let settings = self.store.get(&format!("rcs_settings.{}", self.serial));
+        let listed = |field: &str| -> Vec<String> {
+            let list = settings.as_ref().and_then(|o| o.value.get(field)).and_then(Value::as_array);
+            list.into_iter().flatten().filter_map(Value::as_str).filter(|s| !s.is_empty()).map(Into::into).collect()
+        };
+        if stand_in.is_none() && listed("associated_rcs_sensors").is_empty() {
+            return None;
+        }
+        for bucket in listed("active_rcs_sensors") {
+            let source = match stand_in.filter(|sensor| sensor.bucket == bucket) {
+                Some(sensor) => sensor.source(),
+                None if self.occupancy.heard.hears(&bucket) => "sensor",
+                None => "backplate",
+            };
+            if source != "backplate" {
+                return Some((source, Some(bucket)));
+            }
+        }
+        Some(("backplate", None))
     }
 
     /// What the entities show, from the device and shared buckets, with the
-    /// stand-in sensor's reading as the current temperature while it
-    /// regulates: nlclient updates shared's only in steps of half a degree.
+    /// sensor's reading as the current temperature while it regulates:
+    /// nlclient updates shared's only in steps of half a degree.
     pub fn state(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut s = state(dev, sh);
         let schedule = self.schedule_status();
@@ -176,10 +199,13 @@ impl Bridge {
         s.insert("hold".into(), schedule.hold_until.is_some().into());
         s.insert("hold_duration".into(), schedule.hold_minutes.into());
         s.insert("hold_until".into(), schedule.hold_until.map_or(Value::Null, Value::from));
-        if self.temperature_source() == Some("external") {
-            if let Some(reading) = self.sensor.get().and_then(|sensor| sensor.reading()) {
-                s.insert("current_temperature".into(), shown(Some(&reading.into())));
-            }
+        let reading = match self.regulating() {
+            Some(("external", _)) => self.sensor.get().and_then(|sensor| sensor.reading()),
+            Some(("sensor", Some(bucket))) => self.occupancy.heard.reading(&bucket),
+            _ => None,
+        };
+        if let Some(reading) = reading {
+            s.insert("current_temperature".into(), shown(Some(&reading.into())));
         }
         s
     }
@@ -573,7 +599,9 @@ impl Bridge {
         shown.insert("external_power".into(), self.power.external().map_or(Value::Null, Value::from));
         if let Some(sensor) = self.sensor.get() {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
-            shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
+        }
+        if let Some(source) = self.temperature_source() {
+            shown.insert("temperature_source".into(), source.into());
         }
         // How the connection fares, since nestlocal started: in the state a
         // reconnection publishes, so a drop shows at once.
@@ -721,6 +749,8 @@ impl Bridge {
         sensor(&mut add, "backplate_temperature", "Backplate temperature", "°C", "temperature", diag());
         if self.sensor.get().is_some() {
             sensor(&mut add, "external_temperature", "External temperature", "°C", "temperature", diag());
+        }
+        if self.temperature_source().is_some() {
             add(
                 "sensor",
                 "temperature_source",
@@ -1513,6 +1543,41 @@ pub mod tests {
     }
 
     #[test]
+    fn a_paired_sensor_chosen_is_what_regulates_while_it_is_heard() {
+        let b = test_bridge();
+        let sh = obj(json!({"current_temperature": 23.5}));
+        let current = || b.state(&Fields::new(), &sh)["current_temperature"].clone();
+        let choose = |active: Value| {
+            let fields = fields! {"active_rcs_sensors" => active, "associated_rcs_sensors" => json!(["kryptonite.A"])};
+            b.store.merge("rcs_settings.S", &fields, 0, 0, true);
+        };
+        assert_eq!(b.temperature_source(), None, "no sensors");
+        choose(json!([]));
+        assert_eq!((b.temperature_source(), current()), (Some("backplate"), json!(23.5)));
+        choose(json!([""]));
+        assert_eq!(b.temperature_source(), Some("backplate"), "a name of nothing is nlclient's backplate");
+        choose(json!(["kryptonite.A"]));
+        let now = chrono::Utc::now();
+        let report = |at: chrono::DateTime<chrono::Utc>, celsius: &str| {
+            let line =
+                format!("{} KR1Data \"kryptonite.A\" {celsius} 20 20 20 20 100 1 -60", at.format("%Y-%m-%dT%H:%M:%S"));
+            b.occupancy.heard.line(&line);
+        };
+        report(now, "22.13");
+        b.occupancy.heard.update(now.timestamp());
+        assert_eq!((b.temperature_source(), current()), (Some("sensor"), json!(22.13)));
+        choose(json!([]));
+        assert_eq!((b.temperature_source(), current()), (Some("backplate"), json!(23.5)));
+        // Silent for longer than nlclient waits, and not heard since the log was first read.
+        let quiet = test_bridge();
+        let fields = fields! {"active_rcs_sensors" => json!(["kryptonite.A"])};
+        quiet.store.merge("rcs_settings.S", &fields, 0, 0, true);
+        quiet.store.merge("rcs_settings.S", &fields! {"associated_rcs_sensors" => json!(["kryptonite.A"])}, 0, 0, true);
+        quiet.occupancy.heard.update(now.timestamp() - 700);
+        assert_eq!(quiet.temperature_source(), Some("backplate"));
+    }
+
+    #[test]
     fn state_from_buckets() {
         let future = chrono::Utc::now().timestamp() + 600;
         let dev = obj(json!({"fan_timer_timeout": future, "fan_timer_duration": 900.0, "eco": {"mode": "manual-eco"}}));
@@ -1646,6 +1711,19 @@ pub mod tests {
             "Home Assistant shows it in its own unit"
         );
         assert_eq!(eco["step"], json!(1), "Home Assistant takes the step in its own unit");
+    }
+
+    #[test]
+    fn the_temperature_source_is_discovered_once_a_sensor_is_paired() {
+        let b = test_bridge();
+        let dev = obj(json!({"model_version": "Display-3.4"}));
+        let sh = obj(json!({"can_heat": true}));
+        let topic = "homeassistant/sensor/nestlocal_s/temperature_source/config";
+        b.announce(&dev, &sh);
+        assert!(!b.announced.lock().unwrap().clone().unwrap().contains_key(topic), "no sensors");
+        b.store.merge("rcs_settings.S", &fields! {"associated_rcs_sensors" => json!(["kryptonite.A"])}, 0, 0, true);
+        b.announce(&dev, &sh);
+        assert!(b.announced.lock().unwrap().clone().unwrap().contains_key(topic), "a paired sensor");
     }
 
     #[test]
