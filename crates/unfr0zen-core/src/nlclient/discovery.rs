@@ -32,6 +32,21 @@ const HANDOVER_IMPORTS: [(&str, &str); 6] = [
     ("native_usleep", "usleep"),
     ("native_getpid", "getpid"),
 ];
+/// The gen 2's 5.9.1-6 nlclient, whose Legal Info layer reaches no image,
+/// and where its text natives are: each one's reviewed 5.9.4-5 instruction
+/// shape, at the same distance from its neighbours as there.
+const J49_5_9_1_6: &str = "fd5831409d01ef4a3f08a0cf5ae72dcbad61ee7629d81709cf9b63929dbf3a8d";
+const J49_5_9_1_6_TEXT_NATIVES: [(&str, u32); 9] = [
+    ("native_config_invalidate", 0x2d2960),
+    ("native_config_layout", 0x1842a0),
+    ("native_image_load", 0x2deff4),
+    ("native_style", 0x54b40),
+    ("native_config_y", 0x2d25e0),
+    ("native_config_draw", 0x2d6d60),
+    ("native_image_width", 0x2de91c),
+    ("native_image_height", 0x2de930),
+    ("native_scroll_draw", 0x1833f0),
+];
 const EGL_IMPORTS: [(&str, &str); 2] =
     [("native_egl_swap", "eglSwapBuffers"), ("native_pthread_create", "pthread_create")];
 const FRAMEBUFFER_IMPORTS: [(&str, &str); 1] = [("native_mmap", "mmap")];
@@ -638,10 +653,14 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     let (ls, _) = arm.stores(lc[1], None)?;
     let (ss, ssizes) = arm.stores(screen, Some(api["native_new"]))?;
     let (_, lsizes) = arm.stores(layer, Some(api["native_new"]))?;
-    require(
-        ssizes == [Some(Value::Number(0xf0))] && lsizes == [Some(Value::Number(0x140))],
-        "unrecognised allocation sizes",
-    )?;
+    // The Legal Info layer and where its nlLayer part starts: 5.9.1-6's has
+    // one more string (its page text index at +0xa0, the string at +0xa4).
+    let (primary, common_offset) = match lsizes.as_slice() {
+        [Some(Value::Number(0x140))] => (0x140, 0xa4),
+        [Some(Value::Number(0x15c))] => (0x15c, 0xc0),
+        _ => (0, 0),
+    };
+    require(ssizes == [Some(Value::Number(0xf0))] && primary != 0, "unrecognised allocation sizes")?;
     let (lv, sv) = (number(&ls, 0)?, number(&ss, 0)?);
     for vptr in [lv, sv] {
         require(
@@ -651,7 +670,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         )?;
     }
     let common = elf.read(lv - 12)?;
-    require(common == 0xa4, "unrecognised common base adjustment")?;
+    require(common == common_offset, "unrecognised common base adjustment")?;
     let parts = [number(&ls, common as i32)?, number(&ls, common as i32 + 4)?, number(&ls, common as i32 + 8)?];
     require(number(&ss, 0xec)? == 0, "unrecognised screen constructor stores")?;
     let second = number(&ss, 4)?;
@@ -672,7 +691,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         "thunk adjustment mismatch",
     )?;
     let mut layout = BTreeMap::from([
-        ("PRIMARY_SIZE".into(), 0x140),
+        ("PRIMARY_SIZE".into(), primary),
         ("COMMON_OFFSET".into(), common),
         ("LAYER_VTABLE_SIZE".into(), group_end(&elf, parts[2])? - lv + 12),
         ("SCREEN_VTABLE_SIZE".into(), group_end(&elf, third)? - sv + 8),
@@ -707,41 +726,51 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     }
     let enter = elf.read(lv + 0x2c)?;
     let mut draw = elf.read(lv + 0x28)?;
-    let ec = arm.calls(enter)?;
-    let mut dc = arm.calls(draw)?;
-    // A build may keep the draw's visibility guard in a wrapper around the
-    // drawing itself: the wrapper calls the guard, then the body, whose calls
-    // follow the guard's in a build that draws in one function.
-    if let [guard, body] = dc[..] {
-        let mut calls = vec![guard];
-        calls.extend(arm.calls(body)?);
-        (draw, dc) = (body, calls);
-    }
-    require([4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()), "Legal Info lifecycle call shape changed")?;
-    api.insert("native_config_invalidate".into(), ec[3]);
-    let wrapper = unique(arm.tails(enter)?, "layout wrapper")?;
-    api.insert("native_config_layout".into(), unique(arm.tails(wrapper)?, "layout implementation")?);
-    let image_calls = arm.calls(ec[2])?;
-    require([3, 4].contains(&image_calls.len()), "image helper call shape changed")?;
-    require(dc[1] == dc[5] && dc[1] == dc[7], "renderer style calls disagree")?;
-    for (name, value) in [
-        ("native_image_load", image_calls[1]),
-        ("native_style", dc[1]),
-        ("native_config_y", dc[4]),
-        ("native_config_draw", dc[6]),
-        ("native_image_width", dc[8]),
-        ("native_scroll_draw", dc[9]),
-    ] {
-        api.insert(name.into(), value);
-    }
-    let code = arm.code(dc[8], Some(64))?;
-    let mut heights = Vec::new();
-    for (i, ins) in code.iter().enumerate() {
-        if ins.name == "ldr" && ins.text == "r0, [r0, #8]" {
-            heights.push(if i > 0 && code[i - 1].text == "ip, sp" { code[i - 1].address } else { ins.address });
+    let (wrapper, image_helper) = if sha256_hex(data) == J49_5_9_1_6 {
+        // Its Legal Info layer draws random text, without the image through
+        // whose helpers other builds' natives are found.
+        for (name, value) in J49_5_9_1_6_TEXT_NATIVES {
+            api.insert(name.into(), value);
         }
-    }
-    api.insert("native_image_height".into(), unique(heights, "image height getter")?);
+        (0x1843d8, None)
+    } else {
+        let ec = arm.calls(enter)?;
+        let mut dc = arm.calls(draw)?;
+        // A build may keep the draw's visibility guard in a wrapper around the
+        // drawing itself: the wrapper calls the guard, then the body, whose calls
+        // follow the guard's in a build that draws in one function.
+        if let [guard, body] = dc[..] {
+            let mut calls = vec![guard];
+            calls.extend(arm.calls(body)?);
+            (draw, dc) = (body, calls);
+        }
+        require([4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()), "Legal Info lifecycle call shape changed")?;
+        api.insert("native_config_invalidate".into(), ec[3]);
+        let wrapper = unique(arm.tails(enter)?, "layout wrapper")?;
+        api.insert("native_config_layout".into(), unique(arm.tails(wrapper)?, "layout implementation")?);
+        let image_calls = arm.calls(ec[2])?;
+        require([3, 4].contains(&image_calls.len()), "image helper call shape changed")?;
+        require(dc[1] == dc[5] && dc[1] == dc[7], "renderer style calls disagree")?;
+        for (name, value) in [
+            ("native_image_load", image_calls[1]),
+            ("native_style", dc[1]),
+            ("native_config_y", dc[4]),
+            ("native_config_draw", dc[6]),
+            ("native_image_width", dc[8]),
+            ("native_scroll_draw", dc[9]),
+        ] {
+            api.insert(name.into(), value);
+        }
+        let code = arm.code(dc[8], Some(64))?;
+        let mut heights = Vec::new();
+        for (i, ins) in code.iter().enumerate() {
+            if ins.name == "ldr" && ins.text == "r0, [r0, #8]" {
+                heights.push(if i > 0 && code[i - 1].text == "ip, sp" { code[i - 1].address } else { ins.address });
+            }
+        }
+        api.insert("native_image_height".into(), unique(heights, "image height getter")?);
+        (wrapper, Some(ec[2]))
+    };
     let event = elf.read(lv + 0x14)?;
     let legacy = arm.code(event, None)?[0].name != "b";
     let handler = if legacy { event } else { unique(arm.tails(event)?, "layer event handler")? };
@@ -770,12 +799,14 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         ("screen_composition".into(), init),
         ("layer_enter".into(), enter),
         ("layer_draw".into(), draw),
-        ("image_helper".into(), ec[2]),
         ("layer_event".into(), event),
         ("layout_wrapper".into(), wrapper),
         ("screen_title".into(), elf.read(sv + title)?),
         ("generic_event".into(), generic),
     ]);
+    if let Some(helper) = image_helper {
+        anchors.insert("image_helper".into(), helper);
+    }
     let known: serde_json::Value =
         serde_json::from_str(include_str!("abi_shapes.json")).map_err(|e| crate::Error::Device(e.to_string()))?;
     // Screen port additions: real activity notification and periodic refresh.

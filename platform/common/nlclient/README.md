@@ -9,10 +9,16 @@ The object is compiled once with the firmware when building the app.
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
 The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.0-6, 6.3-5, 6.4-8
-and both 6.5-14 builds, and the gen 1 and gen 2's 5.9.4-5) remain supported;
-this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
-unknown instruction shapes, missing imports or unsupported relocations fail
-before device writes. No firmware hash selects native addresses for this ABI.
+and both 6.5-14 builds, the gen 1 and gen 2's 5.9.4-5, and the gen 2's 5.9.1-6)
+remain supported; this does not infer arbitrary C++ semantics. Unsupported ELF
+layouts, unknown instruction shapes, missing imports or unsupported relocations
+fail before device writes. No firmware hash selects native addresses for this
+ABI, with one exception: the gen 2's 5.9.1-6 Legal Info layer shows random
+text instead of an image (an index at +0xa0, its string at +0xa4, the nlLayer
+part at +0xc0), so the nine text and image natives other builds are found
+through it come from a table that its complete stock executable's SHA-256
+selects. Each is the reviewed 5.9.4-5 native's instruction shape, at the same
+distance from its neighbours; discovery still checks every native's shape.
 
 The gen 3's 5.6-7 has a distinct ABI: 32-byte strings and compact vtables.
 It uses `custom-screen-legacy.o` and bindings guarded by the complete reviewed
