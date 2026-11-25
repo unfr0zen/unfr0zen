@@ -29,6 +29,9 @@ static inline int custom_same(const char *a, const char *b) {
     }
     return *a == *b;
 }
+static inline int custom_schedule_insert_before(const char *name, int doom) {
+    return custom_same(name, doom ? "templock" : "slideshow");
+}
 static inline enum custom_page custom_root(const char *name) {
     return custom_same(name, "account")         ? CUSTOM_ZIGBEE
            : custom_same(name, "update")        ? CUSTOM_MATTER
@@ -76,7 +79,7 @@ struct custom_flow {
 
 /* Insert before the current entry in the legacy menu's bounded arrays.
  * Its original name is present, but its screen pointer is not stored yet.
- * Reserve the trailing Reset and Temperature entries in the 32 name slots. */
+ * The builder bounds the entire menu to fit the 32 name slots. */
 static inline int custom_insert_legacy(const char **names, void **screens, unsigned int *name_count,
                                        unsigned int *screen_count, unsigned int *next, void *screen) {
     unsigned int n = *name_count, s = *screen_count;

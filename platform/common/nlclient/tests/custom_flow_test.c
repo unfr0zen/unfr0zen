@@ -132,6 +132,12 @@ static void duration_wheel_test(void) {
     assert(f.page == CUSTOM_HOLD_DURATION && !f.hold_fraction);
 }
 static void menu_insertion_test(void) {
+    assert(custom_schedule_insert_before("templock", 1));
+    assert(!custom_schedule_insert_before("slideshow", 1));
+    assert(custom_schedule_insert_before("slideshow", 0));
+    assert(!custom_schedule_insert_before("templock", 0));
+    assert(!custom_schedule_insert_before("legalinfo", 0));
+    assert(!custom_schedule_insert_before("proinfoscreen", 1));
     int existing, schedule, legal;
     const char *names[32] = {"wifi", "legalinfo"};
     void *screens[36] = {0, 0, &existing};

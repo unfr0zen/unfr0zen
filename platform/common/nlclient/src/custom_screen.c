@@ -94,8 +94,10 @@ DECLARE_LAYOUT(MENU_SCREENS_REGISTER);
 #define MENU_SCREENS_REGISTER LAYOUT(MENU_SCREENS_REGISTER)
 DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define MENU_NEXT_REGISTER LAYOUT(MENU_NEXT_REGISTER)
+DECLARE_LAYOUT(MENU_HAS_DOOM);
+#define MENU_HAS_DOOM LAYOUT(MENU_HAS_DOOM)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
-#define VTABLE_MAX         0x400
+#define VTABLE_MAX    0x400
 
 /* --- Fixed layouts ----------------------------------------------------------
  * The same in every audited build. */
@@ -1577,11 +1579,12 @@ static int screen_event(void *screen, void *event, void *target) {
     return native_screen_event(screen, event, target);
 }
 
-/* Insert a borrowed screen before Legal Info without changing the stock
+/* Insert a borrowed Schedule screen after the optional integration entries,
+ * before Doom or the first stock entry, without changing the stock
  * menu table or its sentinels. The caller's insertion and lookup own no
  * screen references; its native vector helper owns its buffer allocation. */
 __attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
-    if (!custom_same((const char *)registers[1], "legalinfo"))
+    if (!custom_schedule_insert_before((const char *)registers[1], MENU_HAS_DOOM))
         return;
     void *menu = (void *)registers[MENU_OBJECT_REGISTER];
     void *screen = native_menu_lookup((void *)registers[0], "appsetup");

@@ -10,8 +10,9 @@
 //! after the list's address is loaded, shortened to match. The slots past the
 //! bound keep valid names, since nlclient's lookup of a screen by name walks
 //! the whole list. SCHEDULE uses the unused cloud-setup child registration;
-//! a validated native insertion adds it before UNFR0ZEN at runtime, retaining
-//! every stock slot and both sentinels without relocating the pointer table.
+//! a validated native insertion adds it before Doom or the first stock
+//! entry at runtime, retaining every stock slot and both sentinels without
+//! relocating the pointer table.
 use super::{
     discovery,
     elf::{word, Elf},
@@ -38,7 +39,7 @@ pub(super) struct Insertion {
     pub next_register: u32,
 }
 
-pub(super) fn insertion(elf: &Elf) -> Result<Insertion> {
+pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
     use super::arm::Arm;
     let (list, names) = discovery::settings(elf)?;
     if names.len() < 3 || names[names.len() - 3..] != ["legalinfo", "reset", "temperature"] {
@@ -112,6 +113,14 @@ pub(super) fn insertion(elf: &Elf) -> Result<Insertion> {
         return device(format!("settings menu insertion: expected one safe shape, found {}", found.len()));
     }
     let found = found.pop().unwrap();
+    let arranged = arranged(&names, sections)?;
+    let section_count = Section::ALL.iter().filter(|section| sections.contains(section)).count();
+    if !sections.contains(&Section::Doom) && arranged.get(1 + section_count).map(String::as_str) != Some("slideshow") {
+        return device("settings menu insertion requires Slideshow after the optional sections");
+    }
+    if found.grow == 0 && arranged.len() > 32 {
+        return device("settings menu insertion exceeds legacy name capacity");
+    }
     if !(4..12).contains(&found.object_register) {
         return device("settings menu object is not in a preserved register");
     }
