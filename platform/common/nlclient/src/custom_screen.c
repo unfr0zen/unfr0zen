@@ -94,8 +94,10 @@ DECLARE_LAYOUT(MENU_SCREENS_REGISTER);
 #define MENU_SCREENS_REGISTER LAYOUT(MENU_SCREENS_REGISTER)
 DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define MENU_NEXT_REGISTER LAYOUT(MENU_NEXT_REGISTER)
+DECLARE_LAYOUT(MENU_HAS_DOOM);
+#define MENU_HAS_DOOM LAYOUT(MENU_HAS_DOOM)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
-#define VTABLE_MAX         0x400
+#define VTABLE_MAX    0x400
 
 /* --- Fixed layouts ----------------------------------------------------------
  * The same in every audited build. */
@@ -190,6 +192,7 @@ DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define CUSTOM_IMAGE     IMAGES "G_unfr0zen_192px.png"
 /* The menu glyphs: each entry's, 80 px. */
 #define MENU_GLYPH       IMAGES "G_unfr0zen_glyph_80px.png"
+#define SCHEDULE_GLYPH   IMAGES "G_unfr0zen_schedule_80px.png"
 #define ZIGBEE_GLYPH     IMAGES "G_unfr0zen_zigbee_80px.png"
 #define MATTER_GLYPH     IMAGES "G_unfr0zen_matter_80px.png"
 #define THEMES_GLYPH     IMAGES "G_unfr0zen_themes_80px.png"
@@ -1511,11 +1514,12 @@ static int screen_draw(void *screen, void *context) {
         if (!s->menu_glyph) {
             int error = 0;
             enum custom_page root = s->flow.root;
-            s->menu_glyph = native_image_load(root == CUSTOM_ZIGBEE   ? ZIGBEE_GLYPH
-                                              : root == CUSTOM_MATTER ? MATTER_GLYPH
-                                              : root == CUSTOM_THEMES ? THEMES_GLYPH
-                                              : root == CUSTOM_DOOM   ? DOOM_GLYPH
-                                                                      : MENU_GLYPH,
+            s->menu_glyph = native_image_load(root == CUSTOM_SCHEDULE_HOME ? SCHEDULE_GLYPH
+                                              : root == CUSTOM_ZIGBEE      ? ZIGBEE_GLYPH
+                                              : root == CUSTOM_MATTER      ? MATTER_GLYPH
+                                              : root == CUSTOM_THEMES      ? THEMES_GLYPH
+                                              : root == CUSTOM_DOOM        ? DOOM_GLYPH
+                                                                           : MENU_GLYPH,
                                               &error);
         }
         if (s->menu_glyph) {
@@ -1575,11 +1579,12 @@ static int screen_event(void *screen, void *event, void *target) {
     return native_screen_event(screen, event, target);
 }
 
-/* Insert a borrowed screen before Legal Info without changing the stock
+/* Insert a borrowed Schedule screen after the optional integration entries,
+ * before Doom or the first stock entry, without changing the stock
  * menu table or its sentinels. The caller's insertion and lookup own no
  * screen references; its native vector helper owns its buffer allocation. */
 __attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
-    if (!custom_same((const char *)registers[1], "legalinfo"))
+    if (!custom_schedule_insert_before((const char *)registers[1], MENU_HAS_DOOM))
         return;
     void *menu = (void *)registers[MENU_OBJECT_REGISTER];
     void *screen = native_menu_lookup((void *)registers[0], "appsetup");

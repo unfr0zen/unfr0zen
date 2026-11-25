@@ -47,7 +47,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
     let address = u32::try_from(align(end as usize, 0x10000)?)
         .map_err(|_| crate::Error::Device("payload address overflow".into()))?;
     let offset = align(source.len(), 0x10000)?;
-    let insertion = super::menu::insertion(&elf)?;
+    let insertion = super::menu::insertion(&elf, sections)?;
     let mut externals = discovery.native_api.clone();
     let menu_bindings = std::collections::BTreeMap::from([
         ("native_menu_lookup".to_string(), insertion.lookup),
@@ -56,6 +56,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
         ("layout_MENU_NAMES_REGISTER".into(), insertion.names_register),
         ("layout_MENU_SCREENS_REGISTER".into(), insertion.screens_register),
         ("layout_MENU_NEXT_REGISTER".into(), insertion.next_register),
+        ("layout_MENU_HAS_DOOM".into(), u32::from(sections.contains(&super::menu::Section::Doom))),
     ]);
     externals.extend(menu_bindings.clone());
     externals.entry("native_rename".into()).or_insert(0);
