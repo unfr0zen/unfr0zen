@@ -5,7 +5,9 @@
 // The thermostat is endpoint 1, in standard clusters: Thermostat (eco is the
 // economy bit of its programming operation mode, the eco temperatures are the
 // unoccupied setpoints), Fan Control (with a fan), Thermostat User Interface
-// Configuration, Relative Humidity and the battery's voltage; and one
+// Configuration, Relative Humidity and Power Configuration (the battery's
+// voltage and charge; Basic's power source says whether the unit has outside
+// power, from its backplate or USB, or runs on the battery); and one
 // manufacturer-specific cluster, Weather (see WEATHER below). The rest have
 // endpoints of their own, present as the unit's equipment calls for:
 //
@@ -535,6 +537,17 @@ const nest = {
       }
     },
   },
+  // Outside power, from the backplate or USB: Basic's power source is mains
+  // then, and battery (3) on the battery alone.
+  power: {
+    cluster: "genBasic",
+    type: ["attributeReport", "readResponse"],
+    convert: (model, msg) => {
+      if (msg.data.powerSource !== undefined) {
+        return { external_power: (msg.data.powerSource & 0x7f) !== 3 };
+      }
+    },
+  },
   states: {
     cluster: "genBinaryInput",
     type: ["attributeReport", "readResponse"],
@@ -963,6 +976,7 @@ const definition = {
     nest.states,
     nest.switches,
     nest.hot_water_boost,
+    nest.power,
   ],
   toZigbee: [
     tz.thermostat_occupied_heating_setpoint,
@@ -1017,6 +1031,12 @@ const definition = {
     const result = [
       climate,
       e.humidity(),
+      e.battery(),
+      e
+        .binary("external_power", ea.STATE, true, false)
+        .withLabel("External power")
+        .withCategory("diagnostic")
+        .withDescription("Outside power, from the backplate or USB; off on the battery alone"),
       e.battery_voltage().withLabel("Battery voltage").withHomeAssistant({ name: "Battery voltage" }),
       e.binary("occupancy", ea.STATE, true, false).withDescription("Motion at the thermostat in the last 15 minutes"),
       e
@@ -1369,7 +1389,10 @@ const definition = {
     await report(THERMOSTAT, "hvacFanCtrl", ["fanMode"]);
     await report(THERMOSTAT, "hvacUserInterfaceCfg", ["tempDisplayMode"]);
     await report(THERMOSTAT, "msRelativeHumidity", ["measuredValue"]);
-    await report(THERMOSTAT, "genPowerCfg", ["batteryVoltage"]);
+    await report(THERMOSTAT, "genPowerCfg", ["batteryVoltage", "batteryPercentageRemaining"]);
+    // The power source as the unit says it now: Zigbee2MQTT's interview
+    // kept the 0x81 earlier firmware gave, which it can't name.
+    await device.getEndpoint(THERMOSTAT).read("genBasic", ["powerSource"]);
     await report(BACKPLATE, "msTemperatureMeasurement", ["measuredValue"]);
     // The unit reports to the coordinator bound or not, and its binding
     // table (16 entries) is about full: the rest are only read.

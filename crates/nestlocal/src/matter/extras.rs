@@ -229,26 +229,35 @@ impl temperature_measurement::ClusterHandler for Backplate {
     }
 }
 
-/// The display's battery, charged from the wiring: its voltage.
+/// The display's battery, charged from the wiring or USB: its voltage and
+/// charge, and whether it powers the unit now (Active) or stands by while
+/// outside power does (Standby).
 pub struct Battery {
     pub dataver: Dataver,
     pub nest: Arc<Nest>,
 }
 
 impl power_source::ClusterHandler for Battery {
-    const CLUSTER: Cluster<'static> =
-        power_source::FULL_CLUSTER.with_features(power_source::Feature::BATTERY.bits()).with_attrs(with!(
+    const CLUSTER: Cluster<'static> = power_source::FULL_CLUSTER
+        .with_features(power_source::Feature::BATTERY.bits() | power_source::Feature::RECHARGEABLE.bits())
+        .with_attrs(with!(
             required;
             power_source::AttributeId::BatVoltage
+                | power_source::AttributeId::BatPercentRemaining
                 | power_source::AttributeId::BatChargeLevel
                 | power_source::AttributeId::BatReplacementNeeded
                 | power_source::AttributeId::BatReplaceability
+                | power_source::AttributeId::BatChargeState
+                | power_source::AttributeId::BatFunctionalWhileCharging
         ));
 
     dataver!();
 
     fn status(&self, _ctx: impl ReadContext) -> Result<power_source::PowerSourceStatusEnum, Error> {
-        Ok(power_source::PowerSourceStatusEnum::Active)
+        Ok(match self.nest.bridge.power.external() {
+            Some(true) => power_source::PowerSourceStatusEnum::Standby,
+            _ => power_source::PowerSourceStatusEnum::Active,
+        })
     }
 
     fn order(&self, _ctx: impl ReadContext) -> Result<u8, Error> {
@@ -278,13 +287,33 @@ impl power_source::ClusterHandler for Battery {
         Ok(Nullable::new(volts.map(|v| (v * 1000.0).round() as u32)))
     }
 
+    /// Percent, in halves.
+    fn bat_percent_remaining(&self, _ctx: impl ReadContext) -> Result<Nullable<u8>, Error> {
+        let volts = self.nest.view().device_number("battery_level");
+        Ok(Nullable::new(volts.map(|v| crate::power::percent(v) * 2)))
+    }
+
     fn bat_charge_level(&self, _ctx: impl ReadContext) -> Result<power_source::BatChargeLevelEnum, Error> {
-        // The unit runs on its wiring; under 3.6 V it starts to shut things down.
         Ok(match self.nest.view().device_number("battery_level") {
-            Some(v) if v < 3.5 => power_source::BatChargeLevelEnum::Critical,
-            Some(v) if v < 3.6 => power_source::BatChargeLevelEnum::Warning,
+            Some(v) if v < crate::power::EMPTY => power_source::BatChargeLevelEnum::Critical,
+            Some(v) if v < crate::power::LOW => power_source::BatChargeLevelEnum::Warning,
             _ => power_source::BatChargeLevelEnum::OK,
         })
+    }
+
+    /// Charging while outside power is on, until full.
+    fn bat_charge_state(&self, _ctx: impl ReadContext) -> Result<power_source::BatChargeStateEnum, Error> {
+        let full = self.nest.view().device_number("battery_level").is_some_and(|v| crate::power::percent(v) == 100);
+        Ok(match self.nest.bridge.power.external() {
+            Some(true) if full => power_source::BatChargeStateEnum::IsAtFullCharge,
+            Some(true) => power_source::BatChargeStateEnum::IsCharging,
+            Some(false) => power_source::BatChargeStateEnum::IsNotCharging,
+            None => power_source::BatChargeStateEnum::Unknown,
+        })
+    }
+
+    fn bat_functional_while_charging(&self, _ctx: impl ReadContext) -> Result<bool, Error> {
+        Ok(true)
     }
 
     fn bat_replacement_needed(&self, _ctx: impl ReadContext) -> Result<bool, Error> {
@@ -1181,6 +1210,27 @@ mod tests {
             Nullable::none()
         );
         assert_eq!(Battery { dataver: Dataver::new(0), nest: unit }.bat_voltage(ctx(3)).unwrap(), Nullable::none());
+    }
+
+    #[test]
+    fn battery_status_and_charge_follow_outside_power() {
+        use power_source::BatChargeStateEnum::{IsAtFullCharge, IsCharging, IsNotCharging, Unknown};
+        use power_source::PowerSourceStatusEnum::{Active, Standby};
+        for (volts, external, status, charge, half_percent) in [
+            (3.92, Some(true), Standby, IsAtFullCharge, 200),
+            (3.7, Some(true), Standby, IsCharging, 100),
+            (3.7, Some(false), Active, IsNotCharging, 100),
+            (3.7, None, Active, Unknown, 100),
+        ] {
+            let unit = nest(fields! {"battery_level" => volts}, fields! {});
+            unit.bridge.power.set(external);
+            let battery = Battery { dataver: Dataver::new(0), nest: unit };
+            assert_eq!(battery.status(ctx(3)).unwrap(), status, "{volts} {external:?}");
+            assert_eq!(battery.bat_charge_state(ctx(3)).unwrap(), charge, "{volts} {external:?}");
+            assert_eq!(battery.bat_percent_remaining(ctx(3)).unwrap(), Nullable::some(half_percent));
+        }
+        let battery = Battery { dataver: Dataver::new(0), nest: nest(fields! {}, fields! {}) };
+        assert_eq!(battery.bat_percent_remaining(ctx(3)).unwrap(), Nullable::none());
     }
 
     #[test]

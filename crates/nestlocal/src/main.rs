@@ -29,6 +29,7 @@ mod network;
 mod nlsettings;
 mod occupancy;
 mod package;
+mod power;
 mod schedule;
 mod schedule_control;
 mod scratch;
@@ -325,6 +326,7 @@ async fn run(config: flags::Config) {
     if let Some(bridge) = &integration {
         occupancy::watch(bridge.occupancy.clone(), occupancy::EVENT_LOG.into());
         brightness::watch(bridge.brightness.clone());
+        power::watch(bridge.power.clone());
         bridge.wake_for_boost();
     }
     let mut broker_port = None;

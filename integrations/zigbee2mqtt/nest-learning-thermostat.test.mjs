@@ -175,3 +175,29 @@ test("configure completes on firmware that refuses the hold expiry attribute", a
   await definition.configure({ getEndpoint: () => endpoint }, {});
   assert.ok(reads.includes("msTemperatureMeasurement"), "reads after the refused one still run");
 });
+
+test("the power source says whether the unit has outside power", () => {
+  const power = definition.fromZigbee.find((c) => c?.cluster === "genBasic");
+  for (const [source, external] of [
+    [0x01, true],
+    [0x03, false],
+    [0x81, true],
+  ]) {
+    assert.equal(power.convert({}, { data: { powerSource: source } }).external_power, external, String(source));
+  }
+  assert.equal(power.convert({}, { data: { modelId: "Nest" } }), undefined);
+});
+
+test("configure reports the battery's charge and reads the power source again", async () => {
+  const done = [];
+  const endpoint = {
+    supportsInputCluster: () => true,
+    bind: async () => {},
+    unbind: async () => {},
+    configureReporting: async (cluster, [{ attribute }]) => done.push(`report ${cluster} ${attribute}`),
+    read: async (cluster, attributes) => done.push(`read ${cluster} ${attributes.join()}`),
+  };
+  await definition.configure({ getEndpoint: () => endpoint }, {});
+  assert.ok(done.includes("report genPowerCfg batteryPercentageRemaining"));
+  assert.ok(done.includes("read genBasic powerSource"));
+});

@@ -421,7 +421,8 @@ impl Nest {
                         0x0000, 0x0001, 0x0002, 0x0011, 0x0012, 0x0013, 0x0014, 0x001B, 0x001C, 0x0023, 0x0024, 0x0025,
                         0x0029,
                     ],
-                    POWER => &[0x0020],
+                    BASIC => &[0x0007],
+                    POWER => &[0x0020, 0x0021],
                     FAN | DISPLAY | HUMIDITY | TEMPERATURE => &[0x0000],
                     ANALOG_OUTPUT | ANALOG_INPUT | BINARY_INPUT | BINARY_OUTPUT => &[0x0055],
                     HOT_WATER => HOT_WATER_ATTRIBUTES,
@@ -1020,7 +1021,7 @@ impl Clusters for Nest {
         }
         Some(match cluster {
             BASIC => BASIC_ATTRIBUTES,
-            POWER => &[0x0020],
+            POWER => &[0x0020, 0x0021],
             IDENTIFY => &[0x0000],
             THERMOSTAT => THERMOSTAT_ATTRIBUTES,
             FAN | DISPLAY => &[0x0000, 0x0001],
@@ -1048,12 +1049,22 @@ impl Clusters for Nest {
                 let model = if crate::device::current().generation == 2 { MODEL_GEN2 } else { MODEL };
                 Some(Value::Str(model.into()))
             }
-            (BASIC, 0x0007) => Some(Value::Enum8(0x81)), // mains (the HVAC system's 24 V), battery backup
+            // Mains (the HVAC's 24 V through the backplate, or USB), else the
+            // battery alone. Never with bit 7 (battery backup) set:
+            // zigbee-herdsman keeps the byte as read and names only 0-6.
+            (BASIC, 0x0007) => {
+                Some(Value::Enum8(if self.bridge.power.external() == Some(false) { 0x03 } else { 0x01 }))
+            }
             (BASIC, 0x4000) => Some(Value::Str(sprint(self.view().dev.get("current_version")))),
             // Volts, in 100 mV.
             (POWER, 0x0020) => {
                 let volts = number(self.view().dev.get("battery_level"));
                 Some(Value::U8(volts.map_or(0xFF, |v| (v * 10.0).round() as u8)))
+            }
+            // Percent, in halves.
+            (POWER, 0x0021) => {
+                let volts = number(self.view().dev.get("battery_level"));
+                Some(Value::U8(volts.map_or(0xFF, |v| crate::power::percent(v) * 2)))
             }
             (IDENTIFY, 0x0000) => Some(Value::U16(0)),
             (THERMOSTAT, a) => self.thermostat(a),
@@ -1199,6 +1210,20 @@ mod tests {
     }
 
     #[test]
+    fn the_power_source_follows_outside_power_and_is_reported() {
+        let n = nest(fields! {"battery_level" => 3.7}, fields! {});
+        assert_eq!(n.read(1, BASIC, 0x0007), Some(Value::Enum8(0x01)), "unknown: on its wiring");
+        n.bridge.power.set(Some(true));
+        assert_eq!(n.read(1, BASIC, 0x0007), Some(Value::Enum8(0x01)));
+        n.bridge.power.set(Some(false));
+        assert_eq!(n.read(1, BASIC, 0x0007), Some(Value::Enum8(0x03)));
+        assert_eq!(n.read(1, POWER, 0x0021), Some(Value::U8(100)), "3.7 V is 50 %");
+        let reported = n.reported();
+        assert!(reported.contains(&(1, BASIC, &[0x0007][..])));
+        assert!(reported.contains(&(1, POWER, &[0x0020, 0x0021][..])));
+    }
+
+    #[test]
     fn generation_models_fit_the_basic_cluster_model_identifier() {
         assert!(MODEL.len() <= 32);
         assert!(MODEL_GEN2.len() <= 32);
@@ -1222,6 +1247,7 @@ mod tests {
         assert_eq!(n.read(1, HUMIDITY, 0x0000), Some(Value::U16(4100)));
         assert_eq!(n.read(1, DISPLAY, 0x0000), Some(Value::Enum8(0)));
         assert_eq!(n.read(1, POWER, 0x0020), Some(Value::U8(39)));
+        assert_eq!(n.read(1, POWER, 0x0021), Some(Value::U8(200)), "3.92 V is full");
         assert_eq!(n.read(2, TEMPERATURE, 0x0000), Some(Value::I16(2210)));
         assert_eq!(n.read(10, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
         assert!(n.attributes(3, ANALOG_OUTPUT).is_none()); // no fan
@@ -1407,6 +1433,7 @@ mod tests {
         assert_eq!(n.read(2, TEMPERATURE, 0x0000), Some(Value::I16(i16::MIN)));
         assert_eq!(n.read(1, HUMIDITY, 0x0000), Some(Value::U16(0xFFFF)));
         assert_eq!(n.read(1, POWER, 0x0020), Some(Value::U8(0xFF)));
+        assert_eq!(n.read(1, POWER, 0x0021), Some(Value::U8(0xFF)));
         // Off, no setpoints yet, and neither heating nor cooling said: both.
         assert_eq!(n.read(1, THERMOSTAT, 0x001C), Some(Value::Enum8(0x00)));
         assert_eq!(n.read(1, THERMOSTAT, 0x0011), Some(Value::I16(2400)));

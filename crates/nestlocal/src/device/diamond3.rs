@@ -1,6 +1,6 @@
 //! The gen3 (diamond3, i.MX6SoloX).
 
-use super::{Ble, Device, Radio};
+use super::{Ble, Device, Power, Radio};
 
 pub static DEVICE: Device = Device {
     name: "diamond3",
@@ -28,4 +28,9 @@ pub static DEVICE: Device = Device {
         firmware: "/usr/share/dialog/data/firmware/nl_ble_peripheral_app_firmware.bin",
     }),
     display: 480,
+    // The sensor MCU's backplate detect line, and the i.MX USB charger.
+    power: Power {
+        backplate: "/sys/bus/platform/devices/0.sensor-mcu-gpios/detect#/value",
+        usb: "/sys/class/power_supply/imx_usb_charger/online",
+    },
 };
