@@ -1,6 +1,6 @@
 //! The gen2 (j49, TI AM3703).
 
-use super::{ChipSelect, Device, Radio};
+use super::{ChipSelect, Device, Radio, OMAP_POWER};
 
 pub static DEVICE: Device = Device {
     name: "j49",
@@ -27,4 +27,5 @@ pub static DEVICE: Device = Device {
     // No BLE.
     ble: None,
     display: 320,
+    power: OMAP_POWER,
 };

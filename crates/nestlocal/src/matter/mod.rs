@@ -535,11 +535,15 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         }
     });
 
-    // Changes to the buckets, occupancy and the stand-in sensor, reported to
-    // subscribed controllers.
+    // Changes to the buckets, occupancy, outside power and the stand-in
+    // sensor, reported to subscribed controllers.
     let (changed, changes) = async_channel::bounded::<()>(1);
     let occupancy = changed.clone();
     let reading = changed.clone();
+    let powered = changed.clone();
+    nest.bridge.power.on_change(move || {
+        let _ = powered.try_send(());
+    });
     nest.bridge.store.watch(move |_| {
         let _ = changed.try_send(());
     });

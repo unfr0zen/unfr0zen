@@ -7,6 +7,14 @@ mod j49;
 
 use std::sync::OnceLock;
 
+/// The gen 1's and gen 2's: the backplate's diamond-backplate detect line,
+/// and VBUS as the TWL4030's USB PHY sees it (musb's own vbus file always
+/// reads off on the OMAP).
+const OMAP_POWER: Power = Power {
+    backplate: "/sys/devices/platform/diamond-backplate/detect#/value",
+    usb: "/sys/devices/platform/omap/omap_i2c.1/i2c-1/1-0048/twl4030_usb/vbus",
+};
+
 /// The 802.15.4 radio: its wiring, and the firmware nestlocal gives it.
 pub struct Radio {
     /// The SPI device the radio is a slave on.
@@ -29,6 +37,15 @@ pub struct Radio {
     pub selects_zigbee: bool,
     /// EmberZNet's transmit power mode for the board's front end.
     pub tx_power_mode: u16,
+}
+
+/// Where the unit says it has outside power, as Nest's shutdown daemon
+/// (nlshutdownd) reads it: sysfs files holding 1/0 or on/off.
+pub struct Power {
+    /// The backplate's detect line, active low, read as its GPIO's value.
+    pub backplate: &'static str,
+    /// Power on the USB port.
+    pub usb: &'static str,
 }
 
 /// The GPIO that can drive the radio's nSSEL in place of the SPI controller:
@@ -63,6 +80,7 @@ pub struct Device {
     /// The round display's width in pixels, which the settings screen's
     /// images are drawn for.
     pub display: usize,
+    pub power: Power,
 }
 
 impl Device {

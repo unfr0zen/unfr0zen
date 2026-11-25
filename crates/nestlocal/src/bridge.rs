@@ -72,6 +72,8 @@ pub struct Bridge {
     pub occupancy: Arc<Occupancy>,
     /// The screen brightness the unit shows (brightness.rs).
     pub brightness: Arc<crate::brightness::Watch>,
+    /// Whether the unit has outside power (power.rs).
+    pub power: Arc<crate::power::Watch>,
     mqtt: OnceLock<mqtt::Client>,
     /// The unit's wakes since nestlocal started (wake.rs).
     wakes: AtomicU64,
@@ -124,6 +126,7 @@ impl Bridge {
             updates: OnceLock::new(),
             occupancy: Arc::new(Occupancy::default()),
             brightness: Arc::new(crate::brightness::Watch::default()),
+            power: Arc::new(crate::power::Watch::default()),
             mqtt: OnceLock::new(),
             wakes: AtomicU64::new(0),
             announced: Mutex::new(None),
@@ -252,6 +255,12 @@ impl Bridge {
         });
         let bridge = Arc::downgrade(self);
         self.brightness.on_change(move || {
+            if let Some(bridge) = bridge.upgrade() {
+                bridge.publish_state();
+            }
+        });
+        let bridge = Arc::downgrade(self);
+        self.power.on_change(move || {
             if let Some(bridge) = bridge.upgrade() {
                 bridge.publish_state();
             }
@@ -532,7 +541,7 @@ impl Bridge {
     }
 
     /// The state, with what no bucket holds: occupancy, the brightness the
-    /// unit shows and the stand-in sensor.
+    /// unit shows, outside power and the stand-in sensor.
     fn shown(&self, dev: &Fields, sh: &Fields) -> Fields {
         let mut shown = self.state(dev, sh);
         if let Some((heat, cool)) = eco_targets(&shown) {
@@ -556,6 +565,7 @@ impl Bridge {
         let (brightness, automatic) = crate::brightness::reported(dev, self.brightness.shown());
         shown.insert("screen_brightness".into(), brightness.map_or(Value::Null, Value::from));
         shown.insert("screen_brightness_auto".into(), automatic.into());
+        shown.insert("external_power".into(), self.power.external().map_or(Value::Null, Value::from));
         if let Some(sensor) = self.sensor.get() {
             shown.insert("external_temperature".into(), sensor.reading().map_or(Value::Null, Value::from));
             shown.insert("temperature_source".into(), self.temperature_source().map_or(Value::Null, Value::from));
@@ -713,6 +723,7 @@ impl Bridge {
                 fields! {"value_template" => tmpl("temperature_source"), "entity_category" => "diagnostic", "icon" => "mdi:thermometer-lines"},
             );
         }
+        sensor(&mut add, "battery", "Battery", "%", "battery", diag());
         sensor(&mut add, "battery_level", "Battery voltage", "V", "voltage", diag());
         sensor(
             &mut add,
@@ -784,6 +795,7 @@ impl Bridge {
         }
         binary("leaf", "Leaf", "", fields! {"icon" => "mdi:leaf"});
         binary("occupancy", "Occupancy", "occupancy", Fields::new());
+        binary("external_power", "External power", "plug", fields! {"entity_category" => "diagnostic"});
         binary("preconditioning_active", "Early-On active", "", fields! {"icon" => "mdi:clock-fast"});
         binary("sunlight_correction_active", "Sunblock active", "", fields! {"icon" => "mdi:weather-sunny"});
         binary("hvac_safety_shutoff_active", "Safety shutoff", "problem", fields! {"entity_category" => "diagnostic"});
@@ -1370,6 +1382,8 @@ pub fn state(dev: &Fields, sh: &Fields) -> Fields {
     ] {
         s.insert(k.into(), dev.get(k).cloned().unwrap_or(Value::Null));
     }
+    let battery = number(dev.get("battery_level")).map(crate::power::percent);
+    s.insert("battery".into(), battery.map_or(Value::Null, Value::from));
     s.insert("away_temperature_low".into(), shown_eco(dev.get("away_temperature_low"), ECO_LOW));
     s.insert("away_temperature_high".into(), shown_eco(dev.get("away_temperature_high"), ECO_HIGH));
     for k in [
@@ -1898,6 +1912,29 @@ pub mod tests {
         assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], json!(90));
         b.brightness.set_shown(None);
         assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], Value::Null, "nothing set or shown");
+    }
+
+    #[test]
+    fn the_state_shows_the_battery_percentage_and_outside_power() {
+        let b = test_bridge();
+        let shown = |b: &Bridge, dev: &Fields| {
+            let s = b.shown(dev, &Fields::new());
+            (s["battery"].clone(), s["external_power"].clone())
+        };
+        assert_eq!(shown(&b, &Fields::new()), (Value::Null, Value::Null), "nothing reported or read");
+        let dev = obj(json!({"battery_level": 3.7}));
+        b.power.set(Some(true));
+        assert_eq!(shown(&b, &dev), (json!(50), json!(true)));
+        b.power.set(Some(false));
+        assert_eq!(shown(&b, &dev), (json!(50), json!(false)));
+        let (dev, sh) = everything();
+        b.announce(&dev, &sh);
+        let configs = b.announced.lock().unwrap().clone().unwrap();
+        let battery: Value = serde_json::from_str(&configs["homeassistant/sensor/nestlocal_s/battery/config"]).unwrap();
+        assert_eq!((&battery["device_class"], &battery["unit_of_measurement"]), (&json!("battery"), &json!("%")));
+        let plug: Value =
+            serde_json::from_str(&configs["homeassistant/binary_sensor/nestlocal_s/external_power/config"]).unwrap();
+        assert_eq!(plug["device_class"], json!("plug"));
     }
 
     #[test]
