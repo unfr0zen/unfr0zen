@@ -39,6 +39,15 @@ pub const FAN_SCHEDULE: u16 = 40;
 pub const SCHEDULE_ENABLED: u16 = 43;
 pub const HOLD: u16 = 44;
 pub const HOLD_DURATION: u16 = 45;
+pub const SCREEN_ALWAYS_ON: u16 = 46;
+pub const SCREEN_BRIGHTNESS_AUTO: u16 = 47;
+pub const SCREEN_TIMEOUT: u16 = 48;
+pub const SCREEN_BRIGHTNESS: u16 = 49;
+/// The home screen theme, with -themes.
+pub const THEME: u16 = 50;
+
+/// The screen timeout's choices, seconds: presets of MQTT's number.
+const SCREEN_SECONDS: [i64; 8] = [10, 15, 30, 45, 60, 120, 300, 600];
 
 const HOLD_MINUTES: [u16; 15] = [1, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1440];
 
@@ -93,6 +102,8 @@ pub fn switches(nest: &Nest) -> Vec<Switch> {
     switches.extend([
         Switch { endpoint: SCHEDULE_ENABLED, key: "schedule_enabled", name: "Schedule enabled" },
         Switch { endpoint: HOLD, key: "hold", name: "Hold" },
+        Switch { endpoint: SCREEN_ALWAYS_ON, key: "screen_always_on", name: "Screen always on" },
+        Switch { endpoint: SCREEN_BRIGHTNESS_AUTO, key: "screen_brightness_auto", name: "Screen brightness auto" },
     ]);
     switches
 }
@@ -884,6 +895,126 @@ impl mode_select::ClusterHandler for FanSchedule {
     }
 }
 
+/// The screen's timeout and brightness, as presets of MQTT's numbers (any
+/// other value reads Custom), and the home screen theme.
+pub struct Screen {
+    pub dataver: Dataver,
+    pub nest: Arc<Nest>,
+}
+
+/// One of the screen's settings: its name, the command that sets it, its
+/// choices (a label and the argument the command takes; Custom takes none),
+/// and the one current.
+struct ScreenSetting {
+    name: &'static str,
+    command: &'static str,
+    choices: Vec<(String, Option<String>)>,
+    current: usize,
+}
+
+impl ScreenSetting {
+    /// Presets as (label, value), then Custom, current while `value` is no preset.
+    fn presets(name: &'static str, command: &'static str, presets: Vec<(String, i64)>, value: Option<i64>) -> Self {
+        let current = presets.iter().position(|(_, v)| Some(*v) == value).unwrap_or(presets.len());
+        let mut choices: Vec<_> = presets.into_iter().map(|(label, v)| (label, Some(v.to_string()))).collect();
+        choices.push(("Custom".to_string(), None));
+        ScreenSetting { name, command, choices, current }
+    }
+}
+
+impl Screen {
+    fn setting(&self, endpoint: u16) -> Result<ScreenSetting, Error> {
+        match endpoint {
+            SCREEN_TIMEOUT => {
+                let label = |s: i64| if s < 60 { format!("{s} s") } else { format!("{} min", s / 60) };
+                let presets = SCREEN_SECONDS.iter().map(|s| (label(*s), *s)).collect();
+                let seconds = crate::screen::seconds(&self.nest.view().dev);
+                Ok(ScreenSetting::presets("Screen timeout", "screen_timeout", presets, Some(seconds)))
+            }
+            SCREEN_BRIGHTNESS => {
+                let presets = crate::brightness::PERCENTS.step_by(10).map(|p| (format!("{p}%"), p)).collect();
+                Ok(ScreenSetting::presets("Screen brightness", "screen_brightness", presets, self.nest.brightness().0))
+            }
+            THEME => {
+                let themes = self.nest.bridge.themes().ok_or(ErrorCode::NotFound)?;
+                let (offered, shown) = (themes.offered(), themes.shown());
+                let current = offered.iter().position(|(_, label)| *label == shown).unwrap_or(0);
+                let choices = offered.into_iter().map(|(id, label)| (label, Some(id))).collect();
+                Ok(ScreenSetting { name: "Home screen theme", command: "theme", choices, current })
+            }
+            _ => Err(ErrorCode::NotFound.into()),
+        }
+    }
+
+    fn set(&self, endpoint: u16, mode: u8) -> Result<(), Error> {
+        let setting = self.setting(endpoint)?;
+        let mode = usize::from(mode);
+        match setting.choices.get(mode) {
+            Some((_, Some(arg))) => self.nest.apply(setting.command, arg).map_err(failed),
+            // Custom is set from MQTT or the unit; picking it keeps a custom value.
+            Some((_, None)) if mode == setting.current => Ok(()),
+            Some((_, None)) => Err(ErrorCode::InvalidInState.into()),
+            None => Err(ErrorCode::ConstraintError.into()),
+        }
+    }
+}
+
+impl mode_select::ClusterHandler for Screen {
+    const CLUSTER: Cluster<'static> =
+        mode_select::FULL_CLUSTER.with_attrs(with!(required)).with_cmds(with!(mode_select::CommandId::ChangeToMode));
+
+    dataver!();
+
+    fn description<P: TLVBuilderParent>(&self, ctx: impl ReadContext, builder: Utf8StrBuilder<P>) -> Result<P, Error> {
+        builder.set(self.setting(ctx.attr().endpoint_id)?.name)
+    }
+
+    fn standard_namespace(&self, _ctx: impl ReadContext) -> Result<Nullable<u16>, Error> {
+        Ok(Nullable::none())
+    }
+
+    fn supported_modes<P: TLVBuilderParent>(
+        &self,
+        ctx: impl ReadContext,
+        builder: ArrayAttributeRead<
+            mode_select::ModeOptionStructArrayBuilder<P>,
+            mode_select::ModeOptionStructBuilder<P>,
+        >,
+    ) -> Result<P, Error> {
+        let choices = self.setting(ctx.attr().endpoint_id)?.choices;
+        macro_rules! option {
+            ($b:expr, $mode:expr, $label:expr) => {
+                $b.label($label)?.mode($mode as u8)?.semantic_tags()?.end()?.end()
+            };
+        }
+        match builder {
+            ArrayAttributeRead::ReadAll(mut array) => {
+                for (mode, (label, _)) in choices.iter().enumerate() {
+                    array = option!(array.push()?, mode, label)?;
+                }
+                array.end()
+            }
+            ArrayAttributeRead::ReadOne(i, item) => match choices.get(usize::from(i)) {
+                Some((label, _)) => option!(item, i, label),
+                None => Err(ErrorCode::ConstraintError.into()),
+            },
+            ArrayAttributeRead::ReadNone(array) => array.end(),
+        }
+    }
+
+    fn current_mode(&self, ctx: impl ReadContext) -> Result<u8, Error> {
+        Ok(self.setting(ctx.attr().endpoint_id)?.current as u8)
+    }
+
+    fn handle_change_to_mode(
+        &self,
+        ctx: impl InvokeContext,
+        request: mode_select::ChangeToModeRequest<'_>,
+    ) -> Result<(), Error> {
+        self.set(ctx.cmd().endpoint_id, request.new_mode()?)
+    }
+}
+
 /// The unit's on/off settings, a switch each.
 pub struct Switches {
     pub dataver: Dataver,
@@ -896,9 +1027,16 @@ impl Switches {
         self.all.iter().find(|s| s.endpoint == endpoint).map(|s| s.key).ok_or_else(|| ErrorCode::NotFound.into())
     }
 
+    fn is_on(&self, key: &str) -> bool {
+        match key {
+            "screen_brightness_auto" => self.nest.brightness().1,
+            _ => self.nest.view().switch_on(key),
+        }
+    }
+
     fn set(&self, endpoint: u16, on: Option<bool>) -> Result<(), Error> {
         let key = self.key(endpoint)?;
-        let on = on.unwrap_or_else(|| !self.nest.view().switch_on(key));
+        let on = on.unwrap_or_else(|| !self.is_on(key));
         self.nest.apply(key, if on { "ON" } else { "OFF" }).map_err(failed)
     }
 }
@@ -911,7 +1049,7 @@ impl on_off::ClusterHandler for Switches {
     dataver!();
 
     fn on_off(&self, ctx: impl ReadContext) -> Result<bool, Error> {
-        Ok(self.nest.view().switch_on(self.key(ctx.attr().endpoint_id)?))
+        Ok(self.is_on(self.key(ctx.attr().endpoint_id)?))
     }
 
     fn handle_on(&self, ctx: impl InvokeContext) -> Result<(), Error> {
@@ -988,14 +1126,71 @@ mod tests {
     }
 
     #[test]
+    fn the_screen_timeout_and_brightness_are_presets_else_custom() {
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let screen = Screen { dataver: Dataver::new(0), nest: unit.clone() };
+        let timeout = screen.setting(SCREEN_TIMEOUT).unwrap();
+        let labels: Vec<_> = timeout.choices.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(labels, ["10 s", "15 s", "30 s", "45 s", "1 min", "2 min", "5 min", "10 min", "Custom"]);
+        assert_eq!(timeout.current, 2, "nlclient's own 30 s");
+        screen.set(SCREEN_TIMEOUT, 6).unwrap();
+        assert_eq!(field(&unit, "device", crate::screen::TIMEOUT), Value::from(300));
+        assert_eq!(screen.setting(SCREEN_TIMEOUT).unwrap().current, 6);
+        assert_eq!(code(screen.set(SCREEN_TIMEOUT, 8)), ErrorCode::InvalidInState);
+        unit.apply("screen_timeout", "95").unwrap();
+        assert_eq!(screen.setting(SCREEN_TIMEOUT).unwrap().current, 8);
+        screen.set(SCREEN_TIMEOUT, 8).unwrap();
+        assert_eq!(code(screen.set(SCREEN_TIMEOUT, 9)), ErrorCode::ConstraintError);
+
+        let brightness = screen.setting(SCREEN_BRIGHTNESS).unwrap();
+        assert_eq!(brightness.choices.len(), 12);
+        assert_eq!((brightness.choices[3].0.as_str(), brightness.current), ("30%", 11), "unset reads Custom");
+        screen.set(SCREEN_BRIGHTNESS, 3).unwrap();
+        assert_eq!(field(&unit, "device", crate::brightness::PERCENT), Value::from(30));
+        assert_eq!(screen.setting(SCREEN_BRIGHTNESS).unwrap().current, 3);
+        assert_eq!(code(screen.set(THEME, 0)), ErrorCode::NotFound, "no themes without -themes");
+    }
+
+    #[test]
+    fn the_theme_is_a_choice_of_the_themes_offered() {
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let themes = Arc::new(crate::theme::Catalog::default());
+        unit.bridge.attach_themes(themes.clone());
+        let offered = vec![("stock".to_string(), "Nest".to_string()), ("lcd".to_string(), "LCD".to_string())];
+        crate::theme::tests::set(&themes, offered, "lcd");
+        let screen = Screen { dataver: Dataver::new(0), nest: unit };
+        let theme = screen.setting(THEME).unwrap();
+        assert_eq!(
+            theme.choices,
+            [("Nest".to_string(), Some("stock".to_string())), ("LCD".to_string(), Some("lcd".to_string()))]
+        );
+        assert_eq!(theme.current, 1);
+        assert_eq!(code(screen.set(THEME, 2)), ErrorCode::ConstraintError);
+    }
+
+    #[test]
+    fn screen_brightness_auto_is_a_switch_reading_what_the_unit_shows() {
+        let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
+        let switches = Switches { dataver: Dataver::new(0), all: switches(&unit), nest: unit.clone() };
+        assert!(!switches.on_off(ctx(SCREEN_BRIGHTNESS_AUTO)).unwrap());
+        switches.set(SCREEN_BRIGHTNESS_AUTO, Some(true)).unwrap();
+        assert_eq!(field(&unit, "device", crate::brightness::AUTO), Value::Bool(true));
+        assert!(switches.on_off(ctx(SCREEN_BRIGHTNESS_AUTO)).unwrap());
+        unit.bridge.brightness.set_shown(Some(crate::brightness::Shown::Percent(70)));
+        assert!(!switches.on_off(ctx(SCREEN_BRIGHTNESS_AUTO)).unwrap(), "the unit's own choice wins");
+        switches.set(SCREEN_ALWAYS_ON, None).unwrap();
+        assert!(switches.on_off(ctx(SCREEN_ALWAYS_ON)).unwrap());
+    }
+
+    #[test]
     fn switches_follow_the_equipment_on_consecutive_endpoints_but_hot_waters() {
         let keys = |dev: Fields, sh: Fields| {
             let all = switches(&nest(dev, sh));
             assert_eq!(
-                all[all.len() - 2..].iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>(),
-                [(43, "schedule_enabled"), (44, "hold")]
+                all[all.len() - 4..].iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>(),
+                [(43, "schedule_enabled"), (44, "hold"), (46, "screen_always_on"), (47, "screen_brightness_auto")]
             );
-            all[..all.len() - 2].iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>()
+            all[..all.len() - 4].iter().map(|s| (s.endpoint, s.key)).collect::<Vec<_>>()
         };
         let common = [
             (10, "learning_mode"),

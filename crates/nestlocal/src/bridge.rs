@@ -217,6 +217,11 @@ impl Bridge {
         let _ = self.themes.set(themes);
     }
 
+    /// The home screen themes, with -themes.
+    pub fn themes(&self) -> Option<&Arc<crate::theme::Catalog>> {
+        self.themes.get()
+    }
+
     pub fn attach_sensor(self: &Arc<Self>, sensor: Arc<crate::sensor::Sensor>) {
         let bridge = Arc::downgrade(self);
         sensor.on_change(move || {

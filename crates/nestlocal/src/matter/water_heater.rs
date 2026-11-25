@@ -909,11 +909,19 @@ mod tests {
         let ids = |hot_water| {
             let switches =
                 crate::matter::extras::switches(&unit(fields! {"has_hot_water_control" => true, "has_fan" => true}));
-            super::super::node_for_network(true, super::super::Equipment::Both, hot_water, &switches, false, true)
-                .endpoints
-                .iter()
-                .map(|e| e.id)
-                .collect::<Vec<_>>()
+            super::super::node_for_network(
+                true,
+                super::super::Equipment::Both,
+                hot_water,
+                &switches,
+                false,
+                false,
+                true,
+            )
+            .endpoints
+            .iter()
+            .map(|e| e.id)
+            .collect::<Vec<_>>()
         };
         assert!(!ids(false).contains(&WATER_HEATER));
         assert!(ids(true).contains(&WATER_HEATER));
