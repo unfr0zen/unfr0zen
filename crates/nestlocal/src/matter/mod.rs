@@ -91,7 +91,7 @@ use crate::logf;
 
 use extras::{
     Backplate, Battery, Display, ExternalTemperature, Fan, FanSchedule, FanTimer, HoldDuration, HotWaterBoost,
-    Humidity, Labels, Switch, Switches, TemperatureSource,
+    Humidity, Labels, Screen, Switch, Switches, TemperatureSource,
 };
 use thermostat::{Equipment, Thermostat};
 
@@ -130,6 +130,13 @@ impl Nest {
     /// The sensor regulating, when the unit has the external one.
     pub fn temperature_source(&self) -> Option<&'static str> {
         self.bridge.temperature_source()
+    }
+
+    /// The screen brightness as MQTT reports it: the percentage, and
+    /// whether it is automatic.
+    pub fn brightness(&self) -> (Option<i64>, bool) {
+        let dev = self.bridge.buckets().get("device").cloned().unwrap_or_default();
+        crate::brightness::reported(&dev, self.bridge.brightness.shown())
     }
 
     /// The buckets and the computed state, as of now.
@@ -335,12 +342,14 @@ struct Shape {
     equipment: Equipment,
     hot_water: bool,
     switches: Vec<Switch>,
+    themes: bool,
 }
 
 impl Shape {
     /// The endpoints it builds.
     fn endpoints(&self, thread: bool, external: bool) -> Vec<u16> {
-        let all = endpoints_for(self.has_fan, self.equipment, self.hot_water, &self.switches, thread, external);
+        let all =
+            endpoints_for(self.has_fan, self.equipment, self.hot_water, &self.switches, self.themes, thread, external);
         all.iter().map(|e| e.id).collect()
     }
 
@@ -360,6 +369,7 @@ impl Shape {
             equipment: Equipment::of(nest),
             hot_water: view.device_flag("has_hot_water_control"),
             switches: extras::switches(nest),
+            themes: nest.bridge.themes().is_some(),
         }
     }
 }
@@ -476,8 +486,15 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
     if note_shape(&matter, &kv, &settings.storage, &shape, &shape.endpoints(settings.thread, external)) {
         logf!("matter: the node's endpoints changed; configuration version bumped");
     }
-    let node =
-        node_for_network(shape.has_fan, shape.equipment, shape.hot_water, &shape.switches, settings.thread, external);
+    let node = node_for_network(
+        shape.has_fan,
+        shape.equipment,
+        shape.hot_water,
+        &shape.switches,
+        shape.themes,
+        settings.thread,
+        external,
+    );
     let im = InteractionModel::new_with_net_ctl(
         &matter,
         &crypto,
@@ -535,12 +552,22 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         }
     });
 
-    // Changes to the buckets, occupancy, outside power and the stand-in
-    // sensor, reported to subscribed controllers.
+    // Changes to the buckets, occupancy, outside power, the stand-in sensor,
+    // the brightness shown and the themes, reported to subscribed controllers.
     let (changed, changes) = async_channel::bounded::<()>(1);
     let occupancy = changed.clone();
     let reading = changed.clone();
     let powered = changed.clone();
+    let brightness = changed.clone();
+    nest.bridge.brightness.on_change(move || {
+        let _ = brightness.try_send(());
+    });
+    if let Some(themes) = nest.bridge.themes() {
+        let themes_changed = changed.clone();
+        themes.on_change(move || {
+            let _ = themes_changed.try_send(());
+        });
+    }
     nest.bridge.power.on_change(move || {
         let _ = powered.try_send(());
     });
@@ -769,7 +796,7 @@ const THERMOSTAT_ENDPOINT: Endpoint<'static> = thermostat_endpoint!(Equipment::B
 /// its switches).
 #[cfg(test)]
 fn node(has_fan: bool, switches: &[Switch]) -> Node<'static> {
-    node_for_network(has_fan, Equipment::Both, false, switches, false, false)
+    node_for_network(has_fan, Equipment::Both, false, switches, false, false, false)
 }
 
 fn node_for_network(
@@ -777,10 +804,11 @@ fn node_for_network(
     equipment: Equipment,
     hot_water: bool,
     switches: &[Switch],
+    themes: bool,
     thread: bool,
     external: bool,
 ) -> Node<'static> {
-    let endpoints = endpoints_for(has_fan, equipment, hot_water, switches, thread, external);
+    let endpoints = endpoints_for(has_fan, equipment, hot_water, switches, themes, thread, external);
     Node { endpoints: Box::leak(endpoints.into_boxed_slice()) }
 }
 
@@ -790,6 +818,7 @@ fn endpoints_for(
     equipment: Equipment,
     hot_water: bool,
     switches: &[Switch],
+    themes: bool,
     thread: bool,
     external: bool,
 ) -> Vec<Endpoint<'static>> {
@@ -878,6 +907,14 @@ fn endpoints_for(
         devices!(DEV_TYPE_MODE_SELECT),
         clusters!(desc::DescHandler::CLUSTER, HoldDuration::CLUSTER, Labels::CLUSTER),
     ));
+    let screen = [extras::SCREEN_TIMEOUT, extras::SCREEN_BRIGHTNESS];
+    for id in screen.into_iter().chain(themes.then_some(extras::THEME)) {
+        endpoints.push(Endpoint::new(
+            id,
+            devices!(DEV_TYPE_MODE_SELECT),
+            clusters!(desc::DescHandler::CLUSTER, Screen::CLUSTER, Labels::CLUSTER),
+        ));
+    }
     endpoints.sort_by_key(|e| e.id);
     endpoints
 }
@@ -924,6 +961,9 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
         (water_heater::WATER_HEATER, "Hot water"),
         (extras::HOT_WATER_BOOST, "Hot water boost"),
         (extras::HOLD_DURATION, "Hold duration"),
+        (extras::SCREEN_TIMEOUT, "Screen timeout"),
+        (extras::SCREEN_BRIGHTNESS, "Screen brightness"),
+        (extras::THEME, "Home screen theme"),
     ];
     names.extend(switches.iter().map(|s| (s.endpoint, s.name)));
     (
@@ -1043,6 +1083,16 @@ fn data_model<'a, C: NetCtl + NetCtlStatus + ThreadDiag>(
             .chain(
                 |e, c| (FAN_SCHEDULE..FAN_SCHEDULE + 3).contains(&e) && c == FanSchedule::CLUSTER.id,
                 Async(mode_select::HandlerAdaptor(FanSchedule {
+                    dataver: Dataver::new_rand(&mut rand),
+                    nest: nest.clone(),
+                })),
+            )
+            .chain(
+                |e, c| {
+                    matches!(e, extras::SCREEN_TIMEOUT | extras::SCREEN_BRIGHTNESS | extras::THEME)
+                        && c == Screen::CLUSTER.id
+                },
+                Async(mode_select::HandlerAdaptor(Screen {
                     dataver: Dataver::new_rand(&mut rand),
                     nest: nest.clone(),
                 })),
@@ -1486,7 +1536,7 @@ mod tests {
         };
         assert_eq!(
             ids(false, crate::fields! {}, crate::fields! {"can_heat" => true}),
-            [0, 1, 2, 3, 10, 11, 12, 13, 14, 43, 44, 45]
+            [0, 1, 2, 3, 10, 11, 12, 13, 14, 43, 44, 45, 46, 47, 48, 49]
         );
         assert_eq!(
             ids(
@@ -1494,7 +1544,7 @@ mod tests {
                 crate::fields! {"has_humidifier" => true},
                 crate::fields! {"can_heat" => true, "can_cool" => true}
             ),
-            [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42, 43, 44, 45]
+            [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
         );
     }
 

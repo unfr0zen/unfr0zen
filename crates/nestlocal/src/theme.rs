@@ -31,7 +31,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -134,7 +134,7 @@ fn catalog(root: &Path, listed: &[(String, Option<std::time::SystemTime>)]) -> S
 pub struct Catalog {
     /// The themes offered, as id and label, and the id of the one shown.
     state: Mutex<(Vec<(String, String)>, String)>,
-    on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    on_change: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
     /// The next pick lights the display once it is shown (pick).
     wake: AtomicBool,
 }
@@ -151,9 +151,10 @@ impl Catalog {
         offered.iter().find(|(id, _)| id == chosen).map_or_else(|| chosen.clone(), |(_, label)| label.clone())
     }
 
-    /// Runs `f` whenever the themes offered or the one shown change.
+    /// Runs `f`, with any given before, whenever the themes offered or the
+    /// one shown change.
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        let _ = self.on_change.set(Box::new(f));
+        self.on_change.lock().unwrap().push(Box::new(f));
     }
 
     fn set(&self, offered: Vec<(String, String)>, chosen: &str) {
@@ -164,7 +165,7 @@ impl Catalog {
             changed
         };
         if changed {
-            if let Some(f) = self.on_change.get() {
+            for f in self.on_change.lock().unwrap().iter() {
                 f();
             }
         }
