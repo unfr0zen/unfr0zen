@@ -111,11 +111,12 @@ pub fn newest(candidates: Vec<Environment>) -> Option<Environment> {
 /// lists each image ("    Image 0 (kernel@1)"), then checks each one
 /// ("   Hash(es) for Image 0 (kernel@1): sha256+"), printing "Bad hash in
 /// FIT image!" on failure: a kernel and an FDT at least, every listed image
-/// with a valid SHA-256, and no bad hash.
+/// with a valid hash, and no bad hash. Releases before 5.9 hash their images
+/// with SHA-1, later ones with SHA-256.
 pub fn verified_fit(output: &str) -> bool {
     static LISTED: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^\s*Image (\d+) \("));
     static VERIFIED: LazyLock<Regex> =
-        LazyLock::new(|| regex(r"(?m)^\s*Hash\(es\) for Image (\d+) \([^)]*\): sha256\+"));
+        LazyLock::new(|| regex(r"(?m)^\s*Hash\(es\) for Image (\d+) \([^)]*\): sha(?:1|256)\+\s*$"));
     let numbers = |pattern: &Regex| pattern.captures_iter(output).map(|c| c[1].to_string()).collect::<BTreeSet<_>>();
     let listed = numbers(&LISTED);
     output.contains("FIT image found")
@@ -851,21 +852,29 @@ pub(crate) mod tests {
     /// iminfo's report on a vendor FIT with `fdts` FDTs, the first `verified`
     /// images of which have their hash checked.
     fn iminfo(fdts: usize, verified: usize) -> String {
+        iminfo_hashed(fdts, verified, "sha256")
+    }
+
+    fn iminfo_hashed(fdts: usize, verified: usize, algorithm: &str) -> String {
         let names: Vec<String> =
             std::iter::once("kernel@1".to_string()).chain((1..=fdts).map(|n| format!("fdt@{n}"))).collect();
         let mut out = String::from("## Checking Image at 83000000 ...\n   FIT image found\n");
         for (n, name) in names.iter().enumerate() {
-            out += &format!("    Image {n} ({name})\n     Hash algo:    sha256\n");
+            out += &format!("    Image {n} ({name})\n     Hash algo:    {algorithm}\n");
         }
         out += "## Checking hash(es) for FIT Image at 83000000 ...\n";
         for (n, name) in names.iter().enumerate().take(verified) {
-            out += &format!("   Hash(es) for Image {n} ({name}): sha256+ \n");
+            out += &format!("   Hash(es) for Image {n} ({name}): {algorithm}+ \n");
         }
         out
     }
 
     #[test]
     fn fit_needs_every_hash() {
+        assert!(verified_fit(&iminfo_hashed(8, 9, "sha1")), "5.6-7");
+        assert!(!verified_fit(&iminfo_hashed(8, 8, "sha1")));
+        assert!(!verified_fit(&iminfo_hashed(8, 9, "crc32")));
+        assert!(!verified_fit(&iminfo_hashed(8, 9, "sha1").replace(": sha1+", ": sha1-")));
         assert!(verified_fit(&iminfo(8, 9)), "5.9.5-2");
         assert!(verified_fit(&iminfo(9, 10)), "5.9.4-5");
         assert!(verified_fit(&iminfo(10, 11)), "6.4-8");
