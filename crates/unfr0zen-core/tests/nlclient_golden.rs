@@ -378,7 +378,9 @@ fn samples() -> Vec<(PathBuf, Vec<u8>, Value)> {
 /// reviewed build been unknown, the others' evidence would have admitted
 /// all but at most one of its natives (the 2025 build's activity mark, the
 /// gen 2's and 6.0-6's device commits), but five of the 6.5-14 build's: its factories
-/// and event handlers also call the string destructor, delete and Release.
+/// and event handlers also call the string destructor, delete and Release;
+/// and two of the gen 2's 5.9.1-6, whose Legal Info layer shows random text:
+/// its enter writes it, and its constructor builds the string that holds it.
 #[test]
 fn reviewed_builds_share_their_natives_library_calls() {
     let samples = samples();
@@ -401,7 +403,11 @@ fn reviewed_builds_share_their_natives_library_calls() {
             .filter(|(name, calls)| !others.iter().any(|v| v["imports"][name.as_str()] == json!(calls)))
             .map(|(name, _)| name.as_str())
             .collect();
-        let allowed = if own == "2025-6.5-14" { 5 } else { 1 };
+        let allowed = match own.as_str() {
+            "2025-6.5-14" => 5,
+            "2019-gen2-5.9.1-6" => 2,
+            _ => 1,
+        };
         assert!(
             unmatched.len() <= allowed,
             "{}: no other reviewed build's natives call what these do: {unmatched:?}",
