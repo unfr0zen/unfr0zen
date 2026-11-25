@@ -398,7 +398,12 @@ fn local_nlclient(
         let patch = nlclient::Patch::parse(&std::fs::read(journal)?)?;
         (patch.apply(&source, true)?, None)
     } else {
-        let built = nlclient::builder::build(&source, assets::CUSTOM_SCREEN, &nlclient::menu::Section::ALL)?;
+        let (screen, sections) = if nlclient::legacy_abi(&source) {
+            (assets::CUSTOM_SCREEN_LEGACY, &nlclient::menu::Section::LEGACY[..])
+        } else {
+            (assets::CUSTOM_SCREEN, &nlclient::menu::Section::ALL[..])
+        };
+        let built = nlclient::builder::build(&source, screen, sections)?;
         let manifest =
             serde_json::to_vec_pretty(&built.manifest).map_err(|e| unfr0zen_host::Error::Io(e.to_string()))?;
         (built.output, Some((built.journal, manifest)))

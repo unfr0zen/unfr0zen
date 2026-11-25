@@ -102,10 +102,53 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 #define VTABLE_MAX        0x400
 
 /* --- Fixed layouts ----------------------------------------------------------
- * The same in every audited build. */
+ * Each compiled variant uses its audited native ABI. */
 #define WORD(p, offset)  (*(u32 *)((u8 *)(p) + (offset)))
 #define PTR(p, offset)   (*(void **)((u8 *)(p) + (offset)))
 #define FLOAT(p, offset) (*(float *)((u8 *)(p) + (offset)))
+
+/* The 5.6-7 Legal Info ABI has a smaller method surface and 32-byte strings. */
+#ifdef CUSTOM_LEGACY_ABI
+#define COMMON_WIDTH           0x58
+#define COMMON_HEIGHT          0x5c
+#define COMMON_SELECTION_SHOWN 0x6c
+#define COMMON_SELECTION       0x70
+#define COMMON_GLOBALS         0x7c
+#define COMMON_CHOICE_IDS      0x80
+#define COMMON_CHOICE_FIRST    0x84
+#define COMMON_CHOICE_LAST     0x88
+#define COMMON_SET_STYLE_SLOT  0x3c
+#define LAYER_EVENT_SLOT       0x0c
+#define LAYER_DRAW_SLOT        0x18
+#define LAYER_ENTER_SLOT       0x1c
+#define LAYER_RELOAD_SLOT      0x20
+#define SCREEN_SIZE            0xe8
+#define SCREEN_SUBTITLE        0x74
+#define SCREEN_LAYER           0xe4
+#define CONTEXT_VTABLE_SIZE    0xb4
+#define MENU_NAMES_OFFSET      0x68
+#define MENU_SCREENS_OFFSET    0xd4
+#else
+#define COMMON_WIDTH           0x64
+#define COMMON_HEIGHT          0x68
+#define COMMON_SELECTION_SHOWN 0x74
+#define COMMON_SELECTION       0x7c
+#define COMMON_GLOBALS         0x8c
+#define COMMON_CHOICE_IDS      0x90
+#define COMMON_CHOICE_FIRST    0x94
+#define COMMON_CHOICE_LAST     0x98
+#define COMMON_SET_STYLE_SLOT  0x5c
+#define LAYER_EVENT_SLOT       0x14
+#define LAYER_DRAW_SLOT        0x28
+#define LAYER_ENTER_SLOT       0x2c
+#define LAYER_RELOAD_SLOT      0x30
+#define SCREEN_SIZE            0xf0
+#define SCREEN_SUBTITLE        0x70
+#define SCREEN_LAYER           0xec
+#define CONTEXT_VTABLE_SIZE    0xc4
+#define MENU_NAMES_OFFSET      0x70
+#define MENU_SCREENS_OFFSET    0xf0
+#endif
 
 /* The layer (`raw`, the derived object), from its start. */
 #define LAYER_SCROLL_Y       0x08 /* float: the viewport's offset */
@@ -113,44 +156,33 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 /* floats: the furthest the scroller goes is their difference */
 #define LAYER_CONTENT_HEIGHT 0x18
 #define LAYER_VIEW_HEIGHT    0x30
-#define LAYER_SCROLL_FACTOR  0x84 /* float */
-#define LAYER_IMAGE          0xa0 /* the page's image, or 0 */
+#ifdef CUSTOM_LEGACY_ABI
+#define LAYER_SCROLL_FACTOR 0x80 /* float */
+#else
+#define LAYER_SCROLL_FACTOR 0x84 /* float */
+#endif
+#define LAYER_IMAGE       0xa0 /* the page's image, or 0 */
 /* Its vtable's slots. */
-#define LAYER_EVENT_SLOT     0x14
-#define LAYER_WHEEL_SLOT     0x18
-#define LAYER_CLICK_SLOT     0x1c
-#define LAYER_DRAW_SLOT      0x28
-#define LAYER_ENTER_SLOT     0x2c
-#define LAYER_RELOAD_SLOT    0x30
+#define LAYER_WHEEL_SLOT  0x18
+#define LAYER_CLICK_SLOT  0x1c
 /* Bytes before the vptr in its vtable: offset-to-top, RTTI and the
  * adjustment metadata, all copied. */
-#define LAYER_VTABLE_HEAD    12
+#define LAYER_VTABLE_HEAD 12
 
 /* The layer's nlLayer part (`base`, at COMMON_OFFSET), and any stock
  * nlLayer's (the template). */
-#define COMMON_TEXT_BOX        0x0c /* passed to the text layout as stock does */
-#define COMMON_EVENT_TARGET    0x14
-#define COMMON_WIDTH           0x64
-#define COMMON_HEIGHT          0x68
-#define COMMON_SELECTION_SHOWN 0x74
-#define COMMON_SELECTION       0x7c
-#define COMMON_GLOBALS         0x8c
-#define COMMON_CHOICE_IDS      0x90 /* null-terminated */
-#define COMMON_CHOICE_FIRST    0x94
-#define COMMON_CHOICE_LAST     0x98
+#define COMMON_TEXT_BOX     0x0c /* passed to the text layout as stock does */
+#define COMMON_EVENT_TARGET 0x14
+/* COMMON_CHOICE_IDS points to a null-terminated array. */
 /* Its vtable's slots. */
-#define COMMON_EVENT_SLOT      0x00
-#define COMMON_ENTER_SLOT      0x0c
-#define COMMON_DRAW_SLOT       0x10
-#define COMMON_SET_STYLE_SLOT  0x5c
+#define COMMON_EVENT_SLOT   0x00
+#define COMMON_ENTER_SLOT   0x0c
+#define COMMON_DRAW_SLOT    0x10
 
 /* The Settings screen object. */
-#define SCREEN_SIZE             0xf0
 #define SCREEN_ACTIVE_LAYER     0x20
 #define SCREEN_GLOBALS          0x3c
 #define SCREEN_TITLE            0x54 /* nl_string */
-#define SCREEN_SUBTITLE         0x70 /* nl_string */
-#define SCREEN_LAYER            0xec /* our layer (raw) */
 /* Its vtable's slots, and the third part's title slot (its this is 8
  * bytes into the screen). */
 #define SCREEN_EVENT_SLOT       0x00
@@ -163,14 +195,17 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 #define SCREEN_VTABLE_HEAD      8
 
 /* The drawing context's vtable: its size and slots. */
-#define CONTEXT_VTABLE_SIZE      0xc4
 #define CONTEXT_DRAW_TEXT_SLOT   0x30
 #define CONTEXT_DRAW_IMAGE_SLOT  0x50
 #define CONTEXT_DRAW_SCALED_SLOT 0x60
 /* An image's vtable slot that destroys it. */
 #define IMAGE_DESTROY_SLOT       4
 /* The client's globals, which tells the stock client from another queue. */
-#define CLIENT_GLOBALS           0x70
+#ifdef CUSTOM_LEGACY_ABI
+#define CLIENT_GLOBALS 0x68
+#else
+#define CLIENT_GLOBALS 0x70
+#endif
 
 /* nlclient's events and their size. */
 #define EVENT_SIZE           0x10
@@ -232,7 +267,11 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 
 /* --- Native types and calls ------------------------------------------------ */
 typedef struct {
+#ifdef CUSTOM_LEGACY_ABI
+    u32 words[8];
+#else
     u32 words[7];
+#endif
 } nl_string;
 /* The stock text layout's configuration: text rows then choice rows. */
 typedef struct {
@@ -278,6 +317,13 @@ extern int native_image_width(void *);
 extern int native_image_height(void *);
 extern void native_rebuild_title(void *);
 extern unsigned int native_event_type(void *);
+#ifdef CUSTOM_LEGACY_ABI
+extern int native_event_value(void *);
+extern void native_timeout_ctor(void *);
+extern int native_timeout_init(void *, int, unsigned int, void *, void *);
+extern void native_add_ref(void *);
+extern unsigned int native_milliseconds_to_interval(unsigned int);
+#endif
 extern int native_screen_event(void *, void *, void *);
 extern void native_screen_enter(void *);
 extern int native_screen_draw(void *, void *);
@@ -342,6 +388,10 @@ struct custom_state {
     int display;
     int drawn;
     void *menu_glyph;
+#ifdef CUSTOM_LEGACY_ABI
+    /* Stock Legal Info owns an integer and a string where newer layers keep an image. */
+    void *image;
+#endif
     text_config config;
     nl_string text[3];
     nl_string *choices;
@@ -366,6 +416,11 @@ static void bytes_zero(void *to, unsigned int count) {
         *dest++ = 0;
 }
 static struct custom_state *state(void *raw) { return (struct custom_state *)((u8 *)raw + PRIMARY_SIZE); }
+#ifdef CUSTOM_LEGACY_ABI
+#define PAGE_IMAGE(raw) (state(raw)->image)
+#else
+#define PAGE_IMAGE(raw) PTR(raw, LAYER_IMAGE)
+#endif
 static void *raw_layer(void *screen) { return PTR(screen, SCREEN_LAYER); }
 static void *common(void *raw) { return (u8 *)raw + COMMON_OFFSET; }
 
@@ -384,6 +439,9 @@ static void notify_activity(void *globals) {
     void *queue = PTR(client, ACTIVITY_QUEUE_OFFSET);
     if (!queue)
         return;
+#ifdef CUSTOM_LEGACY_ABI
+    queue = (u8 *)queue + 4;
+#endif
     void *event = native_new(EVENT_SIZE);
     if (!event)
         return;
@@ -547,7 +605,11 @@ static void queue_handler(void *globals, int (*handle)(struct wake_handler *, vo
     native_activity_init(event, EVENT_ACTIVITY, 0);
     /* nlClient inherits nlEventQueue. Its main thread dispatches the handler
      * and applies the returned UI result before releasing the event. */
+#ifdef CUSTOM_LEGACY_ABI
+    native_enqueue((u8 *)client + 4, event, handler);
+#else
     native_enqueue(client, event, handler);
+#endif
 }
 static void wake_display(void *globals) { queue_handler(globals, light_display); }
 /* Seconds a wake request (display.request, its expiry as a u32) stays
@@ -985,8 +1047,8 @@ static void release_image(void *image) {
  * code once pairing has opened. */
 static void load_image(void *raw) {
     /* Reload on entry so a deployed PNG needs no executable rebuild. */
-    release_image(PTR(raw, LAYER_IMAGE));
-    PTR(raw, LAYER_IMAGE) = 0;
+    release_image(PAGE_IMAGE(raw));
+    PAGE_IMAGE(raw) = 0;
     int error = 0;
     void *image = 0;
     enum custom_page page = state(raw)->flow.page;
@@ -1006,7 +1068,7 @@ static void load_image(void *raw) {
         image = 0;
     }
     state(raw)->image_page = page;
-    PTR(raw, LAYER_IMAGE) = image; /* Missing images leave a usable text-only screen. */
+    PAGE_IMAGE(raw) = image; /* Missing images leave a usable text-only screen. */
 #ifdef CUSTOM_TRACE
     state(raw)->image_traced = 0;
     trace(raw, 0x494d4701, (u32)image);
@@ -1329,7 +1391,7 @@ static void refresh_status(void *raw) {
     if (changed) {
         show(raw, s->flow.page != before);
     }
-    if (s->flow.page == CUSTOM_MATTER_PAIRING && !PTR(raw, LAYER_IMAGE))
+    if (s->flow.page == CUSTOM_MATTER_PAIRING && !PAGE_IMAGE(raw))
         load_image(raw);
 }
 
@@ -1346,9 +1408,24 @@ static void stop_refresh(void *raw) {
 static void schedule_refresh(void *raw) {
     struct custom_state *s = state(raw);
     void *globals = PTR(common(raw), COMMON_GLOBALS);
+#ifdef CUSTOM_LEGACY_ABI
+    stop_refresh(raw);
+    void *request = native_new(0x28);
+    if (!request)
+        return;
+    native_timeout_ctor(request);
+    native_add_ref(request);
+    s->refresh_request = request;
+    unsigned int interval =
+        native_milliseconds_to_interval(custom_activity(s->flow.page) ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS);
+    native_timeout_init(request, (int)(u32)s, interval, PTR(common(raw), COMMON_EVENT_TARGET), common(raw));
+    void *(*get_timer)(void *) = PTR(PTR(globals, 0), 8);
+    native_enqueue((u8 *)get_timer(globals) + 4, request, 0);
+#else
     native_send_timeout(&s->refresh_request, (u32)s,
                         custom_activity(s->flow.page) ? REFRESH_ACTIVE_MS : REFRESH_IDLE_MS,
                         PTR(common(raw), COMMON_EVENT_TARGET), common(raw), PTR(globals, GLOBALS_TIMER_OFFSET));
+#endif
 }
 static int layer_event(void *raw, void *event, void *target) {
     u32 type = native_event_type(event);
@@ -1363,6 +1440,16 @@ static int layer_event(void *raw, void *event, void *target) {
         }
         return 1;
     }
+#ifdef CUSTOM_LEGACY_ABI
+    /* This ABI dispatches the wheel directly, without a virtual wheel slot. */
+    if (type == EVENT_WHEEL) {
+        int value = native_event_value(event);
+        if (s->flow.page == CUSTOM_HOLD_DURATION)
+            return custom_wheel(raw, value);
+        if (value)
+            s->at_top = 0;
+    }
+#endif
     int result = native_layer_event(raw, event, target);
     /* Old Legal Info consumes a click by stopping its timer and returning
      * exit, bypassing the click vtable. Keep that native cleanup, then
@@ -1413,7 +1500,7 @@ static int draw(void *raw, void *context) {
     int pictured = s->flow.page == CUSTOM_HOME || s->flow.page == CUSTOM_DOOM;
     int inset = SCALED(s, pictured ? PICTURED_INSET : TEXT_INSET);
     y = (s->at_top ? 0 : (int)FLOAT(raw, LAYER_SCROLL_Y)) - y - inset;
-    void *image = PTR(raw, LAYER_IMAGE);
+    void *image = PAGE_IMAGE(raw);
     if (image && (pictured || s->flow.page == CUSTOM_MATTER_PAIRING)) {
         draw_image_fn *draw_image = PTR(PTR(context, 0), CONTEXT_DRAW_IMAGE_SLOT);
 #ifdef CUSTOM_TRACE
@@ -1592,13 +1679,22 @@ __attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
     if (!custom_schedule_insert_before((const char *)registers[1], MENU_HAS_DOOM))
         return;
     void *menu = (void *)registers[MENU_OBJECT_REGISTER];
+#ifdef CUSTOM_LEGACY_ABI
+    void *screen = native_menu_lookup((void *)registers[0], "update");
+#else
     void *screen = native_menu_lookup((void *)registers[0], "appsetup");
+#endif
     if (!screen)
         return;
     if (MENU_NAMES_REGISTER) {
-        custom_insert_legacy((const char **)((u8 *)menu + 0x70), (void **)((u8 *)menu + 0xf0),
-                             &registers[MENU_NAMES_REGISTER], &registers[MENU_SCREENS_REGISTER],
-                             &registers[MENU_NEXT_REGISTER], screen);
+#ifdef CUSTOM_LEGACY_ABI
+        /* Leave three slots in the 27-name array for insertion and sentinels. */
+        if (registers[MENU_NAMES_REGISTER] > 24)
+            return;
+#endif
+        custom_insert_legacy((const char **)((u8 *)menu + MENU_NAMES_OFFSET),
+                             (void **)((u8 *)menu + MENU_SCREENS_OFFSET), &registers[MENU_NAMES_REGISTER],
+                             &registers[MENU_SCREENS_REGISTER], &registers[MENU_NEXT_REGISTER], screen);
     } else {
         u32 begin = WORD(menu, 0x70), end = WORD(menu, 0x74), capacity = WORD(menu, 0x78);
         if (!custom_menu_vector_valid(begin, end, capacity))
@@ -1658,7 +1754,13 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     native_layer_ctor(raw);
     struct custom_state *s = state(raw);
     s->screen = screen;
+#ifdef CUSTOM_LEGACY_ABI
+    s->flow.root = custom_same(name, "proinfoscreen") ? CUSTOM_MATTER
+                   : custom_same(name, "update")      ? CUSTOM_SCHEDULE_HOME
+                                                      : custom_root(name);
+#else
     s->flow.root = custom_root(name);
+#endif
     s->flow.hold_minutes = 120;
     s->display = display_width();
     s->config.text_count = 2;
@@ -1678,13 +1780,17 @@ void *custom_factory(void *globals, void *handler, const char *name) {
     PTR(raw, COMMON_OFFSET + 8) = s->layer_vtables + LAYER_THIRD_VPTR;
     PTR(PTR(raw, 0), LAYER_EVENT_SLOT) = layer_event;
     PTR(PTR(raw, COMMON_OFFSET), COMMON_EVENT_SLOT) = common_event;
+#ifndef CUSTOM_LEGACY_ABI
     PTR(PTR(raw, 0), LAYER_CLICK_SLOT) = click;
+#endif
     PTR(PTR(raw, 0), LAYER_DRAW_SLOT) = draw;
     PTR(PTR(raw, 0), LAYER_ENTER_SLOT) = enter_layer;
     PTR(PTR(raw, 0), LAYER_RELOAD_SLOT) = no_reload;
     PTR(PTR(raw, COMMON_OFFSET), COMMON_ENTER_SLOT) = enter_common;
     PTR(PTR(raw, COMMON_OFFSET), COMMON_DRAW_SLOT) = draw_common;
+#ifndef CUSTOM_LEGACY_ABI
     PTR(PTR(raw, 0), LAYER_WHEEL_SLOT) = custom_wheel;
+#endif
     void *base = common(raw);
     if (native_layer_init(base, globals, PTR(template, COMMON_EVENT_TARGET), "nlcustomlayer",
                           WORD(template, COMMON_WIDTH), WORD(template, COMMON_HEIGHT)))

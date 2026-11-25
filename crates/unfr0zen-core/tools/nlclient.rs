@@ -11,6 +11,14 @@ fn main() {
         std::process::exit(1);
     }
 }
+fn sections(source: &[u8]) -> &'static [unfr0zen_core::nlclient::menu::Section] {
+    use unfr0zen_core::nlclient::{legacy_abi, menu::Section};
+    if legacy_abi(source) {
+        &Section::LEGACY
+    } else {
+        &Section::ALL
+    }
+}
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 2 && args[0] == "--report" {
@@ -22,7 +30,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() == 4 && args[0] == "--golden" {
         let source = std::fs::read(&args[1])?;
         let object = std::fs::read(&args[2])?;
-        let found = builder::build(&source, &object, &unfr0zen_core::nlclient::menu::Section::ALL)?;
+        let found = builder::build(&source, &object, sections(&source))?;
         let manifest = &found.manifest;
         let offset = manifest["payload_offset"].as_u64().unwrap() as usize;
         let size = manifest["payload_size"].as_u64().unwrap() as usize;
@@ -53,7 +61,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "toolchain": args[3].to_string_lossy(),
         });
         let path = PathBuf::from(env!("UNFR0ZEN_ROOT"))
-            .join("platform/common/nlclient/tests/golden")
+            .join(if unfr0zen_core::nlclient::legacy_abi(&source) {
+                "platform/common/nlclient/tests/legacy"
+            } else {
+                "platform/common/nlclient/tests/golden"
+            })
             .join(format!("{}.json", unfr0zen_core::shell::sha256_hex(&source)));
         std::fs::write(&path, serde_json::to_vec_pretty(&golden)?)?;
         println!("{}", path.display());
@@ -64,7 +76,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let source = std::fs::read(&args[0])?;
     let object = std::fs::read(&args[1])?;
-    let found = builder::build(&source, &object, &unfr0zen_core::nlclient::menu::Section::ALL)?;
+    let found = builder::build(&source, &object, sections(&source))?;
     let out = PathBuf::from(&args[2]);
     std::fs::write(&out, &found.output)?;
     std::fs::write(out.with_extension("json"), serde_json::to_vec_pretty(&found.manifest)?)?;

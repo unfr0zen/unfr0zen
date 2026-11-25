@@ -346,9 +346,13 @@ pub fn edit_networking_defines(text: &str, zigbee: bool) -> Result<String> {
 }
 
 /// usephoenix 1 (6.4-8) moves the unit to Nest's newer service, which
-/// nestlocal does not speak; 0 keeps it on the one it does.
+/// nestlocal does not speak; 0 keeps it on the one it does. Earlier firmware
+/// has no Phoenix setting and already speaks the older service.
 pub fn edit_product_config(text: &str) -> Result<String> {
     static USEPHOENIX: LazyLock<Regex> = LazyLock::new(|| regex(r#"(<a key="usephoenix" value=")([^"]*)("/>)"#));
+    if !text.contains("usephoenix") && text.contains("<config>") && text.contains("</config>") {
+        return Ok(text.to_owned());
+    }
     if USEPHOENIX.find_iter(text).count() != 1 {
         return device("product.config: expected one usephoenix setting");
     }
@@ -721,6 +725,20 @@ mod tests {
         assert_eq!(edit_networking_defines(&without, true).unwrap(), without);
         assert_eq!(edit_networking_defines(&without, false).unwrap(), defines);
         assert!(edit_networking_defines("X=1\n", true).is_err());
+    }
+
+    #[test]
+    fn pre_phoenix_product_config_keeps_the_legacy_service() {
+        let legacy = "<config>\n<a key=\"ble_disabled\" value=\"1\"/>\n</config>\n";
+        assert_eq!(edit_product_config(legacy).unwrap(), legacy);
+        let modern = "<config><a key=\"usephoenix\" value=\"1\"/></config>";
+        assert_eq!(edit_product_config(modern).unwrap(), modern.replace("value=\"1\"", "value=\"0\""));
+        for invalid in [
+            "<config><a key=\"usephoenix\"/></config>",
+            "<config><a key=\"usephoenix\" value=\"0\"/><a key=\"usephoenix\" value=\"1\"/></config>",
+        ] {
+            assert!(edit_product_config(invalid).is_err());
+        }
     }
 
     #[test]

@@ -12,7 +12,13 @@ The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.0-6, 6.3-5, 
 and both 6.5-14 builds, and the gen 1 and gen 2's 5.9.4-5) remain supported;
 this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
-before device writes. No firmware hash selects native addresses.
+before device writes. No firmware hash selects native addresses for this ABI.
+
+The gen 3's 5.6-7 has a distinct ABI: 32-byte strings and compact vtables.
+It uses `custom-screen-legacy.o` and bindings guarded by the complete reviewed
+stock executable's SHA-256, not its version string. Its [legacy baseline](tests/legacy/README.md)
+records discovery, linking, output and undo checks separately. Modified or
+unknown legacy executables are refused.
 
 The settings menu has one entry per section: **ZIGBEE**, **MATTER**,
 **THEMES**, **SCHEDULE** and **DOOM** right after its first entry, with Schedule
@@ -75,7 +81,13 @@ for Zigbee. Back or completion stops those notifications and restores normal ina
 
 ## The settings menu
 
-Each entry is a stock screen whose factory builds unfr0zen's screen instead
+On 5.6-7, Matter takes `proinfoscreen` and Schedule takes `update`, which is
+registered but absent from the stock menu. System Info stays stock. The
+27-name array permits Schedule and up to two optional tiles: Zigbee, Matter
+or Doom. Themes have no reviewed preload for this firmware; enabling Doom
+alongside both Zigbee and Matter is refused before writes.
+
+Each entry on the modern ABI is a stock screen whose factory builds unfr0zen's screen instead
 (`custom_root` in `src/custom_flow.h`): Nest app (`account`) is ZIGBEE,
 Software (`update`) MATTER, Nest Pro (`proinfoscreen`) THEMES, Lock
 (`templock`) DOOM and Legal Info (`legalinfo`) UNFR0ZEN. Those stock screens
@@ -239,8 +251,8 @@ happen in memory, without launching an external process or extracting source
 into a temporary directory.
 
 Developers still need the ordinary firmware/app build toolchain.
-`utils/build-firmware.sh` compiles `build/custom-screen.o` and
-`build/j49-rcs-screen.o` with ARM clang; `unfr0zen-host` embeds them into both
+`utils/build-firmware.sh` compiles `build/custom-screen.o`,
+`build/custom-screen-legacy.o` and `build/j49-rcs-screen.o` with ARM clang; `unfr0zen-host` embeds them into both
 front ends. Cargo builds the bundled static
 Capstone decoder with a C compiler, as it builds other native dependencies.
 These compilers are build requirements only. There is no runtime compilation.

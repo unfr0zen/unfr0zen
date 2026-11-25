@@ -1,9 +1,10 @@
 #!/bin/sh
 # Builds zbwake.ko, the kernel module that makes the radio's nHOST_INT a wake
 # source, for gen3 firmware releases: OUT/RELEASE.ko from Nest's published
-# kernel source for each (nest-learning-thermostat/RELEASE/linux-imx-4.1.15),
-# configured as Nest's release builds are (diamond3_defconfig and
-# diamond3_release_fragment, which give the units' /proc/config.gz). The kernel
+# kernel source for each (nest-learning-thermostat/RELEASE/linux-imx for 5.6,
+# linux-imx-4.1.15 for later releases), configured as Nest's release builds are
+# (diamond3_defconfig and diamond3_release_fragment, with hung-task detection
+# disabled on 5.6, matching the units' /proc/config.gz). The kernel
 # checks the CRCs of the symbols a module uses; they come from genksyms over
 # the objects that export them, so no kernel is built. Needs git, make, bc, a
 # host gcc and arm-none-eabi-gcc (the build image has them); ZBWAKE_JOBS
@@ -37,25 +38,43 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export ARCH=arm
-symbols="gpio_to_desc|gpiod_to_irq|irq_set_irq_wake|printk|module_layout|__aeabi_unwind_cpp_pr0|request_threaded_irq|free_irq|wakeup_source_register|wakeup_source_unregister|__pm_wakeup_event"
+common_symbols="irq_set_irq_wake|printk|module_layout|__aeabi_unwind_cpp_pr0|request_threaded_irq|free_irq|wakeup_source_register|wakeup_source_unregister|__pm_wakeup_event"
 
 build() { # build RELEASE
     release=$1
     tree=$work/$release
-    git clone -q --depth 1 "https://nest-open-source.googlesource.com/nest-learning-thermostat/$release/linux-imx-4.1.15" "$tree"
+    # GCC 14 diagnoses annotations and host-tool patterns in these kernels.
+    hostcc="gcc -fcommon -Wno-dangling-pointer"
+    cflags="-Wno-attributes -Wno-missing-attributes -Wno-attribute-alias"
+    case "$release" in
+        5.6)
+            repo=linux-imx
+            compiler=4
+            symbols="__gpio_to_irq|$common_symbols"
+            crcs=10
+            hostcc="$hostcc -Wno-unused-function"
+            ;;
+        *)
+            repo=linux-imx-4.1.15
+            compiler=5
+            symbols="gpio_to_desc|gpiod_to_irq|$common_symbols"
+            crcs=11
+            ;;
+    esac
+    git clone -q --depth 1 "https://nest-open-source.googlesource.com/nest-learning-thermostat/$release/$repo" "$tree"
     cd "$tree"
-    # 4.1 includes the header for the compiler's major version and has them
-    # up to GCC 5; later ones build it as 5 does. The host tools predate
-    # -fno-common being the default.
+    # These kernels select a header for the compiler's major version; newer
+    # GCC versions use the latest header available in each tree. The host
+    # tools predate -fno-common being the default.
     gcc_version=$(arm-none-eabi-gcc -dumpversion | cut -d. -f1)
     [ -f "include/linux/compiler-gcc$gcc_version.h" ] ||
-        cp include/linux/compiler-gcc5.h "include/linux/compiler-gcc$gcc_version.h"
-    # vermagic says 4.1.15 for every release: with module versioning the
-    # kernel skips the release in it, so releases with the same CRCs get the
-    # same module.
-    m() { make -s CROSS_COMPILE=arm-none-eabi- HOSTCC="gcc -fcommon" LOCALVERSION= "$@"; }
+        cp "include/linux/compiler-gcc$compiler.h" "include/linux/compiler-gcc$gcc_version.h"
+    # With module versioning the kernel skips the release in vermagic, so
+    # releases with the same CRCs get the same module.
+    m() { make -s CROSS_COMPILE=arm-none-eabi- HOSTCC="$hostcc" KCFLAGS="$cflags" LOCALVERSION= "$@"; }
     scripts/kconfig/merge_config.sh -m arch/arm/configs/diamond3_defconfig \
         arch/arm/configs/diamond3_release_fragment >/dev/null
+    [ "$release" != 5.6 ] || scripts/config --disable DETECT_HUNG_TASK
     m olddefconfig
     : >.scmversion
     m modules_prepare
@@ -64,8 +83,8 @@ build() { # build RELEASE
     m $exporters
     for o in $exporters; do arm-none-eabi-nm "$o"; done |
         sed -nE "s/^([0-9a-f]+) . __crc_($symbols)\$/0x\1\t\2\tvmlinux\tEXPORT_SYMBOL/p" >Module.symvers
-    [ "$(wc -l <Module.symvers)" -eq 11 ] || {
-        echo "expected 11 CRCs:"
+    [ "$(wc -l <Module.symvers)" -eq "$crcs" ] || {
+        echo "expected $crcs CRCs:"
         cat Module.symvers
         return 1
     }

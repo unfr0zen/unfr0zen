@@ -4,7 +4,7 @@
 # the Rust toolchain. The submodules are not formatted, nor the patches, the
 # fonts' licenses and the goldens the nlclient tool writes. The website's HTML
 # is linted, not formatted.
-exclude: ^(.*\.patch|assets/fonts/.*|platform/common/nlclient/tests/golden/.*\.json)$
+exclude: ^(.*\.patch|assets/fonts/.*|platform/common/nlclient/tests/(golden|legacy)/.*\.json)$
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks

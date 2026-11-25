@@ -36,7 +36,7 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 24] = [
+const REQUIRED: [&str; 25] = [
     "rom-stage.imx",
     "boot-wrapper.bin",
     "u-boot-recovery.bin",
@@ -48,6 +48,7 @@ const REQUIRED: [&str; 24] = [
     "nestlocal-armv7",
     "doom-armv7",
     "custom-screen.o",
+    "custom-screen-legacy.o",
     "j49-rcs-screen.o",
     "radio/radio.bin",
     "radio/radio.identity",
@@ -497,7 +498,7 @@ fn theme(root: &Path, out: &Path) {
 }
 
 fn custom_screen(root: &Path, out: &Path) {
-    for name in ["custom-screen.o", "j49-rcs-screen.o"] {
+    for name in ["custom-screen.o", "custom-screen-legacy.o", "j49-rcs-screen.o"] {
         let object = root.join("build").join(name);
         println!("cargo:rerun-if-changed={}", object.display());
         let data = fs::read(&object)
