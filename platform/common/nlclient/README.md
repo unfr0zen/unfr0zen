@@ -8,8 +8,8 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.3-5, 6.4-8 and
-both 6.5-14 builds, and the gen 1 and gen 2's 5.9.4-5) remain supported;
+The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.0-6, 6.3-5, 6.4-8
+and both 6.5-14 builds, and the gen 1 and gen 2's 5.9.4-5) remain supported;
 this does not infer arbitrary C++ semantics. Unsupported ELF layouts,
 unknown instruction shapes, missing imports or unsupported relocations fail
 before device writes. No firmware hash selects native addresses.
@@ -85,7 +85,9 @@ entries, which nlclient reads in a loop of fixed length. The setup rewrites
 the list from the chosen options and shortens the loop's bound to match
 (`crates/unfr0zen-core/src/nlclient/menu.rs`); the stock entries keep their
 order, and the slots past the bound keep valid names for nlclient's lookup of
-a screen by name.
+a screen by name. Where more than one loop walks the list (6.0-6 also asks each
+listed screen in turn), the bound shortened is the one of the loop that builds
+the menu, which holds the insertion below; the others walk the whole list.
 
 SCHEDULE uses the unused cloud-setup child registration (`appsetup`). The
 native menu's screen lookup is wrapped at its validated construction-loop call:
@@ -93,7 +95,8 @@ when it reaches Doom (or Slideshow when Doom is absent), the wrapper inserts
 SCHEDULE before returning the original screen. All original list slots and
 both temperature sentinels stay.
 Modern clients use a non-owning screen-pointer vector, grown through the native
-vector helper; older clients use fixed name and screen arrays with checked
+vector helper: inserting at the end, or on 6.0-6's older libstdc++ appending
+(`_M_emplace_back_aux`, `MENU_GROW_APPENDS`); older clients use fixed name and screen arrays with checked
 capacity and live counter invariants. Unknown insertion, lookup or growth shapes
 are refused before patching. No ELF data relocations or additional writable
 payload segments are needed.

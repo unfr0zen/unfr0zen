@@ -52,11 +52,13 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
     let menu_bindings = std::collections::BTreeMap::from([
         ("native_menu_lookup".to_string(), insertion.lookup),
         ("native_menu_grow".into(), insertion.grow),
+        ("native_menu_append".into(), insertion.grow),
         ("layout_MENU_OBJECT_REGISTER".into(), insertion.object_register),
         ("layout_MENU_NAMES_REGISTER".into(), insertion.names_register),
         ("layout_MENU_SCREENS_REGISTER".into(), insertion.screens_register),
         ("layout_MENU_NEXT_REGISTER".into(), insertion.next_register),
         ("layout_MENU_HAS_DOOM".into(), u32::from(sections.contains(&super::menu::Section::Doom))),
+        ("layout_MENU_GROW_APPENDS".into(), u32::from(insertion.appends)),
     ]);
     externals.extend(menu_bindings.clone());
     externals.entry("native_rename".into()).or_insert(0);

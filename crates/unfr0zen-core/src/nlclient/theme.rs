@@ -26,7 +26,7 @@ struct Globals {
     off: u32,
     eco: u32,
 }
-/// 6.x's, the same in every reviewed 6.x build.
+/// 6.4-8's and 6.5-14's, the same in each of their reviewed builds.
 const V6_GLOBALS: Globals =
     Globals { target: 0xa8, fahrenheit: 0xa0, low: 0xf0, high: 0xe8, mode: 0x138, off: 0, eco: 0 };
 
@@ -108,6 +108,23 @@ const REVIEWED: &[Reviewed] = &[
         current_humidity: 0xae81c,
         leaf_slot: 0x364,
         globals: V6_GLOBALS,
+        dial_size: 480,
+        software: false,
+    },
+    // 6.0-6, whose globals' vtable is 5.9.4-5's with two more methods first.
+    Reviewed {
+        stock_sha256: "5d58299c1219e632a534014e8853d4f1b796c9ae1d42a6f0dc68ee0c88e10c9a",
+        background_slot: 0x48d470,
+        background_draw: 0x19a2b8,
+        brightness_manager: 0x6f814,
+        read_als: 0x1a33e8,
+        settings_view: 0x471988,
+        thermostat_view: 0x47b8e0,
+        view_offset: 0x10c,
+        current_temperature: 0x70af4,
+        current_humidity: 0x70b0c,
+        leaf_slot: 0x30c,
+        globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x114, off: 0xc0, eco: 0x64 },
         dial_size: 480,
         software: false,
     },
@@ -249,7 +266,13 @@ mod tests {
     #[test]
     fn reviewed_builds_bind_every_name() {
         let firmware = std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware");
-        for sample in ["nlclient-gen3-2025", "nlclient-gen3-6.5-14", "nlclient-gen3-6.5-14-2", "nlclient-gen2-2019"] {
+        for sample in [
+            "nlclient-gen3-2025",
+            "nlclient-gen3-6.5-14",
+            "nlclient-gen3-6.5-14-2",
+            "nlclient-gen3-6.0-6",
+            "nlclient-gen2-2019",
+        ] {
             let Ok(stock) = std::fs::read(firmware.join(sample)) else {
                 assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");
                 continue;

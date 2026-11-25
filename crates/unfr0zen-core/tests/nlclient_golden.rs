@@ -377,7 +377,7 @@ fn samples() -> Vec<(PathBuf, Vec<u8>, Value)> {
 /// build is admitted on, so they must be what survives a recompile: had any
 /// reviewed build been unknown, the others' evidence would have admitted
 /// all but at most one of its natives (the 2025 build's activity mark, the
-/// gen 2's device commit), but five of the 6.5-14 build's: its factories
+/// gen 2's and 6.0-6's device commits), but five of the 6.5-14 build's: its factories
 /// and event handlers also call the string destructor, delete and Release.
 #[test]
 fn reviewed_builds_share_their_natives_library_calls() {
@@ -557,10 +557,13 @@ fn schedule_insertion_preserves_every_stock_slot_and_rejects_unknown_menu_abis()
                 "{}: undecodable growth",
                 path.display()
             );
+            // A store of the new buffer's end and capacity, made to miss.
+            let (word, corrupt) =
+                if menu["insertion"]["appends"] == true { (0xe9860030, 0xe9860060) } else { (0xe5858004, 0xe585800c) };
             let start = file_offset(&stock, grow);
-            let store = (start..start + 512).step_by(4).find(|&at| w(&stock, at) == 0xe5858004).unwrap();
+            let store = (start..start + 512).step_by(4).find(|&at| w(&stock, at) == word).unwrap();
             let mut changed = stock.clone();
-            put(&mut changed, store, 0xe585800c);
+            put(&mut changed, store, corrupt);
             assert!(nlclient::builder::build(&changed, &object, &[]).is_err(), "{}: corrupt growth", path.display());
         }
     }

@@ -96,8 +96,10 @@ DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define MENU_NEXT_REGISTER LAYOUT(MENU_NEXT_REGISTER)
 DECLARE_LAYOUT(MENU_HAS_DOOM);
 #define MENU_HAS_DOOM LAYOUT(MENU_HAS_DOOM)
+DECLARE_LAYOUT(MENU_GROW_APPENDS);
+#define MENU_GROW_APPENDS LAYOUT(MENU_GROW_APPENDS)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
-#define VTABLE_MAX    0x400
+#define VTABLE_MAX        0x400
 
 /* --- Fixed layouts ----------------------------------------------------------
  * The same in every audited build. */
@@ -251,7 +253,10 @@ extern int native_layer_init(void *, void *, void *, const char *, int, int);
 extern int native_screen_init(void *, void *, void *, const char *, void *);
 extern void *native_layer_lookup(void *, const char *);
 extern void *native_menu_lookup(void *, const char *);
+/* The vector's growth: inserting at a position, or (MENU_GROW_APPENDS, an
+ * older libstdc++'s) appending, the one native bound to both. */
 extern void native_menu_grow(void *, void *, void *);
+extern void native_menu_append(void *, void *);
 extern int native_attach(void *, void *);
 extern void native_string_ctor(nl_string *);
 extern void native_string_copy(nl_string *, const char *);
@@ -1599,7 +1604,10 @@ __attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
         if (!custom_menu_vector_valid(begin, end, capacity))
             return;
         if (end == capacity) {
-            native_menu_grow((u8 *)menu + 0x70, (void *)end, &screen);
+            if (MENU_GROW_APPENDS)
+                native_menu_append((u8 *)menu + 0x70, &screen);
+            else
+                native_menu_grow((u8 *)menu + 0x70, (void *)end, &screen);
         } else {
             *(void **)end = screen;
             WORD(menu, 0x74) = end + 4;

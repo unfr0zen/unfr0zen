@@ -16,6 +16,7 @@ committed. The corresponding private samples live in `.work/firmware/`:
 | `nlclient-gen3-6.3-5` (6.3-5)     | `7bc7e152ecee09ed993264f6d50c134b14a5464a3b4d294671c32f9ff1ec95e3` |
 | `nlclient-gen3-6.5-14` (6.5-14)   | `3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2` |
 | `nlclient-gen3-6.5-14-2` (6.5-14) | `ea07f0d31e27ed859e0e1307a7a4de493deaa346fb5b111277beef30d4664611` |
+| `nlclient-gen3-6.0-6` (6.0-6)     | `5d58299c1219e632a534014e8853d4f1b796c9ae1d42a6f0dc68ee0c88e10c9a` |
 | `nlclient-gen3-2019` (5.9.4-5)    | `bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d` |
 | `nlclient-gen2-2019` (5.9.4-5)    | `67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7` |
 

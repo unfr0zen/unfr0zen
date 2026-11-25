@@ -14,6 +14,7 @@
 //! entry at runtime, retaining every stock slot and both sentinels without
 //! relocating the pointer table.
 use super::{
+    arm::Arm,
     discovery,
     elf::{word, Elf},
 };
@@ -37,16 +38,75 @@ pub(super) struct Insertion {
     pub names_register: u32,
     pub screens_register: u32,
     pub next_register: u32,
+    /// Whether `grow` appends (an older libstdc++'s `_M_emplace_back_aux`,
+    /// taking the value's address) rather than inserting at a position.
+    pub appends: bool,
 }
 
 pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
-    use super::arm::Arm;
     let (list, names) = discovery::settings(elf)?;
     if names.len() < 3 || names[names.len() - 3..] != ["legalinfo", "reset", "temperature"] {
         return device("settings menu insertion requires Legal Info before Reset and Temperature");
     }
     let arm = Arm::new(elf)?;
-    let code = arm.code(bound(elf, list, names.len())?, None)?;
+    let (_, mut found) = menu_loop(elf, &arm, list, names.len())?;
+    if found.len() != 1 {
+        return device(format!("settings menu insertion: expected one safe shape, found {}", found.len()));
+    }
+    let found = found.pop().unwrap();
+    let arranged = arranged(&names, sections)?;
+    let section_count = Section::ALL.iter().filter(|section| sections.contains(section)).count();
+    if !sections.contains(&Section::Doom) && arranged.get(1 + section_count).map(String::as_str) != Some("slideshow") {
+        return device("settings menu insertion requires Slideshow after the optional sections");
+    }
+    if found.grow == 0 && arranged.len() > 32 {
+        return device("settings menu insertion exceeds legacy name capacity");
+    }
+    if !(4..12).contains(&found.object_register) {
+        return device("settings menu object is not in a preserved register");
+    }
+    // A successful lookup returns the hash table's borrowed pointer directly.
+    let lookup = arm.code(found.lookup, None)?;
+    let imports = discovery::imported(elf)?;
+    let first = lookup
+        .iter()
+        .position(|i| i.name == "bl")
+        .ok_or_else(|| crate::Error::Device("menu lookup has no call".into()))?;
+    if lookup[first].ops[0].imm() != imports.get("PL_HashTableLookupConst").copied()
+        || lookup.get(first + 1).map(|i| i.word) != Some(0xe2504000)
+        || lookup.get(first + 2).map(|i| i.word >> 24) != Some(0x0a)
+        || lookup.get(first + 3).map(|i| i.word) != Some(0xe1a00004)
+        || !lookup.get(first + 4).is_some_and(|i| [0xe8bd8070, 0xe89da830, 0xe8bd8038].contains(&i.word))
+    {
+        return device("settings menu lookup does not return a borrowed screen");
+    }
+    if found.grow != 0 {
+        let grow = arm.code(found.grow, None)?;
+        let calls = arm.calls(found.grow)?;
+        // Allocates, moves the old elements, frees them and stores the new
+        // buffer's begin, end and capacity: inserting the value at the
+        // position, or (appending) reading it from the second argument.
+        let shape: &[u32] = if found.appends {
+            &[0xe5993000, 0x17873004, 0xe5867000, 0xe9860030]
+        } else {
+            &[0xe8900180, 0xe585b000, 0xe5858004, 0xe5854008]
+        };
+        if !shape.iter().all(|w| grow.iter().any(|i| i.word == *w))
+            || !imports.get("_Znwj").is_some_and(|address| calls.contains(address))
+            || !["_ZdlPv", "_ZdlPvj"]
+                .iter()
+                .any(|name| imports.get(*name).is_some_and(|address| calls.contains(address)))
+        {
+            return device("settings menu growth does not have the native pointer-vector ABI");
+        }
+    }
+    Ok(found)
+}
+
+/// The native insertion sites in the code at `at`: the menu's loop calls
+/// the screen lookup once per name and keeps each screen it finds.
+fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
+    let code = arm.code(at, None)?;
     let words: Vec<u32> = code.iter().map(|i| i.word).collect();
     let mut found = Vec::new();
     for (i, ins) in code.iter().enumerate() {
@@ -81,6 +141,44 @@ pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
                 names_register: 0,
                 screens_register: 0,
                 next_register: 0,
+                appends: false,
+            });
+        } else if after.len() >= 12 && after[0] == 0xe3500000 && after[1] == 0xe58d0000 {
+            // An older libstdc++'s push_back: the screen stored at the end
+            // when there is room (and the end is not null), appended by
+            // _M_emplace_back_aux(vector, &screen) when there is not.
+            let object = (after[3] >> 16) & 15;
+            if after[2] >> 24 != 0x0a
+                || after[3] != 0xe5903074 | (object << 16)
+                || after[4] != 0xe5902078 | (object << 16)
+                || after[5] != 0xe1530002
+                || after[6] >> 24 != 0x0a
+                || after[7] != 0xe3530000
+                || after[8] != 0x15830000
+                || after[9] != 0x15903074 | (object << 16)
+                || after[10] != 0xe2833004
+                || after[11] != 0xe5803074 | (object << 16)
+            {
+                continue;
+            }
+            let target = code[i + 7].ops[0].imm().unwrap();
+            let grow = arm.code(target, Some(12))?;
+            if grow.len() != 3
+                || grow[0].word != 0xe1a0100d
+                || grow[1].word != 0xe2800070 | (object << 16)
+                || grow[2].name != "bl"
+            {
+                continue;
+            }
+            found.push(Insertion {
+                call: ins.address,
+                lookup,
+                grow: grow[2].ops[0].imm().unwrap(),
+                object_register: object,
+                names_register: 0,
+                screens_register: 0,
+                next_register: 0,
+                appends: true,
             });
         } else if after.len() >= 3 && after[0] & 0xfff0ffff == 0xe280303c && after[2] & 0xfff0ffff == 0xe7800103 {
             let screens = (after[0] >> 16) & 15;
@@ -104,54 +202,30 @@ pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
                         names_register: names,
                         screens_register: screens,
                         next_register: next,
+                        appends: false,
                     });
                 }
             }
         }
     }
-    if found.len() != 1 {
-        return device(format!("settings menu insertion: expected one safe shape, found {}", found.len()));
-    }
-    let found = found.pop().unwrap();
-    let arranged = arranged(&names, sections)?;
-    let section_count = Section::ALL.iter().filter(|section| sections.contains(section)).count();
-    if !sections.contains(&Section::Doom) && arranged.get(1 + section_count).map(String::as_str) != Some("slideshow") {
-        return device("settings menu insertion requires Slideshow after the optional sections");
-    }
-    if found.grow == 0 && arranged.len() > 32 {
-        return device("settings menu insertion exceeds legacy name capacity");
-    }
-    if !(4..12).contains(&found.object_register) {
-        return device("settings menu object is not in a preserved register");
-    }
-    // A successful lookup returns the hash table's borrowed pointer directly.
-    let lookup = arm.code(found.lookup, None)?;
-    let imports = discovery::imported(elf)?;
-    let first = lookup
-        .iter()
-        .position(|i| i.name == "bl")
-        .ok_or_else(|| crate::Error::Device("menu lookup has no call".into()))?;
-    if lookup[first].ops[0].imm() != imports.get("PL_HashTableLookupConst").copied()
-        || lookup.get(first + 1).map(|i| i.word) != Some(0xe2504000)
-        || lookup.get(first + 2).map(|i| i.word >> 24) != Some(0x0a)
-        || lookup.get(first + 3).map(|i| i.word) != Some(0xe1a00004)
-        || !lookup.get(first + 4).is_some_and(|i| [0xe8bd8070, 0xe89da830, 0xe8bd8038].contains(&i.word))
-    {
-        return device("settings menu lookup does not return a borrowed screen");
-    }
-    if found.grow != 0 {
-        let grow = arm.code(found.grow, None)?;
-        let calls = arm.calls(found.grow)?;
-        if ![0xe8900180, 0xe585b000, 0xe5858004, 0xe5854008].iter().all(|w| grow.iter().any(|i| i.word == *w))
-            || !imports.get("_Znwj").is_some_and(|address| calls.contains(address))
-            || !["_ZdlPv", "_ZdlPvj"]
-                .iter()
-                .any(|name| imports.get(*name).is_some_and(|address| calls.contains(address)))
-        {
-            return device("settings menu growth does not have the native pointer-vector ABI");
+    Ok(found)
+}
+
+/// The menu's loop: of the loops bounded by the list's end, the one holding
+/// an insertion site, and its sites. Others (6.0-6 also asks each listed
+/// screen in turn) walk the whole list and keep their bound.
+fn menu_loop(elf: &Elf, arm: &Arm, list: u32, count: usize) -> Result<(u32, Vec<Insertion>)> {
+    let mut found = Vec::new();
+    for at in bounds(elf, list, count) {
+        let sites = sites(arm, at)?;
+        if !sites.is_empty() {
+            found.push((at, sites));
         }
     }
-    Ok(found)
+    match found.len() {
+        1 => Ok(found.pop().unwrap()),
+        n => device(format!("settings menu loop bound: expected one, found {n}")),
+    }
 }
 
 /// An entry shown only with its feature on, in the menu's order.
@@ -201,7 +275,7 @@ pub fn arrange(source: &[u8], output: &mut [u8], sections: &[Section]) -> Result
     let names = arranged(&stock, sections)?;
     let at = elf.offset(address)?;
     let words: Vec<u32> = (0..stock.len()).map(|i| word(source, at + i * 4)).collect::<Result<_>>()?;
-    let bound = bound(&elf, address, stock.len())?;
+    let (bound, _) = menu_loop(&elf, &Arm::new(&elf)?, address, stock.len())?;
     let bound_at = elf.offset(bound)?;
     for (offset, length) in [(at, stock.len() * 4), (bound_at, 4)] {
         if output.get(offset..offset + length) != source.get(offset..offset + length) {
@@ -220,11 +294,11 @@ pub fn arrange(source: &[u8], output: &mut [u8], sections: &[Section]) -> Result
     Ok(serde_json::json!({"address": address, "bound": bound, "names": names}))
 }
 
-/// The loop's bound: the one `add Rd, Rn, #4*count` (AL, unrotated) whose
-/// Rn holds the list's address, or the word before it, loaded from a literal
+/// The loops' bounds: each `add Rd, Rn, #4*count` (AL, unrotated) whose Rn
+/// holds the list's address, or the word before it, loaded from a literal
 /// (and on a position-independent build, added to pc) a few instructions
 /// before.
-fn bound(elf: &Elf, list: u32, count: usize) -> Result<u32> {
+fn bounds(elf: &Elf, list: u32, count: usize) -> Vec<u32> {
     let mut found = Vec::new();
     for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
         let code = elf.contents(section);
@@ -263,10 +337,7 @@ fn bound(elf: &Elf, list: u32, count: usize) -> Result<u32> {
             }
         }
     }
-    match found.as_slice() {
-        [one] => Ok(*one),
-        _ => device(format!("settings menu loop bound: expected one, found {}", found.len())),
-    }
+    found
 }
 
 #[cfg(test)]
