@@ -182,7 +182,7 @@ fn main() {
 
 /// How many paired sensors nlclient may have, or none where it cannot hear them.
 fn sensor_room(config: &flags::Config, stand_in: bool) -> Option<usize> {
-    sensor::roster::room(stand_in, matter_takes_ble(config))
+    sensor::roster::room(stand_in, config.ble_relay, matter_takes_ble(config))
 }
 
 /// nlclient's settings file, as it should be when nlclient starts.
@@ -279,7 +279,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     #[cfg(target_os = "linux")]
     {
         let result = match (device.ble.as_ref(), device.hci) {
-            (Some(ble), _) => sensor::port::start(Some(sensor.clone()), ble, config.matter),
+            (Some(ble), _) => sensor::port::start(Some(sensor.clone()), ble, config.matter, config.ble_relay),
             (None, Some(link)) => sensor::hci::start(sensor.clone(), link),
             (None, None) => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
         };
@@ -311,7 +311,7 @@ async fn run(config: flags::Config) {
     if let (true, false, Some(ble)) =
         (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref())
     {
-        if let Err(e) = sensor::port::start(None, ble, true) {
+        if let Err(e) = sensor::port::start(None, ble, true, false) {
             logf!("matter BLE: stand-in: {e}");
         }
     }

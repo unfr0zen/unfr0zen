@@ -19,6 +19,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("device-name-file", Kind::Text, "", "file holding the unit's name in Home Assistant and Matter (its NodeLabel), <serial> standing for the unit's serial; empty keeps the last, at first \"Nest Thermostat\""),
     ("doom", Kind::Bool, "false", "offer Doom in the settings menu's DOOM entry and launch it from there (doom.rs)"),
     ("themes", Kind::Bool, "false", "offer customizable home screen themes in the settings menu's THEMES entry, drawn in nlclient by the theme preload (theme/)"),
+    ("ble-relay", Kind::Bool, "false", "with -external-temperature on gen 3: keep the real BLE chip behind the stand-in, for paired sensors to be heard beside it (sensor/relay.rs); not with -matter"),
     ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 1 and gen 2 need the nlclient RCS input patch"),
     ("external-temperature-store", Kind::Text, "/media/data/nestlocal-sensor.json", "where the stand-in sensor's identity is kept"),
     ("external-temperature-timeout", Kind::Duration, "30m", "how long the last reading counts; nlclient goes back to the backplate about 11.5 minutes after that"),
@@ -58,6 +59,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
 ];
 
 pub struct Config {
+    pub ble_relay: bool,
     pub cert: String,
     pub discovery: String,
     pub device_name_file: String,
@@ -238,7 +240,11 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         get("matter-discriminator").parse::<u16>().ok().filter(|d| *d < 4096).ok_or_else(|| {
             Some(format!("invalid value {:?} for flag -matter-discriminator", get("matter-discriminator")))
         })?;
+    if flag("ble-relay") && (!flag("external-temperature") || flag("matter") || flag("matter-thread")) {
+        return Err(Some("-ble-relay goes with -external-temperature, and not with Matter".into()));
+    }
     Ok(Config {
+        ble_relay: flag("ble-relay"),
         cert: get("cert"),
         discovery: get("discovery"),
         device_name_file: get("device-name-file"),

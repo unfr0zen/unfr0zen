@@ -13,6 +13,8 @@ pub mod chip;
 pub mod hci;
 #[cfg(target_os = "linux")]
 pub mod port;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub mod relay;
 pub mod roster;
 pub mod socket;
 

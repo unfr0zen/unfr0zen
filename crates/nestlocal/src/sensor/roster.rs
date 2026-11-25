@@ -508,7 +508,7 @@ fn unheard(path: &Path, file: &File) -> Option<String> {
     let (paired, _) = check(&file.sensors, MOST_SENSORS);
     (!paired.is_empty()).then(|| {
         format!(
-            "sensors: {} in {} are not heard while the external temperature or Matter has the Bluetooth chip; their keys stay in the file",
+            "sensors: {} in {} are not heard while Matter, or the external temperature without -ble-relay, has the Bluetooth chip; their keys stay in the file",
             paired.len(),
             path.display()
         )
@@ -516,9 +516,9 @@ fn unheard(path: &Path, file: &File) -> Option<String> {
 }
 
 /// How many paired sensors nlclient has room for, or none where it hears none:
-/// the stand-in takes a place, and its Bluetooth too.
-pub fn room(stand_in: bool, matter: bool) -> Option<usize> {
-    if matter || stand_in {
+/// the stand-in takes a place, and without the relay its Bluetooth too.
+pub fn room(stand_in: bool, relay: bool, matter: bool) -> Option<usize> {
+    if matter || (stand_in && !relay) {
         return None;
     }
     Some(MOST_SENSORS - usize::from(stand_in))
@@ -637,7 +637,7 @@ mod tests {
         let (path, settings) = (dir.join("sensors.json"), dir.join("settings"));
         std::fs::write(&settings, stock(&[(A, 1, ""), (B, 2, "")])).unwrap();
         // Matter, or the stand-in, has the chip: nlclient is to hear none.
-        prepare(&path, &settings, None, room(false, true)).unwrap();
+        prepare(&path, &settings, None, room(false, false, true)).unwrap();
         let file = read(&path).unwrap().unwrap();
         let note = unheard(&path, &file).expect("two sensors are in the file");
         assert!(note.contains("2 in") && note.contains("Bluetooth chip"), "{note}");
@@ -820,8 +820,8 @@ mod tests {
 
     #[test]
     fn where_nlclient_hears_none_they_wait_in_the_file() {
-        assert_eq!(room(false, false), Some(6));
-        assert_eq!((room(true, false), room(false, true), room(true, true)), (None, None, None));
+        assert_eq!((room(false, false, false), room(true, true, false)), (Some(6), Some(5)));
+        assert_eq!((room(true, false, false), room(false, false, true), room(true, true, true)), (None, None, None));
         let dir = dir("deaf");
         let (path, settings) = (dir.join("sensors.json"), dir.join("settings"));
         std::fs::write(&settings, stock(&[(A, 1, "")])).unwrap();
@@ -857,10 +857,10 @@ mod tests {
 
     /// What nlclient holds after the prepare steps main.rs runs with -external-temperature:
     /// the paired sensors first, then the stand-in.
-    fn boot(dir: &Path) -> (io::Result<()>, usize) {
+    fn boot(dir: &Path, relay: bool) -> (io::Result<()>, usize) {
         let (sensors, settings, identity) = (dir.join("sensors.json"), dir.join("settings"), dir.join("stand-in.json"));
         let stand_in = crate::sensor::stand_in_id(&identity);
-        let first = prepare(&sensors, &settings, stand_in.as_deref(), room(true, false))
+        let first = prepare(&sensors, &settings, stand_in.as_deref(), room(true, relay, false))
             .and_then(|()| make_room(&sensors, &settings, stand_in.as_deref()));
         let second = first.and_then(|()| crate::sensor::prepare_settings(&identity, &settings, "S", None));
         let b = std::fs::read(&settings).unwrap();
@@ -886,16 +886,17 @@ mod tests {
     #[test]
     fn six_paired_sensors_and_the_stand_in_never_pass_six() {
         let ids: Vec<String> = (1..=6).map(|i| format!("18B43000AAAA000{i}")).collect();
-        for paired in [5, 6] {
-            let dir = dir(&format!("six-{paired}"));
+        for (paired, relay) in [(5, false), (6, false), (5, true), (6, true)] {
+            let dir = dir(&format!("six-{paired}-{relay}"));
             let sensors: Vec<(&str, u8, &str)> =
                 ids.iter().take(paired).enumerate().map(|(i, id)| (id.as_str(), i as u8 + 1, "room")).collect();
             std::fs::write(dir.join("settings"), stock(&sensors)).unwrap();
             for start in 1..=3 {
-                let (result, held) = boot(&dir);
-                // The stand-in always has its place: the sixth is set aside, and its key stays in the file.
-                assert_eq!(held, 6, "{paired} paired, start {start}");
-                assert!(result.is_ok(), "{paired} paired, start {start}: {result:?}");
+                let (result, held) = boot(&dir, relay);
+                // The stand-in always has its place, with the relay or without: the sixth is set aside,
+                // and its key stays in the file.
+                assert_eq!(held, 6, "{paired} paired, relay {relay}, start {start}");
+                assert!(result.is_ok(), "{paired} paired, relay {relay}, start {start}: {result:?}");
             }
             let b = std::fs::read(dir.join("settings")).unwrap();
             let has = |id: &str| nlsettings::value(&b, &format!("kryptonite.{id}.key")).is_some();
@@ -906,6 +907,22 @@ mod tests {
             assert_eq!(in_file, paired == 6, "{paired} paired: the sixth's key is in the file");
             let list = String::from_utf8_lossy(nlsettings::value(&b, "associated_rcs_sensors").unwrap()).into_owned();
             assert!(!list.contains(ids[5].as_str()), "{paired} paired: nlclient is not told of it: {list}");
+        }
+    }
+
+    #[test]
+    fn with_the_relay_nlclient_is_told_of_the_paired_sensors_beside_the_stand_in() {
+        let dir = dir("relay");
+        let (path, settings) = (dir.join("sensors.json"), dir.join("settings"));
+        let sensors = json!({"sensors": [{"id": A, "key": key(1)}, {"id": B, "key": key(2)}]});
+        std::fs::write(&path, sensors.to_string()).unwrap();
+        for (relay, told) in [(false, 0), (true, 2)] {
+            std::fs::write(&settings, stock(&[(OURS, 9, "room")])).unwrap();
+            prepare(&path, &settings, Some(OURS), room(true, relay, false)).unwrap();
+            let b = std::fs::read(&settings).unwrap();
+            let held = |id: &str| nlsettings::value(&b, &format!("kryptonite.{id}.key")).is_some();
+            assert_eq!([held(A), held(B)], [told == 2; 2], "relay {relay}");
+            assert!(held(OURS), "the stand-in stays, relay {relay}");
         }
     }
 }

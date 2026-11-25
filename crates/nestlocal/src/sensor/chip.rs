@@ -4,21 +4,22 @@
 
 use crate::logf;
 
-const STX: u8 = 0x02;
-const SOH: u8 = 0x01;
-const ACK: u8 = 0x06;
+pub(super) const STX: u8 = 0x02;
+pub(super) const SOH: u8 = 0x01;
+pub(super) const ACK: u8 = 0x06;
+pub(super) const NAK: u8 = 0x15;
 /// A GTL message: 0x05, the application's message id, destination, source.
-const TO_CHIP: [u8; 7] = [5, 1, 0xc8, 0x32, 0, 0x3f, 0];
-const TO_HOST: [u8; 7] = [5, 1, 0xc8, 0x3f, 0, 0x32, 0];
-const HEADER: usize = 9;
-const MAX_PAYLOAD: usize = 1024;
+pub(super) const TO_CHIP: [u8; 7] = [5, 1, 0xc8, 0x32, 0, 0x3f, 0];
+pub(super) const TO_HOST: [u8; 7] = [5, 1, 0xc8, 0x3f, 0, 0x32, 0];
+pub(super) const HEADER: usize = 9;
+pub(super) const MAX_PAYLOAD: usize = 1024;
 /// How often the ROM offers to take firmware, ms. The loader reads for STX in
 /// this order of time, and anything else that reaches its GTL reader makes it
 /// start over: the ROM speaks only after a reset.
 const STX_EVERY_MS: u64 = 100;
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-mod op {
+pub(super) mod op {
     pub const CONFIGURE_CENTRAL: u16 = 0x01;
     pub const CONFIGURE_PERIPHERAL: u16 = 0x02;
     pub const CONFIGURED: u16 = 0x04;
@@ -34,9 +35,9 @@ mod op {
     pub const SCAN_PARAMETERS: u16 = 0x3d;
 }
 
-const ROLE_CENTRAL: u8 = 0;
-const ROLE_PERIPHERAL: u8 = 1;
-const SUCCESS: u8 = 1;
+pub(super) const ROLE_CENTRAL: u8 = 0;
+pub(super) const ROLE_PERIPHERAL: u8 = 1;
+pub(super) const SUCCESS: u8 = 1;
 
 enum Mode {
     /// Out of reset: offering to take firmware.

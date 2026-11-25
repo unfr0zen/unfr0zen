@@ -243,6 +243,7 @@ data:
                     <thead><tr><th>App</th><th>CLI</th></tr></thead>
                     <tbody>
                         <tr><td data-label="App"><b>External temperature</b>, under Set up → Integrations</td><td data-label="CLI"><code>--external-temperature</code></td></tr>
+                        <tr><td data-label="App">Not available</td><td data-label="CLI"><code>--ble-relay</code></td></tr>
                     </tbody>
                 </table>
             </div>
@@ -251,6 +252,7 @@ data:
                 <li><b>One sensor.</b> Only one external temperature is supported for now.</li>
                 <li><b>Named after the thermostat's room.</b> The sensor takes the thermostat's room, so the Sensors menu lists it under that room's name, Living room for example. It cannot be renamed on its own yet.</li>
                 <li><b>On 3rd generation, Bluetooth is turned off.</b> The thermostat no longer hears real Nest Temperature Sensors, and the Nest app cannot pair with it over Bluetooth. Sensors already paired stay in <a href="#paired-sensors">their file</a>.</li>
+                <li><b>Or kept, with <code>--ble-relay</code>.</b> nestlocal then keeps the thermostat's real Bluetooth chip behind the virtual sensor, so the thermostat hears the <a href="#paired-sensors">paired sensors</a> beside it. The external temperature takes one of the six places. Not with Matter, which can take the chip itself. Tested on one 3rd generation with two sensors, over MQTT only, and not offered in the app.</li>
             </ul>
             <h3>Setting it up in Home Assistant</h3>
             <p>Install with the option and your integration, then import that integration's blueprint and create an automation. Each sends the reading when it changes (at most once a minute), every 10 minutes and when Home Assistant starts; °F is converted to °C; nothing is sent while the thermometer is unavailable.</p>
@@ -278,7 +280,7 @@ data:
                 <li><b>Switch one off or on.</b> Set <code>"enabled": false</code> and the thermostat stops using it within a few seconds; the entry and its key stay. Deleting an entry does not remove the sensor: the entry is just no longer managed.</li>
                 <li><b>Add one.</b> Add its <code>id</code> and <code>key</code> to the file. When the thermostat hears the sensor it asks nestlocal for its key. Pairing a new sensor still needs Nest's service.</li>
                 <li><b>Six at most.</b> Nest's software takes six sensors, and the external temperature counts as one. With six paired, the sixth is set aside so the external temperature has its place: it leaves Nest's settings, nestlocal logs it, and its key stays in the file, for when there is room.</li>
-                <li><b>Not while the external temperature is on.</b> It takes the Bluetooth chip, so the thermostat does not hear paired sensors. Matter does the same where the thermostat's own Bluetooth is off: while Matter has the chip, paired sensors are not heard. Their keys stay in the file, nestlocal says so in its log at start, and they are heard again once it is off.</li>
+                <li><b>Not while the external temperature is on, unless <code>--ble-relay</code> is.</b> It takes the Bluetooth chip, so the thermostat does not hear paired sensors. Matter does the same where the thermostat's own Bluetooth is off: while Matter has the chip, paired sensors are not heard. Their keys stay in the file, nestlocal says so in its log at start, and they are heard again once it is off.</li>
                 <li><b>Tested with MQTT only.</b> Paired sensors are untested together with Zigbee or Matter. Zigbee has its own radio and no conflict is known. Whether Matter and paired sensors can share the chip is not known; today nestlocal gives it to one of them, as above.</li>
                 <li><b>Copy the file</b> over SSH to keep it. A factory reset removes it, since it lives in <code>/media/data</code>.</li>
             </ul>
