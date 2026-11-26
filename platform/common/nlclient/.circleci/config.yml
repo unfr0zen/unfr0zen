@@ -56,8 +56,12 @@ jobs:
             SH
             chmod 700 "$askpass"
             export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1
-            git clone --branch main --depth 1 --filter=blob:none --no-checkout \
-              https://github.com/unfr0zen/reference-images.git .work/reference-images
+            # CircleCI's checkout rewrites GitHub HTTPS URLs to use its SSH key.
+            # The private corpus uses its own read-only HTTPS credential.
+            export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+            repo=https://github.com/unfr0zen/reference-images.git
+            test "$(git ls-remote --get-url "$repo")" = "$repo"
+            git clone --branch main --depth 1 --filter=blob:none --no-checkout "$repo" .work/reference-images
             cd .work/reference-images
             git lfs install --local
             git sparse-checkout set nlclient-goldens/firmware
