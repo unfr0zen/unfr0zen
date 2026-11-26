@@ -1,8 +1,7 @@
 //! Resolve modern native addresses from this ELF's imports, registrations and code.
-//! Reviewed instruction shapes name modern builds, never select addresses.
-//! The distinct 5.6-7 ABI uses bindings guarded by the complete stock hash.
+//! Compact UI builds use their own vtable and string layout checks.
 use super::{
-    arm::{Arm, Ins, Op, Value},
+    arm::{scalar_field, Arm, Ins, Op, Value},
     elf::{bytes, half, string, word, Elf},
 };
 use crate::shell::sha256_hex;
@@ -31,21 +30,6 @@ const HANDOVER_IMPORTS: [(&str, &str); 6] = [
     ("native_kill", "kill"),
     ("native_usleep", "usleep"),
     ("native_getpid", "getpid"),
-];
-/// The gen 2's 5.9.1-6 nlclient, whose Legal Info layer reaches no image,
-/// and where its text natives are: each one's reviewed 5.9.4-5 instruction
-/// shape, at the same distance from its neighbours as there.
-const J49_5_9_1_6: &str = "fd5831409d01ef4a3f08a0cf5ae72dcbad61ee7629d81709cf9b63929dbf3a8d";
-const J49_5_9_1_6_TEXT_NATIVES: [(&str, u32); 9] = [
-    ("native_config_invalidate", 0x2d2960),
-    ("native_config_layout", 0x1842a0),
-    ("native_image_load", 0x2deff4),
-    ("native_style", 0x54b40),
-    ("native_config_y", 0x2d25e0),
-    ("native_config_draw", 0x2d6d60),
-    ("native_image_width", 0x2de91c),
-    ("native_image_height", 0x2de930),
-    ("native_scroll_draw", 0x1833f0),
 ];
 const EGL_IMPORTS: [(&str, &str); 2] =
     [("native_egl_swap", "eglSwapBuffers"), ("native_pthread_create", "pthread_create")];
@@ -128,16 +112,7 @@ pub struct Discovery {
     pub fingerprints: BTreeMap<String, String>,
     /// The imported symbols each native calls, its evidence across builds.
     pub evidence: BTreeMap<String, Vec<String>>,
-    /// Per reviewed variant, how many natives' evidence it matches.
-    pub matches: BTreeMap<String, usize>,
-    /// The reviewed variant whose instruction shapes this build has, if any.
-    /// Modern builds pass structural discovery: addresses, layouts, call shapes,
-    /// each native's own shape and the library calls it makes. A modern build
-    /// no variant's shapes match is patched on that alone. The 5.6-7 variant
-    /// requires the complete reviewed executable's hash instead.
-    pub variant: Option<String>,
     pub stock_sha256: String,
-    pub validation: String,
     /// The gen 2's framebuffer, for its screen hand-over; absent elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framebuffer: Option<Framebuffer>,
@@ -169,7 +144,7 @@ pub(super) fn require(ok: bool, message: impl Into<String>) -> Result<()> {
         device(format!("Native discovery: {}", message.into()))
     }
 }
-fn unique<T: Ord>(values: impl IntoIterator<Item = T>, label: &str) -> Result<T> {
+pub(super) fn unique<T: Ord>(values: impl IntoIterator<Item = T>, label: &str) -> Result<T> {
     let mut values: BTreeSet<T> = values.into_iter().collect();
     require(values.len() == 1, format!("{label}: expected one result, found {}", values.len()))?;
     Ok(values.pop_first().unwrap())
@@ -244,7 +219,7 @@ fn registry(elf: &Elf) -> Result<Registry> {
 }
 /// The address of the one string `text` (with its NUL) in the read-only
 /// data, if it is there once.
-fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
+pub(super) fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
     let mut found = Vec::new();
     for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 2 != 0 && s.flags & 4 == 0) {
         let data = elf.contents(section);
@@ -348,6 +323,11 @@ fn references(elf: &Elf, words: &Words, target: u32) -> Vec<usize> {
     found
 }
 
+pub(super) fn referencing_functions(elf: &Elf, arm: &Arm, address: u32) -> BTreeSet<u32> {
+    let words = Words::new(elf);
+    references(elf, &words, address).into_iter().filter_map(|i| arm.enclosing(words.at(i).0)).collect()
+}
+
 /// The target of the BL (or B, with `link` false) instruction `w` at `at`.
 fn branch_target(at: u32, w: u32, link: bool) -> Option<u32> {
     if w >> 24 != if link { 0xeb } else { 0xea } {
@@ -355,6 +335,31 @@ fn branch_target(at: u32, w: u32, link: bool) -> Option<u32> {
     }
     let offset = ((w & 0xff_ffff) << 8) as i32 >> 6;
     Some(at.wrapping_add(8).wrapping_add(offset as u32))
+}
+
+/// Startup samples the ambient light, then loads the same manager again
+/// and compares its user brightness setting with the automatic mode (3).
+pub(super) fn ambient_light_sampler(elf: &Elf, arm: &Arm, bright: &Brightness) -> Result<u32> {
+    let words = Words::new(elf);
+    let mut found = Vec::new();
+    for i in 1..words.len().saturating_sub(5) {
+        let call = |j| {
+            let (at, w) = words.at(j);
+            branch_target(at, w, true)
+        };
+        if call(i) != Some(bright.accessor)
+            || call(i + 3) != Some(bright.accessor)
+            || words.at(i - 1).1 != words.at(i + 2).1
+            || words.at(i + 5).1 != 0xe3500003
+        {
+            continue;
+        }
+        let (Some(sampler), Some(mode)) = (call(i + 1), call(i + 4)) else { continue };
+        if arm.body(mode)?.iter().any(|i| i.word == 0xe5900000 | bright.mode) {
+            found.push(sampler);
+        }
+    }
+    unique(found, "ambient light sampler")
 }
 
 /// The client's screen timeouts: its default, client.config's sleeptimeout,
@@ -400,6 +405,7 @@ fn sleep_timeout(elf: &Elf) -> Option<(u32, u32)> {
 /// what applies the setting to the backlight, the globals' field holding
 /// the manager, the setting's field and the high level's (a float, in %).
 pub(super) struct Brightness {
+    pub accessor: u32,
     pub set: u32,
     pub apply: u32,
     pub globals: u32,
@@ -412,7 +418,7 @@ pub(super) struct Brightness {
 /// field. Its callers (the Brightness screen) get the manager from an
 /// accessor of the globals (`ldr r0, [r0, #globals]`) and then call apply,
 /// which loads the mode and, for high (2), the level at `high`.
-fn brightness(elf: &Elf) -> Option<Brightness> {
+pub(super) fn brightness(elf: &Elf) -> Option<Brightness> {
     let string = string_address(elf, b"brightness manager: SetUserBrightnessSetting() invalid value:%d\0")?;
     let words = Words::new(elf);
     let calls_to = |target: u32| {
@@ -461,7 +467,7 @@ fn brightness(elf: &Elf) -> Option<Brightness> {
                     continue;
                 };
                 if let Some(high) = words.index(apply).and_then(|at| high_level(&words, at, mode)) {
-                    found.push((set, apply, globals, mode, high));
+                    found.push((accessor, set, apply, globals, mode, high));
                 }
             }
         }
@@ -469,7 +475,7 @@ fn brightness(elf: &Elf) -> Option<Brightness> {
     found.sort();
     found.dedup();
     match found[..] {
-        [(set, apply, globals, mode, high)] => Some(Brightness { set, apply, globals, mode, high }),
+        [(accessor, set, apply, globals, mode, high)] => Some(Brightness { accessor, set, apply, globals, mode, high }),
         _ => None,
     }
 }
@@ -516,6 +522,21 @@ fn high_level(words: &Words, start: usize, mode: u32) -> Option<u32> {
         }
     }
     None
+}
+
+fn legal_layer_factory(elf: &Elf) -> Result<u32> {
+    let mut layers = Vec::new();
+    for s in &elf.sections {
+        if s.kind == 1 && s.flags & 7 == 3 {
+            for r in (0..s.size.saturating_sub(7)).step_by(4) {
+                let va = s.address + r as u32;
+                if elf.ident(elf.read(va + 4)?).as_deref() == Some("legalinfolayer") && elf.text(elf.read(va)?) {
+                    layers.push(elf.read(va)?);
+                }
+            }
+        }
+    }
+    unique(layers, "Legal Info layer factory")
 }
 
 /// Each registered screen's factory, by its name.
@@ -580,6 +601,43 @@ fn group_end(elf: &Elf, vptr: u32) -> Result<u32> {
     }
     Ok(end)
 }
+fn image_height(arm: &Arm, width: u32) -> Result<u32> {
+    let code = arm.code(width, Some(64))?;
+    let mut heights = Vec::new();
+    for (i, ins) in code.iter().enumerate() {
+        if ins.name == "ldr" && ins.text == "r0, [r0, #8]" {
+            heights.push(if i > 0 && code[i - 1].text == "ip, sp" { code[i - 1].address } else { ins.address });
+        }
+    }
+    unique(heights, "image height getter")
+}
+
+/// The path from nlConfig::GetValue goes to the image loader. Its result is
+/// saved in the layer, so a logging or cleanup call cannot supply the binding.
+fn image_loader(arm: &Arm, function: u32, get_value: u32, imports: &BTreeSet<u32>) -> Result<u32> {
+    let code = arm.code(function, None)?;
+    let mut found = Vec::new();
+    for (i, ins) in code.iter().enumerate() {
+        if ins.name != "bl" || ins.ops[0].imm() != Some(get_value) {
+            continue;
+        }
+        let tail = &code[i + 1..];
+        let Some(call) = tail.iter().position(|i| matches!(i.name.as_str(), "bl" | "blx")) else { continue };
+        let Some(target) = tail[call].ops[0].imm().filter(|a| !imports.contains(a)) else { continue };
+        if tail[call + 1..]
+            .iter()
+            .take_while(|i| !matches!(i.name.as_str(), "bl" | "blx") && !i.writes.iter().any(|r| r == "r0"))
+            .any(|i| {
+                i.name == "str"
+                    && i.ops[0].reg() == Some("r0")
+                    && i.ops[1].mem().is_some_and(|(base, _, indexed)| !indexed && !matches!(base, "pc" | "sp" | "fp"))
+            })
+        {
+            found.push(target);
+        }
+    }
+    unique(found, "configured image loader")
+}
 pub fn discover(data: &[u8]) -> Result<Discovery> {
     let found = match survey(data)? {
         (found, None) => found,
@@ -602,10 +660,8 @@ pub fn discover_hashed(data: &[u8], sha256: &str) -> Result<Discovery> {
         _ => discover(data),
     }
 }
-/// What discovery finds, and why the build is refused when it is: every
-/// native must call what a reviewed build's does, and fingerprints mask the
-/// targets of calls, so this holds a reviewed build too. A review of a new
-/// build starts from the findings whatever the objection.
+/// Return the resolved bindings and any missing library calls required by
+/// their roles. The report includes the findings even when a role fails.
 pub fn survey(data: &[u8]) -> Result<(Discovery, Option<String>)> {
     if super::legacy_abi(data) {
         return legacy::survey(data).map(|found| (found, None));
@@ -654,18 +710,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     let account = *screens.get("account").ok_or_else(|| crate::Error::Device("missing account registration".into()))?;
     let screen =
         *screens.get("legalinfo").ok_or_else(|| crate::Error::Device("missing legalinfo registration".into()))?;
-    let mut layers = Vec::new();
-    for s in &elf.sections {
-        if s.kind == 1 && s.flags & 7 == 3 {
-            for r in (0..s.size.saturating_sub(7)).step_by(4) {
-                let va = s.address + r as u32;
-                if elf.ident(elf.read(va + 4)?).as_deref() == Some("legalinfolayer") && elf.text(elf.read(va)?) {
-                    layers.push(elf.read(va)?);
-                }
-            }
-        }
-    }
-    let layer = unique(layers, "Legal Info layer factory")?;
+    let layer = legal_layer_factory(&elf)?;
     let arm = Arm::new(&elf)?;
     let lc = arm.calls(layer)?;
     let sc = arm.calls(screen)?;
@@ -764,33 +809,63 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     }
     let enter = elf.read(lv + 0x2c)?;
     let mut draw = elf.read(lv + 0x28)?;
-    let (wrapper, image_helper) = if sha256_hex(data) == J49_5_9_1_6 {
-        // Its Legal Info layer draws random text, without the image through
-        // whose helpers other builds' natives are found.
-        for (name, value) in J49_5_9_1_6_TEXT_NATIVES {
+    let internal = |calls: Vec<u32>| calls.into_iter().filter(|a| !imported_at.contains(a)).collect::<Vec<_>>();
+    let ec = internal(arm.calls(enter)?);
+    let mut dc = internal(arm.calls(draw)?);
+    let get_value = *imports
+        .get("_ZNK8nlConfig8GetValueEPKc")
+        .ok_or_else(|| crate::Error::Device("missing image configuration lookup".into()))?;
+    let (wrapper, image_helper) = if let [guard, style, other_style, text_draw, scroll] = dc[..] {
+        require(style == other_style, "Legal Info text styles disagree")?;
+        let [invalidate, wrapper] = ec[..] else { return device("unknown Legal Info text layout calls") };
+        // The equipment layer loads a configured image on entry. Its draw
+        // uses the same text renderer and calls a helper to position the icon.
+        let equipment = primary_vtable(&elf, "19nlWWNEquipmentLayer")?;
+        let load = image_loader(&arm, elf.read(equipment + 0x2c)?, get_value, &imported_at)?;
+        let paint = internal(arm.calls(elf.read(equipment + 0x28)?)?);
+        require([guard, style, text_draw, scroll].iter().all(|a| paint.contains(a)), "equipment renderer mismatch")?;
+        let mut icons = Vec::new();
+        for callee in paint.into_iter().collect::<BTreeSet<_>>() {
+            let calls = internal(arm.calls(callee)?);
+            if let [icon_style, width, y, height] = calls[..] {
+                if icon_style == style {
+                    icons.push((width, y, height));
+                }
+            }
+        }
+        let (width, y, height) = unique(icons, "equipment image drawing")?;
+        for (name, value) in [
+            ("native_config_invalidate", invalidate),
+            ("native_config_layout", unique(arm.tails(wrapper)?, "layout implementation")?),
+            ("native_image_load", load),
+            ("native_style", style),
+            ("native_config_y", y),
+            ("native_config_draw", text_draw),
+            ("native_image_width", width),
+            ("native_image_height", height),
+            ("native_scroll_draw", scroll),
+        ] {
             api.insert(name.into(), value);
         }
-        (0x1843d8, None)
+        (wrapper, None)
     } else {
-        let ec = arm.calls(enter)?;
-        let mut dc = arm.calls(draw)?;
         // A build may keep the draw's visibility guard in a wrapper around the
         // drawing itself: the wrapper calls the guard, then the body, whose calls
         // follow the guard's in a build that draws in one function.
         if let [guard, body] = dc[..] {
             let mut calls = vec![guard];
-            calls.extend(arm.calls(body)?);
+            calls.extend(internal(arm.calls(body)?));
             (draw, dc) = (body, calls);
         }
-        require([4, 5].contains(&ec.len()) && [10, 11].contains(&dc.len()), "Legal Info lifecycle call shape changed")?;
-        api.insert("native_config_invalidate".into(), ec[3]);
+        let [helper, invalidate] = ec[..] else { return device("unknown Legal Info image layout calls") };
+        require(dc.len() == 10, "Legal Info image draw call shape changed")?;
+        api.insert("native_config_invalidate".into(), invalidate);
         let wrapper = unique(arm.tails(enter)?, "layout wrapper")?;
         api.insert("native_config_layout".into(), unique(arm.tails(wrapper)?, "layout implementation")?);
-        let image_calls = arm.calls(ec[2])?;
-        require([3, 4].contains(&image_calls.len()), "image helper call shape changed")?;
+        let load = image_loader(&arm, helper, get_value, &imported_at)?;
         require(dc[1] == dc[5] && dc[1] == dc[7], "renderer style calls disagree")?;
         for (name, value) in [
-            ("native_image_load", image_calls[1]),
+            ("native_image_load", load),
             ("native_style", dc[1]),
             ("native_config_y", dc[4]),
             ("native_config_draw", dc[6]),
@@ -799,15 +874,8 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         ] {
             api.insert(name.into(), value);
         }
-        let code = arm.code(dc[8], Some(64))?;
-        let mut heights = Vec::new();
-        for (i, ins) in code.iter().enumerate() {
-            if ins.name == "ldr" && ins.text == "r0, [r0, #8]" {
-                heights.push(if i > 0 && code[i - 1].text == "ip, sp" { code[i - 1].address } else { ins.address });
-            }
-        }
-        api.insert("native_image_height".into(), unique(heights, "image height getter")?);
-        (wrapper, Some(ec[2]))
+        api.insert("native_image_height".into(), image_height(&arm, dc[8])?);
+        (wrapper, Some(helper))
     };
     let event = elf.read(lv + 0x14)?;
     let legacy = arm.code(event, None)?[0].name != "b";
@@ -845,10 +913,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     if let Some(helper) = image_helper {
         anchors.insert("image_helper".into(), helper);
     }
-    let known: serde_json::Value =
-        serde_json::from_str(include_str!("abi_shapes.json")).map_err(|e| crate::Error::Device(e.to_string()))?;
-    // Screen port additions: real activity notification and periodic refresh.
-    activity(&elf, &arm, &imports, &known, &mut api, &mut layout)?;
+    activity(&elf, &arm, &imports, false, &mut api, &mut layout)?;
     for (name, symbol) in [
         (
             "native_send_timeout",
@@ -924,10 +989,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         "vtable larger than the payload holds",
     )?;
     roles(&arm, &api, &anchors)?;
-    // Every native of the build's own code: its shape names the build, and
-    // the library calls it makes are the evidence an unreviewed build is
-    // patched on. The view's event handler differs by build, so its calls
-    // are no evidence; the dispatch it owns is checked by its shape.
+    // Report fingerprints for inspection. Import evidence also validates native roles.
     let by_address: BTreeMap<u32, String> = imports.iter().map(|(k, v)| (*v, k.clone())).collect();
     let mut fingerprints = BTreeMap::new();
     let mut evidence = BTreeMap::new();
@@ -944,39 +1006,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
             evidence.insert(name.clone(), arm.imports_called(address, &by_address)?.into_iter().collect::<Vec<_>>());
         }
     }
-    let layout_value = serde_json::to_value(&layout).unwrap();
-    let fingerprint_value = serde_json::to_value(&fingerprints).unwrap();
-    let variants =
-        known["variants"].as_array().ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
-    let variant = variants
-        .iter()
-        .find(|v| v["layout"] == layout_value && v["functions"] == fingerprint_value)
-        .and_then(|v| v["label"].as_str())
-        .map(str::to_owned);
-    let mut matches = BTreeMap::new();
-    for v in variants {
-        let label = v["label"].as_str().unwrap_or_default().to_owned();
-        let count = evidence.iter().filter(|(name, calls)| v["imports"][name] == serde_json::json!(calls)).count();
-        matches.insert(label, count);
-    }
-    let unmatched: Vec<_> = evidence
-        .iter()
-        .filter(|(name, calls)| !variants.iter().any(|v| v["imports"][name.as_str()] == serde_json::json!(calls)))
-        .map(|(name, calls)| {
-            format!("{name} calls {}", if calls.is_empty() { "nothing".to_owned() } else { calls.join(", ") })
-        })
-        .collect();
-    let objection = (!unmatched.is_empty())
-        .then(|| format!("no reviewed build's native makes these library calls: {}", unmatched.join("; ")));
-    let validation = match &variant {
-        Some(label) => format!("instruction shapes of the reviewed {label} build; guest acceptance required"),
-        None => {
-            let (label, count) =
-                matches.iter().max_by_key(|(_, n)| **n).map(|(l, n)| (l.as_str(), *n)).unwrap_or(("none", 0));
-            format!("unreviewed build: structurally consistent, {count} of {} natives' library calls as the reviewed {label} build; \
-                     no reviewed instruction shapes", evidence.len())
-        }
-    };
+    let objection = missing_role_imports(&evidence);
     let found = Discovery {
         factory: account,
         native_api: api,
@@ -984,15 +1014,55 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         anchors,
         fingerprints,
         evidence,
-        matches,
-        variant,
         stock_sha256: sha256_hex(data),
-        validation,
         framebuffer,
         dial,
     };
     Ok((found, objection))
 }
+/// Independent anchors for the roles that call into shared libraries. Other
+/// imports may vary with inlining, logging, exception cleanup and refcounts.
+fn missing_role_imports(evidence: &BTreeMap<String, Vec<String>>) -> Option<String> {
+    let mut missing = Vec::new();
+    for (name, required) in [
+        ("account_factory", &["_Znwj"][..]),
+        ("layer_factory", &["_Znwj"]),
+        ("screen_factory", &["_Znwj"]),
+        ("screen_composition", &["__dynamic_cast"]),
+        ("native_screen_ctor", &["_ZN7nlArrayC2Ev", "_ZN8nlStringC1Ev"]),
+        ("native_layer_lookup", &["PL_HashTableLookupConst"]),
+        ("native_attach", &["_Znwj"]),
+        ("native_image_load", &["_ZN8nlStringC1EPKc", "_ZN8nlStringD1Ev"]),
+        ("generic_event", &["_ZNK7nlEvent7GetTypeEv"]),
+        ("native_layer_event", &["_ZNK7nlEvent7GetTypeEv", "_ZNK7nlEvent8GetValueEv"]),
+        ("screen_title", &["_ZN8nlString18GetLocalizedStringEPKcS1_", "_ZN8nlStringaSERKS_"]),
+        ("native_rebuild_title", &["_ZN13nlStringArray5ClearEv", "_ZN8nlString6AppendEPKc"]),
+        ("native_device_commit", &["_ZN10nlSettings5WriteEv"]),
+        ("native_shared_commit", &["_ZN8nlStringC1ERKS_", "_ZN8nlString5ClearEv"]),
+        ("native_schedule_commit", &["_ZNK8nlString6EqualsEPKc6nlBOOL", "_ZNK8nlString7IsEmptyEv"]),
+    ] {
+        for &symbol in required {
+            if !evidence.get(name).is_some_and(|calls| calls.iter().any(|s| s == symbol)) {
+                missing.push(format!("{name} requires {symbol}"));
+            }
+        }
+    }
+    // These accessors only read fields or dispatch through the object's vtable.
+    for name in [
+        "native_activity_client",
+        "native_image_width",
+        "native_image_height",
+        "native_menu_hidden",
+        "native_menu_scale",
+        "native_style",
+    ] {
+        if evidence.get(name).is_some_and(|calls| !calls.is_empty()) {
+            missing.push(format!("{name} calls an unexpected library function"));
+        }
+    }
+    (!missing.is_empty()).then(|| missing.join(", "))
+}
+
 /// What the screen asks of natives found by position, checked on the
 /// natives' own instructions: the loads, stores and calls the screen's use
 /// of each one assumes, which a recompile keeps and a wrong slot does not.
@@ -1091,7 +1161,7 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
 }
 /// The first virtual slot of the primary vtable of the class whose RTTI
 /// name (as mangled, length first) is `name`.
-fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
+pub(super) fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
     let refs = |value: u32| -> Result<Vec<u32>> {
         let mut result = Vec::new();
         for s in elf.sections.iter().filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0) {
@@ -1127,7 +1197,7 @@ fn primary_vtable(elf: &Elf, name: &str) -> Result<u32> {
 }
 /// A PIE's vtable slot holds an address the loader biases: one the patch
 /// rewrites must have its R_ARM_RELATIVE relocation.
-fn relocated(elf: &Elf, slot: u32, what: &str) -> Result<()> {
+pub(super) fn relocated(elf: &Elf, slot: u32, what: &str) -> Result<()> {
     if half(elf.data, 16)? != 3 {
         return Ok(());
     }
@@ -1284,7 +1354,7 @@ fn activity(
     elf: &Elf,
     arm: &Arm,
     imports: &BTreeMap<String, u32>,
-    known: &serde_json::Value,
+    compact: bool,
     api: &mut BTreeMap<String, u32>,
     layout: &mut BTreeMap<String, u32>,
 ) -> Result<()> {
@@ -1298,6 +1368,7 @@ fn activity(
             *imports.get(symbol).ok_or_else(|| crate::Error::Device(format!("missing activity import {symbol}")))?,
         );
     }
+    let globals_field = if compact { ", #0x68]" } else { ", #0x70]" };
     let mut candidates = Vec::new();
     for s in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
         for off in (s.offset + 64..(s.offset + s.size).saturating_sub(32)).step_by(4) {
@@ -1327,7 +1398,7 @@ fn activity(
             // from whichever register the build keeps the client in.
             let Some(client) = c[j - 3..j - 1].iter().find_map(|i| {
                 (i.name == "ldr")
-                    .then(|| i.text.strip_prefix("r0, [")?.strip_suffix(", #0x70]"))
+                    .then(|| i.text.strip_prefix("r0, [")?.strip_suffix(globals_field))
                     .flatten()
                     .filter(|r| !matches!(*r, "sp" | "pc"))
             }) else {
@@ -1347,67 +1418,149 @@ fn activity(
     let (mark, queue) = unique(candidates, "client user-activity notification")?;
     api.insert("native_mark_activity".into(), mark);
     layout.insert("ACTIVITY_QUEUE_OFFSET".into(), queue);
-    fn refs(elf: &Elf, value: u32) -> Result<Vec<u32>> {
-        let mut found = Vec::new();
-        for s in elf.sections.iter().filter(|s| s.address != 0 && s.kind != 8 && s.flags & 4 == 0) {
-            for off in (s.offset..s.offset + s.size.saturating_sub(3)).step_by(4) {
-                if word(elf.data, off)? == value {
-                    found.push(s.address + (off - s.offset) as u32);
+    let getter = activity_client(elf, arm, if compact { 0x68 } else { 0x70 }, queue)?;
+    api.insert("native_activity_client".into(), getter);
+    Ok(())
+}
+/// The client is passed to the globals initializer as its third stack
+/// argument. Follow that argument from the initializer's prologue to its field.
+fn client_argument_field(arm: &Arm, initializer: u32) -> Result<u32> {
+    let mut stack = BTreeMap::from([("sp", 0i32)]);
+    let mut objects = BTreeSet::from(["r0"]);
+    let mut clients = BTreeSet::new();
+    let mut fields = Vec::new();
+    let code = arm.code(initializer, Some(128))?;
+    for ins in &code {
+        let ops = &ins.ops;
+        if matches!(ins.name.as_str(), "bl" | "blx" | "b") {
+            break;
+        }
+        if ins.name == "str" {
+            if let (Some(source), Some((base, offset, false))) = (ops[0].reg(), ops[1].mem()) {
+                if objects.contains(base) && clients.contains(source) && offset > 0 {
+                    fields.push(offset as u32);
                 }
             }
         }
-        Ok(found)
-    }
-    let needle = b"15nlClientGlobals\0";
-    let off = elf
-        .data
-        .windows(needle.len())
-        .position(|v| v == needle)
-        .ok_or_else(|| crate::Error::Device("missing client globals RTTI".into()))?;
-    let name = unique(
-        elf.sections
-            .iter()
-            .filter(|s| s.address != 0 && s.offset <= off && off < s.offset + s.size)
-            .map(|s| s.address + (off - s.offset) as u32),
-        "globals RTTI name",
-    )?;
-    let mut vtables = Vec::new();
-    for r in refs(elf, name)? {
-        for p in refs(elf, r - 4)? {
-            if elf.read(p - 4)? == 0 {
-                vtables.push(p + 4);
+        let mut next_stack = None;
+        let mut next_object = false;
+        let mut next_client = false;
+        let dest = ops.first().and_then(Op::reg);
+        match ins.name.as_str() {
+            "push" | "vpush" => {
+                let width = if ins.name == "vpush" { 8 } else { 4 };
+                if let Some(&offset) = stack.get("sp") {
+                    stack.insert("sp", offset - width * ops.len() as i32);
+                }
+                continue;
+            }
+            "mov" => {
+                if let Some(source) = ops.get(1).and_then(Op::reg) {
+                    next_stack = stack.get(source).copied();
+                    next_object = objects.contains(source);
+                    next_client = clients.contains(source);
+                }
+            }
+            "add" | "sub" => {
+                if let (Some(source), Some(delta)) = (ops[1].reg(), ops[2].imm()) {
+                    next_stack =
+                        stack.get(source).map(|n| if ins.name == "add" { n + delta as i32 } else { n - delta as i32 });
+                }
+            }
+            "ldr" => {
+                if let Some((base, offset, false)) = ops[1].mem() {
+                    next_client = stack.get(base).is_some_and(|n| n + offset == 8);
+                }
+            }
+            "ldm" => {
+                let base = dest.and_then(|r| stack.get(r)).copied();
+                for (index, reg) in ops[1..].iter().filter_map(Op::reg).enumerate() {
+                    stack.remove(reg);
+                    objects.remove(reg);
+                    clients.remove(reg);
+                    if base.is_some_and(|offset| offset + index as i32 * 4 == 8) {
+                        clients.insert(reg);
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        for register in &ins.writes {
+            stack.remove(register.as_str());
+            objects.remove(register.as_str());
+            clients.remove(register.as_str());
+        }
+        if let Some(dest) = dest {
+            if let Some(offset) = next_stack {
+                stack.insert(dest, offset);
+            }
+            if next_object {
+                objects.insert(dest);
+            }
+            if next_client {
+                clients.insert(dest);
             }
         }
     }
-    let vtable = unique(vtables, "globals primary vtable")?;
-    let mark_shape = arm.fingerprint(mark)?;
-    let mut getters = Vec::new();
-    for slot in [0x10, 0x18, 0x20] {
-        let getter = elf.read(vtable + slot)?;
-        let shapes = serde_json::json!({"mark": mark_shape, "client": arm.fingerprint(getter)?});
-        if known["activity_variants"].as_array().is_some_and(|v| v.contains(&shapes)) {
-            getters.push(getter);
+    unique(fields, "globals initializer client argument")
+}
+
+/// Find the globals constructor by its RTTI vtable, then its caller which
+/// stores the new globals on the client and passes the client and queue to
+/// the initializer. The initializer identifies the client pointer getter.
+fn activity_client(elf: &Elf, arm: &Arm, globals_field: i32, queue: u32) -> Result<u32> {
+    let vtable = primary_vtable(elf, "15nlClientGlobals")?;
+    let words = Words::new(elf);
+    let constructors: BTreeSet<_> = [vtable, vtable - 8]
+        .into_iter()
+        .flat_map(|address| references(elf, &words, address))
+        .filter_map(|index| arm.enclosing(words.at(index).0))
+        .collect();
+    let mut fields = Vec::new();
+    for (site, word) in words.iter() {
+        if !branch_target(site, word, true).is_some_and(|target| constructors.contains(&target)) {
+            continue;
+        }
+        let code = arm.code(site + 4, Some(80))?;
+        let Some(call) = code.iter().position(|i| i.name == "bl") else { continue };
+        let args = &code[..call];
+        let Some((global, client)) = args.iter().find_map(|i| {
+            if i.name != "str" {
+                return None;
+            }
+            let (base, offset, false) = i.ops[1].mem()? else { return None };
+            (offset == globals_field).then_some((i.ops[0].reg()?, base))
+        }) else {
+            continue;
+        };
+        if !args.iter().any(|i| i.name == "mov" && i.ops[0].reg() == Some("r0") && i.ops[1].reg() == Some(global))
+            || !args.iter().any(|i| i.name == "ldr" && i.ops[1].mem() == Some((client, queue as i32, false)))
+            || !args.iter().any(|i| {
+                i.name == "str"
+                    && i.ops[1].mem() == Some(("sp", 8, false))
+                    && (globals_field == 0x68 || i.ops[0].reg() == Some(client))
+            })
+        {
+            continue;
+        }
+        if let Ok(field) = client_argument_field(arm, code[call].ops[0].imm().unwrap()) {
+            fields.push(field);
         }
     }
-    // The client accessor's slot differs by build (0x18 on the gen 3, 0x20
-    // on its 6.0-6, whose globals' vtable starts with two more methods, 0x10
-    // on the gen 2) and all hold plain getters, so a build no
-    // reviewed shapes name gets the gen 3's: the screen checks the client's
-    // back-pointer before using it, so a wrong slot costs the display wake,
-    // not a crash.
-    if getters.is_empty() {
-        getters.push(elf.read(vtable + 0x18)?);
+    let field = unique(fields, "globals client pointer field")?;
+    let mut getters = Vec::new();
+    for slot in (vtable..).step_by(4) {
+        let Ok(address) = elf.read(slot) else { break };
+        if !elf.text(address) {
+            break;
+        }
+        let Ok(code) = arm.body(address) else { continue };
+        if scalar_field(&code, false) == Some(field) {
+            getters.push(address);
+        }
     }
-    let getter = unique(getters, "validated client globals accessor")?;
-    let code = arm.code(getter, Some(20))?;
-    require(
-        code.len() >= 2
-            && code[..2].iter().filter(|i| i.name == "ldr" && i.text.starts_with("r0, [r0, #")).count() == 1
-            && (code[1].name == "bx" || code[0].text == "ip, sp"),
-        "unknown client accessor ABI",
-    )?;
-    api.insert("native_activity_client".into(), getter);
-    Ok(())
+    unique(getters, "client globals accessor")
 }
 fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
     let ctor =
@@ -1432,7 +1585,10 @@ fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
                 continue;
             };
             let code = &code[..index];
-            if code.iter().any(|i| !matches!(i.name.as_str(), "ldr" | "str" | "mov" | "cmp" | "beq")) {
+            if code
+                .iter()
+                .any(|i| !matches!(i.name.as_str(), "ldr" | "str" | "mov" | "cmp" | "beq") && i.word != 0x12811004)
+            {
                 continue;
             }
             let saves: Vec<_> = code.iter().filter(|i| i.name == "str" && i.ops[1].mem().is_some()).collect();
@@ -1469,7 +1625,7 @@ mod tests {
     use super::*;
 
     /// A private nlclient sample, when this checkout has one (see
-    /// tests/nlclient_golden.rs).
+    /// tests/nlclient_firmware.rs).
     fn sample(name: &str) -> Option<Vec<u8>> {
         let dir = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
             .map(std::path::PathBuf::from)
@@ -1498,8 +1654,12 @@ mod tests {
             eprintln!("No private Onyx nlclient sample");
             return;
         };
-        let found = brightness(&Elf::parse(&data).unwrap()).expect("Onyx's brightness manager");
+        let elf = Elf::parse(&data).unwrap();
+        let found = brightness(&elf).expect("Onyx's brightness manager");
         assert_eq!((found.globals, found.mode, found.high), (0x4b4, 8, 28));
-        assert_eq!((found.set, found.apply), (0x233830, 0x233dbc));
+        assert!(elf.text(found.set) && elf.text(found.apply));
+        assert_ne!(found.set, found.apply);
+        let accessor = Arm::new(&elf).unwrap().body(found.accessor).unwrap();
+        assert!(accessor.iter().any(|i| i.word == 0xe5900000 | found.globals));
     }
 }

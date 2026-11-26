@@ -207,7 +207,6 @@ static const struct {
     {"mode_slot", &mode_slot},
     {"off_slot", &off_slot},
     {"eco_slot", &eco_slot},
-    {"dial_size", &dial_size},
     {"software", &software},
 };
 
@@ -1159,12 +1158,14 @@ static int load_marker(void) {
     if (!image)
         return 0;
     uint32_t *pixels = PTR(image, IMAGE_PIXELS);
-    if (software && (WORD(image, IMAGE_WIDTH) != dial_size || WORD(image, IMAGE_HEIGHT) != dial_size || !pixels ||
-                     pixels[0] != MARKER_PIXEL || pixels[dial_size * dial_size - 1] != MARKER_PIXEL)) {
+    uint32_t size = WORD(image, IMAGE_WIDTH);
+    if (!size || size > INT_MAX || size != WORD(image, IMAGE_HEIGHT) || size > SIZE_MAX / sizeof(*pixels) / size ||
+        (software && (!pixels || pixels[0] != MARKER_PIXEL || pixels[size * size - 1] != MARKER_PIXEL))) {
         fprintf(stderr, "theme: the marker's pixels are not nlclient's image's\n");
         fail();
         return 0;
     }
+    dial_size = size;
     theme_image = image;
     theme_pixels = pixels;
     return 1;

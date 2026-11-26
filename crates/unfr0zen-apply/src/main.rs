@@ -2,6 +2,7 @@
 //! volume mounted at ROOT, with a run's options.json.
 //!
 //!     unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--remove-bundle]
+//!     unfr0zen-apply check-nlclient OBJECT_DIR STOCK
 //!     unfr0zen-apply update BUNDLE
 //!
 //! The bundle's pre-setup script runs first, then the setup, then (unless

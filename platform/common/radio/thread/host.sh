@@ -19,7 +19,7 @@ cmake -S platform/common/radio/thread/host -B "$OT_HOST_BUILD/sleep" -GNinja \
     -DOT_POSIX_RCP_HDLC_BUS=ON -DOT_PLATFORM_NETIF=ON \
     -DOT_SRP_CLIENT=ON -DOT_ECDSA=ON -DOT_THREAD_VERSION=1.3 \
     -DOT_LOG_LEVEL=INFO -DOT_LOG_LEVEL_DYNAMIC=ON
-cmake --build "$OT_HOST_BUILD/sleep" --target ot-daemon ot-ctl -j8
+cmake --build "$OT_HOST_BUILD/sleep" --target ot-daemon ot-ctl -j "${JOBS:-8}"
 for name in ot-daemon ot-ctl; do
     arm-none-eabi-strip -o "build/thread/$name" "$OT_HOST_BUILD/sleep/openthread/src/posix/$name"
 done

@@ -335,9 +335,7 @@ pub(crate) fn stored_pki(directory: &Path) -> Result<Pki> {
 }
 
 /// Links the settings screen against the unit's stock nlclient, keeping
-/// what was discovered in the run directory as nlclient.json. A build no
-/// reviewed variant names, or one the link fails on, is a sample a review
-/// needs, and the run has read it: its stock executable goes there too.
+/// its discovery report in the run directory and the stock binary on failure.
 pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8], &[nlclient::menu::Section]) -> Result<Vec<u8>> + '_ {
     move |source, sections| {
         log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens in memory");
@@ -347,12 +345,7 @@ pub(crate) fn screen_builder(run_dir: &Path) -> impl Fn(&[u8], &[nlclient::menu:
             Ok(built) => {
                 fs::write(run_dir.join("nlclient.json"), format!("{:#}\n", built.manifest))?;
                 let status = built.manifest["status"].as_str().unwrap_or_default();
-                if built.manifest["reviewed"] == false {
-                    fs::write(&path, source)?;
-                    log::info!("nlclient: {status}; its stock executable is saved as {}", path.display());
-                } else {
-                    log::info!("nlclient: {status}");
-                }
+                log::info!("nlclient: {status}");
                 Ok(built.journal)
             }
             Err(error) => Err(match fs::write(&path, source) {

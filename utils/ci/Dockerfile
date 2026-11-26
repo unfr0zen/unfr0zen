@@ -32,7 +32,7 @@ FROM rust:1-trixie
 ARG TARGETARCH
 RUN for arch in amd64 arm64 riscv64; do [ "$arch" = "$TARGETARCH" ] || dpkg --add-architecture $arch; done \
     && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs git pkg-config bc bison flex libssl-dev \
+    && apt-get install -y --no-install-recommends nodejs git git-lfs pkg-config bc bison flex libssl-dev \
         gcc-arm-none-eabi binutils-arm-none-eabi python3-pil python3-pip python3-pytest zstd zip \
         libudev-dev:amd64 libudev-dev:arm64 libudev-dev:riscv64 gcc-mingw-w64-x86-64 llvm \
         clang cmake ninja-build libnewlib-arm-none-eabi libstdc++-arm-none-eabi-dev \

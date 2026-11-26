@@ -1,5 +1,4 @@
-/* Independent assembler reference for the Rust emitter. Link at the golden's
- * entry address; native symbols are absolute bindings from the reviewed ELF. */
+/* Relocatable ARM reference for the external-temperature emitter. */
 .syntax unified
 .arm
 .text

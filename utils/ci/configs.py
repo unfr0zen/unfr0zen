@@ -271,6 +271,9 @@ def render(configs, directory=RENDERED, fork=False, cached=()):
                 entries,
                 flags=re.MULTILINE,
             )
+        if fork:
+            # Only trusted jobs can fetch the private firmware corpus.
+            entries = re.sub(r"^      - apply-reference:\n(?:          [^\n]+\n)+", "", entries, flags=re.MULTILINE)
         text = jobs + workflows + entries
         if fork:
             text = re.sub(r"^( *)context: docker-hub$", r"\1context: []", text, flags=re.MULTILINE)
@@ -352,6 +355,10 @@ def validate():
             capture_output=True,
             text=True,
         ).stdout
+        reference_job = re.search(r"^\s+- apply-reference:\s*$", merged, re.MULTILINE)
+        if bool(reference_job) != (not fork and bool(parameters.get("app") or parameters.get("release"))):
+            failed = True
+            print("FAILED: unexpected apply-reference workflow selection")
         with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as f:
             f.write(merged)
         values = {**{name: True for name in parameters}, "image": IMAGE + ":000000000000"}

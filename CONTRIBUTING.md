@@ -103,7 +103,7 @@ pre-commit run --all-files
   `crates/unfr0zen-core/tests/`.
 - A change to a binary patch follows
   [platform/common/nlclient/tests/README.md](platform/common/nlclient/tests/README.md);
-  its strict golden tests need private firmware samples.
+  its strict patch tests need private firmware samples.
 
 ### On a thermostat
 

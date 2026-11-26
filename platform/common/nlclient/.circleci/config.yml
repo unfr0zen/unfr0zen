@@ -24,3 +24,64 @@ jobs:
             /tmp/custom-flow-test
             clang -std=c11 -Wall -Wextra -Werror platform/common/nlclient/tests/rcs_screen_test.c -o /tmp/rcs-screen-test
             /tmp/rcs-screen-test
+
+  # The private corpus follows reference-images/main independently of this
+  # repository, so this check runs even when its build inputs are cached.
+  apply-reference:
+    executor: build-large
+    steps:
+      - checkout
+      - cargo-registry-restore
+      - cargo-target-restore:
+          cache: apply-reference
+      - run:
+          name: Build the native setup engine and screen objects
+          command: |
+            cargo build --release --locked -p unfr0zen-apply
+            sh platform/common/nlclient/build.sh build
+      - run:
+          name: Fetch the private nlclient executables
+          command: |
+            : "${REFERENCE_IMAGES_TOKEN:?reference-images requires read-only Contents access}"
+            mkdir -p .work
+            askpass=$(mktemp)
+            trap 'rm -f "$askpass"' EXIT
+            cat > "$askpass" \<<'SH'
+            #!/bin/sh
+            case "$1" in
+              *Username*) echo x-access-token ;;
+              *Password*) printf '%s\n' "$REFERENCE_IMAGES_TOKEN" ;;
+              *) exit 1 ;;
+            esac
+            SH
+            chmod 700 "$askpass"
+            export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 GIT_LFS_SKIP_SMUDGE=1
+            # CircleCI's checkout rewrites GitHub HTTPS URLs to use its SSH key.
+            # The private corpus uses its own read-only HTTPS credential.
+            export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+            repo=https://github.com/unfr0zen/reference-images.git
+            test "$(git ls-remote --get-url "$repo")" = "$repo"
+            git clone --branch main --depth 1 --filter=blob:none --no-checkout "$repo" .work/reference-images
+            cd .work/reference-images
+            git lfs install --local
+            git sparse-checkout set nlclient-goldens/firmware
+            git checkout --quiet HEAD
+            git lfs pull --include='nlclient-goldens/firmware/**'
+            git rev-parse HEAD
+      - run:
+          name: Check every reference executable in parallel
+          command: |
+            cd .work/reference-images
+            git ls-files -z -- nlclient-goldens/firmware/ > ../nlclient-samples
+            test -s ../nlclient-samples || { echo "No tracked reference executables" >&2; exit 1; }
+            xargs -0 -n 1 -P "$JOBS" ../../target/release/unfr0zen-apply check-nlclient ../../build < ../nlclient-samples
+      - run:
+          name: Verify linked payloads, native bindings and optional patches
+          command: |
+            export NLCLIENT_FIRMWARE_DIR="$PWD/.work/reference-images/nlclient-goldens/firmware" NLCLIENT_REQUIRE_FIRMWARE=1
+            export NLCLIENT_REFERENCE_LLD="$(rustc --print target-libdir)/../bin/gcc-ld/ld.lld"
+            cargo test --release --locked -p unfr0zen-core --lib nlclient::
+            cargo test --release --locked -p unfr0zen-core --test nlclient_firmware --test legacy_nlclient --test j49_dark_theme
+      - cargo-registry-store
+      - cargo-target-store:
+          cache: apply-reference

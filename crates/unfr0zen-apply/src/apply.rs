@@ -34,16 +34,27 @@ pub fn main() {
     STARTED.get_or_init(std::time::Instant::now);
     let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(error) = dispatch(&args) {
+        eprintln!("unfr0zen-apply: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn dispatch(args: &[String]) -> Result<()> {
+    if args.first().is_some_and(|arg| arg == "check-nlclient") {
+        let [_, objects, stock] = args else {
+            eprintln!("usage: unfr0zen-apply check-nlclient OBJECT_DIR STOCK");
+            std::process::exit(2);
+        };
+        return check_nlclient(Path::new(objects), Path::new(stock)).map_err(|e| failure(format!("{stock}: {e}")));
+    }
     let flag = |name: &str| args.iter().any(|a| a == name);
     let (dry_run, live, remove_bundle) = (flag("--dry-run"), flag("--live"), flag("--remove-bundle"));
     let paths: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("--")).collect();
     if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--entropy=")) {
-        if let Err(error) = credit_entropy(Path::new(path)) {
-            eprintln!("unfr0zen-apply: {path}: {error}");
-            std::process::exit(1);
-        }
+        credit_entropy(Path::new(path)).map_err(|e| failure(format!("{path}: {e}")))?;
     }
-    let result = match paths[..] {
+    match paths[..] {
         ["update", bundle] => update(Path::new(bundle)),
         [bundle, options, root, out] => {
             let generation = args.iter().find_map(|a| a.strip_prefix("--device="));
@@ -53,15 +64,10 @@ pub fn main() {
         _ => {
             eprintln!(
                 "usage: unfr0zen-apply BUNDLE OPTIONS ROOT OUT [--dry-run] [--live] [--remove-bundle] [--device=NAME] \
-                       [--entropy=FILE] \
-                       | update BUNDLE"
+                       [--entropy=FILE] | update BUNDLE | check-nlclient OBJECT_DIR STOCK"
             );
             std::process::exit(2);
         }
-    };
-    if let Err(error) = result {
-        eprintln!("unfr0zen-apply: {error}");
-        std::process::exit(1);
     }
 }
 
@@ -104,6 +110,49 @@ fn device(name: &str) -> Result<Device> {
         "diamond" => Ok(Device::Diamond),
         other => Err(failure(format!("the bundle is for a {other}, which unfr0zen-apply does not set up"))),
     }
+}
+
+fn link_screen(
+    source: &[u8],
+    modern: &[u8],
+    compact: Option<&[u8]>,
+    sections: &[nlclient::menu::Section],
+) -> Result<nlclient::builder::Built> {
+    let object = if nlclient::legacy_abi(source) {
+        compact.ok_or_else(|| failure(format!("bundle: no {}", bundle::SCREEN_LEGACY)))?
+    } else {
+        modern
+    };
+    nlclient::builder::build(source, object, sections)
+}
+
+/// Exercise the device builder and journal on a single stock executable.
+fn check_nlclient(objects: &Path, stock: &Path) -> Result<()> {
+    use nlclient::menu::Section;
+    let source = fs::read(stock)?;
+    let compact = nlclient::legacy_abi(&source);
+    let modern = fs::read(objects.join("custom-screen.o"))?;
+    let legacy = compact.then(|| fs::read(objects.join("custom-screen-legacy.o"))).transpose()?;
+    let mut checked = 0;
+    for mask in 0..1 << Section::ALL.len() {
+        let sections: Vec<_> =
+            Section::ALL.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, s)| *s).collect();
+        if compact && (sections.contains(&Section::Themes) || sections.len() > Section::LEGACY.len()) {
+            continue;
+        }
+        let built = link_screen(&source, &modern, legacy.as_deref(), &sections)
+            .map_err(|e| failure(format!("{sections:?}: {e}")))?;
+        let patch = nlclient::Patch::parse(&built.journal)?;
+        if built.output == source
+            || patch.apply(&source, false)? != built.output
+            || patch.apply_owned(built.output, true)? != source
+        {
+            return Err(failure(format!("{sections:?}: patch or undo differs")));
+        }
+        checked += 1;
+    }
+    println!("{}: {checked} settings configurations passed", stock.display());
+    Ok(())
 }
 
 /// Runs one of the bundle's scripts from OUT, with the run's details in its environment.
@@ -324,14 +373,9 @@ fn run(
     let build_screen = |source: &[u8], sections: &[nlclient::menu::Section]| -> Result<Vec<u8>> {
         log::info!("Discovering nlclient ABI and linking unfr0zen's settings screens");
         let stock = out.join("nlclient.stock");
-        let object = if nlclient::legacy_abi(source) {
-            screen_legacy.as_deref().ok_or_else(|| failure(format!("bundle: no {}", bundle::SCREEN_LEGACY)))?
-        } else {
-            &screen
-        };
-        match nlclient::builder::build(source, object, sections) {
+        match link_screen(source, &screen, screen_legacy.as_deref(), sections) {
             Ok(built) => {
-                if built.manifest["reviewed"] == false || (themes && !nlclient::theme::supported(source)) {
+                if themes && !nlclient::theme::supported(source) {
                     fs::write(&stock, source)?;
                 }
                 log::info!("nlclient: {}", built.manifest["status"].as_str().unwrap_or_default());

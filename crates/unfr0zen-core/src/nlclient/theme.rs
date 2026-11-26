@@ -1,13 +1,17 @@
 //! The bindings of the theme preload (platform/common/theme), which draws
 //! customizable home screen themes in nlclient, in its GPU context or on the
 //! CPU: where, in the unit's stock nlclient, the dial, its figures, the background layer
-//! and the natives the preload calls are. Discovery finds the dial and the
-//! natives in any build; the rest comes from the builds reviewed by hand.
+//! and the natives the preload calls are. The stock figures and temperature
+//! screen expose the control model through their virtual calls.
 //! The setup writes them to BINDINGS as `name value` lines (hexadecimal
 //! addresses relative to the executable's load base, or field offsets), and
 //! the preload hooks nothing unless the vtable slots hold what they name.
 
-use super::discovery;
+use super::{
+    arm::{scalar_field, Arm, Ins, Op},
+    discovery,
+    elf::Elf,
+};
 use crate::shell::sha256_hex;
 use crate::{device, Result};
 
@@ -26,181 +30,6 @@ struct Globals {
     off: u32,
     eco: u32,
 }
-/// 6.x's, the same in every reviewed 6.5-14 and 6.4-8 build and the gen E's 6.3-5.
-const V6_GLOBALS: Globals =
-    Globals { target: 0xa8, fahrenheit: 0xa0, low: 0xf0, high: 0xe8, mode: 0x138, off: 0, eco: 0 };
-
-/// What discovery does not find, from each reviewed build.
-struct Reviewed {
-    stock_sha256: &'static str,
-    /// nlBackgroundLayer's draw: its vtable slot and the stock method (it
-    /// reads its ARGB colour at +0x9c).
-    background_slot: u32,
-    background_draw: u32,
-    /// The brightness manager's accessor and its ambient light sampler,
-    /// read once to seed automatic brightness.
-    brightness_manager: u32,
-    read_als: u32,
-    /// The settings and thermostat views' vtables, and where nlClient's
-    /// globals keep the current view.
-    settings_view: u32,
-    thermostat_view: u32,
-    view_offset: u32,
-    /// The slider's displayed ambient temperature and the controller's
-    /// humidity (16.16), and the globals' vtable slot for the leaf.
-    current_temperature: u32,
-    current_humidity: u32,
-    leaf_slot: u32,
-    globals: Globals,
-    /// The dial's size in pixels, and whether nlclient draws on the CPU
-    /// (into the framebuffer) rather than in GLES2.
-    dial_size: u32,
-    software: bool,
-}
-
-const REVIEWED: &[Reviewed] = &[
-    // 6.4-8
-    Reviewed {
-        stock_sha256: "d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52",
-        background_slot: 0x6e1a08,
-        background_draw: 0x21dbec,
-        brightness_manager: 0xab388,
-        read_als: 0x2282a4,
-        settings_view: 0x6d6bc8,
-        thermostat_view: 0x6d9bb8,
-        view_offset: 0x1b8,
-        current_temperature: 0xae050,
-        current_humidity: 0xae068,
-        leaf_slot: 0x34c,
-        globals: V6_GLOBALS,
-        dial_size: 480,
-        software: false,
-    },
-    // 6.5-14
-    Reviewed {
-        stock_sha256: "3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2",
-        background_slot: 0x6bac30,
-        background_draw: 0x236744,
-        brightness_manager: 0xaac68,
-        read_als: 0x240f4c,
-        settings_view: 0x6b0564,
-        thermostat_view: 0x6b3554,
-        view_offset: 0x2f0,
-        current_temperature: 0xad880,
-        current_humidity: 0xad898,
-        leaf_slot: 0x364,
-        globals: V6_GLOBALS,
-        dial_size: 480,
-        software: false,
-    },
-    // 6.5-14's other build, whose client globals hold four bytes more
-    // before the current view.
-    Reviewed {
-        stock_sha256: "ea07f0d31e27ed859e0e1307a7a4de493deaa346fb5b111277beef30d4664611",
-        background_slot: 0x6df6f0,
-        background_draw: 0x2373b0,
-        brightness_manager: 0xaba44,
-        read_als: 0x241f34,
-        settings_view: 0x6d5024,
-        thermostat_view: 0x6d8014,
-        view_offset: 0x2f4,
-        current_temperature: 0xae804,
-        current_humidity: 0xae81c,
-        leaf_slot: 0x364,
-        globals: V6_GLOBALS,
-        dial_size: 480,
-        software: false,
-    },
-    // 6.0-6, whose globals' vtable is 5.9.4-5's with two more methods first.
-    Reviewed {
-        stock_sha256: "5d58299c1219e632a534014e8853d4f1b796c9ae1d42a6f0dc68ee0c88e10c9a",
-        background_slot: 0x48d470,
-        background_draw: 0x19a2b8,
-        brightness_manager: 0x6f814,
-        read_als: 0x1a33e8,
-        settings_view: 0x471988,
-        thermostat_view: 0x47b8e0,
-        view_offset: 0x10c,
-        current_temperature: 0x70af4,
-        current_humidity: 0x70b0c,
-        leaf_slot: 0x30c,
-        globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x114, off: 0xc0, eco: 0x64 },
-        dial_size: 480,
-        software: false,
-    },
-    // The gen E's 6.5-14: the gen 3's 6.5-14 drawn on the CPU, its
-    // globals laid out the same.
-    Reviewed {
-        stock_sha256: "be7410378c46ea13c72d2db6ac71be92c44519b7bfe8a72490c691cef584afb4",
-        background_slot: 0x68d08c,
-        background_draw: 0x2291e8,
-        brightness_manager: 0xaa0fc,
-        read_als: 0x233950,
-        settings_view: 0x6829b8,
-        thermostat_view: 0x6859b0,
-        view_offset: 0x2f0,
-        current_temperature: 0xacd34,
-        current_humidity: 0xacd4c,
-        leaf_slot: 0x364,
-        globals: V6_GLOBALS,
-        dial_size: 320,
-        software: true,
-    },
-    // The gen E's 6.3-5: 6.5-14's globals vtable up to the leaf, which comes
-    // two slots earlier, and its globals' fields 0x120 lower.
-    Reviewed {
-        stock_sha256: "6bdf8634147c4adb4e0ac03dfc7fc8e3313c1c424420eb22f721a0012adaaf25",
-        background_slot: 0x6abe00,
-        background_draw: 0x211ffc,
-        brightness_manager: 0xab1c8,
-        read_als: 0x21c41c,
-        settings_view: 0x6a0fb8,
-        thermostat_view: 0x6a3fb0,
-        view_offset: 0x1d4,
-        current_temperature: 0xaddbc,
-        current_humidity: 0xaddd4,
-        leaf_slot: 0x344,
-        globals: V6_GLOBALS,
-        dial_size: 320,
-        software: true,
-    },
-    // The gen E's 6.1-9, whose globals' vtable has fewer slots before the
-    // setpoints'.
-    Reviewed {
-        stock_sha256: "5da23c395b1ee0b258bc1d8a7a5a76931e778cf25afa8846e81245b38d088ca3",
-        background_slot: 0x4cb260,
-        background_draw: 0x1b005c,
-        brightness_manager: 0x759d8,
-        read_als: 0x1b99e4,
-        settings_view: 0x4a8cd8,
-        thermostat_view: 0x4b4518,
-        view_offset: 0x130,
-        current_temperature: 0x76cf8,
-        current_humidity: 0x76d10,
-        leaf_slot: 0x314,
-        globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x118, off: 0, eco: 0 },
-        dial_size: 320,
-        software: true,
-    },
-    // 5.9.4-5, whose globals' vtable is laid out apart from 6.x's.
-    Reviewed {
-        stock_sha256: "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
-        background_slot: 0x3f5b58,
-        background_draw: 0x17d6d4,
-        brightness_manager: 0x51940,
-        read_als: 0x1831cc,
-        settings_view: 0x3d6908,
-        thermostat_view: 0x3e3270,
-        view_offset: 0x100,
-        current_temperature: 0x55174,
-        current_humidity: 0x5522c,
-        leaf_slot: 0x2f8,
-        globals: Globals { target: 0x84, fahrenheit: 0x7c, low: 0xc8, high: 0xc0, mode: 0x10c, off: 0xb8, eco: 0x5c },
-        dial_size: 320,
-        software: true,
-    },
-];
-
 /// The natives the preload calls, by discovery's names.
 const NATIVES: &[&str] = &[
     "native_activity_client",
@@ -216,22 +45,243 @@ const NATIVES: &[&str] = &[
     "native_new",
 ];
 
-/// Whether `stock` is a build the preload supports.
+/// Whether the stock firmware exposes all the ABI evidence needed by the preload.
 pub fn supported(stock: &[u8]) -> bool {
-    let sha = sha256_hex(stock);
-    REVIEWED.iter().any(|r| r.stock_sha256 == sha)
+    bindings(stock).is_ok()
+}
+
+/// Virtual call sites and their vtable offsets, recovered from the register
+/// supplying the indirect call. A caller may pass arguments between the
+/// method load and the call.
+fn virtual_calls(code: &[Ins]) -> Vec<(usize, u32)> {
+    let mut calls = Vec::new();
+    for (index, ins) in code.iter().enumerate().filter(|(_, i)| i.name == "blx") {
+        let Some(register) = ins.ops[0].reg() else { continue };
+        let Some(load) = code[index.saturating_sub(8)..index]
+            .iter()
+            .rev()
+            .take_while(|i| !matches!(i.name.as_str(), "bl" | "blx"))
+            .find(|i| i.writes.iter().any(|r| r == register))
+        else {
+            continue;
+        };
+        if load.name != "ldr" || ins.address - load.address > 32 {
+            continue;
+        }
+        if let Some((base, slot, false)) = load.ops[1].mem() {
+            if !matches!(base, "sp" | "pc" | "fp") && slot > 0 && slot % 4 == 0 {
+                calls.push((index, slot as u32));
+            }
+        }
+    }
+    calls
+}
+
+/// Globals getters called by the temperature controls. The two delegated
+/// getters read neighbouring fields of the schedule object. The ring's range
+/// constraint compares the high and low setters against its minimum gap.
+fn control_slots(elf: &Elf, arm: &Arm, dial: &discovery::Dial) -> Result<(Globals, u32)> {
+    let vtable = discovery::primary_vtable(elf, "15nlClientGlobals")?;
+    let method = |slot| elf.read(vtable + slot).ok().filter(|&address| elf.text(address));
+    let body = |slot| method(slot).and_then(|address| arm.body(address).ok());
+    let field = |slot| body(slot).and_then(|code| scalar_field(&code, false));
+    let figures = arm.full_code(dial.figures)?;
+    let events = arm.full_code(dial.event)?;
+    let figure_calls = virtual_calls(&figures);
+    let event_calls = virtual_calls(&events);
+    let mut delegates = Vec::new();
+    for &(_, slot) in &figure_calls {
+        let Some(code) = body(slot) else { continue };
+        let Some(last) = code.last().filter(|i| i.name == "b") else { continue };
+        let Some(destination) = last.ops[0].imm() else { continue };
+        let Some(pointer) = code.iter().find_map(|i| {
+            if i.name == "ldr" && i.ops[0].reg() == Some("r0") {
+                let ("r0", offset, false) = i.ops[1].mem()? else { return None };
+                Some(offset)
+            } else {
+                None
+            }
+        }) else {
+            continue;
+        };
+        let Ok(callee) = arm.body(destination) else { continue };
+        let Some(offset) = scalar_field(&callee, false) else { continue };
+        delegates.push((slot, pointer, destination, offset, callee.len() as u32 * 4));
+    }
+    let mut pairs = Vec::new();
+    for &(first, pointer, address, offset, size) in &delegates {
+        for &(second, other_pointer, other_address, other_offset, _) in &delegates {
+            if pointer == other_pointer
+                && address + size == other_address
+                && offset + 4 == other_offset
+                && event_calls.iter().any(|&(_, slot)| slot == first)
+                && event_calls.iter().any(|&(_, slot)| slot == second)
+            {
+                pairs.push((first, second));
+            }
+        }
+    }
+    let (target, mode) = discovery::unique(pairs, "theme schedule target and mode getters")?;
+    let fahrenheit = discovery::unique(
+        figure_calls
+            .windows(2)
+            .filter_map(|call| (call[1].1 == mode && field(call[0].1).is_some()).then_some(call[0].1)),
+        "theme temperature units",
+    )?;
+    let mut highs = Vec::new();
+    let mut lows = Vec::new();
+    for &(index, slot) in &event_calls {
+        if field(slot).is_none() {
+            continue;
+        }
+        let after = &events[index + 1..(index + 6).min(events.len())];
+        let Some(compare) = after.iter().position(|i| i.name == "cmp" && i.ops[1].imm() == Some(0x18000)) else {
+            continue;
+        };
+        let Some(subtract) = after[..compare]
+            .iter()
+            .rev()
+            .find(|i| matches!(i.name.as_str(), "sub" | "rsb") && i.ops[0].reg() == after[compare].ops[0].reg())
+        else {
+            continue;
+        };
+        let left = subtract.ops[1].reg() == Some("r0");
+        let right = subtract.ops[2].reg() == Some("r0");
+        if left == right {
+            continue;
+        }
+        if left == (subtract.name == "sub") {
+            highs.push(slot);
+        } else {
+            lows.push(slot);
+        }
+    }
+    let high = discovery::unique(highs, "theme upper range setpoint")?;
+    let low = discovery::unique(lows, "theme lower range setpoint")?;
+    discovery::require(field(high).zip(field(low)).is_some_and(|(h, l)| h + 4 == l), "theme range fields disagree")?;
+
+    // The figures read the eco flag immediately before the system-off flag;
+    // the latter is the word after the range's cached state.
+    let off = discovery::unique(
+        figure_calls
+            .iter()
+            .map(|&(_, slot)| slot)
+            .filter(|&slot| field(slot).zip(field(low)).is_some_and(|(o, l)| o == l + 8)),
+        "theme system-off getter",
+    )?;
+    let eco = discovery::unique(
+        figure_calls.windows(2).filter_map(|calls| {
+            let [(before, eco), (after, slot)] = calls else { return None };
+            (*slot == off
+                && field(*eco).is_some()
+                && !figures[before + 1..*after]
+                    .iter()
+                    .any(|i| i.name.starts_with('b') && i.word & 0x0e000000 == 0x0a000000)
+                && figures[*after].address - figures[*before].address <= 40)
+                .then_some(*eco)
+        }),
+        "theme eco getter",
+    )?;
+
+    // The leaf is drawn by a helper called by the figures method. It tests
+    // the getter and has a conditional setter for precisely the same field.
+    let mut leaves = Vec::new();
+    for callee in figures
+        .iter()
+        .filter(|i| i.name == "bl")
+        .filter_map(|i| i.ops[0].imm())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        let Ok(code) = arm.full_code(callee) else { continue };
+        for (index, slot) in virtual_calls(&code) {
+            let Some(value) = field(slot) else { continue };
+            if !body(slot + 4).and_then(|code| scalar_field(&code, true)).is_some_and(|v| v == value) {
+                continue;
+            }
+            let after = &code[index + 1..(index + 4).min(code.len())];
+            if after.iter().any(|i| {
+                matches!(i.name.as_str(), "cmp" | "subs")
+                    && i.ops.last().and_then(Op::imm) == Some(0)
+                    && i.ops.iter().any(|o| o.reg() == Some("r0"))
+            }) {
+                leaves.push(slot);
+            }
+        }
+    }
+    let leaf = discovery::unique(leaves, "theme leaf getter")?;
+    let slots = [target, fahrenheit, low, high, mode, off, eco, leaf];
+    discovery::require(
+        slots.into_iter().collect::<std::collections::BTreeSet<_>>().len() == slots.len(),
+        "theme control getters overlap",
+    )?;
+    for slot in slots {
+        discovery::relocated(elf, vtable + slot, "theme globals getter")?;
+    }
+    Ok((Globals { target, fahrenheit, low, high, mode, off, eco }, leaf))
+}
+
+/// The light, temperature and humidity getters all load the same sensor
+/// interface from globals. The shared bucket and Away Temperatures layer both
+/// read temperature. The RCS bucket reads humidity on newer clients and
+/// the device bucket does on clients with direct virtual sensor getters.
+fn sensor_getters(elf: &Elf, arm: &Arm, sampler: u32) -> Result<(u32, u32)> {
+    let calls = arm.calls(sampler)?;
+    let Some(&sensor) = calls.first() else { return device("theme: missing ambient sensor accessor") };
+    let load = elf.read(sensor)?;
+    discovery::require(load & 0xfffff000 == 0xe5900000, "unknown ambient sensor accessor")?;
+    let bucket_calls = |class: &str, slot| -> Result<Vec<u32>> {
+        let address = discovery::primary_vtable(elf, class)? + slot;
+        discovery::relocated(elf, address, class)?;
+        let mut calls = arm.calls(elf.read(address)?)?;
+        calls.retain(|&target| elf.read(target).ok() == Some(load));
+        calls.sort_unstable();
+        calls.dedup();
+        Ok(calls)
+    };
+    let display = bucket_calls("16nlAwayTempsLayer", 0x1c)?;
+    let temperature = discovery::unique(
+        bucket_calls("16nlCZSharedBucket", 0x24)?.into_iter().filter(|t| display.contains(t)),
+        "displayed temperature",
+    )?;
+    let rcs = bucket_calls("21nlCZRCSSettingsBucket", 0x24)?;
+    let humidity = if rcs.is_empty() {
+        discovery::unique(bucket_calls("16nlCZDeviceBucket", 0x24)?, "device humidity")?
+    } else {
+        discovery::unique(rcs, "RCS humidity")?
+    };
+    discovery::require(temperature != humidity, "temperature and humidity getters coincide")?;
+    Ok((temperature, humidity))
 }
 
 /// The bindings file for the unit's stock nlclient.
 pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
     let sha = sha256_hex(stock);
-    let Some(reviewed) = REVIEWED.iter().find(|r| r.stock_sha256 == sha) else {
-        return device("customizable themes do not support this firmware");
-    };
     let found = discovery::discover_hashed(stock, &sha)?;
     let Some(dial) = &found.dial else {
         return device("customizable themes: nlclient's dial was not found");
     };
+    let elf = Elf::parse(stock)?;
+    let arm = Arm::new(&elf)?;
+    let background_slot = discovery::primary_vtable(&elf, "17nlBackgroundLayer")? + 0x10;
+    discovery::relocated(&elf, background_slot, "background draw")?;
+    let background_draw = elf.read(background_slot)?;
+    discovery::require(elf.text(background_draw), "background draw is not executable")?;
+    // Both menu accessors start by loading the current view from globals.
+    let mut offsets = Vec::new();
+    for name in ["native_menu_scale", "native_menu_hidden"] {
+        let code = arm.body(found.native_api[name])?;
+        let offset = code
+            .iter()
+            .find(|i| i.word & 0xfffff000 == 0xe5900000)
+            .ok_or_else(|| crate::Error::Device(format!("missing view field in {name}")))?;
+        offsets.push(offset.word & 0xfff);
+    }
+    discovery::require(offsets[0] == offsets[1] && offsets[0] != 0, "menu view fields disagree")?;
+    let bright =
+        discovery::brightness(&elf).ok_or_else(|| crate::Error::Device("theme brightness manager not found".into()))?;
+    let sampler = discovery::ambient_light_sampler(&elf, &arm, &bright)?;
+    let (temperature, humidity) = sensor_getters(&elf, &arm, sampler)?;
+    let (globals, leaf) = control_slots(&elf, &arm, dial)?;
     let mut lines = vec![
         ("dial_slot", dial.slot),
         ("dial_draw", dial.draw),
@@ -239,25 +289,24 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
         ("dial_event", dial.event),
         ("figures_slot", dial.figures_slot),
         ("figures_draw", dial.figures),
-        ("background_slot", reviewed.background_slot),
-        ("background_draw", reviewed.background_draw),
-        ("brightness_manager", reviewed.brightness_manager),
-        ("read_als", reviewed.read_als),
-        ("settings_view", reviewed.settings_view),
-        ("thermostat_view", reviewed.thermostat_view),
-        ("view_offset", reviewed.view_offset),
-        ("current_temperature", reviewed.current_temperature),
-        ("current_humidity", reviewed.current_humidity),
-        ("leaf_slot", reviewed.leaf_slot),
-        ("target_slot", reviewed.globals.target),
-        ("fahrenheit_slot", reviewed.globals.fahrenheit),
-        ("low_slot", reviewed.globals.low),
-        ("high_slot", reviewed.globals.high),
-        ("mode_slot", reviewed.globals.mode),
-        ("off_slot", reviewed.globals.off),
-        ("eco_slot", reviewed.globals.eco),
-        ("dial_size", reviewed.dial_size),
-        ("software", u32::from(reviewed.software)),
+        ("background_slot", background_slot),
+        ("background_draw", background_draw),
+        ("brightness_manager", bright.accessor),
+        ("read_als", sampler),
+        ("settings_view", discovery::primary_vtable(&elf, "14nlSettingsView")?),
+        ("thermostat_view", discovery::primary_vtable(&elf, "16nlThermostatView")?),
+        ("view_offset", offsets[0]),
+        ("current_temperature", temperature),
+        ("current_humidity", humidity),
+        ("leaf_slot", leaf),
+        ("target_slot", globals.target),
+        ("fahrenheit_slot", globals.fahrenheit),
+        ("low_slot", globals.low),
+        ("high_slot", globals.high),
+        ("mode_slot", globals.mode),
+        ("off_slot", globals.off),
+        ("eco_slot", globals.eco),
+        ("software", u32::from(found.framebuffer.is_some())),
     ];
     for name in NATIVES {
         let Some(&address) = found.native_api.get(*name) else {
@@ -273,7 +322,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_reviewed_builds_are_bound() {
+    fn invalid_elf_is_not_bound() {
         assert!(!supported(b"not nlclient"));
         assert!(bindings(b"not nlclient").is_err());
     }
@@ -306,7 +355,6 @@ mod tests {
             "mode_slot",
             "off_slot",
             "eco_slot",
-            "dial_size",
             "software",
         ]
         .iter()
@@ -318,25 +366,64 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_builds_bind_every_name() {
-        let firmware = std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware");
-        for sample in [
-            "nlclient-gen3-2025",
-            "nlclient-gen3-6.5-14",
-            "nlclient-gen3-6.5-14-2",
-            "nlclient-gen3-6.0-6",
-            "nlclient-genE-6.1-9",
-            "nlclient-genE-6.3-5",
-            "nlclient-genE-6.5-14",
-            "nlclient-gen2-2019",
-        ] {
-            let Ok(stock) = std::fs::read(firmware.join(sample)) else {
-                assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");
+    fn reference_builds_bind_every_name() {
+        let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
+        let mut checked = 0;
+        let paths = match std::fs::read_dir(&firmware) {
+            Ok(paths) => paths,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none() =>
+            {
+                return
+            }
+            Err(e) => panic!("{}: {e}", firmware.display()),
+        };
+        for path in paths.map(|p| p.unwrap().path()).filter(|p| p.is_file()) {
+            let sample = path.display();
+            let stock = std::fs::read(&path).unwrap();
+            if super::super::legacy_abi(&stock) {
+                assert!(bindings(&stock).is_err(), "{sample}: compact theme ABI");
                 continue;
-            };
-            let text = String::from_utf8(bindings(&stock).unwrap()).unwrap();
-            assert_eq!(text.lines().count(), 25 + NATIVES.len(), "{sample}");
-            assert!(text.lines().all(|l| l.split_once(" 0x").is_some()), "{sample}");
+            }
+            let text = String::from_utf8(bindings(&stock).unwrap_or_else(|e| panic!("{sample}: {e}"))).unwrap();
+            checked += 1;
+            let values: std::collections::BTreeMap<_, _> = text
+                .lines()
+                .map(|line| {
+                    let (name, hex) = line.split_once(" 0x").unwrap();
+                    (name, u32::from_str_radix(hex, 16).unwrap())
+                })
+                .collect();
+            let elf = Elf::parse(&stock).unwrap();
+            for (slot, target) in [
+                ("dial_slot", "dial_draw"),
+                ("dial_event_slot", "dial_event"),
+                ("figures_slot", "figures_draw"),
+                ("background_slot", "background_draw"),
+            ] {
+                assert_eq!(elf.read(values[slot]).unwrap(), values[target], "{sample}: {slot}");
+                assert!(elf.text(values[target]));
+            }
+            let globals = discovery::primary_vtable(&elf, "15nlClientGlobals").unwrap();
+            for name in [
+                "leaf_slot",
+                "target_slot",
+                "fahrenheit_slot",
+                "low_slot",
+                "high_slot",
+                "mode_slot",
+                "off_slot",
+                "eco_slot",
+            ] {
+                assert!(elf.text(elf.read(globals + values[name]).unwrap()), "{sample}: {name}");
+            }
+            assert_eq!(text.lines().count(), 24 + NATIVES.len(), "{sample}");
+        }
+        if std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_some() {
+            assert!(checked > 0, "missing modern theme firmware");
         }
     }
 }

@@ -142,7 +142,7 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
         }
     }
     let manifest = serde_json::json!({
-        "status":discovery.validation,"reviewed":discovery.variant.is_some(),"stock_sha256":discovery.stock_sha256,
+        "status":"settings screen linked from discovered bindings","stock_sha256":discovery.stock_sha256,
         "source_size":source.len(),"program_header_offset":phoff,"original_program_headers":hex(original_headers),
         "output_sha256":sha256_hex(&output),
         "factories":branches.iter().map(|(name, factory, offset, old, _)| (name.to_string(), serde_json::json!({

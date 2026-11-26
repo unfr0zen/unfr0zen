@@ -16,8 +16,8 @@ ring, the button, the menus and the setpoints.
 
 ## How the theme is drawn
 
-The dial's draw places a marker image the dial's size (`dial_size` in the
-bindings; `/var/run/unfr0zen/theme-marker.png`, every pixel
+The dial's draw places a marker image the display's size
+(`/var/run/unfr0zen/theme-marker.png`, every pixel
 RGBA `12 34 56 ff`) where the dial would show.
 
 Where nlclient draws on the CPU (`software` in the bindings), it draws into
@@ -94,13 +94,14 @@ is shown, and that theme's later frames go through it too.
 
 ## Bindings
 
-Discovery finds the dial, its event handler, its figures and the natives the
-preload calls in any build; the background layer, brightness manager, views,
-displayed temperature and humidity, the leaf, the globals' setpoint, unit and
-mode getters, the dial's size and whether nlclient draws on the CPU come from
-the builds reviewed by hand (`REVIEWED` in `nlclient/theme.rs`): 6.0-6, 6.4-8,
-both 6.5-14 builds and 5.9.4-5, and the Thermostat E's 6.1-9, 6.3-5 and 6.5-14.
-Another build is refused at setup. The preload
+Discovery finds the dial, event handler, figures, background layer, current
+view, view vtables, brightness manager and ambient light sampler. The
+sensor interface and bucket methods identify the displayed temperature and
+humidity. The framebuffer handover identifies the software renderer. The
+control model's leaf, setpoint, unit and mode getters are identified by
+the stock temperature figures and ring event handler. The preload obtains
+the panel size from the loaded marker, which nestlocal generates at the
+device's display resolution. Missing or ambiguous bindings fail at setup. The preload
 hooks nothing without a complete `/etc/unfr0zen/theme.bindings` (`name value`
 lines) or when a vtable slot does not hold the stock method it names.
 

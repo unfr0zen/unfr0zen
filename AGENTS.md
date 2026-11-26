@@ -58,7 +58,7 @@ python3 -m pytest platform/common/radio/tests
 cargo clippy --workspace --locked --all-targets -- -D warnings
 ```
 
-For binary patch changes, follow `platform/common/nlclient/tests/README.md`; strict golden tests require private firmware samples. Report hardware verification separately from host tests. No numeric coverage threshold is specified.
+For binary patch changes, follow `platform/common/nlclient/tests/README.md`; strict patch tests require private firmware samples. Report hardware verification separately from host tests. No numeric coverage threshold is specified.
 
 ## Commits and PR titles
 

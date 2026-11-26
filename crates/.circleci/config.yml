@@ -206,6 +206,9 @@ workflows:
       - nestlocal:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
+      - apply-reference:
+          requires: [image-ready]
+          context: [docker-hub, reference-images]
       - test:
           requires:
             &modules [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]

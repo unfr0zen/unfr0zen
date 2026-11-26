@@ -8,23 +8,17 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-Reviewed ABI shapes are recorded in
-[`abi_shapes.json`](../../../crates/unfr0zen-core/src/nlclient/abi_shapes.json).
+The display-wake accessor is resolved from the client pointer passed to the globals initializer.
 Unsupported ELF layouts, unknown instruction shapes, missing imports or
-unsupported relocations fail before device writes. No firmware hash selects
-native addresses for this ABI, with one exception: the gen 2's 5.9.1-6 Legal
-Info layer shows random text instead of an image (an index at +0xa0, its
-string at +0xa4, the nlLayer part at +0xc0), so the text and image natives
-other builds are found through it come from a table that its complete stock
-executable's SHA-256 selects. Each is the reviewed 5.9.4-5 native's
-instruction shape, at the same distance from its neighbours; discovery still
-checks every native's shape.
+unsupported relocations fail before device writes. The Legal Info factory and layer identify the settings ABI. On builds where
+Legal Info displays text, the WWN Equipment layer supplies the image and
+text layout calls. Both paths require the discovered functions to have the
+loads, stores and library calls used by the linked screen.
 
-The gen 3's 5.6-7 has a distinct ABI: 32-byte strings and compact vtables.
-It uses `custom-screen-legacy.o` and bindings guarded by the complete reviewed
-stock executable's SHA-256, not its version string. Its [legacy baseline](tests/legacy/README.md)
-records discovery, linking, output and undo checks separately. Modified or
-unknown legacy executables are refused.
+The compact ABI, found on the gen 3's 5.6-7, uses 32-byte strings and
+`custom-screen-legacy.o`. Discovery checks the timeout API, constructor sizes,
+string fields and vtable layout. Its [legacy baseline](tests/legacy/README.md)
+records discovery, linking, output and undo checks.
 
 The settings menu has one entry per section: **ZIGBEE**, **MATTER**,
 **THEMES**, **SCHEDULE MODE** and **DOOM** right after its first entry, with Schedule
@@ -95,7 +89,7 @@ for Zigbee. Back or completion stops those notifications and restores normal ina
 On 5.6-7, Matter takes `proinfoscreen` and Schedule takes `update`, which is
 registered but absent from the stock menu. System Info stays stock. The
 27-name array permits Schedule and up to two optional tiles: Zigbee, Matter
-or Doom. Themes have no reviewed preload for this firmware; enabling Doom
+or Doom. The compact ABI has no compatible theme dial; enabling Doom
 alongside both Zigbee and Matter is refused before writes.
 
 Each entry on the modern ABI is a stock screen whose factory builds unfr0zen's screen instead
@@ -227,7 +221,7 @@ immediate restarts with connections in TIME_WAIT.
 
 The code shares the screen's executable segment and undo journal. Deselecting
 the option removes these patches while retaining the settings screen. The
-[RCS golden and acceptance process](tests/external-temperature/README.md)
+[RCS tests](tests/external-temperature/README.md)
 cover the additional native bindings and layouts.
 
 ## Gen 1 and gen 2 dark theme
@@ -237,11 +231,11 @@ Advanced in the app, offered for a gen 1 or gen 2), their settings screens take 
 gen 3's colours: black backgrounds, white text, `#00a3d9` selection,
 `#004157` fields being edited, `#666666` unselected rows and `#00a1f2`
 carousel tiles. unfr0zen's settings screens draw with the stock palette, so they
-follows. Each colour is the one the gen 3's nlclient sets in the same
-function. Like the external temperature input, it applies only to the
-reviewed 5.9.4-5 stock binary, at fixed, hash-guarded addresses, and fails
-closed on any other build. Each edited word must hold its stock value before
-any is written.
+follow it. Each colour comes from the corresponding gen 3 function. The
+patch finds the palette operations through class vtables, call graphs and
+the uses of colour constants, including calls to the background layer's
+colour setter. It checks every site against the stock
+executable before writing. A missing or ambiguous required operation stops setup.
 
 The kernel's boot logo, Nest's cream disc, goes black too: a copy of the
 kernel the unit boots (the stock one, or unfr0zen's with `--usb-shell`) with
@@ -251,8 +245,7 @@ is, and U-Boot falls back to it should the copy not load.
 
 The edits share the screen's undo journal, so a run without the option
 restores the light colours while retaining the settings screen, and puts
-back an undarkened kernel. The [dark theme
-golden](tests/dark-theme/README.md) lists every edit and the patched digest.
+back an undarkened kernel. The [dark theme tests](tests/dark-theme/README.md) check palette edits and undo.
 
 ## Runtime and build requirements
 
@@ -333,16 +326,12 @@ unknown allocated section or relocation. It does not synthesize veneers.
 
 ```sh
 cargo test -p unfr0zen-core -p unfr0zen-host -p unfr0zen-cli
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --test nlclient_golden
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --lib native_screen_patch_is_automatic
+NLCLIENT_REQUIRE_FIRMWARE=1 cargo test -p unfr0zen-core --test nlclient_firmware
+NLCLIENT_REQUIRE_FIRMWARE=1 cargo test -p unfr0zen-core --lib native_screen_patch_is_automatic
 ```
 
-Goldens from all three untouched dumps pin discovery, native API, planned
-patch, linked payload/symbols, output and decompressed undo journal against
-the independent Python/lld reference. They contain addresses and hashes,
-never firmware. See [tests/README.md](tests/README.md) for sample provenance,
-strict mode, toolchain details and the optional same-object `ld.lld` check.
-Private samples are kept under `.work/firmware/` or `NLCLIENT_FIRMWARE_DIR`.
+The tests discover bindings in the private samples and compare the payload
+linker with LLVM. See [tests/README.md](tests/README.md) for the test inputs.
 Tests also cover moved ELF addresses, corrupted ABI rejection, unsupported
 relocations, patch/undo round trips and recovery dry run/idempotence/upgrades,
 including interrupted executable or journal writes.

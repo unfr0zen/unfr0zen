@@ -565,7 +565,7 @@ pub struct Options {
     /// The relocatable native Sensors view helper, linked only on gen 1 and gen 2.
     pub external_temperature_screen: Vec<u8>,
     /// The gen 1's and gen 2's settings screens in the gen 3's dark palette,
-    /// through the reviewed nlclient 5.9.4-5 patch; the gen 3 ignores it.
+    /// through its stock nlclient palette routines; the gen 3 ignores it.
     pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
@@ -2045,7 +2045,7 @@ esac
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
         let Ok(stock_nlclient) = std::fs::read(firmware.join("nlclient-gen3-6.5-14")) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the gen 3 sample");
             return;
         };
         let pki = nestlocal::generate_pki().unwrap();
@@ -2079,15 +2079,15 @@ esac
         );
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
 
-        // A build the themes were not reviewed on fails, after the screen's
+        // A compact UI build has no compatible dial, after the screen's
         // build had it, which keeps it for the bug report.
-        let Ok(unreviewed) = std::fs::read(firmware.join("nlclient-gen3-6.3-5")) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the 6.3-5 sample");
+        let Ok(unsupported) = std::fs::read(firmware.join("nlclient-gen3-5.6-7")) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the compact sample");
             return;
         };
-        assert!(!crate::nlclient::theme::supported(&unreviewed));
+        assert!(!crate::nlclient::theme::supported(&unsupported));
         let mut volume = nestlocal_unit(Some(&pki));
-        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, unreviewed.clone()));
+        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, unsupported.clone()));
         let built = std::cell::RefCell::new(Vec::new());
         let error = set_up_on_device(&mut volume, Device::Diamond3, &on, b"ARMV7", &mut no_pki, true, &|source, _| {
             built.borrow_mut().push(source.to_vec());
@@ -2095,7 +2095,7 @@ esac
         })
         .unwrap_err();
         assert_eq!(error.to_string(), "built");
-        assert_eq!(*built.borrow(), [unreviewed]);
+        assert_eq!(*built.borrow(), [unsupported]);
     }
 
     #[test]
@@ -2195,7 +2195,7 @@ esac
         let (Ok(source), Ok(object)) = (std::fs::read(firmware.join("nlclient-gen2-2019")), std::fs::read(object))
         else {
             assert!(
-                std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(),
+                std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(),
                 "strict checks need the j49 sample and screen object"
             );
             return;
@@ -2724,7 +2724,7 @@ esac
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware/nlclient-gen3-2025"));
         let Ok(source) = std::fs::read(&path) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the gen 3 sample");
             eprintln!("No private stock sample: {}", path.display());
             return;
         };
