@@ -20,6 +20,7 @@ committed. The corresponding private samples live in `.work/firmware/`:
 | `nlclient-gen3-2019` (5.9.4-5)    | `bbbd94e1f70a4087c4a4a5581d32103788536e5f0facc58758183403a197f37d` |
 | `nlclient-gen2-2019` (5.9.4-5)    | `67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7` |
 | `nlclient-gen2-5.9.1-6` (5.9.1-6) | `fd5831409d01ef4a3f08a0cf5ae72dcbad61ee7629d81709cf9b63929dbf3a8d` |
+| `nlclient-gen1-2019` (5.9.4-5)    | `e353b30291ac6825028ac03919d5ed5b1da75ad297a6ee6d47d6e227e7be0c87` |
 
 Each golden records discovery (including ABI fingerprints and the library
 calls each native makes), resolved native APIs, original size/program
