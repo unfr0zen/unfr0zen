@@ -13,7 +13,6 @@ mkdir -p build/thread
 cmake -S platform/common/radio/thread/host -B "$OT_HOST_BUILD/sleep" -GNinja \
     -DOT_SOURCE="$OT" \
     -DCMAKE_TOOLCHAIN_FILE="$thread_root/platform/common/radio/thread/linux-toolchain.cmake" \
-    -DCMAKE_JOB_POOLS=link=1 -DCMAKE_JOB_POOL_LINK=link \
     -DCMAKE_BUILD_TYPE=Release -DOT_LINKER_MAP=OFF \
     -DOT_PLATFORM=posix -DOT_FTD=ON -DOT_MTD=OFF -DOT_RCP=OFF \
     -DOT_APP_NCP=OFF -DOT_APP_RCP=OFF -DOT_DAEMON=ON -DOT_READLINE=OFF \
