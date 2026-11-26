@@ -14,18 +14,6 @@ fn image() -> Option<Vec<u8>> {
     Some(std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
 }
 
-/// The file offset of a virtual address in an ELF's loadable segments.
-fn elf_offset(elf: &[u8], address: u32) -> usize {
-    let word = |at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap());
-    let headers = word(28) as usize;
-    let count = u16::from_le_bytes(elf[44..46].try_into().unwrap()) as usize;
-    (0..count)
-        .map(|i| headers + i * 32)
-        .find(|&h| word(h) == 1 && address >= word(h + 8) && address - word(h + 8) < word(h + 16))
-        .map(|h| (word(h + 4) + address - word(h + 8)) as usize)
-        .unwrap_or_else(|| panic!("unmapped address {address:#x}"))
-}
-
 fn pages(image: &[u8], offset: usize, length: usize) -> &[u8] {
     &image[offset / PAGE * PAGE_RAW..(offset + length) / PAGE * PAGE_RAW]
 }
@@ -223,7 +211,7 @@ fn the_setup_applies_to_both_slots() {
     };
     for which in [Slot::Root1, Slot::Root0] {
         let mut volume = slot(&image, which);
-        // The dark theme where the slot's stock nlclient is the reviewed build.
+        // The dark theme where the slot's stock nlclient contains the stock palette operations.
         let stock = match volume.read("etc/unfr0zen/nlclient.original").unwrap() {
             Some(original) => original.2,
             None => volume.read("nestlabs/sbin/nlclient").unwrap().unwrap().2,
@@ -267,22 +255,12 @@ fn the_setup_applies_to_both_slots() {
         // The settings screens are dark when asked for.
         let original = back.read("etc/unfr0zen/nlclient.original").unwrap().unwrap().2;
         if dark {
-            let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
-                env!("UNFR0ZEN_ROOT"),
-                "/platform/common/nlclient/tests/dark-theme/j49-5.9.4-5.json"
-            )))
-            .unwrap();
-            let hex = |value: &serde_json::Value| {
-                u32::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
-            };
-            for edit in golden["edits"].as_array().unwrap() {
-                let at = elf_offset(&original, hex(&edit[0]));
-                assert_eq!(
-                    u32::from_le_bytes(nlclient[at..at + 4].try_into().unwrap()),
-                    hex(&edit[2]),
-                    "{which}: {}",
-                    edit[0]
-                );
+            let mut expected = original.clone();
+            unfr0zen_core::nlclient::dark_theme::patch(&original, &mut expected).unwrap();
+            for (at, (&before, &after)) in original.iter().zip(&expected).enumerate() {
+                if before != after {
+                    assert_eq!(nlclient[at], after, "{which}: dark theme at {at:#x}");
+                }
             }
         }
         // A second run finds everything in place.

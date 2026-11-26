@@ -203,11 +203,24 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
                 next_register: 0,
                 appends: true,
             });
-        } else if after.len() >= 3 && after[0] & 0xfff0ffff == 0xe280303c && after[2] & 0xfff0ffff == 0xe7800103 {
-            let screens = (after[0] >> 16) & 15;
-            let object = (after[2] >> 16) & 15;
-            let next = after[1] & 15;
-            if after[1] != 0xe1a00000 | (screens << 12) | next
+        } else {
+            // Fixed inline arrays. The compact ABI computes the screen
+            // address first and stores after comparing the loop bound.
+            let (object, screens, move_index, names_index) =
+                if after.len() >= 3 && after[0] & 0xfff0ffff == 0xe280303c && after[2] & 0xfff0ffff == 0xe7800103 {
+                    ((after[2] >> 16) & 15, (after[0] >> 16) & 15, 1, 0x1c)
+                } else if after.len() >= 4
+                    && after[0] & 0xfff0fff0 == 0xe0803100
+                    && after[1] & 0xfff0fff0 == 0xe1500000
+                    && after[3] == 0xe58300d4
+                    && super::legacy_abi(arm.elf.data)
+                {
+                    ((after[0] >> 16) & 15, after[0] & 15, 2, 0x1a)
+                } else {
+                    continue;
+                };
+            let next = after[move_index] & 15;
+            if after[move_index] != 0xe1a00000 | (screens << 12) | next
                 || !before.contains(&(0xe2800001 | (screens << 16) | (next << 12)))
                 || !before.contains(&(0xe5900060 | (object << 16)))
             {
@@ -215,7 +228,7 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
             }
             for names in 4..12 {
                 if before.contains(&(0xe2800001 | (names << 16) | (names << 12)))
-                    && before.contains(&(0xe280301c | (names << 16)))
+                    && before.contains(&(0xe2803000 | names_index | (names << 16)))
                 {
                     found.push(Insertion {
                         call: ins.address,
@@ -240,21 +253,7 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
 fn menu_loop(elf: &Elf, arm: &Arm, list: u32, count: usize) -> Result<(u32, Vec<Insertion>)> {
     let mut found = Vec::new();
     for at in bounds(elf, list, count) {
-        let mut sites = sites(arm, at)?;
-        // The reviewed 5.6-7 build fills bounded inline name and screen
-        // arrays (names at +0x68, screens at +0xd4) in its own loop shape.
-        if super::legacy_abi(elf.data) && at == 0x100b88 && sites.is_empty() {
-            sites.push(Insertion {
-                call: 0x100c54,
-                lookup: 0x4d098,
-                grow: 0,
-                object_register: 5,
-                names_register: 8,
-                screens_register: 7,
-                next_register: 4,
-                appends: false,
-            });
-        }
+        let sites = sites(arm, at)?;
         if !sites.is_empty() {
             found.push((at, sites));
         }

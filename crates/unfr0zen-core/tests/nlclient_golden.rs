@@ -75,8 +75,7 @@ fn stock_dumps_match_every_recorded_stage() {
         eprintln!("No private firmware directory: {}", firmware.display());
         return;
     };
-    let mut checked = 0;
-    let mut unrecorded = Vec::new();
+    let mut checked = std::collections::BTreeSet::new();
     for path in paths {
         let path = path.unwrap().path();
         if !path.is_file() {
@@ -86,16 +85,27 @@ fn stock_dumps_match_every_recorded_stage() {
         let hash = sha256_hex(&stock);
         let golden_path = root().join(format!("platform/common/nlclient/tests/golden/{hash}.json"));
         if !golden_path.exists() {
-            // The 5.6-7 ABI's goldens are legacy_nlclient's.
-            if !root().join(format!("platform/common/nlclient/tests/legacy/{hash}.json")).exists() {
-                unrecorded.push(path.display().to_string());
+            // An additional sample can exercise discovery without a recorded output.
+            if hash != nlclient::LEGACY_SHA256 {
+                let (payload, sections) = if nlclient::legacy_abi(&stock) {
+                    let path = std::env::var_os("NLCLIENT_LEGACY_OBJECT")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| root().join("build/custom-screen-legacy.o"));
+                    (std::fs::read(path).unwrap(), nlclient::menu::Section::LEGACY.as_slice())
+                } else {
+                    (object.clone(), nlclient::menu::Section::ALL.as_slice())
+                };
+                let built = nlclient::builder::build(&stock, &payload, sections)
+                    .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                let patch = nlclient::Patch::parse(&built.journal).unwrap();
+                assert_eq!(patch.apply(&built.output, true).unwrap(), stock);
             }
             continue;
         }
         let golden: Value = serde_json::from_slice(&std::fs::read(golden_path).unwrap()).unwrap();
         let found = nlclient::builder::build(&stock, &object, &nlclient::menu::Section::ALL)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        checked += 1;
+        checked.insert(hash);
         for stage in ["discovery", "native_api"] {
             assert_eq!(found.manifest[stage], golden[stage], "{}: {stage}", path.display());
         }
@@ -125,10 +135,9 @@ fn stock_dumps_match_every_recorded_stage() {
         let patch = nlclient::Patch::parse(&found.journal).unwrap();
         assert_eq!(patch.apply(&found.output, true).unwrap(), stock);
     }
-    eprintln!("Checked {checked} unchanged firmware samples");
+    eprintln!("Checked {} unchanged firmware samples", checked.len());
     if std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_some() {
-        assert_eq!(checked, goldens().len(), "all private stock samples are required");
-        assert!(unrecorded.is_empty(), "every private stock sample needs a golden: {unrecorded:?}");
+        assert_eq!(checked.len(), goldens().len(), "all private stock samples are required");
     }
 }
 #[test]
@@ -387,14 +396,7 @@ fn samples() -> Vec<(PathBuf, Vec<u8>, Value)> {
     found
 }
 
-/// The imported symbols each native calls are the evidence an untested
-/// build is admitted on, so they must be what survives a recompile: had any
-/// reviewed build been unknown, the others' evidence would have admitted
-/// all but at most one of its natives (the 2025 build's activity mark, the
-/// gen 2's and 6.0-6's device commits), but five of the 6.5-14 build's: its factories
-/// and event handlers also call the string destructor, delete and Release;
-/// and two of the gen 2's 5.9.1-6, whose Legal Info layer shows random text:
-/// its enter writes it, and its constructor builds the string that holds it.
+/// Verify the cross-build import similarity reported in the discovery manifest.
 #[test]
 fn reviewed_builds_share_their_natives_library_calls() {
     let samples = samples();
@@ -452,10 +454,24 @@ fn a_recompiled_build_is_patched_and_named_as_no_reviewed_one() {
     assert_eq!(nlclient::builder::build(&stock, &object, &[]).unwrap().manifest["reviewed"], true);
 }
 
-/// Discovery holds every native to its shape whatever its fingerprints: a
-/// getter that reads another field is refused, and so is a native calling
-/// other library functions than every reviewed build's, which the
-/// fingerprints alone, masking call targets, would not tell apart.
+/// Metadata can change without moving the text-only Legal Info layer.
+#[test]
+fn text_only_legal_info_resolves_without_a_stock_hash() {
+    let firmware =
+        std::env::var_os("NLCLIENT_FIRMWARE_DIR").map(PathBuf::from).unwrap_or_else(|| root().join(".work/firmware"));
+    let Ok(mut stock) = std::fs::read(firmware.join("nlclient-gen2-5.9.1-6")) else {
+        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none());
+        return;
+    };
+    let before = nlclient::discovery::discover(&stock).unwrap();
+    stock.extend_from_slice(b"additional build metadata");
+    let changed = nlclient::discovery::discover(&stock).unwrap();
+    assert_ne!(before.stock_sha256, changed.stock_sha256);
+    assert_eq!(before.native_api, changed.native_api);
+    assert_eq!(before.layout, changed.layout);
+}
+
+/// Reject a getter reading the wrong field and a constructor missing required calls.
 #[test]
 fn natives_of_another_shape_are_refused() {
     let Some(stock) = stock_sample() else { return };
@@ -489,10 +505,7 @@ fn natives_of_another_shape_are_refused() {
         }
     }
     let error = nlclient::discovery::discover(&changed).unwrap_err().to_string();
-    assert!(
-        error.contains("no reviewed build's native makes these library calls: native_screen_ctor calls"),
-        "{error}"
-    );
+    assert!(error.contains("native_screen_ctor requires"), "{error}");
 }
 #[test]
 fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
@@ -508,7 +521,7 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
             continue;
         }
         let stock = std::fs::read(&path).unwrap();
-        // Only the reviewed builds, each with its golden, take the screen.
+        // This comparison uses the stock menu recorded for each modern sample.
         if !root().join(format!("platform/common/nlclient/tests/golden/{}.json", sha256_hex(&stock))).exists() {
             continue;
         }

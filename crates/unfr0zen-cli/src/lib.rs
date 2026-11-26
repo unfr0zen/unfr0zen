@@ -110,7 +110,7 @@ struct Args {
     /// regulate from temperatures sent over MQTT, Zigbee or Matter, using one sensor named after the thermostat's room; gen 1 and gen 2 need the reviewed 5.9.4-5 nlclient patch; gen 3 turns off its own Bluetooth, so real Nest Temperature Sensors stop working; needs --mqtt, --matter or --zigbee
     #[arg(long, help_heading = "Root filesystem options")]
     external_temperature: bool,
-    /// gen 1 and gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; needs the reviewed 5.9.4-5 nlclient
+    /// gen 1 and gen 2: show the settings screens in the 3rd generation's dark colours, and the boot logo on black; requires compatible stock palette code
     #[arg(long, help_heading = "Root filesystem options")]
     dark_theme: bool,
     /// run nlclient's backplate simulator: 1H1C, simulated temperature

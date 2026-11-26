@@ -50,14 +50,10 @@ path: cargo runs the tests from the crate's directory);
 `NLCLIENT_OBJECT` changes the compiled screen object (default
 `build/custom-screen.o`). Use the build image's compiler to reproduce these
 exact bytes. Golden linking needs the object but no firmware. The full-stage
-checks need the original samples. Strict mode fails if any golden lacks its
-sample, and if any sample in the directory has no golden (in `golden/`, or
-`legacy/` for the 5.6-7 ABI), so every reviewed build is enforced; the 5.6-7
-sample is found in that directory by its hash.
-Ordinary public CI can check every payload without shipping firmware.
-The gen3-6.3-5 and gen3-6.5-14-2 references record the linked payload
-and output size; strict full-file verification also requires recording
-their output and undo-journal hashes from the matching stock samples.
+checks need the original samples. Strict mode requires every recorded sample. Additional executables
+exercise discovery, linking and undo without a golden. The compact ABI has
+its own stock checks in `legacy_nlclient`. Ordinary public CI can check the
+recorded payloads without shipping firmware.
 
 When `ld.lld` is present, a second test compares the Rust linker against
 `ld.lld -O0` using exactly the same object and bindings for every variant.
@@ -76,17 +72,9 @@ hashes; never update discovery fingerprints simply to accept unknown firmware.
 
 ## Unreviewed builds
 
-A build whose instruction shapes match no reviewed variant is patched on its
-structure alone: the address, layout and call-shape checks every build
-passes, each native's own shape (the loads, stores and calls the screen's
-use of it assumes), and the imported symbols each native calls, which must
-be a reviewed variant's for every native. Each variant in `abi_shapes.json`
-records those imports beside its fingerprints; the fingerprints name the
-build in the manifest and never block. Tests hold every reviewed build's
-imports to every other's on all but one native (five for 6.5-14, whose
-factories and event handlers call more), so that evidence stays what
-survives a recompile. A run on such a build keeps its stock nlclient beside
-the run log. `cargo run -p unfr0zen-core --bin nlclient -- --report STOCK`
-(or `unfr0zen nlclient --discover STOCK`) prints what discovery finds in a
-sample: the first step of reviewing a new variant, whose fingerprints and
-imports it records.
+Settings discovery checks each build's registrations, object layout, native
+instructions and the library calls required by their roles. The manifest
+also reports its similarity to the reviewed builds in `abi_shapes.json`.
+A run on an unreviewed build keeps its stock nlclient beside the run log.
+`cargo run -p unfr0zen-core --bin nlclient -- --report STOCK` (or
+`unfr0zen nlclient --discover STOCK`) prints the bindings and ABI evidence.

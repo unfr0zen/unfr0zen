@@ -17,8 +17,25 @@ use std::io::Read;
 /// The reviewed 5.6-7 build uses 32-byte strings and a distinct native UI ABI.
 pub const LEGACY_SHA256: &str = "e9b4f67b1e6c422a1bbe0c9bfd5aa6a63184010cc663b64374132553d393d741";
 
+/// Select the compact screen object by its timeout API. Discovery verifies
+/// the screen and layer layouts before the object can be linked.
 pub fn legacy_abi(source: &[u8]) -> bool {
-    sha256_hex(source) == LEGACY_SHA256
+    let Ok(elf) = elf::Elf::parse(source) else { return false };
+    let Ok(strings) = elf.section(".dynstr") else { return false };
+    if strings.kind != 3 {
+        return false;
+    }
+    let mut direct = false;
+    for symbol in elf.contents(strings).split(|b| *b == 0) {
+        match symbol {
+            b"_ZN12nlEventUtils11SendTimeoutERP21nlEventTimeoutRequestjjP12nlEventQueueP15nlIEventHandlerP7nlTimer" => {
+                return false
+            }
+            b"_ZN21nlEventTimeoutRequest4InitEijP12nlEventQueueP15nlIEventHandler" => direct = true,
+            _ => {}
+        }
+    }
+    direct
 }
 
 pub const BINARY: &str = "nestlabs/sbin/nlclient";

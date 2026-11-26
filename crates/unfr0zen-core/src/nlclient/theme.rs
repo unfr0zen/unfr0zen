@@ -1,13 +1,13 @@
 //! The bindings of the theme preload (platform/common/theme), which draws
 //! customizable home screen themes in nlclient, in its GPU context or on the
 //! CPU: where, in the unit's stock nlclient, the dial, its figures, the background layer
-//! and the natives the preload calls are. Discovery finds the dial and the
-//! natives in any build; the rest comes from the builds reviewed by hand.
+//! and the natives the preload calls are. The control model's vtable slots
+//! and panel size come from the reviewed build.
 //! The setup writes them to BINDINGS as `name value` lines (hexadecimal
 //! addresses relative to the executable's load base, or field offsets), and
 //! the preload hooks nothing unless the vtable slots hold what they name.
 
-use super::discovery;
+use super::{arm::Arm, discovery, elf::Elf};
 use crate::shell::sha256_hex;
 use crate::{device, Result};
 
@@ -33,171 +33,72 @@ const V6_GLOBALS: Globals =
 /// What discovery does not find, from each reviewed build.
 struct Reviewed {
     stock_sha256: &'static str,
-    /// nlBackgroundLayer's draw: its vtable slot and the stock method (it
-    /// reads its ARGB colour at +0x9c).
-    background_slot: u32,
-    background_draw: u32,
-    /// The brightness manager's accessor and its ambient light sampler,
-    /// read once to seed automatic brightness.
-    brightness_manager: u32,
-    read_als: u32,
-    /// The settings and thermostat views' vtables, and where nlClient's
-    /// globals keep the current view.
-    settings_view: u32,
-    thermostat_view: u32,
-    view_offset: u32,
-    /// The slider's displayed ambient temperature and the controller's
-    /// humidity (16.16), and the globals' vtable slot for the leaf.
-    current_temperature: u32,
-    current_humidity: u32,
+    /// The globals' vtable slot for the leaf.
     leaf_slot: u32,
     globals: Globals,
-    /// The dial's size in pixels, and whether nlclient draws on the CPU
-    /// (into the framebuffer) rather than in GLES2.
     dial_size: u32,
-    software: bool,
 }
 
 const REVIEWED: &[Reviewed] = &[
     // 6.4-8
     Reviewed {
         stock_sha256: "d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52",
-        background_slot: 0x6e1a08,
-        background_draw: 0x21dbec,
-        brightness_manager: 0xab388,
-        read_als: 0x2282a4,
-        settings_view: 0x6d6bc8,
-        thermostat_view: 0x6d9bb8,
-        view_offset: 0x1b8,
-        current_temperature: 0xae050,
-        current_humidity: 0xae068,
         leaf_slot: 0x34c,
         globals: V6_GLOBALS,
         dial_size: 480,
-        software: false,
     },
     // 6.5-14
     Reviewed {
         stock_sha256: "3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2",
-        background_slot: 0x6bac30,
-        background_draw: 0x236744,
-        brightness_manager: 0xaac68,
-        read_als: 0x240f4c,
-        settings_view: 0x6b0564,
-        thermostat_view: 0x6b3554,
-        view_offset: 0x2f0,
-        current_temperature: 0xad880,
-        current_humidity: 0xad898,
         leaf_slot: 0x364,
         globals: V6_GLOBALS,
         dial_size: 480,
-        software: false,
     },
     // 6.5-14's other build, whose client globals hold four bytes more
     // before the current view.
     Reviewed {
         stock_sha256: "ea07f0d31e27ed859e0e1307a7a4de493deaa346fb5b111277beef30d4664611",
-        background_slot: 0x6df6f0,
-        background_draw: 0x2373b0,
-        brightness_manager: 0xaba44,
-        read_als: 0x241f34,
-        settings_view: 0x6d5024,
-        thermostat_view: 0x6d8014,
-        view_offset: 0x2f4,
-        current_temperature: 0xae804,
-        current_humidity: 0xae81c,
         leaf_slot: 0x364,
         globals: V6_GLOBALS,
         dial_size: 480,
-        software: false,
     },
     // 6.0-6, whose globals' vtable is 5.9.4-5's with two more methods first.
     Reviewed {
         stock_sha256: "5d58299c1219e632a534014e8853d4f1b796c9ae1d42a6f0dc68ee0c88e10c9a",
-        background_slot: 0x48d470,
-        background_draw: 0x19a2b8,
-        brightness_manager: 0x6f814,
-        read_als: 0x1a33e8,
-        settings_view: 0x471988,
-        thermostat_view: 0x47b8e0,
-        view_offset: 0x10c,
-        current_temperature: 0x70af4,
-        current_humidity: 0x70b0c,
         leaf_slot: 0x30c,
         globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x114, off: 0xc0, eco: 0x64 },
         dial_size: 480,
-        software: false,
     },
     // The gen E's 6.5-14: the gen 3's 6.5-14 drawn on the CPU, its
     // globals laid out the same.
     Reviewed {
         stock_sha256: "be7410378c46ea13c72d2db6ac71be92c44519b7bfe8a72490c691cef584afb4",
-        background_slot: 0x68d08c,
-        background_draw: 0x2291e8,
-        brightness_manager: 0xaa0fc,
-        read_als: 0x233950,
-        settings_view: 0x6829b8,
-        thermostat_view: 0x6859b0,
-        view_offset: 0x2f0,
-        current_temperature: 0xacd34,
-        current_humidity: 0xacd4c,
         leaf_slot: 0x364,
         globals: V6_GLOBALS,
         dial_size: 320,
-        software: true,
     },
     // The gen E's 6.3-5: 6.5-14's globals vtable up to the leaf, which comes
     // two slots earlier, and its globals' fields 0x120 lower.
     Reviewed {
         stock_sha256: "6bdf8634147c4adb4e0ac03dfc7fc8e3313c1c424420eb22f721a0012adaaf25",
-        background_slot: 0x6abe00,
-        background_draw: 0x211ffc,
-        brightness_manager: 0xab1c8,
-        read_als: 0x21c41c,
-        settings_view: 0x6a0fb8,
-        thermostat_view: 0x6a3fb0,
-        view_offset: 0x1d4,
-        current_temperature: 0xaddbc,
-        current_humidity: 0xaddd4,
         leaf_slot: 0x344,
         globals: V6_GLOBALS,
         dial_size: 320,
-        software: true,
     },
     // The gen E's 6.1-9, whose globals' vtable has fewer slots before the
     // setpoints'.
     Reviewed {
         stock_sha256: "5da23c395b1ee0b258bc1d8a7a5a76931e778cf25afa8846e81245b38d088ca3",
-        background_slot: 0x4cb260,
-        background_draw: 0x1b005c,
-        brightness_manager: 0x759d8,
-        read_als: 0x1b99e4,
-        settings_view: 0x4a8cd8,
-        thermostat_view: 0x4b4518,
-        view_offset: 0x130,
-        current_temperature: 0x76cf8,
-        current_humidity: 0x76d10,
         leaf_slot: 0x314,
         globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x118, off: 0, eco: 0 },
         dial_size: 320,
-        software: true,
     },
     // 5.9.4-5, whose globals' vtable is laid out apart from 6.x's.
     Reviewed {
         stock_sha256: "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
-        background_slot: 0x3f5b58,
-        background_draw: 0x17d6d4,
-        brightness_manager: 0x51940,
-        read_als: 0x1831cc,
-        settings_view: 0x3d6908,
-        thermostat_view: 0x3e3270,
-        view_offset: 0x100,
-        current_temperature: 0x55174,
-        current_humidity: 0x5522c,
         leaf_slot: 0x2f8,
         globals: Globals { target: 0x84, fahrenheit: 0x7c, low: 0xc8, high: 0xc0, mode: 0x10c, off: 0xb8, eco: 0x5c },
         dial_size: 320,
-        software: true,
     },
 ];
 
@@ -222,6 +123,39 @@ pub fn supported(stock: &[u8]) -> bool {
     REVIEWED.iter().any(|r| r.stock_sha256 == sha)
 }
 
+/// The light, temperature and humidity getters all load the same sensor
+/// interface from globals. The shared bucket and Away Temperatures layer both
+/// read temperature. The RCS bucket reads humidity on newer clients and
+/// the device bucket does on clients with direct virtual sensor getters.
+fn sensor_getters(elf: &Elf, arm: &Arm, sampler: u32) -> Result<(u32, u32)> {
+    let calls = arm.calls(sampler)?;
+    let Some(&sensor) = calls.first() else { return device("theme: missing ambient sensor accessor") };
+    let load = elf.read(sensor)?;
+    discovery::require(load & 0xfffff000 == 0xe5900000, "unknown ambient sensor accessor")?;
+    let bucket_calls = |class: &str, slot| -> Result<Vec<u32>> {
+        let address = discovery::primary_vtable(elf, class)? + slot;
+        discovery::relocated(elf, address, class)?;
+        let mut calls = arm.calls(elf.read(address)?)?;
+        calls.retain(|&target| elf.read(target).ok() == Some(load));
+        calls.sort_unstable();
+        calls.dedup();
+        Ok(calls)
+    };
+    let display = bucket_calls("16nlAwayTempsLayer", 0x1c)?;
+    let temperature = discovery::unique(
+        bucket_calls("16nlCZSharedBucket", 0x24)?.into_iter().filter(|t| display.contains(t)),
+        "displayed temperature",
+    )?;
+    let rcs = bucket_calls("21nlCZRCSSettingsBucket", 0x24)?;
+    let humidity = if rcs.is_empty() {
+        discovery::unique(bucket_calls("16nlCZDeviceBucket", 0x24)?, "device humidity")?
+    } else {
+        discovery::unique(rcs, "RCS humidity")?
+    };
+    discovery::require(temperature != humidity, "temperature and humidity getters coincide")?;
+    Ok((temperature, humidity))
+}
+
 /// The bindings file for the unit's stock nlclient.
 pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
     let sha = sha256_hex(stock);
@@ -232,6 +166,27 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
     let Some(dial) = &found.dial else {
         return device("customizable themes: nlclient's dial was not found");
     };
+    let elf = Elf::parse(stock)?;
+    let arm = Arm::new(&elf)?;
+    let background_slot = discovery::primary_vtable(&elf, "17nlBackgroundLayer")? + 0x10;
+    discovery::relocated(&elf, background_slot, "background draw")?;
+    let background_draw = elf.read(background_slot)?;
+    discovery::require(elf.text(background_draw), "background draw is not executable")?;
+    // Both menu accessors start by loading the current view from globals.
+    let mut offsets = Vec::new();
+    for name in ["native_menu_scale", "native_menu_hidden"] {
+        let code = arm.body(found.native_api[name])?;
+        let offset = code
+            .iter()
+            .find(|i| i.word & 0xfffff000 == 0xe5900000)
+            .ok_or_else(|| crate::Error::Device(format!("missing view field in {name}")))?;
+        offsets.push(offset.word & 0xfff);
+    }
+    discovery::require(offsets[0] == offsets[1] && offsets[0] != 0, "menu view fields disagree")?;
+    let bright =
+        discovery::brightness(&elf).ok_or_else(|| crate::Error::Device("theme brightness manager not found".into()))?;
+    let sampler = discovery::ambient_light_sampler(&elf, &arm, &bright)?;
+    let (temperature, humidity) = sensor_getters(&elf, &arm, sampler)?;
     let mut lines = vec![
         ("dial_slot", dial.slot),
         ("dial_draw", dial.draw),
@@ -239,15 +194,15 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
         ("dial_event", dial.event),
         ("figures_slot", dial.figures_slot),
         ("figures_draw", dial.figures),
-        ("background_slot", reviewed.background_slot),
-        ("background_draw", reviewed.background_draw),
-        ("brightness_manager", reviewed.brightness_manager),
-        ("read_als", reviewed.read_als),
-        ("settings_view", reviewed.settings_view),
-        ("thermostat_view", reviewed.thermostat_view),
-        ("view_offset", reviewed.view_offset),
-        ("current_temperature", reviewed.current_temperature),
-        ("current_humidity", reviewed.current_humidity),
+        ("background_slot", background_slot),
+        ("background_draw", background_draw),
+        ("brightness_manager", bright.accessor),
+        ("read_als", sampler),
+        ("settings_view", discovery::primary_vtable(&elf, "14nlSettingsView")?),
+        ("thermostat_view", discovery::primary_vtable(&elf, "16nlThermostatView")?),
+        ("view_offset", offsets[0]),
+        ("current_temperature", temperature),
+        ("current_humidity", humidity),
         ("leaf_slot", reviewed.leaf_slot),
         ("target_slot", reviewed.globals.target),
         ("fahrenheit_slot", reviewed.globals.fahrenheit),
@@ -257,7 +212,7 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
         ("off_slot", reviewed.globals.off),
         ("eco_slot", reviewed.globals.eco),
         ("dial_size", reviewed.dial_size),
-        ("software", u32::from(reviewed.software)),
+        ("software", u32::from(found.framebuffer.is_some())),
     ];
     for name in NATIVES {
         let Some(&address) = found.native_api.get(*name) else {
@@ -319,22 +274,25 @@ mod tests {
 
     #[test]
     fn reviewed_builds_bind_every_name() {
-        let firmware = std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware");
-        for sample in [
-            "nlclient-gen3-2025",
-            "nlclient-gen3-6.5-14",
-            "nlclient-gen3-6.5-14-2",
-            "nlclient-gen3-6.0-6",
-            "nlclient-genE-6.1-9",
-            "nlclient-genE-6.3-5",
-            "nlclient-genE-6.5-14",
-            "nlclient-gen2-2019",
+        let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
+        for (sample, expected) in [
+            ("nlclient-gen3-2025", "742245b5bd73e178e4cb537d615c7db8d662779ae2931637030994803deae705"),
+            ("nlclient-gen3-6.5-14", "c8c77f9e274760ec702e26872afa065d7a816374053f86e32c5dc98091edee27"),
+            ("nlclient-gen3-6.5-14-2", "26daac6544e251348e6aa7e973ea42fa361c00a80b1305c0347a5fe056a9fdd6"),
+            ("nlclient-gen3-6.0-6", "843accc0ff15f6be24bc77a23d2b084bd0d5bd346e3a435234705251cba6b7bb"),
+            ("nlclient-genE-6.1-9", "187e2e6a5661282f8698a3b84785cbf5203d51655971b13e0f74840933ae6231"),
+            ("nlclient-genE-6.3-5", "c4d1798f5693266be78be1523eb27ef8fa9e2790222a648447c02cb233a5e507"),
+            ("nlclient-genE-6.5-14", "aca741a27514537d936c9d6d757e2c3db33a9dc5deab7448b4dcc79af596c2f6"),
+            ("nlclient-gen2-2019", "06ad736fd836b2fb9b3c5c73ca60ab7e7088e3055020d9cdd0eb8526e007693f"),
         ] {
             let Ok(stock) = std::fs::read(firmware.join(sample)) else {
                 assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");
                 continue;
             };
-            let text = String::from_utf8(bindings(&stock).unwrap()).unwrap();
+            let text = String::from_utf8(bindings(&stock).unwrap_or_else(|e| panic!("{sample}: {e}"))).unwrap();
+            assert_eq!(sha256_hex(text.as_bytes()), expected, "{sample} theme bindings");
             assert_eq!(text.lines().count(), 25 + NATIVES.len(), "{sample}");
             assert!(text.lines().all(|l| l.split_once(" 0x").is_some()), "{sample}");
         }

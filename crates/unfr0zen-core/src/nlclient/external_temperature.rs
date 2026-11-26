@@ -146,26 +146,34 @@ fn sample_reply(address: u32, retry: u32) -> Result<Vec<u8>> {
         .collect())
 }
 
-fn screen_bindings() -> std::collections::BTreeMap<String, u32> {
-    [
+fn screen_bindings(elf: &Elf) -> Result<std::collections::BTreeMap<String, u32>> {
+    let mut bindings: std::collections::BTreeMap<_, _> = [
         ("rcs_screen_lookup", 0x51a1c),
         ("rcs_layer_lookup", 0x519a0),
         ("rcs_layer_new", 0x19862c),
         ("rcs_screen_new", 0x19a6f8),
         ("rcs_add_layer", 0x51968),
         ("rcs_add_screen", 0x519e8),
-        ("strcmp", 0x2bec4),
         ("rcs_associated", 0x96a08),
-        ("rcs_string_find", 0x2a820),
         ("rcs_native_post", 0x6c180),
-        ("rcs_native_read", 0x2c77c),
-        ("rcs_interval", 0x2b36c),
-        ("rcs_string_clear", 0x2ce48),
-        ("rcs_poll", 0x2ad60),
     ]
     .into_iter()
     .map(|(name, address)| (name.into(), address))
-    .collect()
+    .collect();
+    let imports = super::discovery::imported(elf)?;
+    for (name, symbol) in [
+        ("strcmp", "strcmp"),
+        ("rcs_string_find", "_ZNK8nlString4FindERKS_6nlBOOL"),
+        ("rcs_native_read", "PR_Read"),
+        ("rcs_interval", "PR_MillisecondsToInterval"),
+        ("rcs_string_clear", "_ZN8nlString5ClearEv"),
+        ("rcs_poll", "PR_Poll"),
+    ] {
+        let address =
+            imports.get(symbol).ok_or_else(|| crate::Error::Device(format!("missing RCS import {symbol}")))?;
+        bindings.insert(name.into(), *address);
+    }
+    Ok(bindings)
 }
 
 /// Extend the screen builder's executable load segment. The stock hash guards
@@ -262,7 +270,7 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     code.extend(COMMAND);
     code.extend(RETRY_REPLY);
     code.resize(align(code.len(), 4)?, 0);
-    let screen = super::linker::link(screen_object, address + code.len() as u32, &screen_bindings())?;
+    let screen = super::linker::link(screen_object, address + code.len() as u32, &screen_bindings(&elf)?)?;
     let post_entry = screen
         .symbols
         .get("rcs_post_reading")

@@ -1,12 +1,9 @@
 # 5.6-7 native UI baseline
 
 The gen 3's 5.6-7 executable uses 32-byte `nlString` objects and compact
-screen and layer vtables. Its bindings in
-`crates/unfr0zen-core/src/nlclient/discovery/legacy.rs` apply only to the
-complete stock executable with SHA-256
-`e9b4f67b1e6c422a1bbe0c9bfd5aa6a63184010cc663b64374132553d393d741`.
-Other legacy executables require their own ABI review; matching the version
-string does not admit a build.
+screen and layer vtables. `discovery/legacy.rs` resolves its bindings from the screen
+registrations, vtables, imports and ARM instructions. The regression sample
+has SHA-256 `e9b4f67b1e6c422a1bbe0c9bfd5aa6a63184010cc663b64374132553d393d741`.
 
 The payload is `build/custom-screen-legacy.o`, compiled from the shared
 screen source with `CUSTOM_LEGACY_ABI`, using Debian clang 19.1.7. Modern

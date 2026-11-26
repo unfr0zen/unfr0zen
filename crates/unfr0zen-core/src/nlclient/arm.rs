@@ -133,6 +133,11 @@ impl<'a, 'b> Arm<'a, 'b> {
         }
         Ok(result)
     }
+    /// The unwind entry covering an instruction in the executable.
+    pub fn enclosing(&self, address: u32) -> Option<u32> {
+        let end = self.starts.partition_point(|&a| a <= address);
+        self.starts.get(end.checked_sub(1)?).copied().filter(|&a| self.elf.text(a))
+    }
     pub fn code(&self, address: u32, size: Option<usize>) -> Result<Vec<Ins>> {
         if address & 3 != 0 || !self.elf.text(address) {
             return device(format!("not ARM executable code: {address:#x}"));

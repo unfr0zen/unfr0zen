@@ -44,12 +44,12 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
     let mut output = stock.clone();
     dark_theme::patch(&stock, &mut output).unwrap();
     assert_eq!(output.len(), golden["output_size"].as_u64().unwrap() as usize);
-    assert_eq!(sha256_hex(&output), golden["output_sha256"]);
     for edit in golden["edits"].as_array().unwrap() {
         let at = offset(&stock, hex(&edit[0]));
         assert_eq!(word(&stock, at), hex(&edit[1]));
-        assert_eq!(word(&output, at), hex(&edit[2]));
+        assert_eq!(word(&output, at), hex(&edit[2]), "{}", edit[0]);
     }
+    assert_eq!(sha256_hex(&output), golden["output_sha256"]);
     let changed = stock.iter().zip(&output).filter(|(a, b)| a != b).count();
     assert!(changed > 0 && changed <= 4 * golden["edits"].as_array().unwrap().len());
 
@@ -64,8 +64,23 @@ fn reviewed_j49_dark_theme_matches_the_golden_and_composes() {
     assert!(dark_theme::patch(&stock, &mut changed_site).is_err());
     assert_eq!(changed_site, untouched);
     let mut changed_stock = stock.clone();
-    changed_stock[0x1000] ^= 1;
-    assert!(dark_theme::patch(&changed_stock, &mut stock.clone()).is_err());
+    changed_stock.extend(b"build metadata");
+    let mut changed_output = changed_stock.clone();
+    dark_theme::patch(&changed_stock, &mut changed_output).unwrap();
+    assert_eq!(&changed_output[..stock.len()], output);
+    assert_eq!(&changed_output[stock.len()..], b"build metadata");
+
+    // The same palette operations occur at different addresses in these builds.
+    for name in ["nlclient-gen1-2019", "nlclient-gen2-5.9.1-6"] {
+        let Ok(stock) = std::fs::read(firmware.join(name)) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "missing {name}");
+            continue;
+        };
+        let mut dark = stock.clone();
+        dark_theme::patch(&stock, &mut dark).unwrap();
+        let journal = Patch::parse(&Patch::journal(&stock, &dark).unwrap()).unwrap();
+        assert_eq!(journal.apply(&dark, true).unwrap(), stock);
+    }
 
     // Over the ordinary settings screen and the external temperature patch,
     // as set_up_on_device composes them, and reversible through the journal.

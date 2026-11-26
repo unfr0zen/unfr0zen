@@ -1,4 +1,4 @@
-//! Hash-guarded 5.6-7 ABI checks; proprietary firmware stays in private fixtures.
+//! Compact UI discovery checks; proprietary firmware stays in private fixtures.
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Read, path::PathBuf};
 use unfr0zen_core::{
@@ -95,14 +95,29 @@ fn stock_legacy_firmware_matches_every_reviewed_stage_and_undoes_exactly() {
 }
 
 #[test]
-fn changed_legacy_executables_and_the_modern_object_are_rejected() {
+fn compact_discovery_accepts_changed_metadata_and_rejects_a_changed_getter() {
     let (Some(stock), Some(object)) = (stock(), object()) else { return };
-    for offset in [0, 0xc75b4, stock.len() - 1] {
-        let mut changed = stock.clone();
-        changed[offset] ^= 1;
-        assert!(!nlclient::legacy_abi(&changed));
-        assert!(builder::build(&changed, &object, &[]).is_err(), "changed byte {offset:#x}");
-    }
+    let mut changed = stock.clone();
+    changed.extend_from_slice(b"additional build metadata");
+    assert!(nlclient::legacy_abi(&changed));
+    let built = builder::build(&changed, &object, &Section::LEGACY).unwrap();
+    assert_eq!(built.manifest["reviewed"], false);
+    assert_eq!(built.manifest["native_api"], golden()["native_api"]);
+    assert_eq!(nlclient::Patch::parse(&built.journal).unwrap().apply(&built.output, true).unwrap(), changed);
+
+    let width = golden()["native_api"]["native_image_width"].as_u64().unwrap() as u32;
+    let word = |at: usize| u32::from_le_bytes(stock[at..at + 4].try_into().unwrap());
+    let headers = word(28) as usize;
+    let count = u16::from_le_bytes(stock[44..46].try_into().unwrap()) as usize;
+    let at = (0..count)
+        .map(|i| headers + i * 32)
+        .find(|&h| word(h) == 1 && width >= word(h + 8) && width - word(h + 8) < word(h + 16))
+        .unwrap();
+    let at = (word(at + 4) + width - word(at + 8)) as usize;
+    let at = (at..at + 32).step_by(4).find(|&at| word(at) == 0xe5900004).unwrap();
+    changed[at] = 12;
+    let error = builder::build(&changed, &object, &[]).err().unwrap().to_string();
+    assert!(error.contains("compact image width"), "{error}");
     if let Ok(modern) = std::fs::read(root().join("build/custom-screen.o")) {
         assert!(builder::build(&stock, &modern, &[]).is_err());
     }

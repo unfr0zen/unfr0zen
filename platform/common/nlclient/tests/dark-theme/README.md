@@ -1,9 +1,9 @@
 # Gen 2 dark theme verification
 
-The j49 dark theme is a fixed set of word edits to the stock nlclient
-5.9.4-5. Only the exact stock SHA256 in `j49-5.9.4-5.json` is accepted, and
-each edited word must hold its stock value in the screen builder's output
-before any word is written.
+The dark theme locates the gen 1 and gen 2 palette operations using local
+instruction sequences and the background colour setter. The complete patch
+requires all palette roles. Each edited word must still hold its stock value
+in the screen builder's output before any word is written.
 
 The edits give the settings screens the colours the gen 3's nlclient sets in
 the same functions:
@@ -36,11 +36,10 @@ background calls by scanning for SetColor calls, rather than from the Rust
 table. It records every edit as (address, stock word, new word), and the
 digest and size of the stock executable with only these edits applied.
 
-The public test compares the Rust edit table with the golden. The strict test
-also needs the stock j49 sample: it applies the patch to the stock binary and
-compares the whole output's digest, refuses changed sites, and applies the
-patch together with the ordinary settings screen and the external
-temperature patch.
+The strict test compares every edited word and the complete output digest on
+gen 2 5.9.4-5, checks composition with the settings screen and external
+temperature patch, and checks patching and undo on gen 1 5.9.4-5 and gen 2
+5.9.1-6.
 
 ```sh
 NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme

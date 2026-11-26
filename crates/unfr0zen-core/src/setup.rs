@@ -565,7 +565,7 @@ pub struct Options {
     /// The relocatable native Sensors view helper, linked only on gen 1 and gen 2.
     pub external_temperature_screen: Vec<u8>,
     /// The gen 1's and gen 2's settings screens in the gen 3's dark palette,
-    /// through the reviewed nlclient 5.9.4-5 patch; the gen 3 ignores it.
+    /// through its stock nlclient palette routines; the gen 3 ignores it.
     pub dark_theme: bool,
     /// An SSH server root logs in to with its password; without it rcS does
     /// not start sshd and sshd's files are stock.
