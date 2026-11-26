@@ -94,8 +94,6 @@ DECLARE_LAYOUT(MENU_SCREENS_REGISTER);
 #define MENU_SCREENS_REGISTER LAYOUT(MENU_SCREENS_REGISTER)
 DECLARE_LAYOUT(MENU_NEXT_REGISTER);
 #define MENU_NEXT_REGISTER LAYOUT(MENU_NEXT_REGISTER)
-DECLARE_LAYOUT(MENU_HAS_DOOM);
-#define MENU_HAS_DOOM LAYOUT(MENU_HAS_DOOM)
 DECLARE_LAYOUT(MENU_GROW_APPENDS);
 #define MENU_GROW_APPENDS LAYOUT(MENU_GROW_APPENDS)
 /* Room for the copied vtables; the build refuses larger discovered ones. */
@@ -244,6 +242,7 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 #define MATTER_REQUEST   RUN "matter-reset.request"
 #define THEME_REQUEST    RUN "theme.request"
 #define SCHEDULE_STATUS  RUN "schedule.status"
+#define THEME_STATUS     RUN "theme.status"
 #define SCHEDULE_REQUEST RUN "schedule.request"
 #define NOT_ENABLED      "Not enabled or service unavailable"
 
@@ -273,6 +272,11 @@ typedef struct {
     u32 words[7];
 #endif
 } nl_string;
+/* A choice row's flags, as stock lists set them: a row that takes a check
+ * mark, and the one checked, which the stock layout draws with the mark. The
+ * layout leaves a gap between the checkable rows and those after them. */
+#define CHOICE_CHECKABLE 0x20000000u
+#define CHOICE_CHECKED   0x8u
 /* The stock text layout's configuration: text rows then choice rows. */
 typedef struct {
     int text_count;
@@ -376,6 +380,8 @@ struct custom_state {
     char status[96];
     char code[32];
     char detail[192];
+    /* The saved schedule's state: 1 on, 0 off, -1 none or unknown. */
+    int schedule_on;
     enum custom_page image_page;
     void *activity_images[ACTIVITY_FRAMES];
     unsigned int activity_ticks;
@@ -388,6 +394,7 @@ struct custom_state {
     int display;
     int drawn;
     void *menu_glyph;
+    int menu_shown;
 #ifdef CUSTOM_LEGACY_ABI
     /* Stock Legal Info owns an integer and a string where newer layers keep an image. */
     void *image;
@@ -398,6 +405,7 @@ struct custom_state {
     int choice_capacity;
     struct theme_catalog themes;
     u32 flags[3];
+    u32 *choice_flags;
     const char **choice_ids;
     u8 layer_vtables[VTABLE_MAX];
     u8 screen_vtables[VTABLE_MAX];
@@ -934,12 +942,21 @@ static void choices_capacity(struct custom_state *s, int count) {
         native_delete(s->choices);
     if (s->choice_ids)
         native_delete(s->choice_ids);
+    if (s->choice_flags)
+        native_delete(s->choice_flags);
     s->choices = native_new(count * sizeof(nl_string));
+    s->choice_flags = native_new(count * sizeof(u32));
     s->choice_ids = native_new((count + 1) * sizeof(char *));
     for (int i = 0; i < count; i++)
         native_string_ctor(&s->choices[i]);
     s->choice_capacity = count;
     s->config.choices = s->choices;
+    s->config.choice_flags = s->choice_flags;
+}
+/* Marks rows 0 to `count` as checkable and `current` among them checked. */
+static void check_choices(struct custom_state *s, int count, int current) {
+    for (int i = 0; i < count; i++)
+        s->choice_flags[i] = CHOICE_CHECKABLE | (i == current ? CHOICE_CHECKED : 0);
 }
 /* Writes `length` bytes of `data` to `tmp`, then renames it to `path`,
  * so nestlocal never reads a partial request: 0 once written. */
@@ -1109,13 +1126,15 @@ static void schedule_detail(struct custom_state *s) {
     read_text(SCHEDULE_STATUS, s->status, sizeof(s->status), "");
     const char *label = "Schedule unavailable";
     unsigned int remaining = 0;
+    s->schedule_on = -1;
     if (custom_schedule_status(s->status, fields, &error)) {
+        if (fields[0] && !*error)
+            s->schedule_on = fields[1] != 0;
         if (s->flow.page != CUSTOM_HOLD_DURATION)
             s->flow.hold_minutes = fields[3];
-        label = !fields[0]  ? "No saved schedule"
-                : fields[2] ? "Schedule held"
-                : fields[1] ? "Schedule on"
-                            : "Schedule off (indefinite)";
+        /* The menu tile shows ON, OFF or ON HOLD (schedule_subtitle); the
+         * page only what the tile cannot. */
+        label = fields[0] ? "" : "No saved schedule";
         if (*error)
             label = error;
         else if (fields[2]) {
@@ -1129,13 +1148,24 @@ static void schedule_detail(struct custom_state *s) {
     while (*label && n < sizeof(s->detail) - 32)
         s->detail[n++] = *label++;
     if (remaining && !s->flow.action_failed) {
-        s->detail[n++] = '\n';
+        if (n)
+            s->detail[n++] = '\n';
         n += put_number(s->detail + n, remaining);
         const char *suffix = " min remaining";
         while (*suffix)
             s->detail[n++] = *suffix++;
     }
+    /* A blank line parts the status from the hint below it. */
+    if (n)
+        s->detail[n++] = '\n';
     s->detail[n] = 0;
+}
+/* A schedule page's texts: its detail over `hint`, or the hint alone as
+ * the first row, since an empty row still takes a line. */
+static void schedule_texts(struct custom_state *s, const char *hint) {
+    native_string_copy(&s->text[0], *s->detail ? s->detail : hint);
+    native_string_copy(&s->text[1], *s->detail ? hint : "");
+    s->config.text_count = *s->detail ? 2 : 1;
 }
 /* Lays out the current page: its texts, choices, selection and scroll.
  * `opening` is entering the page; otherwise its status refreshed and the
@@ -1169,6 +1199,7 @@ static void show(void *raw, int opening) {
                        : activity                                                            ? 1
                                                                                              : 2;
     s->flags[0] = s->flags[1] = s->flags[2] = 0;
+    bytes_zero(s->choice_flags, s->choice_capacity * sizeof(u32));
     s->config.text_count = activity ? 3 : 2;
     /* Text row 0 reserves the image's room in blank lines, so images
      * scroll with the text: their positions come from the native text-row
@@ -1183,24 +1214,22 @@ static void show(void *raw, int opening) {
         char name[64];
         read_text("/etc/unfr0zen/version", name, sizeof(name), "unfr0zen");
         native_string_copy(&s->text[1], name);
-        native_string_copy(&s->choices[0], "Done");
+        native_string_copy(&s->choices[0], "DONE");
         clear_choices(s, 1);
     } else if (s->flow.page == CUSTOM_SCHEDULE_HOME) {
-        native_string_copy(&s->text[0], s->detail);
-        native_string_copy(&s->text[1], "Pause the schedule or hold your current temperature.");
-        native_string_copy(&s->choices[0], "Done");
-        native_string_copy(&s->choices[1], "Schedule");
-        native_string_copy(&s->choices[2], "Hold");
-        native_string_copy(&s->choices[3], "Hold duration");
+        schedule_texts(s, "Pause the schedule or hold your current temperature.");
+        native_string_copy(&s->choices[0], "Schedule");
+        native_string_copy(&s->choices[1], "Hold");
+        native_string_copy(&s->choices[2], "Hold duration");
+        native_string_copy(&s->choices[3], "DONE");
         clear_choices(s, 4);
+        /* Checkable, none checked: only for the gap above DONE. */
+        check_choices(s, 3, -1);
     } else if (schedule) {
-        native_string_copy(&s->text[0], s->detail);
-        const char *hint = s->flow.page == CUSTOM_SCHEDULE
-                               ? "On resumes the saved schedule. Off pauses it indefinitely."
-                           : s->flow.page == CUSTOM_HOLD
-                               ? "Hold keeps your temperature until expiry. Cancel resumes the saved schedule."
-                               : "Turn the ring to choose 1-1440 minutes. Click to save; Back cancels.";
-        native_string_copy(&s->text[1], hint);
+        schedule_texts(s, s->flow.page == CUSTOM_SCHEDULE ? "On resumes the saved schedule. Off pauses it indefinitely."
+                          : s->flow.page == CUSTOM_HOLD
+                              ? "Hold keeps your temperature until expiry. Cancel resumes the saved schedule."
+                              : "Turn the ring to choose 1-1440 minutes. Click to save; Back cancels.");
         if (s->flow.page == CUSTOM_HOLD_DURATION) {
             char label[32];
             unsigned int n = 0;
@@ -1221,23 +1250,32 @@ static void show(void *raw, int opening) {
             bytes_copy(label + n, " min", 5);
             native_string_copy(&s->choices[0], s->flow.page == CUSTOM_SCHEDULE ? "On" : label);
             native_string_copy(&s->choices[1], s->flow.page == CUSTOM_SCHEDULE ? "Off" : "Cancel hold");
-            native_string_copy(&s->choices[2], "Back");
+            native_string_copy(&s->choices[2], "BACK");
             clear_choices(s, 3);
+            if (s->flow.page == CUSTOM_SCHEDULE && s->schedule_on >= 0)
+                check_choices(s, 2, s->schedule_on ? 0 : 1);
         }
     } else if (theme) {
         native_string_copy(&s->text[0], s->flow.action_failed ? "nestlocal is unavailable. Try again."
                                                               : "The theme used on the home screen.");
         native_string_copy(&s->text[1], "");
         s->config.text_count = 1;
-        for (int i = 0; i < s->themes.count; i++)
+        char shown[64];
+        read_text(THEME_STATUS, shown, sizeof(shown), "");
+        int current = -1;
+        for (int i = 0; i < s->themes.count; i++) {
             native_string_copy(&s->choices[i], s->themes.labels[i]);
-        native_string_copy(&s->choices[s->themes.count], "Back");
+            if (same_text(shown, s->themes.labels[i]))
+                current = i;
+        }
+        check_choices(s, s->themes.count, current);
+        native_string_copy(&s->choices[s->themes.count], "BACK");
     } else if (doom) {
         native_string_copy(&s->text[1], s->flow.action_failed
                                             ? "Doom is unavailable. Try again."
                                             : "Doom runs full screen until you hold the button for three seconds.");
         native_string_copy(&s->choices[0], "Play");
-        native_string_copy(&s->choices[1], "Back");
+        native_string_copy(&s->choices[1], "BACK");
         clear_choices(s, 2);
     } else {
         /* Matter's and Zigbee's pages: status, confirmation or pairing. */
@@ -1260,13 +1298,13 @@ static void show(void *raw, int opening) {
         if (activity) {
             /* Room for the spinner. */
             native_string_copy(&s->text[2], "\n\n");
-            native_string_copy(&s->choices[0], "Back");
+            native_string_copy(&s->choices[0], "BACK");
             clear_choices(s, 1);
             load_activity(raw);
         } else {
             native_string_copy(&s->choices[0],
                                s->flow.page == CUSTOM_MATTER_CONFIRM ? "Forget and pair" : "Enable pairing");
-            native_string_copy(&s->choices[1], "Back");
+            native_string_copy(&s->choices[1], "BACK");
             clear_choices(s, 2);
         }
     }
@@ -1287,7 +1325,11 @@ static void show(void *raw, int opening) {
     WORD(base, COMMON_CHOICE_FIRST) = 0;
     WORD(base, COMMON_CHOICE_LAST) = choice_count - 1;
     native_config_layout(raw, &s->config, FIXED_ONE, choice_count);
+    /* A page opens on its checked row, as stock lists do. */
     int selection = opening ? 0 : old_selection;
+    for (int i = 0; opening && i < choice_count; i++)
+        if (s->choice_flags[i] & CHOICE_CHECKED)
+            selection = i;
     if (selection >= choice_count)
         selection = choice_count - 1;
     if (selection < 0)
@@ -1335,9 +1377,9 @@ static void refresh_status(void *raw) {
     if (custom_schedule_page(s->flow.page)) {
         char previous[sizeof(s->detail)];
         bytes_copy(previous, s->detail, sizeof(previous));
-        int minutes = s->flow.hold_minutes;
+        int minutes = s->flow.hold_minutes, on = s->schedule_on;
         schedule_detail(s);
-        if (!same_text(previous, s->detail) || minutes != s->flow.hold_minutes)
+        if (!same_text(previous, s->detail) || minutes != s->flow.hold_minutes || on != s->schedule_on)
             show(raw, 0);
         return;
     }
@@ -1548,6 +1590,21 @@ static int draw(void *raw, void *context) {
     return 0;
 }
 static int draw_common(void *base, void *context) { return draw((u8 *)base - COMMON_OFFSET, context); }
+/* The schedule tile's subtitle: ON, OFF or ON HOLD, or nothing without a
+ * saved schedule. */
+__attribute__((noinline)) static const char *schedule_subtitle(void) {
+    char status[96];
+    unsigned int fields[4];
+    const char *error;
+    read_text(SCHEDULE_STATUS, status, sizeof(status), "");
+    if (!custom_schedule_status(status, fields, &error) || !fields[0] || *error)
+        return "";
+    if (fields[2])
+        return "ON HOLD";
+    if (fields[1])
+        return "ON";
+    return "OFF";
+}
 static void title(void *screen) {
     enum custom_page root = state(raw_layer(screen))->flow.root;
     /* Local volatile stores prevent an absolute-pointer lookup table: the
@@ -1562,9 +1619,10 @@ static void title(void *screen) {
     if (root == CUSTOM_DOOM)
         heading = "\nDOOM";
     if (root == CUSTOM_SCHEDULE_HOME)
-        heading = "\nSCHEDULE";
+        heading = "\nSCHEDULE MODE";
     native_string_copy((nl_string *)((u8 *)screen + SCREEN_TITLE), heading);
-    native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE), "");
+    native_string_copy((nl_string *)((u8 *)screen + SCREEN_SUBTITLE),
+                       root == CUSTOM_SCHEDULE_HOME ? schedule_subtitle() : "");
     native_rebuild_title(screen);
 }
 /* A copy of the drawing context's vtable whose text call lifts the title,
@@ -1592,6 +1650,10 @@ static int screen_draw(void *screen, void *context) {
     int menu_visible = !native_menu_hidden(globals);
     struct title_context view;
     struct custom_state *s = state(raw_layer(screen));
+    /* The tile's subtitle follows the schedule each time the menu appears. */
+    if (menu_visible && !s->menu_shown && s->flow.root == CUSTOM_SCHEDULE_HOME)
+        title(screen);
+    s->menu_shown = menu_visible;
     if (menu_visible) {
         view.y_offset = (int)(SCALED(s, TITLE_LIFT) * native_menu_scale(globals));
         view.original = PTR(context, 0);
@@ -1676,9 +1738,26 @@ static int screen_event(void *screen, void *event, void *target) {
  * menu table or its sentinels. The caller's insertion and lookup own no
  * screen references; its native vector helper owns its buffer allocation. */
 __attribute__((used, noinline)) static void custom_menu_insert(u32 *registers) {
-    if (!custom_schedule_insert_before((const char *)registers[1], MENU_HAS_DOOM))
-        return;
     void *menu = (void *)registers[MENU_OBJECT_REGISTER];
+    /* The entry listed before this lookup's: the legacy name array holds the
+     * current name already; the vector's last screen is the previous one. */
+    int after_lead = 0;
+    if (MENU_NAMES_REGISTER) {
+        u32 n = registers[MENU_NAMES_REGISTER];
+        if (n >= 2)
+            after_lead = custom_menu_lead(((const char **)((u8 *)menu + MENU_NAMES_OFFSET))[n - 2]);
+    } else {
+        u32 begin = WORD(menu, 0x70), end = WORD(menu, 0x74);
+        if (custom_menu_vector_valid(begin, end, WORD(menu, 0x78)) && end > begin) {
+            void *last = *(void **)(end - 4);
+            void *table = (void *)registers[0];
+            after_lead = last == native_menu_lookup(table, "temperature") ||
+                         last == native_menu_lookup(table, "account") || last == native_menu_lookup(table, "update") ||
+                         last == native_menu_lookup(table, "proinfoscreen");
+        }
+    }
+    if (!custom_schedule_insert_before((const char *)registers[1], after_lead))
+        return;
 #ifdef CUSTOM_LEGACY_ABI
     void *screen = native_menu_lookup((void *)registers[0], "update");
 #else

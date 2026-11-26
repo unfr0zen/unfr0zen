@@ -29,8 +29,17 @@ static inline int custom_same(const char *a, const char *b) {
     }
     return *a == *b;
 }
-static inline int custom_schedule_insert_before(const char *name, int doom) {
-    return custom_same(name, doom ? "templock" : "slideshow");
+/* The entries SCHEDULE MODE follows: the menu's leading Temperature sentinel
+ * and the optional sections' hosts. */
+static inline int custom_menu_lead(const char *name) {
+    return custom_same(name, "temperature") || custom_same(name, "account") || custom_same(name, "update") ||
+           custom_same(name, "proinfoscreen");
+}
+/* SCHEDULE MODE goes before `name` when the entry listed just before it is a
+ * lead one (`after_lead`) and `name` is not: after the optional sections,
+ * before Doom or the first stock entry the unit lists, whichever it is. */
+static inline int custom_schedule_insert_before(const char *name, int after_lead) {
+    return after_lead && !custom_menu_lead(name);
 }
 static inline enum custom_page custom_root(const char *name) {
     return custom_same(name, "account")         ? CUSTOM_ZIGBEE
@@ -233,13 +242,13 @@ static int custom_choose(struct custom_flow *flow, int choice, int (*request)(in
         if (choice == 0)
             return CHOOSE_EXIT;
     } else if (flow->page == CUSTOM_SCHEDULE_HOME) {
-        if (choice == 0)
+        if (choice == 3)
             return CHOOSE_EXIT;
-        if (choice == 1)
+        if (choice == 0)
             flow->page = CUSTOM_SCHEDULE;
-        else if (choice == 2)
+        else if (choice == 1)
             flow->page = CUSTOM_HOLD;
-        else if (choice == 3) {
+        else if (choice == 2) {
             flow->page = CUSTOM_HOLD_DURATION;
             flow->hold_fraction = 0;
         }

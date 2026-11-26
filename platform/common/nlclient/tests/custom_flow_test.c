@@ -73,7 +73,7 @@ static void schedule_test(void) {
     assert(!custom_schedule_status("2 0 0 120", fields, &error));
     assert(!custom_schedule_status("1 0 0 120 extra", fields, &error));
     last = 99;
-    custom_choose(&f, 1, request, 0);
+    custom_choose(&f, 0, request, 0);
     assert(f.page == CUSTOM_SCHEDULE && last == 99 && !custom_activity(f.page));
     custom_choose(&f, 0, request, 0);
     assert(last == REQUEST_SCHEDULE_ON);
@@ -83,14 +83,14 @@ static void schedule_test(void) {
     assert(last == REQUEST_SCHEDULE_OFF);
     custom_choose(&f, 2, request, 0);
     assert(f.page == CUSTOM_SCHEDULE_HOME);
-    custom_choose(&f, 2, request, 0);
+    custom_choose(&f, 1, request, 0);
     assert(f.page == CUSTOM_HOLD);
     custom_choose(&f, 0, request, 0);
     assert(last == REQUEST_HOLD_ON);
     custom_choose(&f, 1, request, 0);
     assert(last == REQUEST_HOLD_OFF);
     assert(custom_back(&f) && f.page == CUSTOM_SCHEDULE_HOME);
-    custom_choose(&f, 3, request, 0);
+    custom_choose(&f, 2, request, 0);
     assert(f.page == CUSTOM_HOLD_DURATION && custom_schedule_page(f.page));
     custom_duration_step(&f, -1000);
     assert(f.hold_minutes == 1);
@@ -104,12 +104,13 @@ static void schedule_test(void) {
     fail = 0;
     custom_choose(&f, 0, request, 0);
     assert(!f.action_failed && f.page == CUSTOM_SCHEDULE_HOME);
-    custom_choose(&f, 3, request, 0);
+    custom_choose(&f, 2, request, 0);
     last = 99;
     f.hold_minutes = 0;
     custom_choose(&f, 0, request, 0);
     assert(f.action_failed && last == 99);
     assert(custom_back(&f) && f.page == CUSTOM_SCHEDULE_HOME && !f.action_failed);
+    assert(custom_choose(&f, 3, request, 0) == CHOOSE_EXIT);
 }
 static void duration_wheel_test(void) {
     struct custom_flow f = {.hold_minutes = 2};
@@ -128,16 +129,19 @@ static void duration_wheel_test(void) {
     assert(custom_duration_wheel(&f, -65536) && f.hold_minutes == 1439);
     f.page = f.root = CUSTOM_SCHEDULE_HOME;
     f.hold_fraction = 123;
-    custom_choose(&f, 3, request, 0);
+    custom_choose(&f, 2, request, 0);
     assert(f.page == CUSTOM_HOLD_DURATION && !f.hold_fraction);
 }
 static void menu_insertion_test(void) {
-    assert(custom_schedule_insert_before("templock", 1));
-    assert(!custom_schedule_insert_before("slideshow", 1));
-    assert(custom_schedule_insert_before("slideshow", 0));
-    assert(!custom_schedule_insert_before("templock", 0));
-    assert(!custom_schedule_insert_before("legalinfo", 0));
-    assert(!custom_schedule_insert_before("proinfoscreen", 1));
+    /* After Themes: before Doom, or before the first stock entry listed. */
+    assert(custom_schedule_insert_before("templock", custom_menu_lead("proinfoscreen")));
+    assert(custom_schedule_insert_before("homeawayassist", custom_menu_lead("proinfoscreen")));
+    assert(custom_schedule_insert_before("slideshow", custom_menu_lead("temperature")));
+    /* Never between the sentinel and the optional sections, nor later. */
+    assert(!custom_schedule_insert_before("proinfoscreen", custom_menu_lead("temperature")));
+    assert(!custom_schedule_insert_before("update", custom_menu_lead("account")));
+    assert(!custom_schedule_insert_before("homeawayassist", custom_menu_lead("templock")));
+    assert(!custom_schedule_insert_before("temperature", custom_menu_lead("reset")));
     int existing, schedule, legal;
     const char *names[32] = {"wifi", "legalinfo"};
     void *screens[36] = {0, 0, &existing};

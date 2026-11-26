@@ -27,7 +27,7 @@ records discovery, linking, output and undo checks separately. Modified or
 unknown legacy executables are refused.
 
 The settings menu has one entry per section: **ZIGBEE**, **MATTER**,
-**THEMES**, **SCHEDULE** and **DOOM** right after its first entry, with Schedule
+**THEMES**, **SCHEDULE MODE** and **DOOM** right after its first entry, with Schedule
 always present and the others only when that feature was installed
 (`--zigbee`, `--matter`, `--themes`,
 `--doom`), and **UNFR0ZEN** in Legal Info's place, just before Reset. Each
@@ -35,10 +35,14 @@ tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
 `G_unfr0zen_glyph_80px.png`) above its name. An entry opens its page
 directly, and Back on that page returns to the menu. The UNFR0ZEN page has the
 **192×192 unfr0zen icon**, the line “unfr0zen” with the version of the app
-that set up the unit (`/etc/unfr0zen/version`), and Done only. A separate
-**SCHEDULE** tile shows the
+that set up the unit (`/etc/unfr0zen/version`), and DONE only. A separate
+**SCHEDULE MODE** tile shows the
 [Material Design Icons calendar-clock](https://pictogrammers.com/library/mdi/icon/calendar-clock/)
-glyph and offers Schedule, Hold, Hold duration and Done. Schedule offers explicit On and Off: Off pauses indefinitely;
+glyph, the schedule's state under its name (ON, OFF or ON HOLD, read from
+`schedule.status` each time the menu appears), and offers Schedule, Hold, Hold
+duration and DONE. Schedule offers explicit On and Off, the current one checked
+as stock lists check theirs (the THEMES page checks the theme shown), and each
+page opens on its checked row. Off pauses indefinitely;
 On restores the saved schedule. Hold offers Start / renew and Cancel; renewal
 moves only the expiry, and cancellation restores the saved schedule. The duration
 picker uses the ring for 1–1440 minutes, click to save and Back to cancel.
@@ -107,10 +111,11 @@ a screen by name. Where more than one loop walks the list (6.0-6 also asks each
 listed screen in turn), the bound shortened is the one of the loop that builds
 the menu, which holds the insertion below; the others walk the whole list.
 
-SCHEDULE uses the unused cloud-setup child registration (`appsetup`). The
+SCHEDULE MODE uses the unused cloud-setup child registration (`appsetup`). The
 native menu's screen lookup is wrapped at its validated construction-loop call:
-when it reaches Doom (or Slideshow when Doom is absent), the wrapper inserts
-SCHEDULE before returning the original screen. All original list slots and
+at the first entry listed after the Temperature sentinel and the optional
+sections (Doom, or the first stock entry the unit lists, which varies), the
+wrapper inserts SCHEDULE MODE before returning the original screen. All original list slots and
 both temperature sentinels stay.
 Modern clients use a non-owning screen-pointer vector, grown through the native
 vector helper: inserting at the end, or on 6.0-6's older libstdc++ appending
