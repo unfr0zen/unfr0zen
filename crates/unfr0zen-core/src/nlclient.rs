@@ -57,6 +57,44 @@ pub const SECTION_GLYPHS: [(&str, &[u8]); 5] = [
     ),
 ];
 
+/// The gen E's menu glyphs, the entry's and every section's: 52 px and
+/// opaque, as its own menu draws them.
+pub const GEN_E_GLYPHS: [(&str, &[u8]); 6] = [
+    (
+        "nestlabs/share/images/G_unfr0zen_glyph_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/unfr0zen-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_schedule_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/schedule-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_zigbee_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/zigbee-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_matter_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/matter-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_themes_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/themes-glyph.png")),
+    ),
+    (
+        "nestlabs/share/images/G_unfr0zen_doom_52px.png",
+        include_bytes!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/nlclient/assets/gen-e/doom-glyph.png")),
+    ),
+];
+
+/// The menu glyphs a device's settings menu draws: the entry's, then every section's.
+pub fn glyphs(target: crate::Device) -> Vec<(&'static str, &'static [u8])> {
+    if target == crate::Device::Onyx {
+        GEN_E_GLYPHS.to_vec()
+    } else {
+        std::iter::once((GLYPH, GLYPH_BYTES)).chain(SECTION_GLYPHS).collect()
+    }
+}
+
 pub struct Edit {
     pub offset: usize,
     pub before: Vec<u8>,

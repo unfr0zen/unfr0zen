@@ -39,7 +39,7 @@
 #include <unistd.h>
 
 #define BINDINGS          "/etc/unfr0zen/theme.bindings"
-/* On the scratch volume, with the themes (unfr0zen-core's diamond3::scratch);
+/* On the scratch volume, with the themes (unfr0zen-core's common::scratch);
  * when it is gone the dial stays stock. */
 #define LIBRARY           "/media/scratch/.unfr0zen/lib/libnestlocal_theme.so"
 /* nestlocal's files (crates/nestlocal/src/theme/mod.rs). */
@@ -65,6 +65,7 @@
  * restarts. */
 #define CPU_SPEED         "/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed"
 #define CPU_NOW           "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+#define CPU_MAX           "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
 #define OWN_SPEED         "/var/run/unfr0zen/cpu.khz"
 #define FAST_KHZ          800000
 #define BOOST_NS          2000000000LL
@@ -1210,6 +1211,7 @@ static uint32_t *whole_page(void *ctx) {
 static atomic_int boosted;
 static atomic_llong shown_at;
 static atomic_uint own_khz;
+static unsigned fast_khz = FAST_KHZ;
 /* Whether the ticker runs. */
 static atomic_int ticking;
 /* Sets the processor's speed: false when it cannot be. */
@@ -1324,7 +1326,7 @@ static int draw(void *layer, void *ctx) {
         atomic_store(&frame_started, entered);
         atomic_store(&shown_at, entered);
         /* Faster only while the ticker runs, which brings it back. */
-        if (atomic_load(&own_khz) && atomic_load(&ticking) && !atomic_exchange(&boosted, 1) && !cpu_speed(FAST_KHZ))
+        if (atomic_load(&own_khz) && atomic_load(&ticking) && !atomic_exchange(&boosted, 1) && !cpu_speed(fast_khz))
             atomic_store(&own_khz, 0);
         if (benching && showing) {
             static long long entrance;
@@ -1427,7 +1429,7 @@ enum {
 static int redraw(struct handler *h, void *event) {
     (void)event;
     /* Automatic brightness, seeded once from the native ambient light sampler. */
-    if (!atomic_load(&ambient_ready)) {
+    if (brightness_manager && read_als && !atomic_load(&ambient_ready)) {
         void *manager = NATIVE(pointer_fn, brightness_manager)(h->globals);
         if (manager) {
             NATIVE(void_fn, read_als)(manager);
@@ -1732,8 +1734,11 @@ __attribute__((constructor)) static void init(void) {
     /* The processor at its own speed, should nlclient have stopped while
      * the theme ran it faster. */
     if (software) {
+        unsigned maximum = read_khz(CPU_MAX);
+        if (maximum && maximum < fast_khz)
+            fast_khz = maximum;
         unsigned khz = find_own_khz();
-        if (khz && khz < FAST_KHZ && cpu_speed(khz))
+        if (khz && khz < fast_khz && cpu_speed(khz))
             atomic_store(&own_khz, khz);
     }
     void *unused;

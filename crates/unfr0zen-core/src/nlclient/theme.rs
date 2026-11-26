@@ -26,7 +26,7 @@ struct Globals {
     off: u32,
     eco: u32,
 }
-/// 6.4-8's and 6.5-14's, the same in each of their reviewed builds.
+/// 6.x's, the same in every reviewed 6.5-14 and 6.4-8 build and the gen E's 6.3-5.
 const V6_GLOBALS: Globals =
     Globals { target: 0xa8, fahrenheit: 0xa0, low: 0xf0, high: 0xe8, mode: 0x138, off: 0, eco: 0 };
 
@@ -128,6 +128,60 @@ const REVIEWED: &[Reviewed] = &[
         dial_size: 480,
         software: false,
     },
+    // The gen E's 6.5-14: the gen 3's 6.5-14 drawn on the CPU, its
+    // globals laid out the same.
+    Reviewed {
+        stock_sha256: "be7410378c46ea13c72d2db6ac71be92c44519b7bfe8a72490c691cef584afb4",
+        background_slot: 0x68d08c,
+        background_draw: 0x2291e8,
+        brightness_manager: 0xaa0fc,
+        read_als: 0x233950,
+        settings_view: 0x6829b8,
+        thermostat_view: 0x6859b0,
+        view_offset: 0x2f0,
+        current_temperature: 0xacd34,
+        current_humidity: 0xacd4c,
+        leaf_slot: 0x364,
+        globals: V6_GLOBALS,
+        dial_size: 320,
+        software: true,
+    },
+    // The gen E's 6.3-5: 6.5-14's globals vtable up to the leaf, which comes
+    // two slots earlier, and its globals' fields 0x120 lower.
+    Reviewed {
+        stock_sha256: "6bdf8634147c4adb4e0ac03dfc7fc8e3313c1c424420eb22f721a0012adaaf25",
+        background_slot: 0x6abe00,
+        background_draw: 0x211ffc,
+        brightness_manager: 0xab1c8,
+        read_als: 0x21c41c,
+        settings_view: 0x6a0fb8,
+        thermostat_view: 0x6a3fb0,
+        view_offset: 0x1d4,
+        current_temperature: 0xaddbc,
+        current_humidity: 0xaddd4,
+        leaf_slot: 0x344,
+        globals: V6_GLOBALS,
+        dial_size: 320,
+        software: true,
+    },
+    // The gen E's 6.1-9, whose globals' vtable has fewer slots before the
+    // setpoints'.
+    Reviewed {
+        stock_sha256: "5da23c395b1ee0b258bc1d8a7a5a76931e778cf25afa8846e81245b38d088ca3",
+        background_slot: 0x4cb260,
+        background_draw: 0x1b005c,
+        brightness_manager: 0x759d8,
+        read_als: 0x1b99e4,
+        settings_view: 0x4a8cd8,
+        thermostat_view: 0x4b4518,
+        view_offset: 0x130,
+        current_temperature: 0x76cf8,
+        current_humidity: 0x76d10,
+        leaf_slot: 0x314,
+        globals: Globals { target: 0x8c, fahrenheit: 0x84, low: 0xd0, high: 0xc8, mode: 0x118, off: 0, eco: 0 },
+        dial_size: 320,
+        software: true,
+    },
     // 5.9.4-5, whose globals' vtable is laid out apart from 6.x's.
     Reviewed {
         stock_sha256: "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc30a3741bb7",
@@ -174,7 +228,7 @@ pub fn bindings(stock: &[u8]) -> Result<Vec<u8>> {
     let Some(reviewed) = REVIEWED.iter().find(|r| r.stock_sha256 == sha) else {
         return device("customizable themes do not support this firmware");
     };
-    let found = discovery::discover(stock)?;
+    let found = discovery::discover_hashed(stock, &sha)?;
     let Some(dial) = &found.dial else {
         return device("customizable themes: nlclient's dial was not found");
     };
@@ -271,6 +325,9 @@ mod tests {
             "nlclient-gen3-6.5-14",
             "nlclient-gen3-6.5-14-2",
             "nlclient-gen3-6.0-6",
+            "nlclient-genE-6.1-9",
+            "nlclient-genE-6.3-5",
+            "nlclient-genE-6.5-14",
             "nlclient-gen2-2019",
         ] {
             let Ok(stock) = std::fs::read(firmware.join(sample)) else {

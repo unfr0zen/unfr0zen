@@ -30,7 +30,7 @@ rcs_string_clear = 0x2ce48;
 rcs_poll = 0x2ad60;
 ENTRY(_start)
 SECTIONS {
-    . = 0x516bd4;
+    . = 0x516efc;
     .text : { *(.text) *(.text.*) }
     .rodata : { *(.rodata*) }
     /DISCARD/ : { *(.ARM.exidx*) *(.ARM.extab*) }

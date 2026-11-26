@@ -223,28 +223,35 @@ DECLARE_LAYOUT(MENU_GROW_APPENDS);
 #define OPAQUE    255
 
 /* --- Files --------------------------------------------------------------- */
-#define IMAGES           "/nestlabs/share/images/"
-#define CUSTOM_IMAGE     IMAGES "G_unfr0zen_192px.png"
+#define IMAGES               "/nestlabs/share/images/"
+#define CUSTOM_IMAGE         IMAGES "G_unfr0zen_192px.png"
 /* The menu glyphs: each entry's, 80 px. */
-#define MENU_GLYPH       IMAGES "G_unfr0zen_glyph_80px.png"
-#define SCHEDULE_GLYPH   IMAGES "G_unfr0zen_schedule_80px.png"
-#define ZIGBEE_GLYPH     IMAGES "G_unfr0zen_zigbee_80px.png"
-#define MATTER_GLYPH     IMAGES "G_unfr0zen_matter_80px.png"
-#define THEMES_GLYPH     IMAGES "G_unfr0zen_themes_80px.png"
-#define DOOM_GLYPH       IMAGES "G_unfr0zen_doom_80px.png"
+#define MENU_GLYPH           IMAGES "G_unfr0zen_glyph_80px.png"
+#define SCHEDULE_GLYPH       IMAGES "G_unfr0zen_schedule_80px.png"
+#define ZIGBEE_GLYPH         IMAGES "G_unfr0zen_zigbee_80px.png"
+#define MATTER_GLYPH         IMAGES "G_unfr0zen_matter_80px.png"
+#define THEMES_GLYPH         IMAGES "G_unfr0zen_themes_80px.png"
+#define DOOM_GLYPH           IMAGES "G_unfr0zen_doom_80px.png"
+/* The gen E's: opaque white, 52 px, as its own menu draws them. */
+#define GEN_E_MENU_GLYPH     IMAGES "G_unfr0zen_glyph_52px.png"
+#define GEN_E_SCHEDULE_GLYPH IMAGES "G_unfr0zen_schedule_52px.png"
+#define GEN_E_ZIGBEE_GLYPH   IMAGES "G_unfr0zen_zigbee_52px.png"
+#define GEN_E_MATTER_GLYPH   IMAGES "G_unfr0zen_matter_52px.png"
+#define GEN_E_THEMES_GLYPH   IMAGES "G_unfr0zen_themes_52px.png"
+#define GEN_E_DOOM_GLYPH     IMAGES "G_unfr0zen_doom_52px.png"
 /* Doom's title, made from the WAD when the app installs Doom (246x120). */
-#define DOOM_IMAGE       IMAGES "G_unfr0zen_doom.png"
+#define DOOM_IMAGE           IMAGES "G_unfr0zen_doom.png"
 /* nestlocal's files. */
-#define RUN              "/var/run/unfr0zen/"
-#define MATTER_STATUS    RUN "matter.status"
-#define ZIGBEE_STATUS    RUN "zigbee.status"
-#define MATTER_CODE      RUN "matter.code"
-#define MATTER_REQUEST   RUN "matter-reset.request"
-#define THEME_REQUEST    RUN "theme.request"
-#define SCHEDULE_STATUS  RUN "schedule.status"
-#define THEME_STATUS     RUN "theme.status"
-#define SCHEDULE_REQUEST RUN "schedule.request"
-#define NOT_ENABLED      "Not enabled or service unavailable"
+#define RUN                  "/var/run/unfr0zen/"
+#define MATTER_STATUS        RUN "matter.status"
+#define ZIGBEE_STATUS        RUN "zigbee.status"
+#define MATTER_CODE          RUN "matter.code"
+#define MATTER_REQUEST       RUN "matter-reset.request"
+#define THEME_REQUEST        RUN "theme.request"
+#define SCHEDULE_STATUS      RUN "schedule.status"
+#define THEME_STATUS         RUN "theme.status"
+#define SCHEDULE_REQUEST     RUN "schedule.request"
+#define NOT_ENABLED          "Not enabled or service unavailable"
 
 /* The largest images shown: Doom's title is wider than the others. */
 #define IMAGE_MAX            192
@@ -392,6 +399,8 @@ struct custom_state {
     void *screen;
     /* The display's width, which the gen 3's layouts below scale to. */
     int display;
+    /* A gen E (Nest Thermostat E): a 320-pixel display with its own menu glyphs. */
+    int gen_e;
     int drawn;
     void *menu_glyph;
     int menu_shown;
@@ -533,6 +542,16 @@ static int display_width(void) {
     read_text("/sys/class/graphics/fb0/virtual_size", size, sizeof(size), "480");
     int width = (int)parse_number(size, &at, sizeof(size));
     return width ? width : GEN3_WIDTH;
+}
+/* Whether the device tree names a gen E (its board is Onyx). */
+static int gen_e_board(void) {
+    char model[64];
+    read_text("/proc/device-tree/model", model, sizeof(model), "");
+    for (const char *at = model; *at; at++) {
+        if (at[0] == 'O' && at[1] == 'n' && at[2] == 'y' && at[3] == 'x')
+            return 1;
+    }
+    return 0;
 }
 /* A length of the gen 3's 480-pixel layout, on this display. */
 #define SCALED(s, n) ((n) * (s)->display / GEN3_WIDTH)
@@ -1203,11 +1222,15 @@ static void show(void *raw, int opening) {
     s->config.text_count = activity ? 3 : 2;
     /* Text row 0 reserves the image's room in blank lines, so images
      * scroll with the text: their positions come from the native text-row
-     * anchors. Matter labels its open window above the code. */
+     * anchors. Matter labels its open window above the code, which
+     * nestlocal draws at the display's size: on the gen E's smaller
+     * display a line less holds it. */
+    const char *heading = s->activity_started ? (s->gen_e ? "Ready to pair\n\n\n\n" : "Ready to pair\n\n\n\n\n")
+                          : s->gen_e          ? "Opening pairing...\n\n\n\n"
+                                              : "Opening pairing...\n\n\n\n\n";
     native_string_copy(&s->text[0], s->flow.page == CUSTOM_HOME ? "\n\n\n\n\n"
                                     : doom                      ? "\n\n\n\n\n"
-                                    : matter_pairing            ? (s->activity_started ? "Ready to pair\n\n\n\n\n"
-                                                                                       : "Opening pairing...\n\n\n\n\n")
+                                    : matter_pairing            ? heading
                                                                 : "");
     native_string_copy(&s->text[2], "");
     if (s->flow.page == CUSTOM_HOME) {
@@ -1638,13 +1661,19 @@ static void subtitle_text(void *context, int x, int y, void *text, int count, in
     draw_text(context, x, y - view->y_offset, text, count, scale, a, b, c);
 }
 /* How far the title rises over the menu glyph, in the gen 3's layout. */
-#define TITLE_LIFT      40
+#define TITLE_LIFT       40
 /* The menu glyph: 80 px, centred this far above the tile's centre at the
  * menu's resting (half) scale; on the gen 1 and gen 2, 44/80 of it, lower. */
-#define GLYPH_SIZE      80
-#define GLYPH_Y         (-120)
-#define GEN2_GLYPH_SIZE 44
-#define GEN2_GLYPH_Y    (-71)
+#define GLYPH_SIZE       80
+#define GLYPH_Y          (-120)
+#define GEN2_GLYPH_SIZE  44
+#define GEN2_GLYPH_Y     (-71)
+/* The gen E's menu settles at 9/16 scale. At rest its glyph shows at
+ * its own 52 px, its top this far above the tile's centre, and its title
+ * rises this far, to the line its own titles take under their glyphs. */
+#define GEN_E_MENU_REST  0.5625f
+#define GEN_E_GLYPH_Y    (-77)
+#define GEN_E_TITLE_LIFT 29
 static int screen_draw(void *screen, void *context) {
     void *globals = PTR(screen, SCREEN_GLOBALS);
     int menu_visible = !native_menu_hidden(globals);
@@ -1655,7 +1684,8 @@ static int screen_draw(void *screen, void *context) {
         title(screen);
     s->menu_shown = menu_visible;
     if (menu_visible) {
-        view.y_offset = (int)(SCALED(s, TITLE_LIFT) * native_menu_scale(globals));
+        view.y_offset = s->gen_e ? (int)(GEN_E_TITLE_LIFT * native_menu_scale(globals) / GEN_E_MENU_REST)
+                                 : (int)(SCALED(s, TITLE_LIFT) * native_menu_scale(globals));
         view.original = PTR(context, 0);
         bytes_copy(view.vtable, view.original, sizeof(view.vtable));
         PTR(view.vtable, CONTEXT_DRAW_TEXT_SLOT) = subtitle_text;
@@ -1668,13 +1698,22 @@ static int screen_draw(void *screen, void *context) {
         if (!s->menu_glyph) {
             int error = 0;
             enum custom_page root = s->flow.root;
-            s->menu_glyph = native_image_load(root == CUSTOM_SCHEDULE_HOME ? SCHEDULE_GLYPH
-                                              : root == CUSTOM_ZIGBEE      ? ZIGBEE_GLYPH
-                                              : root == CUSTOM_MATTER      ? MATTER_GLYPH
-                                              : root == CUSTOM_THEMES      ? THEMES_GLYPH
-                                              : root == CUSTOM_DOOM        ? DOOM_GLYPH
-                                                                           : MENU_GLYPH,
-                                              &error);
+            if (s->gen_e)
+                s->menu_glyph = native_image_load(root == CUSTOM_SCHEDULE_HOME ? GEN_E_SCHEDULE_GLYPH
+                                                  : root == CUSTOM_ZIGBEE      ? GEN_E_ZIGBEE_GLYPH
+                                                  : root == CUSTOM_MATTER      ? GEN_E_MATTER_GLYPH
+                                                  : root == CUSTOM_THEMES      ? GEN_E_THEMES_GLYPH
+                                                  : root == CUSTOM_DOOM        ? GEN_E_DOOM_GLYPH
+                                                                               : GEN_E_MENU_GLYPH,
+                                                  &error);
+            else
+                s->menu_glyph = native_image_load(root == CUSTOM_SCHEDULE_HOME ? SCHEDULE_GLYPH
+                                                  : root == CUSTOM_ZIGBEE      ? ZIGBEE_GLYPH
+                                                  : root == CUSTOM_MATTER      ? MATTER_GLYPH
+                                                  : root == CUSTOM_THEMES      ? THEMES_GLYPH
+                                                  : root == CUSTOM_DOOM        ? DOOM_GLYPH
+                                                                               : MENU_GLYPH,
+                                                  &error);
         }
         if (s->menu_glyph) {
             /* Native menu titles settle at half scale; glyph coordinates
@@ -1682,12 +1721,12 @@ static int screen_draw(void *screen, void *context) {
              * gen 3's own glyphs are. The gen 1's and gen 2's are smaller and lower:
              * 30px showing, centred 59px above the tile's centre. */
             int gen3 = s->display >= GEN3_WIDTH;
-            float scale = native_menu_scale(globals) * 2;
-            float glyph = scale * (gen3 ? 1.0f : (float)GEN2_GLYPH_SIZE / GLYPH_SIZE);
+            float scale = s->gen_e ? native_menu_scale(globals) / GEN_E_MENU_REST : native_menu_scale(globals) * 2;
+            float glyph = scale * (gen3 || s->gen_e ? 1.0f : (float)GEN2_GLYPH_SIZE / GLYPH_SIZE);
+            int glyph_y = gen3 ? GLYPH_Y : s->gen_e ? GEN_E_GLYPH_Y : GEN2_GLYPH_Y;
             draw_scaled_fn *draw_image = PTR(PTR(context, 0), CONTEXT_DRAW_SCALED_SLOT);
-            draw_image(context, (int)(-native_image_width(s->menu_glyph) * glyph / 2),
-                       (int)((gen3 ? GLYPH_Y : GEN2_GLYPH_Y) * scale), s->menu_glyph, native_style(globals),
-                       (int)(glyph * FIXED_ONE), (void *)0);
+            draw_image(context, (int)(-native_image_width(s->menu_glyph) * glyph / 2), (int)(glyph_y * scale),
+                       s->menu_glyph, native_style(globals), (int)(glyph * FIXED_ONE), (void *)0);
         }
     }
     return result;
@@ -1842,6 +1881,7 @@ void *custom_factory(void *globals, void *handler, const char *name) {
 #endif
     s->flow.hold_minutes = 120;
     s->display = display_width();
+    s->gen_e = gen_e_board();
     s->config.text_count = 2;
     s->config.text = s->text;
     s->config.flags = s->flags;

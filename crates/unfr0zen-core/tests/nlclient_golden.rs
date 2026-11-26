@@ -76,6 +76,7 @@ fn stock_dumps_match_every_recorded_stage() {
         return;
     };
     let mut checked = 0;
+    let mut unrecorded = Vec::new();
     for path in paths {
         let path = path.unwrap().path();
         if !path.is_file() {
@@ -85,6 +86,10 @@ fn stock_dumps_match_every_recorded_stage() {
         let hash = sha256_hex(&stock);
         let golden_path = root().join(format!("platform/common/nlclient/tests/golden/{hash}.json"));
         if !golden_path.exists() {
+            // The 5.6-7 ABI's goldens are legacy_nlclient's.
+            if !root().join(format!("platform/common/nlclient/tests/legacy/{hash}.json")).exists() {
+                unrecorded.push(path.display().to_string());
+            }
             continue;
         }
         let golden: Value = serde_json::from_slice(&std::fs::read(golden_path).unwrap()).unwrap();
@@ -105,16 +110,25 @@ fn stock_dumps_match_every_recorded_stage() {
         );
         let mut journal = Vec::new();
         flate2::read::GzDecoder::new(found.journal.as_slice()).read_to_end(&mut journal).unwrap();
-        assert_eq!(
-            json!({"size":found.output.len(),"sha256":sha256_hex(&found.output),"journal_sha256":sha256_hex(&journal)}),
-            golden["output"]
-        );
+        let output = json!({
+            "size": found.output.len(),
+            "sha256": sha256_hex(&found.output),
+            "journal_sha256": sha256_hex(&journal)
+        });
+        if std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_some() {
+            assert_eq!(output, golden["output"], "{}: output", path.display());
+        } else {
+            for (key, expected) in golden["output"].as_object().unwrap() {
+                assert_eq!(&output[key], expected, "{}: output.{key}", path.display());
+            }
+        }
         let patch = nlclient::Patch::parse(&found.journal).unwrap();
         assert_eq!(patch.apply(&found.output, true).unwrap(), stock);
     }
     eprintln!("Checked {checked} unchanged firmware samples");
     if std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_some() {
         assert_eq!(checked, goldens().len(), "all private stock samples are required");
+        assert!(unrecorded.is_empty(), "every private stock sample needs a golden: {unrecorded:?}");
     }
 }
 #[test]
@@ -560,11 +574,18 @@ fn schedule_insertion_preserves_every_stock_slot_and_rejects_unknown_menu_abis()
                 "{}: undecodable growth",
                 path.display()
             );
-            // A store of the new buffer's end and capacity, made to miss.
-            let (word, corrupt) =
-                if menu["insertion"]["appends"] == true { (0xe9860030, 0xe9860060) } else { (0xe5858004, 0xe585800c) };
+            // A store of the new buffer's end and capacity, made to miss: the
+            // gen E's append stores its end on its own.
+            let stores: &[(u32, u32)] = if menu["insertion"]["appends"] == true {
+                &[(0xe9860030, 0xe9860060), (0xe5864004, 0xe586400c)]
+            } else {
+                &[(0xe5858004, 0xe585800c)]
+            };
             let start = file_offset(&stock, grow);
-            let store = (start..start + 512).step_by(4).find(|&at| w(&stock, at) == word).unwrap();
+            let (store, corrupt) = (start..start + 512)
+                .step_by(4)
+                .find_map(|at| stores.iter().find(|(word, _)| w(&stock, at) == *word).map(|(_, bad)| (at, *bad)))
+                .unwrap();
             let mut changed = stock.clone();
             put(&mut changed, store, corrupt);
             assert!(nlclient::builder::build(&changed, &object, &[]).is_err(), "{}: corrupt growth", path.display());

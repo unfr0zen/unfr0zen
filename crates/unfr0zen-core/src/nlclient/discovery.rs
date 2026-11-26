@@ -119,7 +119,7 @@ fn swap_call(elf: &Elf, stub: u32) -> Result<u32> {
     }
     unique(sites, "eglSwapBuffers calls")
 }
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Discovery {
     pub factory: u32,
     pub native_api: BTreeMap<String, u32>,
@@ -418,51 +418,58 @@ fn brightness(elf: &Elf) -> Option<Brightness> {
     let calls_to = |target: u32| {
         words.iter().enumerate().filter(move |&(_, (at, w))| branch_target(at, w, true) == Some(target)).map(|(i, _)| i)
     };
-    let [reference] = references(elf, &words, string)[..] else {
-        return None;
-    };
-    let referenced = words.at(reference).0;
-    let set = words
-        .iter()
-        .filter_map(|(at, w)| branch_target(at, w, true))
-        .filter(|target| (referenced.saturating_sub(0x100)..=referenced).contains(target))
-        .max()?;
-    let start = words.index(set)?;
-    // str r1, [rN, #mode]
-    let mode =
-        (start..(start + 16).min(words.len())).map(|j| words.at(j)).find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)?.1
-            & 0xfff;
     let mut found = Vec::new();
-    for call in calls_to(set) {
-        // bl accessor, then (within a few) bl set.
-        let Some(accessor) = (call.saturating_sub(3)..call).rev().find_map(|j| {
-            let (at, w) = words.at(j);
-            branch_target(at, w, true)
-        }) else {
-            continue;
-        };
-        let first = words.index(accessor)?;
-        let Some(globals) = (first..(first + 4).min(words.len()))
-            .map(|j| words.at(j).1)
-            .find(|w| w & 0xffff_f000 == 0xe590_0000)
-            .map(|w| w & 0xfff)
+    // Inlining the setter can leave more than one reference to its log.
+    // The callable setter must still have the screen's accessor and apply.
+    for reference in references(elf, &words, string) {
+        let referenced = words.at(reference).0;
+        let Some(set) = words
+            .iter()
+            .filter_map(|(at, w)| branch_target(at, w, true))
+            .filter(|target| (referenced.saturating_sub(0x100)..=referenced).contains(target))
+            .max()
         else {
             continue;
         };
-        for j in call + 1..(call + 12).min(words.len()) {
-            let (at, w) = words.at(j);
-            let Some(apply) = branch_target(at, w, true).filter(|&t| t != accessor) else {
+        let Some(start) = words.index(set) else { continue };
+        // str r1, [rN, #mode]
+        let Some((_, store)) =
+            (start..(start + 16).min(words.len())).map(|j| words.at(j)).find(|(_, w)| w & 0xfff0_f000 == 0xe580_1000)
+        else {
+            continue;
+        };
+        let mode = store & 0xfff;
+        for call in calls_to(set) {
+            // bl accessor, then (within a few) bl set.
+            let Some(accessor) = (call.saturating_sub(3)..call).rev().find_map(|j| {
+                let (at, w) = words.at(j);
+                branch_target(at, w, true)
+            }) else {
                 continue;
             };
-            if let Some(high) = high_level(&words, words.index(apply)?, mode) {
-                found.push((apply, globals, high));
+            let Some(first) = words.index(accessor) else { continue };
+            let Some(globals) = (first..(first + 4).min(words.len()))
+                .map(|j| words.at(j).1)
+                .find(|w| w & 0xffff_f000 == 0xe590_0000)
+                .map(|w| w & 0xfff)
+            else {
+                continue;
+            };
+            for j in call + 1..(call + 12).min(words.len()) {
+                let (at, w) = words.at(j);
+                let Some(apply) = branch_target(at, w, true).filter(|&t| t != accessor) else {
+                    continue;
+                };
+                if let Some(high) = words.index(apply).and_then(|at| high_level(&words, at, mode)) {
+                    found.push((set, apply, globals, mode, high));
+                }
             }
         }
     }
     found.sort();
     found.dedup();
     match found[..] {
-        [(apply, globals, high)] => Some(Brightness { set, apply, globals, mode, high }),
+        [(set, apply, globals, mode, high)] => Some(Brightness { set, apply, globals, mode, high }),
         _ => None,
     }
 }
@@ -574,9 +581,25 @@ fn group_end(elf: &Elf, vptr: u32) -> Result<u32> {
     Ok(end)
 }
 pub fn discover(data: &[u8]) -> Result<Discovery> {
-    match survey(data)? {
-        (found, None) => Ok(found),
-        (_, Some(objection)) => device(format!("Native discovery: {objection}")),
+    let found = match survey(data)? {
+        (found, None) => found,
+        (_, Some(objection)) => return device(format!("Native discovery: {objection}")),
+    };
+    *LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(found.clone());
+    Ok(found)
+}
+
+/// The last executable discover accepted: a setup's screen build and its
+/// theme bindings discover the same nlclient, which takes the unit longest.
+static LAST: std::sync::Mutex<Option<Discovery>> = std::sync::Mutex::new(None);
+
+/// discover, for an executable whose SHA-256 the caller already has: the last
+/// discovery again when it was of this executable.
+pub fn discover_hashed(data: &[u8], sha256: &str) -> Result<Discovery> {
+    let last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    match last {
+        Some(found) if found.stock_sha256 == sha256 => Ok(found),
+        _ => discover(data),
     }
 }
 /// What discovery finds, and why the build is refused when it is: every
@@ -649,9 +672,18 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     require(lc.len() >= 2 && sc.len() >= 3, "factory call graph incomplete")?;
     require(lc[0] == sc[0] && sc[0] == api["native_new"], "factory allocator mismatch")?;
     api.insert("native_layer_ctor".into(), lc[1]);
-    api.insert("native_screen_ctor".into(), sc[1]);
     let (ls, _) = arm.stores(lc[1], None)?;
-    let (ss, ssizes) = arm.stores(screen, Some(api["native_new"]))?;
+    let (mut ss, ssizes) = arm.stores(screen, Some(api["native_new"]))?;
+    // The factory sets Legal Info's vtables after the base constructor, or
+    // calls Legal Info's own constructor, which calls the base one first.
+    if ss.contains_key(&0) {
+        api.insert("native_screen_ctor".into(), sc[1]);
+    } else {
+        let base =
+            *arm.calls(sc[1])?.first().ok_or_else(|| crate::Error::Device("missing base screen constructor".into()))?;
+        api.insert("native_screen_ctor".into(), base);
+        ss = arm.stores(sc[1], None)?.0;
+    }
     let (_, lsizes) = arm.stores(layer, Some(api["native_new"]))?;
     // The Legal Info layer and where its nlLayer part starts: 5.9.1-6's has
     // one more string (its page text index at +0xa0, the string at +0xa4).
@@ -703,7 +735,13 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         ("SCREEN_TITLE_SLOT".into(), title),
     ]);
     api.insert("native_screen_vtable".into(), sv);
-    let init = sc[2];
+    // The screen's composition is the factory's first call into its own code
+    // after the constructor; a build may assign an nlString in between.
+    let imported_at: BTreeSet<u32> = imports.values().copied().collect();
+    let init = *sc[2..]
+        .iter()
+        .find(|a| !imported_at.contains(a))
+        .ok_or_else(|| crate::Error::Device("missing screen composition call".into()))?;
     let ic = arm.calls(init)?;
     require(ic.len() >= 5, "screen composition call graph incomplete")?;
     require(
@@ -1027,9 +1065,10 @@ fn roles(arm: &Arm, api: &BTreeMap<String, u32>, anchors: &BTreeMap<String, u32>
         }),
         ("native_layer_wheel", {
             let code = body("native_layer_wheel")?;
+            // The ring's 16.16 delta, negated; a 480 px screen scales it too.
             calls(&code) == 2
                 && code.iter().any(|i| i.name == "vcvt.f32.s32")
-                && code.iter().any(|i| i.name == "vdiv.f32")
+                && code.iter().any(|i| i.name == "vneg.f32")
         }),
         ("native_screen_init", {
             let code = body("native_screen_init")?;
@@ -1122,16 +1161,16 @@ fn dial(elf: &Elf, imports: &BTreeMap<String, u32>) -> Result<Dial> {
 }
 /// The gen 2's nlARMFramebuffer (Framebuffer). Its init maps fb0 with
 /// `mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)` and stores the
-/// address; its flip pans with FBIOPAN_DISPLAY. Only an EXEC build: a PIE's
-/// vtable slot would need a relocation the patch doesn't write.
+/// address; its flip pans with FBIOPAN_DISPLAY. In a PIE the vtable slot
+/// must carry the load bias's relocation, as every slot the patch writes.
 fn framebuffer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<Framebuffer> {
-    require(half(elf.data, 16)? == 2, "framebuffer hand-over needs an EXEC build")?;
     let (mmap, ioctl) = match (imports.get("mmap"), imports.get("ioctl")) {
         (Some(&m), Some(&i)) => (m, i),
         _ => return device("framebuffer hand-over needs mmap and ioctl"),
     };
     let vtable = primary_vtable(elf, "16nlARMFramebuffer")?;
     let (init, slot) = (elf.read(vtable)?, vtable + 8);
+    relocated(elf, slot, "framebuffer vtable")?;
     let flip = elf.read(slot)?;
     let target = |i: &Ins| i.ops.first().and_then(Op::imm);
     let code = arm.body(flip)?;
@@ -1164,12 +1203,16 @@ fn framebuffer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<
         .find_map(|i| field(i, "r1").filter(|(b, _)| *b == this))
         .ok_or_else(|| crate::Error::Device("framebuffer mapping length not stored".into()))?
         .1;
-    // The fifth argument, fb0's descriptor, goes on the stack from a field.
+    // The fifth argument, fb0's descriptor, goes on the stack from a field:
+    // stored alone, or first of a store multiple with the sixth.
     let stacked = before
         .iter()
         .rev()
-        .find(|i| i.name == "str" && i.ops.get(1).and_then(Op::mem) == Some(("sp", 0, false)))
-        .and_then(|i| i.ops.first()?.reg())
+        .find_map(|i| match i.name.as_str() {
+            "str" if i.ops.get(1).and_then(Op::mem) == Some(("sp", 0, false)) => i.ops.first()?.reg(),
+            "stm" if i.ops.first()?.reg() == Some("sp") => i.ops.get(1)?.reg(),
+            _ => None,
+        })
         .ok_or_else(|| crate::Error::Device("framebuffer descriptor not passed".into()))?;
     let fd = before
         .iter()
@@ -1280,12 +1323,20 @@ fn activity(
             if j < 3 || c[j - 1].name != "bl" {
                 continue;
             }
-            if !c[j - 3..j - 1].iter().any(|i| i.name == "ldr" && i.text == "r0, [r4, #0x70]") {
+            // The client: its globals at +0x70 are loaded for the marking call,
+            // from whichever register the build keeps the client in.
+            let Some(client) = c[j - 3..j - 1].iter().find_map(|i| {
+                (i.name == "ldr")
+                    .then(|| i.text.strip_prefix("r0, [")?.strip_suffix(", #0x70]"))
+                    .flatten()
+                    .filter(|r| !matches!(*r, "sp" | "pc"))
+            }) else {
                 continue;
-            }
+            };
+            let base = format!("r0, [{client}, #");
             let dest: Vec<_> = c
                 .iter()
-                .filter(|i| i.address > address && i.name == "ldr" && i.text.starts_with("r0, [r4, #"))
+                .filter(|i| i.address > address && i.name == "ldr" && i.text.starts_with(&base))
                 .filter_map(|i| i.ops[1].mem().map(|(_, d, _)| d as u32))
                 .collect();
             if dest.len() == 1 {
@@ -1419,16 +1470,16 @@ mod tests {
 
     /// A private nlclient sample, when this checkout has one (see
     /// tests/nlclient_golden.rs).
-    fn sample() -> Option<Vec<u8>> {
+    fn sample(name: &str) -> Option<Vec<u8>> {
         let dir = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
-        std::fs::read(dir.join("nlclient-gen3-2019")).ok()
+        std::fs::read(dir.join(name)).ok()
     }
 
     #[test]
     fn a_build_without_the_brightness_managers_shape_is_still_set_up() {
-        let Some(data) = sample() else {
+        let Some(data) = sample("nlclient-gen3-2019") else {
             eprintln!("No private nlclient sample");
             return;
         };
@@ -1439,5 +1490,16 @@ mod tests {
         for name in ["native_set_brightness", "native_apply_brightness"] {
             assert!(!found.evidence.contains_key(name) && !found.fingerprints.contains_key(name), "{name}");
         }
+    }
+
+    #[test]
+    fn onyx_discovers_brightness_despite_multiple_log_references() {
+        let Some(data) = sample("nlclient-genE-6.5-14") else {
+            eprintln!("No private Onyx nlclient sample");
+            return;
+        };
+        let found = brightness(&Elf::parse(&data).unwrap()).expect("Onyx's brightness manager");
+        assert_eq!((found.globals, found.mode, found.high), (0x4b4, 8, 28));
+        assert_eq!((found.set, found.apply), (0x233830, 0x233dbc));
     }
 }

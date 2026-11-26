@@ -24,11 +24,24 @@ fn object() -> Option<Vec<u8>> {
     assert!(result.is_some() || std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "legacy object required");
     result
 }
+/// The reviewed 5.6-7 executable: NLCLIENT_LEGACY_STOCK, else the private
+/// samples' file with the golden's hash.
 fn stock() -> Option<Vec<u8>> {
-    let path = std::env::var_os("NLCLIENT_LEGACY_STOCK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join(".work/firmware/nlclient-gen3-5.6-7"));
-    let result = std::fs::read(path).ok();
+    let result = match std::env::var_os("NLCLIENT_LEGACY_STOCK") {
+        Some(path) => std::fs::read(path).ok(),
+        None => {
+            let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root().join(".work/firmware"));
+            std::fs::read_dir(firmware).ok().and_then(|paths| {
+                paths
+                    .flatten()
+                    .filter(|p| p.path().is_file())
+                    .filter_map(|p| std::fs::read(p.path()).ok())
+                    .find(|data| sha256_hex(data) == nlclient::LEGACY_SHA256)
+            })
+        }
+    };
     assert!(result.is_some() || std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "legacy firmware required");
     result
 }
