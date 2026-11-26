@@ -806,7 +806,7 @@ impl Nest {
                     PERCENT,
                     *crate::brightness::PERCENTS.start() as f32,
                     *crate::brightness::PERCENTS.end() as f32,
-                    percent.unwrap_or(100) as f64,
+                    percent.unwrap_or(crate::brightness::DEFAULT_PERCENT) as f64,
                 )
             }
             HOT_WATER_BOOST_ENDPOINT => {
@@ -1641,7 +1641,8 @@ mod tests {
         );
         assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0075), Some(Value::Enum16(PERCENT)));
         assert_eq!(n.read(43, BINARY_OUTPUT, 0x001C), Some(Value::Str("Screen brightness auto".into())));
-        assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(false)));
+        assert_eq!(n.read(43, BINARY_OUTPUT, 0x0055), Some(Value::Bool(true)));
+        assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0055), Some(Value::F32(66.0)));
         assert_eq!(n.write(42, ANALOG_OUTPUT, 0x0055, Value::F32(39.6)), status::SUCCESS);
         assert_eq!(n.read(42, ANALOG_OUTPUT, 0x0055), Some(Value::F32(40.0)));
         assert_eq!(crate::brightness::request(&n.view().dev).as_deref(), Some("40"));

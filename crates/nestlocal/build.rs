@@ -3,8 +3,8 @@
 //! and NESTLOCAL_RADIO_EM357 (the gen2's Zigbee image) name. Without one,
 //! -zigbee runs a radio that already has the firmware but cannot install it.
 //!
-//! Embeds the zbwake.ko builds (platform/diamond3/zbwake/, one per gen3 release) found in the
-//! directory NESTLOCAL_ZBWAKE names, each distinct one once. Without them,
+//! Embeds the zbwake.ko builds (platform/common/zbwake/ and j49's kernel)
+//! found in the directory NESTLOCAL_ZBWAKE names, each distinct one per board. Without them,
 //! -zigbee cannot wake the sleeping unit.
 
 use std::fmt::Write;
@@ -29,7 +29,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-env-changed=NESTLOCAL_ZBWAKE");
-    let mut modules: Vec<Vec<u8>> = Vec::new();
+    let mut modules: Vec<(&str, Vec<u8>)> = Vec::new();
     if let Ok(dir) = std::env::var("NESTLOCAL_ZBWAKE").map(std::path::PathBuf::from) {
         println!("cargo:rerun-if-changed={}", dir.display());
         let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("NESTLOCAL_ZBWAKE {}: {e}", dir.display()));
@@ -39,16 +39,23 @@ fn main() {
         for path in paths {
             println!("cargo:rerun-if-changed={}", path.display());
             let module = std::fs::read(&path).unwrap();
-            if !modules.contains(&module) {
-                modules.push(module);
+            let name = path.file_stem().and_then(|name| name.to_str()).unwrap();
+            let board = match name {
+                "j49" => "j49",
+                name if name.starts_with("onyx-") => "onyx",
+                name if name.bytes().all(|b| b.is_ascii_digit() || b == b'.') => "diamond3",
+                _ => panic!("unknown zbwake module target: {name}"),
+            };
+            if !modules.iter().any(|(target, image)| *target == board && *image == module) {
+                modules.push((board, module));
             }
         }
     }
     let mut list = String::from("&[");
-    for (i, module) in modules.iter().enumerate() {
+    for (i, (board, module)) in modules.iter().enumerate() {
         let name = format!("zbwake-{i}.ko");
         std::fs::write(out.join(&name), module).unwrap();
-        write!(list, "include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{name}\")),").unwrap();
+        write!(list, "(\"{board}\",include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{name}\"))),").unwrap();
     }
     list.push(']');
     std::fs::write(out.join("zbwake.rs"), list).unwrap();

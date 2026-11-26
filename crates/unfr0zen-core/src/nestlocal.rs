@@ -650,7 +650,7 @@ mod tests {
         std::fs::write(&legacy, "-mqtt tcp://10.0.2.100:1883\n").unwrap();
         let script = std::str::from_utf8(INIT)
             .unwrap()
-            .split("case ")
+            .split("\ncase \"${1}\" in")
             .next()
             .unwrap()
             .replace("/etc/nestlocal/options", installed.to_str().unwrap())

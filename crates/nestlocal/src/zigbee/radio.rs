@@ -32,12 +32,13 @@ pub fn stop_wpantund() {
 
 /// Writes the embedded image to the radio.
 pub fn install() -> Result<(), String> {
+    let radio = crate::device::radio()?;
     let Some(version) = version() else {
         return Err("this nestlocal carries no radio firmware (built without NESTLOCAL_RADIO)".into());
     };
     logf!("zigbee: installing the radio's firmware, version {version}");
     let path = std::env::temp_dir().join("nestlocal-radio.bin");
-    std::fs::write(&path, crate::device::radio()?.zigbee_image).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(&path, radio.zigbee_image).map_err(|e| format!("{}: {e}", path.display()))?;
     let out = Command::new(LOADER).arg("--app-easyload").arg(&path).output();
     let _ = std::fs::remove_file(&path);
     let out = out.map_err(|e| format!("{LOADER}: {e}"))?;

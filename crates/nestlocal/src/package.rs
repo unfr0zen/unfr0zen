@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 pub const VENDOR: u16 = 0xFFF1;
 
 /// Each device's Matter product ID and Zigbee image type, by its name.
-const PRODUCTS: [(&str, u16); 3] = [("diamond3", 0x8001), ("j49", 0x8002), ("diamond", 0x8003)];
+const PRODUCTS: [(&str, u16); 4] = [("diamond3", 0x8001), ("j49", 0x8002), ("diamond", 0x8003), ("onyx", 0x8004)];
 
 /// The Matter product ID and Zigbee image type of the device named `device`.
 pub fn product(device: &str) -> u16 {

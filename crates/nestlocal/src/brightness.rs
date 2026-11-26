@@ -7,9 +7,9 @@
 //!
 //! The request is two fields of the device bucket, which the store keeps and
 //! the held subscribe takes to nlclient, so a change makes it commit at once:
-//! the percentage, and whether brightness is automatic. Neither set, no
-//! request is written and the unit keeps its own setting. What is reported
-//! is the state file, while there is one, else the fields.
+//! the percentage, and whether brightness is automatic. Auto is the default;
+//! at startup a missing or zero manual percentage becomes 66%. What is reported is the state
+//! file, while there is one, else the fields.
 
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -22,8 +22,8 @@ use crate::store::Store;
 pub const PERCENT: &str = "unfr0zen_screen_brightness";
 pub const AUTO: &str = "unfr0zen_screen_brightness_auto";
 pub const PERCENTS: RangeInclusive<i64> = 0..=100;
-/// The percentage turning automatic off picks with none stored or shown.
-const FULL: i64 = 100;
+/// The manual percentage when none is stored or shown.
+pub const DEFAULT_PERCENT: i64 = 66;
 const FILE: &str = "screen.brightness";
 const STATE_FILE: &str = "screen.brightness.state";
 const POLL: Duration = Duration::from_secs(5);
@@ -48,12 +48,17 @@ pub fn stored(dev: &Fields) -> Option<i64> {
     number(dev.get(PERCENT)).map(|p| p as i64)
 }
 
+/// An unset preference is automatic; a legacy saved manual level is not.
+fn automatic(dev: &Fields) -> bool {
+    dev.get(AUTO).map_or_else(|| stored(dev).is_none(), |v| truthy(Some(v)))
+}
+
 /// The request for nlclient; none while neither field was set.
 pub fn request(dev: &Fields) -> Option<String> {
     if dev.get(PERCENT).is_none() && dev.get(AUTO).is_none() {
         return None;
     }
-    Some(if truthy(dev.get(AUTO)) { "auto".into() } else { stored(dev).unwrap_or(FULL).to_string() })
+    Some(if automatic(dev) { "auto".into() } else { stored(dev).unwrap_or(DEFAULT_PERCENT).to_string() })
 }
 
 /// What is reported: the percentage (with automatic on, the stored one) and
@@ -63,7 +68,7 @@ pub fn reported(dev: &Fields, shown: Option<Shown>) -> (Option<i64>, bool) {
     match shown {
         Some(Shown::Auto) => (stored(dev), true),
         Some(Shown::Percent(p)) => (Some(p), false),
-        None => (stored(dev), truthy(dev.get(AUTO))),
+        None => (stored(dev), automatic(dev)),
     }
 }
 
@@ -81,7 +86,7 @@ pub fn percent_change(percent: i64) -> Fields {
 }
 
 /// The fields turning automatic on or off sets. Off takes the stored
-/// percentage, else the one the unit shows, else full.
+/// percentage, else the one the unit shows, else the default.
 pub fn auto_change(on: bool, dev: &Fields, shown: Option<Shown>) -> Fields {
     if on {
         return crate::fields! {AUTO => true};
@@ -90,7 +95,7 @@ pub fn auto_change(on: bool, dev: &Fields, shown: Option<Shown>) -> Fields {
         Some(Shown::Percent(p)) => Some(p),
         _ => None,
     };
-    crate::fields! {AUTO => false, PERCENT => stored(dev).or(shown).unwrap_or(FULL)}
+    crate::fields! {AUTO => false, PERCENT => stored(dev).or(shown).unwrap_or(DEFAULT_PERCENT)}
 }
 
 /// Whether `change` touches the brightness.
@@ -106,19 +111,38 @@ pub fn publish_with(store: &Store, serial: &str, change: &Fields) {
     publish(&dev);
 }
 
-/// Publishes the stored request again, for a restarted nlclient's first
-/// commit.
-pub fn republish(store: &Store, serial: &str) {
-    if let Some(dev) = store.get(&format!("device.{serial}")) {
-        publish(&dev.value);
+/// Restores a usable brightness at startup, keeping automatic and nonzero
+/// manual settings. Do not create a partial device bucket on a fresh unit.
+fn startup_request(store: &Store, serial: &str) -> String {
+    let key = format!("device.{serial}");
+    let Some(dev) = store.get(&key) else { return "auto".into() };
+    if automatic(&dev.value) {
+        if dev.value.get(AUTO).is_none() {
+            store.merge(&key, &crate::fields! {PERCENT => DEFAULT_PERCENT, AUTO => true}, 0, 0, false);
+        }
+        return "auto".into();
     }
+    if let Some(percent) = stored(&dev.value).filter(|p| (1..=100).contains(p)) {
+        return percent.to_string();
+    }
+    store.merge(&key, &percent_change(DEFAULT_PERCENT), 0, 0, false);
+    DEFAULT_PERCENT.to_string()
+}
+
+/// Publishes the startup request before nlclient's first commit.
+pub fn republish(store: &Store, serial: &str) {
+    publish_text(&startup_request(store, serial));
 }
 
 fn publish(dev: &Fields) {
     if let Some(text) = request(dev) {
-        if let Err(e) = crate::settings_ui::publish(FILE, text.as_bytes()) {
-            crate::logf!("screen brightness: {e}");
-        }
+        publish_text(&text);
+    }
+}
+
+fn publish_text(text: &str) {
+    if let Err(e) = crate::settings_ui::publish(FILE, text.as_bytes()) {
+        crate::logf!("screen brightness: {e}");
     }
 }
 
@@ -181,7 +205,43 @@ mod tests {
         assert_eq!(request(&fields! {PERCENT => json!(40.0), AUTO => json!(false)}).as_deref(), Some("40"));
         assert_eq!(request(&fields! {PERCENT => json!(0)}).as_deref(), Some("0"));
         assert_eq!(request(&fields! {PERCENT => json!(40), AUTO => json!(true)}).as_deref(), Some("auto"));
-        assert_eq!(request(&fields! {AUTO => json!(false)}).as_deref(), Some("100"));
+        assert_eq!(request(&fields! {AUTO => json!(false)}).as_deref(), Some("66"));
+    }
+
+    #[test]
+    fn startup_defaults_to_auto_and_recovers_zero_manual_brightness() {
+        let store = crate::store::tests::temp_store();
+        assert_eq!(startup_request(&store, "S"), "auto");
+        assert!(store.get("device.S").is_none());
+
+        store.merge("device.S", &fields! {"other" => 1}, 0, 0, true);
+        assert_eq!(startup_request(&store, "S"), "auto");
+        let dev = store.get("device.S").unwrap().value;
+        assert_eq!(stored(&dev), Some(66));
+        assert_eq!(dev[AUTO], json!(true));
+        assert_eq!(dev["other"], json!(1));
+
+        store.merge("device.S", &percent_change(0), 0, 0, false);
+        assert_eq!(request(&store.get("device.S").unwrap().value).as_deref(), Some("0"));
+        assert_eq!(startup_request(&store, "S"), "66");
+        assert_eq!(stored(&store.get("device.S").unwrap().value), Some(66));
+
+        store.merge("device.T", &fields! {AUTO => false}, 0, 0, false);
+        assert_eq!(startup_request(&store, "T"), "66");
+        assert_eq!(store.get("device.T").unwrap().value[AUTO], json!(false));
+    }
+
+    #[test]
+    fn startup_preserves_automatic_and_nonzero_brightness() {
+        let store = crate::store::tests::temp_store();
+        for percent in [1, 81, 100] {
+            store.merge("device.S", &percent_change(percent), 0, 0, false);
+            assert_eq!(startup_request(&store, "S"), percent.to_string());
+        }
+        store.merge("device.S", &fields! {PERCENT => 0, AUTO => true}, 0, 0, false);
+        assert_eq!(startup_request(&store, "S"), "auto");
+        store.merge("device.T", &fields! {PERCENT => 85}, 0, 0, false);
+        assert_eq!(startup_request(&store, "T"), "85");
     }
 
     #[test]
@@ -204,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn a_percentage_turns_auto_off_and_off_takes_the_stored_then_the_shown_then_full() {
+    fn a_percentage_turns_auto_off_and_off_takes_the_stored_then_the_shown_then_default() {
         assert_eq!(percent_change(30), fields! {PERCENT => 30, AUTO => false});
         assert_eq!(
             auto_change(true, &fields! {PERCENT => json!(30)}, None),
@@ -214,8 +274,8 @@ mod tests {
         let off = |dev: Fields, shown| auto_change(false, &dev, shown)[PERCENT].clone();
         assert_eq!(off(fields! {PERCENT => json!(30)}, Some(Shown::Percent(60))), json!(30));
         assert_eq!(off(fields! {}, Some(Shown::Percent(60))), json!(60));
-        assert_eq!(off(fields! {}, Some(Shown::Auto)), json!(100));
-        assert_eq!(off(fields! {}, None), json!(100));
+        assert_eq!(off(fields! {}, Some(Shown::Auto)), json!(66));
+        assert_eq!(off(fields! {}, None), json!(66));
     }
 
     #[test]
@@ -224,7 +284,7 @@ mod tests {
         assert_eq!(reported(&dev, None), (Some(30), false));
         assert_eq!(reported(&dev, Some(Shown::Auto)), (Some(30), true));
         assert_eq!(reported(&dev, Some(Shown::Percent(90))), (Some(90), false));
-        assert_eq!(reported(&fields! {}, None), (None, false));
+        assert_eq!(reported(&fields! {}, None), (None, true));
         assert_eq!(reported(&fields! {AUTO => json!(true)}, None), (None, true));
     }
 

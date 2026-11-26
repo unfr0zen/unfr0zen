@@ -1917,6 +1917,7 @@ pub mod tests {
         assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], json!(90));
         b.brightness.set_shown(None);
         assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness"], Value::Null, "nothing set or shown");
+        assert_eq!(b.shown(&Fields::new(), &Fields::new())["screen_brightness_auto"], json!(true));
     }
 
     #[test]

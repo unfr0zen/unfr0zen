@@ -33,9 +33,12 @@ The game:
   walk into them. Dead, the button restarts. In the menus the wheel moves and
   the button selects, answering yes to questions. Holding the button for three
   seconds quits.
-- Sound: the unit has no audio output but its piezo, one tone at a time.
-  Effects are Doom's PC speaker sounds; music is each song's highest note.
+- Sound: the unit has no audio output but its piezo, one tone at a time: a
+  pwm-beeper, or on the gen E the PWM channel and enable line its
+  `product.config` names. Effects are Doom's PC speaker sounds; music is each
+  song's highest note.
 - While Doom runs nlclient keeps running and controlling the heating or
   cooling: Doom grabs the ring and the button, so nlclient sees none of
-  them, and on the way out Doom puts back the page nlclient showed. An
+  them, and on the way out Doom puts back the framebuffer pages and pans to
+  the one nlclient showed. An
   nlclient patched before the hand-over is stopped instead.

@@ -428,6 +428,17 @@ fn label_node<S: rs_matter::persist::KvBlobStoreAccess>(matter: &Matter, kv: S, 
     }
 }
 
+/// BlueZ's zbus connection needs a Tokio reactor on Matter's own thread.
+fn block_on_transport<F: std::future::Future>(future: F, bluez: bool) -> Result<F::Output, Error> {
+    if bluez {
+        let runtime =
+            tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| ErrorCode::StdIoError)?;
+        Ok(runtime.block_on(future))
+    } else {
+        Ok(futures_lite::future::block_on(future))
+    }
+}
+
 fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNotif>(
     settings: &Settings,
     nest: Arc<Nest>,
@@ -738,7 +749,7 @@ fn run_network<N: Networks, C: NetCtl + NetCtlStatus + ThreadDiag + NetChangeNot
         select4(&mut respond, &mut im_job, &mut report, &mut updates).coalesce(),
         &mut commissionable,
     );
-    futures_lite::future::block_on(all.coalesce())?;
+    block_on_transport(all.coalesce(), crate::device::current().bluez())??;
     Ok(reshaped.get())
 }
 
@@ -1319,6 +1330,19 @@ mod tests {
     use rs_matter::tlv::TLVElement;
     use rs_matter::transport::exchange::Exchange;
     use rs_matter::utils::storage::pooled::Buffers;
+
+    #[test]
+    fn bluez_transport_can_spawn_tokio_tasks() {
+        let answer = block_on_transport(
+            async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                tokio::task::spawn_blocking(|| 42).await.unwrap()
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(answer, 42);
+    }
 
     /// The unit with these buckets, as the cluster handlers see it.
     pub(super) fn nest(dev: Fields, sh: Fields) -> Arc<Nest> {

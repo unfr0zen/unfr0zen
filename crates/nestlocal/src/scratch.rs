@@ -1,7 +1,7 @@
 //! The gen 3's scratch volume, where the setup installs unfr0zen's programs
 //! and data (nestlocal, the update engine, themes, Doom, Thread, the stock
 //! backups) with a manifest of their SHA-256s (unfr0zen-core's
-//! diamond3::scratch). A scratch volume wiped since (an OTA, a factory reset)
+//! common::scratch). A scratch volume wiped since (an OTA, a factory reset)
 //! turns those features off: this says which files are gone or changed, so
 //! the log tells to set the unit up again.
 

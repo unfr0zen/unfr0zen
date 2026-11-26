@@ -2,7 +2,7 @@
 //! (package::product) and a development attestation certificate (DAC) for
 //! that product. Controllers check that the DAC's product is the one Basic
 //! Information reports. The gen 3 keeps rs-matter's test DAC for 0x8001; the
-//! gen 2's and gen 1's are the development DACs connectedhomeip publishes
+//! other generations use the development DACs connectedhomeip publishes
 //! (credentials/development/attestation), issued by the same PAI, the
 //! vendor's development PAI with no product, and covered by the same
 //! certification declaration (products 0x8000 to 0x8063).
@@ -34,11 +34,18 @@ const GEN1: Attestation = Attestation {
         include_bytes!("attestation/Matter-Development-DAC-FFF1-8003-Key.der"),
     )),
 };
+const ONYX: Attestation = Attestation {
+    product: 0x8004,
+    own: Some((
+        include_bytes!("attestation/Matter-Development-DAC-FFF1-8004-Cert.der"),
+        include_bytes!("attestation/Matter-Development-DAC-FFF1-8004-Key.der"),
+    )),
+};
 const GEN3: Attestation = Attestation { product: 0x8001, own: None };
 
 /// The attestation of the device named `device`, as its product says.
 pub fn of(device: &str) -> &'static Attestation {
-    static ALL: [Attestation; 3] = [GEN3, GEN2, GEN1];
+    static ALL: [Attestation; 4] = [GEN3, GEN2, GEN1, ONYX];
     let product = crate::package::product(device);
     ALL.iter().find(|a| a.product == product).expect("every product has a DAC")
 }
@@ -81,7 +88,7 @@ mod tests {
 
     #[test]
     fn each_generation_attests_its_own_product() {
-        for (device, product) in [("diamond3", 0x8001u16), ("j49", 0x8002), ("diamond", 0x8003)] {
+        for (device, product) in [("diamond3", 0x8001u16), ("j49", 0x8002), ("diamond", 0x8003), ("onyx", 0x8004)] {
             let attestation = of(device);
             assert_eq!(attestation.product, product);
             // The DAC names the product: Matter's product ID attribute, as text.
@@ -92,7 +99,7 @@ mod tests {
             assert!(attestation.dac().windows(65).any(|w| w == public.access()), "{device}'s key is its DAC's");
             assert_eq!(attestation.pai(), TEST.pai());
         }
-        for (_, key) in [GEN2.own.unwrap(), GEN1.own.unwrap()] {
+        for (_, key) in [GEN2.own.unwrap(), GEN1.own.unwrap(), ONYX.own.unwrap()] {
             // SEC1 ECPrivateKey: the private key and public key where read.
             assert_eq!((&key[5..7], &key[51..56]), (&[0x04, 0x20][..], &[0xA1, 0x44, 0x03, 0x42, 0x00][..]));
         }

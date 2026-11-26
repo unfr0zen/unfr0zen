@@ -219,16 +219,16 @@ fn hold(link: &Path) -> io::Result<()> {
     }
 }
 
-/// Makes sure the holder runs. Called before nestlocal has threads to lose in
-/// a fork.
-pub fn start_holder(ble: &Ble) -> io::Result<()> {
+/// Makes sure the holder of the PTY `link` names runs. Called before
+/// nestlocal has threads to lose in a fork.
+pub fn start_holder(link: &'static str) -> io::Result<()> {
     if UnixStream::connect_addr(&holder_address()?).is_ok() {
         return Ok(());
     }
     // SAFETY: the process has one thread here, and the child stays in hold.
     match check(unsafe { libc::fork() })? {
         0 => {
-            if let Err(e) = hold(Path::new(ble.uart)) {
+            if let Err(e) = hold(Path::new(link)) {
                 logf!("BLE stand-in: the PTY's holder: {e}");
             }
             // SAFETY: the holder has nothing to tidy.
@@ -248,7 +248,7 @@ pub fn start_holder(ble: &Ble) -> io::Result<()> {
 }
 
 /// The PTY's master from its holder, and whether another nestlocal had it.
-fn fetch_master() -> io::Result<(OwnedFd, bool)> {
+pub(super) fn fetch_master() -> io::Result<(OwnedFd, bool)> {
     let address = holder_address()?;
     let mut last = io::Error::other("the PTY's holder is not there");
     for _ in 0..100 {
@@ -277,7 +277,7 @@ fn sleep_real_chip(ble: &'static Ble) {
     }
 }
 
-fn write_all(fd: RawFd, mut bytes: &[u8]) {
+pub(super) fn write_all(fd: RawFd, mut bytes: &[u8]) {
     let deadline = Instant::now() + Duration::from_secs(1);
     while !bytes.is_empty() && Instant::now() < deadline {
         // SAFETY: bytes is readable for its length.

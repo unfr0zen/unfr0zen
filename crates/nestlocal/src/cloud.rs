@@ -16,7 +16,7 @@
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -42,6 +42,9 @@ pub struct Cloud {
     pub origin: String, // https://127.0.0.1
     pub verbose: bool,
     pub hold: Duration, // how long a subscribe with nothing to send is held
+    /// The device bucket to replay once at startup, so nlclient applies the
+    /// restored display requests even when its cached buckets match.
+    pub display_replay: Mutex<Option<String>>,
 }
 
 /// An object as the device expects it: revision and timestamp ahead of
@@ -358,11 +361,31 @@ impl Cloud {
             };
             keys.insert(key.to_string());
             let (rev, ts) = (int(m.get("object_revision")), int(m.get("object_timestamp")));
+            let whole = matches!(m.get("value"), Some(Value::Object(v)) if !v.is_empty());
             if let Some(Value::Object(v)) = m.get("value") {
                 // A bucket the device sends whole: take it as it stands,
                 // unless ours is newer (Home Assistant changed it since).
                 if !v.is_empty() && self.store.get(key).is_none_or(|srv| srv.timestamp <= ts) {
                     self.store.merge(key, v, rev, ts, true);
+                }
+            }
+            // A newer device copy must be received before we replay it; do
+            // not overwrite the unit's own settings just to apply the display.
+            if self.store.get(key).is_some_and(|srv| srv.timestamp >= ts || whole) {
+                let mut replay = self.display_replay.lock().unwrap();
+                if replay.as_deref() == Some(key) {
+                    // With always-on selected, rearm the display timer using
+                    // the restored timeout rather than its boot default.
+                    if self.store.get(key).is_some_and(|srv| crate::screen::always_on(&srv.value)) {
+                        if let Err(e) = crate::settings_ui::request_wake() {
+                            logf!("display wake: {e}");
+                        }
+                    }
+                    if let Some(srv) = self.store.resend_after(key, rev, ts) {
+                        replay.take();
+                        out.push((srv, true));
+                        continue;
+                    }
                 }
             }
             match self.store.get(key) {
@@ -480,6 +503,7 @@ mod tests {
             origin: "https://127.0.0.1".into(),
             verbose: false,
             hold: Duration::from_secs(290),
+            display_replay: Mutex::new(None),
         }
     }
 
@@ -626,6 +650,47 @@ mod tests {
                 r#"{"object_revision":2,"object_timestamp":500,"object_key":"link.S","value":{"k":"link.S"}}]}"#
             )
         );
+    }
+
+    #[tokio::test]
+    async fn startup_replays_matching_display_bucket_once_even_with_the_clock_behind() {
+        let c = cloud();
+        let key = "device.S";
+        *c.display_replay.lock().unwrap() = Some(key.into());
+        let ts = now_ms() + 86_400_000;
+        let fields = fields! {crate::brightness::PERCENT => 85, crate::screen::ALWAYS_ON => false};
+        c.store.merge(key, &fields, 7, ts, true);
+        let subscribe =
+            |rev, ts| json!({"objects":[{"object_key":key,"object_revision":rev,"object_timestamp":ts}]}).to_string();
+        let (_, _, body) = call(&c, "/transport/v7/subscribe", &subscribe(7, ts)).await;
+        let replayed = c.store.get(key).unwrap();
+        assert_eq!((replayed.revision, replayed.timestamp, &replayed.value), (8, ts + 1, &fields));
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["objects"][0]["value"], json!(fields));
+        let (_, _, body) = call(&c, "/transport/v7/subscribe", &subscribe(8, ts + 1)).await;
+        assert_eq!(body, r#"{"objects":null}"#);
+    }
+
+    #[tokio::test]
+    async fn startup_replay_waits_for_the_newer_device_copy() {
+        let c = cloud();
+        *c.display_replay.lock().unwrap() = Some("device.S".into());
+        c.store.merge(
+            "device.S",
+            &fields! {"temperature_scale" => "F", crate::brightness::PERCENT => 85},
+            4,
+            100,
+            true,
+        );
+        let path = "/transport/v7/subscribe";
+        let (_, _, body) =
+            call(&c, path, r#"{"objects":[{"object_key":"device.S","object_revision":5,"object_timestamp":200}]}"#)
+                .await;
+        assert!(serde_json::from_str::<Value>(&body).unwrap()["objects"][0].get("value").is_none());
+        assert!(c.display_replay.lock().unwrap().is_some());
+        let (_, _, body) = call(&c, path, r#"{"objects":[{"object_key":"device.S","object_revision":5,"object_timestamp":200,"value":{"temperature_scale":"C"}}]}"#).await;
+        let value = &serde_json::from_str::<Value>(&body).unwrap()["objects"][0]["value"];
+        assert_eq!(*value, json!(fields! {"temperature_scale" => "C", crate::brightness::PERCENT => 85}));
+        assert!(c.display_replay.lock().unwrap().is_none());
     }
 
     #[tokio::test]
