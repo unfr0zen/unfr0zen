@@ -30,6 +30,29 @@ The [compact UI](legacy/README.md), [dark palette](dark-theme/README.md)
 and [external temperature](external-temperature/README.md) tests cover
 the additional constraints of those patches.
 
+## Checking a stock executable with unfr0zen-apply
+
+From the repository root on Linux or macOS:
+
+```sh
+sh platform/common/nlclient/build.sh build
+cargo run --release --locked -p unfr0zen-apply -- check-nlclient build /path/to/stock/nlclient
+```
+
+The native setup engine builds every supported settings menu combination in
+memory. It applies each journal to the stock bytes, compares the result with
+the linked executable, then reverses it and compares every byte with stock.
+The command leaves the input file untouched.
+
+CircleCI's `apply-reference` job fetches the tracked executables under
+`nlclient-goldens/firmware/` at the current commit of `reference-images/main`
+and runs four checks concurrently. An empty corpus or a failed sample fails
+the job. Independent checks compare payloads with LLVM, decode the patched
+factory branches, and exercise the theme and optional patches. The job runs on trusted app and release workflows, and gates
+release publication. The CircleCI `reference-images` context supplies
+`REFERENCE_IMAGES_TOKEN`, a GitHub token with read-only Contents access to
+`unfr0zen/reference-images`. Restrict the context to the unfr0zen project.
+
 ## Discovery reports
 
 Settings discovery checks each build's registrations, object layout, native

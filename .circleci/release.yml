@@ -165,6 +165,10 @@ workflows:
           requires: [radio, zbwake, j49-kernel]
           context: docker-hub
           filters: *release-tags
+      - apply-reference:
+          requires: [image-ready]
+          context: [docker-hub, reference-images]
+          filters: *release-tags
       - test:
           requires: [recovery, j49, j49-kernel, diamond-xloader, zbwake, radio, thread, doom, nlclient, nestlocal]
           context: docker-hub
@@ -203,6 +207,7 @@ workflows:
           requires:
             [
               sign-bundles,
+              apply-reference,
               test,
               clippy,
               app-linux-x86_64,
