@@ -13,7 +13,7 @@ use unfr0zen_core::{Device, Result};
 
 use crate::flow::failure;
 use crate::progress::{stage, Progress};
-use crate::{device, diamond3, j49};
+use crate::{device, j49};
 
 pub enum Job {
     Backup(PathBuf),
@@ -29,13 +29,27 @@ pub fn default_backup() -> PathBuf {
 /// The format of a whole-NAND image of `len` bytes. Diamond and j49 share
 /// the OMAP raw-page format, represented here by J49.
 pub fn image_device(len: u64) -> Option<Device> {
-    if diamond3::nand::is_image(len) {
+    if crate::common::nand::is_image(len) {
         Some(Device::Diamond3)
     } else if j49::nand::is_image(len) {
         Some(Device::J49)
     } else {
         None
     }
+}
+
+/// Distinguishes the two logical NAND formats by the installed bootloader's
+/// control tree. The Thermostat E and gen 3 both have 512 MiB of NAND.
+pub fn image_device_at(path: &Path) -> Result<Option<Device>> {
+    let size = file(path, fs::metadata(path))?.len();
+    let device = image_device(size);
+    if device == Some(Device::Diamond3) {
+        let boot = read_at(path, 0, unfr0zen_core::diamond3::nand::BOOT_SIZE as usize)?;
+        if boot.windows(10).any(|bytes| bytes == b"nest,onyx\0") {
+            return Ok(Some(Device::Onyx));
+        }
+    }
+    Ok(device)
 }
 
 /// A host file error, kept apart from the Io errors of a dropped USB link.
@@ -121,7 +135,6 @@ pub fn run(
     job: &Job,
     wait_usb: Duration,
     omap: Option<Device>,
-    entry_point: diamond3::usb::EntryPoint,
     progress: &mut dyn Progress,
     confirm: &mut dyn FnMut(&str) -> bool,
     cancel: &device::CancelFlag,
@@ -132,23 +145,20 @@ pub fn run(
         Job::Verify(image) | Job::Restore(image) => {
             let len = file(image, fs::metadata(image))?.len();
             Some(
-                image_device(len)
+                image_device_at(image)?
                     .ok_or_else(|| failure(format!("{} is not a whole-NAND image ({len} bytes)", image.display())))?,
             )
         }
     };
     let unit = device::detect(progress, wait_usb, omap, cancel)?;
-    if let Some(device) = expected.filter(|&device| {
-        unit.device != Device::Onyx
-            && device != unit.device
-            && !(device == Device::J49 && unit.device == Device::Diamond)
-    }) {
+    if let Some(device) =
+        expected.filter(|&device| device != unit.device && !(device == Device::J49 && unit.device == Device::Diamond))
+    {
         return Err(failure(format!("the image is a {}'s NAND; the unit is a {}", device.name(), unit.device.name())));
     }
     match unit.device {
-        Device::Diamond3 => diamond3::nand::run(job, unit, wait_usb, entry_point, progress, confirm, cancel),
+        Device::Diamond3 | Device::Onyx => crate::common::nand::run(job, unit, wait_usb, progress, confirm, cancel),
         Device::Diamond | Device::J49 => j49::nand::run(job, unit, wait_usb, progress, confirm, cancel),
-        Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }
 
@@ -223,17 +233,9 @@ mod tests {
             fn status(&mut self, _: &str) {}
             fn waiting(&mut self, _: &str) {}
         }
-        let error = run(
-            &Job::Verify(image),
-            Duration::ZERO,
-            None,
-            Default::default(),
-            &mut Silent,
-            &mut |_| false,
-            &Default::default(),
-        )
-        .err()
-        .unwrap();
+        let error = run(&Job::Verify(image), Duration::ZERO, None, &mut Silent, &mut |_| false, &Default::default())
+            .err()
+            .unwrap();
         assert!(error.to_string().contains("is not a whole-NAND image"), "{error}");
         fs::remove_dir_all(dir).unwrap();
     }

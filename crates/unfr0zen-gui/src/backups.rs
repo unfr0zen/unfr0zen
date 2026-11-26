@@ -97,7 +97,7 @@ pub fn scan(dir: &Path) -> Vec<Entry> {
         .filter_map(|file| {
             let path = file.path();
             let metadata = file.metadata().ok()?;
-            let device = metadata.is_file().then(|| nand::image_device(metadata.len())).flatten()?;
+            let device = metadata.is_file().then(|| nand::image_device_at(&path).ok().flatten()).flatten()?;
             let device = match device {
                 Device::J49 => omap_device(&path).unwrap_or(Device::J49),
                 other => other,

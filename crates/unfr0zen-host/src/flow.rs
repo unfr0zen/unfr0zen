@@ -13,9 +13,8 @@ use unfr0zen_core::setup::{self, Options};
 use unfr0zen_core::{Error, Result};
 
 use crate::device::{self, Device};
-use crate::diamond3::usb::EntryPoint;
 use crate::progress::{self, Phase, Progress};
-use crate::{assets, diamond3, j49};
+use crate::{assets, j49};
 
 pub(crate) fn seconds(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -58,7 +57,6 @@ pub struct SetupInputs {
     /// Run a Heat Link model as heating a Works With Nest boiler through W1.
     pub wwn_boiler: bool,
     /// How the 3rd generation's boot ROM is entered for recovery.
-    pub entry_point: EntryPoint,
     /// Customizable home screen themes (the gen 3): themes chosen on the
     /// THEMES settings entry draw the home screen's dial, in nlclient on its GPU.
     pub themes: bool,
@@ -118,7 +116,6 @@ impl SetupInputs {
             ("matter-thread", on(self.matter_thread)),
             ("zigbee", on(self.zigbee)),
             ("wwn-boiler", on(self.wwn_boiler)),
-            ("entry-point", (self.entry_point != EntryPoint::Auto).then(|| self.entry_point.name().to_string())),
             ("themes", on(self.themes)),
             ("doom", on(self.doom)),
             ("external-temperature", on(self.external_temperature)),
@@ -254,7 +251,6 @@ pub struct Config {
     /// Diamond and j49 share their boot ROM's USB ID, taken as j49 without it.
     pub omap: Option<Device>,
     /// How the 3rd generation's boot ROM is entered for recovery.
-    pub entry_point: EntryPoint,
     /// How long to wait for the unit in its boot ROM's USB download mode.
     pub wait_usb: Duration,
     pub wait_shell: Duration,
@@ -403,42 +399,28 @@ pub fn run_after_backup(
     progress.phase(Phase::DownloadMode);
     let unit = device::detect(progress, config.wait_usb, config.omap, cancel)?;
     match unit.device {
-        Device::Diamond3 if config.options.dark_theme => {
+        Device::Diamond3 | Device::Onyx if config.options.dark_theme => {
             Err(failure("--dark-theme is only for the 1st and 2nd generation"))
         }
-        Device::Diamond3 => diamond3::run(config, progress, unit, cancel, backup),
+        Device::Diamond3 | Device::Onyx => crate::common::recovery::run(config, progress, unit, cancel, backup),
         Device::Diamond | Device::J49 => j49::run(config, progress, unit, cancel, backup),
-        Device::Onyx => Err(crate::onyx::unsupported(progress)),
     }
 }
 
 /// Boots the application firmware of the unit on USB from whatever mode it
 /// is in, each generation its own way. Returns the final status line.
-pub fn boot(wait_usb: Duration, entry_point: EntryPoint, progress: &mut dyn Progress) -> Result<String> {
+pub fn boot(wait_usb: Duration, expected: Option<Device>, progress: &mut dyn Progress) -> Result<String> {
     let cancel = device::CancelFlag::default();
-    let unit = device::detect(progress, wait_usb, None, &cancel)?;
+    let unit = device::detect(progress, wait_usb, expected, &cancel)?;
     match unit.device {
         Device::Diamond | Device::J49 => j49::boot(unit, progress, &cancel),
-        _ => diamond3::boot::boot_unit(unit, wait_usb, entry_point, progress, &cancel),
+        _ => crate::common::boot::boot_unit(unit, wait_usb, progress, &cancel),
     }
 }
 
 #[cfg(test)]
 mod describe_tests {
     use super::*;
-
-    #[test]
-    fn the_entry_point_names_its_choice() {
-        assert_eq!(SetupInputs::default().entry_point, EntryPoint::Auto);
-        let forced = SetupInputs { entry_point: "cve-2017-7936".parse().unwrap(), ..SetupInputs::default() };
-        assert_eq!(forced.describe(), "--entry-point cve-2017-7936");
-        assert_eq!(
-            SetupInputs { entry_point: "cve-2017-7932".parse().unwrap(), ..SetupInputs::default() }.describe(),
-            "--entry-point cve-2017-7932"
-        );
-        let error = "nope".parse::<EntryPoint>().err().unwrap();
-        assert!(error.contains("auto, cve-2017-7932, cve-2017-7936 or official-loader"), "{error}");
-    }
 
     #[test]
     fn the_device_name_is_for_mqtt_or_matter() {

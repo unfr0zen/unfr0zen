@@ -36,10 +36,10 @@ pub fn identify(id: Id) -> Option<Device> {
 /// The name of the device's mode with this identity.
 pub fn mode_name(device: Device, id: Id) -> Option<&'static str> {
     match device {
-        Device::Diamond3 => diamond3::usb::mode(id).map(diamond3::usb::Mode::name),
+        Device::Diamond3 => diamond3::usb::mode(id).map(crate::common::usb::Mode::name),
         Device::Diamond => j49::usb::mode_for(id, j49::usb::DIAMOND_APP).map(j49::usb::Mode::name),
         Device::J49 => j49::usb::mode(id).map(j49::usb::Mode::name),
-        Device::Onyx => (id == onyx::usb::SDP).then_some("USB download (SDP)"),
+        Device::Onyx => onyx::usb::mode_name(id),
     }
 }
 
@@ -158,12 +158,16 @@ mod tests {
     }
 
     #[test]
-    fn onyx_is_identified_only_in_sdp_mode() {
+    fn onyx_is_identified_in_sdp_and_recovery_modes() {
         assert_eq!(identify((0x15a2, 0x007d)), Some(Device::Onyx));
         assert_eq!(usb_boot(Device::Onyx), onyx::usb::SDP);
         assert_eq!(mode_name(Device::Onyx, onyx::usb::SDP), Some("USB download (SDP)"));
         assert_eq!(mode_name(Device::Diamond3, onyx::usb::SDP), None);
         assert_eq!(mode_name(Device::Onyx, diamond3::usb::SDP), None);
+        assert_eq!(identify(onyx::usb::RECOVERY), Some(Device::Onyx));
+        assert_eq!(mode_name(Device::Onyx, onyx::usb::RECOVERY), Some("recovery"));
+        assert_eq!(mode_name(Device::Diamond3, onyx::usb::RECOVERY), None);
+        assert_eq!(mode_name(Device::Onyx, diamond3::usb::RECOVERY), None);
         let unit = Unit { device: Device::Onyx, port: "1-1".into(), id: onyx::usb::SDP };
         assert_eq!(selected(unit, Some(Device::Diamond)).device, Device::Onyx);
     }

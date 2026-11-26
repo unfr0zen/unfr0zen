@@ -8,6 +8,10 @@ use crate::{Error, Result};
 
 pub const PROMPT: &[u8] = b"=> ";
 
+// The command echo cannot be mistaken for its reply.
+const CONNECT_COMMAND: &str = "echo unfr0zen_\"\"ready";
+const CONNECT_REPLY: &[u8] = b"unfr0zen_ready";
+
 /// The prompt at the start of a line: `crc32` prints `... ==> 1a2b3c4d`, and
 /// a read can end right after its `=> `.
 fn at_prompt(data: &[u8]) -> bool {
@@ -53,19 +57,26 @@ pub struct UBoot<S: Serial> {
 }
 
 impl<S: Serial> UBoot<S> {
-    /// Waits for the console to answer with a prompt after it enumerates.
+    /// Waits for U-Boot to echo a marker and reach its prompt. Opening the
+    /// serial port can echo old output back to the unit before raw mode.
     pub fn connect(mut port: S, timeout: Duration) -> Result<Self> {
         let mut data = Vec::new();
+        let command = format!("\x15{CONNECT_COMMAND}\r");
         let until = Instant::now() + timeout;
         let mut probe = Instant::now();
         while Instant::now() < until {
             if Instant::now() >= probe {
-                port.write_all(b"\r")?;
+                // Ctrl-U clears a partial line before sending the probe.
+                port.write_all(command.as_bytes())?;
                 port.flush()?;
                 probe = Instant::now() + Duration::from_millis(750);
             }
             read_some(&mut port, &mut data)?;
-            if data.windows(PROMPT.len()).any(|w| w == PROMPT) {
+            if at_prompt(&data)
+                && data
+                    .split(|&byte| byte == b'\n')
+                    .any(|line| line.strip_suffix(b"\r").unwrap_or(line) == CONNECT_REPLY)
+            {
                 log::debug!("ACM console ready: {}", tail(&data, 1000));
                 return Ok(UBoot { port });
             }
@@ -144,9 +155,15 @@ pub(crate) mod fake {
                 if byte == b'\r' {
                     let line = String::from_utf8_lossy(&self.pending).into_owned();
                     self.pending.clear();
-                    let reply = (self.respond)(&line);
+                    let reply = if line == CONNECT_COMMAND {
+                        format!("{line}\r\n{}\r\n", String::from_utf8_lossy(CONNECT_REPLY))
+                    } else {
+                        (self.respond)(&line)
+                    };
                     self.sent.push(line);
                     self.output.extend(reply.bytes().chain(PROMPT.iter().copied()));
+                } else if byte == 0x15 {
+                    self.pending.clear();
                 } else {
                     self.pending.push(byte);
                 }
@@ -190,6 +207,16 @@ mod tests {
         let port = FakeSerial::new(|line| if line == "version" { "U-Boot 2023.04\n".into() } else { String::new() });
         let mut board = UBoot::connect(port, Duration::from_secs(1)).unwrap();
         assert_eq!(board.command("version", Duration::from_secs(1)).unwrap(), "U-Boot 2023.04\n=> ");
+    }
+
+    #[test]
+    fn a_stale_prompt_and_command_echo_do_not_complete_the_connection() {
+        let mut port = FakeSerial::new(|_| String::new());
+        port.output.extend(format!("Unknown command 'RECOVERY_READY'\r\n=> {CONNECT_COMMAND}\r\n=> ").bytes());
+        port.max_read = 1;
+        let board = UBoot::connect(port, Duration::from_secs(1)).unwrap();
+        assert!(board.port.output.is_empty());
+        assert_eq!(board.port.sent, [CONNECT_COMMAND]);
     }
 
     #[test]

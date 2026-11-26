@@ -153,7 +153,7 @@ jobs:
               linux-*)
                 tar czf dist/unfr0zen-$PLATFORM-$VERSION.tar.gz -C "$out" unfr0zen
                 if [ "$PLATFORM" = linux-x86_64 ]; then
-                  for device in diamond3 j49 diamond; do
+                  for device in diamond3 j49 diamond onyx; do
                     cargo run --locked -p unfr0zen-host --bin unfr0zen-bundle -- \
                       pack $device "$VERSION" "dist/unfr0zen-ota-$device-$VERSION.tgz"
                   done

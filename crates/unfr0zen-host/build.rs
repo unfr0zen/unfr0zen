@@ -1,7 +1,7 @@
 //! Gathers what the unfr0zen binary carries, so it needs nothing on the host,
 //! first running utils/build-firmware.sh when build/ lacks any of it:
 //!
-//! - the diamond3's recovery firmware utils/build-firmware.sh makes in
+//! - diamond3's and onyx's recovery firmware utils/build-firmware.sh makes in
 //!   build/, checked against its pinned and recorded hashes;
 //! - the gen 1's and gen 2's NAND flasher, dropbear, initramfs busybox and
 //!   kernels, and each one's x-loader its boot ROM takes over USB, built there too;
@@ -24,7 +24,6 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
-const ROM_STAGE_SHA256: &str = "d60cc77f12d3bf217e800b9b3f576fa78cc2082836e48f8f6fc744a086e87146";
 const OFFICIAL_LOADER_SHA256: &str = "abbde0ce71d8764067ddc982b8ac4f49d27ad3d2587b44d92c55c8a73a5fe826";
 const BUSYBOX_DEB: &str = "busybox-static_1.37.0-6+b9_armhf.deb";
 const BUSYBOX_URL: &str = "https://snapshot.debian.org/file/188a1b20b6150354ee95a5a6405d826e3e6fdaa5";
@@ -36,12 +35,13 @@ const DOOM_WAD_SHA256: &str = "1d7d43be501e67d927e415e0b8f3e29c3bf33075e85972181
 
 /// What the app cannot be built without. The kernel and x-loader are left out:
 /// without Docker the firmware build goes on without them.
-const REQUIRED: [&str; 25] = [
-    "rom-stage.imx",
-    "boot-wrapper.bin",
+const REQUIRED: [&str; 27] = [
     "u-boot-recovery.bin",
     "u-boot-recovery.json",
+    "u-boot-recovery-onyx.bin",
+    "u-boot-recovery-onyx.json",
     "u-boot-sdp-official.hab",
+    "u-boot-sdp-onyx.hab",
     "j49/nand-flasher.bin",
     "j49/dropbearmulti",
     "j49/busybox",
@@ -60,6 +60,7 @@ const REQUIRED: [&str; 25] = [
     "wakefilter/libwakefilter.so",
     "unfr0zen-apply-armv7",
     "localcloud/liblocalcloud.so",
+    "onyx/recovery-logo.bgrx.gz",
     "theme/libunfr0zen-theme.so",
     "theme/libnestlocal_theme.so",
 ];
@@ -77,6 +78,10 @@ fn build_firmware(root: &Path) {
         root.join("crates/nestlocal"),
         root.join("crates/nestlocal-theme"),
         root.join("platform/common/theme"),
+        root.join("platform/common/zbwake"),
+        root.join("platform/diamond3/zbwake"),
+        root.join("platform/onyx/zbwake"),
+        root.join("build/zbwake"),
         root.join("Cargo.lock"),
     ];
     let apply = [root.join("crates/unfr0zen-apply"), root.join("crates/unfr0zen-core"), root.join("Cargo.lock")];
@@ -176,26 +181,20 @@ fn firmware(root: &Path, out: &Path) {
             panic!("build/{name} is missing: build the recovery firmware first (utils/build-firmware.sh)")
         })
     };
-    let rom_stage = read("rom-stage.imx");
-    assert_eq!(sha256(&rom_stage), ROM_STAGE_SHA256, "build/rom-stage.imx is not the pinned ROM bootstrap");
-    let recovery = read("u-boot-recovery.bin");
-    let record = String::from_utf8(read("u-boot-recovery.json")).unwrap();
-    let recorded: serde_json::Value = serde_json::from_str(&record).unwrap();
-    assert_eq!(
-        recorded["image_sha256"].as_str(),
-        Some(sha256(&recovery).as_str()),
-        "build/u-boot-recovery.bin does not match its build record"
-    );
-    assert!(
-        recovery.windows(25).any(|w| w == b"usb_recovery_acm_fastboot"),
-        "build/u-boot-recovery.bin is not the ACM+fastboot recovery build"
-    );
-    for (name, data) in [
-        ("rom-stage.imx", rom_stage),
-        ("boot-wrapper.bin", read("boot-wrapper.bin")),
-        ("u-boot-recovery.bin", recovery),
-    ] {
-        fs::write(out.join(name), data).unwrap();
+    for name in ["u-boot-recovery", "u-boot-recovery-onyx"] {
+        let recovery = read(&format!("{name}.bin"));
+        let record = String::from_utf8(read(&format!("{name}.json"))).unwrap();
+        let recorded: serde_json::Value = serde_json::from_str(&record).unwrap();
+        assert_eq!(
+            recorded["image_sha256"].as_str(),
+            Some(sha256(&recovery).as_str()),
+            "build/{name}.bin does not match its build record"
+        );
+        assert!(
+            recovery.windows(25).any(|w| w == b"usb_recovery_acm_fastboot"),
+            "build/{name}.bin is not the ACM+fastboot recovery build"
+        );
+        fs::write(out.join(format!("{name}.bin")), recovery).unwrap();
     }
     let official = read("u-boot-sdp-official.hab");
     assert_eq!(
@@ -204,6 +203,10 @@ fn firmware(root: &Path, out: &Path) {
         "build/u-boot-sdp-official.hab is not the pinned official SDP loader"
     );
     fs::write(out.join("u-boot-sdp-official.hab"), official).unwrap();
+    let onyx = read("u-boot-sdp-onyx.hab");
+    assert_eq!(sha256(&onyx), "1c204314ed1e536979e5512217e5baa386796500d6c0aca9460862aabb13b033");
+    fs::write(out.join("u-boot-sdp-onyx.hab"), onyx).unwrap();
+    fs::write(out.join("onyx-recovery-logo.bgrx.gz"), read("onyx/recovery-logo.bgrx.gz")).unwrap();
 }
 
 /// The member of an ar archive (a .deb) whose name starts with prefix.

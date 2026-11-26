@@ -134,21 +134,14 @@ pub fn acm_port(id: Id) -> Option<String> {
     })
 }
 
-pub fn wait_acm(id: Id, timeout: Duration) -> Result<String> {
-    let until = Instant::now() + timeout;
-    while Instant::now() < until {
-        if let Some(port) = acm_port(id) {
-            return Ok(port);
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    Err(Error::Timeout(format!("ACM interface for {:04x}:{:04x} did not appear", id.0, id.1)))
-}
-
 /// Waits for the ACM port of `id` and opens it. A port can be listed before
 /// it can be opened (Windows answers "a device which does not exist"), so a
 /// failed open is retried until the timeout.
 pub fn open_acm(id: Id, timeout: Duration) -> Result<Port> {
+    open_acm_named(id, timeout).map(|(_, port)| port)
+}
+
+pub(crate) fn open_acm_named(id: Id, timeout: Duration) -> Result<(String, Port)> {
     let until = Instant::now() + timeout;
     let mut failed = None;
     while Instant::now() < until {
@@ -156,7 +149,7 @@ pub fn open_acm(id: Id, timeout: Duration) -> Result<Port> {
             match Port::open(&name) {
                 Ok(port) => {
                     log::info!("Opened {name}");
-                    return Ok(port);
+                    return Ok((name, port));
                 }
                 Err(error) => {
                     if failed.is_none() {

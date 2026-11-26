@@ -6,7 +6,6 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use eframe::egui;
-use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::{Config, Device, SetupInputs, DEFAULT_MATTER_CODE, DEFAULT_NTP_SERVER};
 
@@ -33,7 +32,6 @@ pub struct Form {
     matter_thread: bool,
     zigbee: bool,
     wwn_boiler: bool,
-    pub entry_point: EntryPoint,
     pub ssh: bool,
     pub usb_shell: bool,
     root_password: String,
@@ -254,6 +252,12 @@ impl Form {
         form
     }
 
+    /// Whether a developer option is on: the review step shows them unfolded
+    /// then, so a choice recalled from the last run is in sight.
+    pub fn developer_options_on(&self) -> bool {
+        self.backplate_sim || self.allow_unsigned_updates || self.device.is_some()
+    }
+
     /// Keeps the form's choices at `path` for the next launch.
     pub fn remember(&self, path: &Path) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
@@ -265,7 +269,7 @@ impl Form {
 
 impl Form {
     /// The unit the options are for: the one chosen, else the last on USB.
-    fn unit(&self) -> Option<Device> {
+    pub(super) fn unit(&self) -> Option<Device> {
         self.device.or(self.last_device)
     }
 
@@ -303,7 +307,6 @@ impl Form {
             matter_code: self.matter.on.then(|| self.matter.code.clone()),
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler && self.holds_radio(),
-            entry_point: self.entry_point,
             themes: self.themes,
             doom: self.doom,
             external_temperature: self.external_temperature && self.external_temperature_enabled(),
@@ -321,7 +324,6 @@ impl Form {
         Ok(Config {
             options,
             omap: self.device,
-            entry_point: self.entry_point,
             wait_usb: WAIT_USB,
             wait_shell: Duration::from_secs(180),
             work_dir: data_dir.join("runs"),
@@ -769,7 +771,7 @@ impl Form {
     /// Whether the external temperature option applies: to every generation,
     /// and to any unit while none is known.
     fn supports_external_temperature(&self) -> bool {
-        matches!(self.unit(), None | Some(Device::Diamond | Device::J49 | Device::Diamond3))
+        matches!(self.unit(), None | Some(Device::Diamond | Device::J49 | Device::Diamond3 | Device::Onyx))
     }
 
     /// Whether the external temperature switch can be turned on: a unit that
@@ -807,13 +809,8 @@ impl Form {
         })
     }
 
-    /// Puts the entry point back to auto when the device changes for
-    /// another; a unit unplugged, or several on the bus, is no change.
     pub fn track_device(&mut self, bus: &Bus) {
         if let Some(device) = self.known_device(bus) {
-            if self.last_device.is_some_and(|last| last != device) {
-                self.entry_point = EntryPoint::Auto;
-            }
             self.last_device = Some(device);
         }
         self.serial = match bus {
@@ -824,7 +821,7 @@ impl Form {
 
     /// The developer options, folded away on the review step: the CLI's
     /// options a run rarely needs, as the steps draw theirs.
-    pub fn developer_ui(&mut self, ui: &mut egui::Ui, bus: &Bus) {
+    pub fn developer_ui(&mut self, ui: &mut egui::Ui) {
         crate::switch_row(
             ui,
             &mut self.backplate_sim,
@@ -849,32 +846,12 @@ impl Form {
             true,
             |ui| {
                 ui.selectable_value(&mut self.device, None, crate::tr!("form.auto"));
-                for device in [Device::Diamond, Device::J49, Device::Diamond3] {
+                for device in [Device::Diamond, Device::J49, Device::Diamond3, Device::Onyx] {
                     ui.selectable_value(&mut self.device, Some(device), device.name());
                 }
             },
         )
         .on_hover_text(crate::tr!("form.device_hint"));
-        // Greyed without a gen 3, keeping the choice: the unit may only
-        // have been unplugged, and other generations ignore it.
-        let gen3 = self.known_device(bus) == Some(Device::Diamond3);
-        crate::select(
-            ui,
-            crate::tr!("form.entry_point"),
-            "technique",
-            width,
-            entry_point_label(self.entry_point),
-            gen3,
-            |ui| {
-                for entry_point in
-                    [EntryPoint::Auto, EntryPoint::OfficialLoader, EntryPoint::Cve20177932, EntryPoint::Cve20177936]
-                {
-                    ui.selectable_value(&mut self.entry_point, entry_point, entry_point_label(entry_point));
-                }
-            },
-        )
-        .on_hover_text(crate::tr!("form.entry_point_choice_hint"))
-        .on_disabled_hover_text(crate::tr!("form.entry_point_disabled_hint"));
     }
 }
 
@@ -963,16 +940,6 @@ fn ssh_command(public: Option<&std::path::Path>) -> String {
 
 /// Text fields in the steps' cards.
 const FIELD_WIDTH: f32 = 260.0;
-
-/// The entry-point labels offered by the GUI, independent of CLI option names.
-fn entry_point_label(entry_point: EntryPoint) -> &'static str {
-    match entry_point {
-        EntryPoint::Auto => crate::tr!("form.auto"),
-        EntryPoint::Cve20177932 => crate::tr!("form.technique.jump_certificates"),
-        EntryPoint::Cve20177936 => crate::tr!("form.technique.spray_stack"),
-        EntryPoint::OfficialLoader => crate::tr!("form.technique.official_loader"),
-    }
-}
 
 /// The device name's field, in MQTT's card and Matter's alike.
 fn device_name_field(ui: &mut egui::Ui, name: &mut String, width: f32, invalid: bool) {
@@ -1110,38 +1077,6 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_point_goes_back_to_auto_only_when_the_device_changes() {
-        use crate::bus::Seen;
-        use unfr0zen_host::{device, diamond3::usb};
-        let one =
-            |id| Bus::One(Seen { device: device::identify(id).unwrap(), mode: "", port: "1".into(), id, serial: None });
-        let gen3 = one(usb::SDP);
-        let gen2 = Bus::One(Seen { device: Device::J49, mode: "", port: "1".into(), id: (0, 0), serial: None });
-        let mut form = Form::default();
-        form.track_device(&gen3);
-        form.entry_point = EntryPoint::Cve20177936;
-        for bus in [
-            Bus::Nothing,
-            Bus::Several(Vec::new()),
-            one(usb::RECOVERY),
-            one(usb::APP_ACM),
-            one(usb::INITRAMFS),
-            gen3.clone(),
-        ] {
-            form.track_device(&bus);
-            assert_eq!(form.entry_point, EntryPoint::Cve20177936, "{bus:?}");
-        }
-        form.track_device(&Bus::Nothing);
-        form.track_device(&gen2);
-        assert_eq!(form.entry_point, EntryPoint::Auto, "swapped while unplugged");
-        form.track_device(&gen3);
-        form.entry_point = EntryPoint::Cve20177936;
-        form.device = Some(Device::J49);
-        form.track_device(&gen3);
-        assert_eq!(form.entry_point, EntryPoint::Auto, "another device asked for");
-    }
-
-    #[test]
     fn external_temperature_is_always_shown_and_enabled_only_for_a_unit_that_takes_it() {
         let plain = crate::tr!("form.external_temperature").to_string();
         let ble = crate::tr!("form.external_temperature_ble").to_string();
@@ -1150,7 +1085,7 @@ mod tests {
             (Some(Device::J49), &plain, true),
             (Some(Device::Diamond3), &ble, true),
             (Some(Device::Diamond), &plain, true),
-            (Some(Device::Onyx), &plain, false),
+            (Some(Device::Onyx), &plain, true),
         ] {
             let mut form = Form {
                 mqtt: Toggle { on: true, value: "tcp://broker:1883".into() },
@@ -1182,7 +1117,7 @@ mod tests {
         assert_eq!(hint(Form::default()), crate::tr!("form.external_temperature_needs_integration_any_hint"));
         assert_eq!(
             hint(Form { mqtt: mqtt(), last_device: Some(Device::Onyx), ..Form::default() }),
-            crate::tr!("form.external_temperature_unsupported_hint")
+            crate::tr!("form.external_temperature_hint")
         );
         assert_eq!(
             hint(Form { mqtt: mqtt(), last_device: Some(Device::Diamond), ..Form::default() }),
@@ -1206,7 +1141,7 @@ mod tests {
             (Some(Device::Diamond3), true),
             (Some(Device::J49), true),
             (Some(Device::Diamond), true),
-            (Some(Device::Onyx), false),
+            (Some(Device::Onyx), true),
         ] {
             let form = Form {
                 mqtt: Toggle { on: true, value: "tcp://broker:1883".into() },
@@ -1426,6 +1361,22 @@ mod tests {
     }
 
     #[test]
+    fn a_recalled_developer_option_unfolds_the_developer_options() {
+        let dir = std::env::temp_dir().join(format!("unfr0zen-developer-{}", std::process::id()));
+        let path = dir.join("setup.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!Form::recalled(&path).developer_options_on(), "a new form keeps them folded");
+        for (backplate_sim, allow_unsigned_updates) in [(true, false), (false, true)] {
+            Form { backplate_sim, allow_unsigned_updates, ..Form::new() }.remember(&path).unwrap();
+            assert!(Form::recalled(&path).developer_options_on(), "{backplate_sim} {allow_unsigned_updates}");
+        }
+        Form { zigbee: true, ..Form::new() }.remember(&path).unwrap();
+        assert!(!Form::recalled(&path).developer_options_on(), "other options leave them folded");
+        assert!(Form { device: Some(Device::Onyx), ..Form::new() }.developer_options_on());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn matter_takes_the_pairing_code_shown() {
         let mut form = Form::default();
         assert_eq!(form.matter.code, DEFAULT_MATTER_CODE, "prefilled");
@@ -1487,10 +1438,6 @@ mod tests {
         assert!(form.config().unwrap().options.wwn_boiler);
         form.zigbee = false;
         form.wwn_boiler = false;
-        form.entry_point = EntryPoint::Cve20177936;
-        assert_eq!(form.inputs().entry_point, EntryPoint::Cve20177936);
-        assert_eq!(form.config().unwrap().entry_point, EntryPoint::Cve20177936);
-        form.entry_point = EntryPoint::Auto;
         form.dark_theme = true;
         assert!(form.inputs().dark_theme && form.config().unwrap().options.dark_theme);
         form.device = Some(Device::Diamond3);

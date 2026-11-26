@@ -13,8 +13,9 @@
 
 use std::time::Duration;
 
+use crate::common::recovery::Recovery;
+use crate::common::recovery::{fcb_fields, is_ivt, Fastboot};
 use crate::console::Serial;
-use crate::diamond3::recovery::{fcb_fields, is_ivt, Fastboot, Recovery, RAM_BASE};
 use crate::{device, Result};
 
 pub const NAND_SIZE: u32 = 0x2000_0000;
@@ -38,14 +39,19 @@ fn seconds(n: u64) -> Duration {
 /// The boot partition, then the rest in fastboot-buffer-sized pieces:
 /// (offset, size) covering `start..end`.
 pub fn chunks(start: u32, end: u32) -> Vec<(u32, u32)> {
+    chunks_with_limit(start, end, CHUNK)
+}
+
+pub fn chunks_with_limit(start: u32, end: u32, limit: u32) -> Vec<(u32, u32)> {
+    assert!(limit >= BLOCK && limit.is_multiple_of(BLOCK));
     let mut chunks = Vec::new();
     if start < BOOT_SIZE {
         chunks.push((start, BOOT_SIZE - start));
     }
     let mut offset = start.max(BOOT_SIZE);
     while offset < end {
-        chunks.push((offset, CHUNK.min(end - offset)));
-        offset += CHUNK;
+        chunks.push((offset, limit.min(end - offset)));
+        offset += limit;
     }
     chunks
 }
@@ -213,9 +219,10 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     /// U-Boot reads to the end of a failing read but names only its start, so
     /// the blocks of such a read are read again on their own to find them.
     fn nand_to_ram(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<Vec<u32>> {
+        let ram_base = self.buffer_address();
         let mut uncorrectable = Vec::new();
         for (at, size, is_bad) in pieces(offset, size, bad) {
-            let address = RAM_BASE + (at - offset);
+            let address = ram_base + (at - offset);
             if is_bad {
                 self.console.command(&format!("mw.b {address:#x} 0xff {size:#x}"), seconds(10))?;
             } else if !self.nand_to_address(address, at, size)? {
@@ -248,6 +255,9 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
 
     /// NAND as it reads now, and the blocks in it with uncorrectable pages.
     pub fn read_nand(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<(Vec<u8>, Vec<u32>)> {
+        if size as usize > self.buffer_capacity() {
+            return device("NAND read exceeds the fastboot buffer");
+        }
         let uncorrectable = self.nand_to_ram(offset, size, bad)?;
         Ok((self.upload_ram(size as usize)?, uncorrectable))
     }
@@ -256,27 +266,36 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
     /// it with uncorrectable pages, which count as erased: such a page reads
     /// differently each time.
     pub fn tolerant_nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<(u32, Vec<u32>)> {
+        let ram_base = self.buffer_address();
+        if size as usize > self.buffer_capacity() {
+            return device("NAND read exceeds the fastboot buffer");
+        }
         let uncorrectable = self.nand_to_ram(offset, size, bad)?;
         for &block in &uncorrectable {
-            let (address, length) = (RAM_BASE + (block - offset), BLOCK.min(offset + size - block));
+            let (address, length) = (ram_base + (block - offset), BLOCK.min(offset + size - block));
             self.console.command(&format!("mw.b {address:#x} 0xff {length:#x}"), seconds(10))?;
         }
-        Ok((self.checked_crc(RAM_BASE, size as usize)?, uncorrectable))
+        Ok((self.checked_crc(ram_base, size as usize)?, uncorrectable))
     }
 
     /// The CRC32 of NAND as it reads now, computed on the unit, where an
     /// uncorrectable page is an error.
     fn nand_crc(&mut self, offset: u32, size: u32, bad: &[u32]) -> Result<u32> {
+        let ram_base = self.buffer_address();
+        if size as usize > self.buffer_capacity() {
+            return device("NAND read exceeds the fastboot buffer");
+        }
         let uncorrectable = self.nand_to_ram(offset, size, bad)?;
         if !uncorrectable.is_empty() {
             return device(format!("NAND blocks {uncorrectable:#x?} have pages the ECC cannot correct"));
         }
-        self.checked_crc(RAM_BASE, size as usize)
+        self.checked_crc(ram_base, size as usize)
     }
 
     /// Erases NAND at `offset` and writes `data` there but in the `bad` blocks,
     /// checked in RAM first and read back after: `data` must be erased there.
     pub fn write_nand(&mut self, offset: u32, data: &[u8], bad: &[u32]) -> Result<()> {
+        let ram_base = self.buffer_address();
         let (size, expected) = self.stage(data)?;
         for (at, size, is_bad) in pieces(offset, size as u32, bad) {
             if is_bad {
@@ -286,7 +305,7 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
             if !response.contains("OK") {
                 return device(format!("nand erase at {at:#x} failed: {}", response.trim()));
             }
-            let address = RAM_BASE + (at - offset);
+            let address = ram_base + (at - offset);
             let response =
                 self.console.command(&format!("nand write.trimffs {address:#x} {at:#x} {size:#x}"), seconds(300))?;
             if !response.contains(&format!("{size} bytes written: OK")) {
@@ -335,7 +354,7 @@ impl<S: Serial, F: Fastboot> Recovery<S, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diamond3::recovery::tests::{board, uboot, Unit};
+    use crate::common::recovery::tests::{board, uboot, Unit};
 
     #[test]
     fn chunks_cover_the_nand_once() {
@@ -465,9 +484,7 @@ mod tests {
 
     #[test]
     fn ecc_errors_do_not_count_in_the_boot_control_blocks() {
-        let mut unit = Unit::default();
-        unit.ecc_errors = true;
-        let (mut board, _) = board(unit);
+        let (mut board, _) = board(Unit { ecc_errors: true, ..Unit::default() });
         assert!(board.read_nand(0, BOOT_CONTROL, &[]).unwrap().1.is_empty());
         assert_eq!(board.read_nand(0, BOOT_CONTROL + BLOCK, &[]).unwrap().1, [BOOT_CONTROL]);
     }
@@ -494,9 +511,7 @@ mod tests {
 
     #[test]
     fn a_read_that_fails_once_and_then_reads_clean_names_nothing() {
-        let mut unit = Unit::default();
-        unit.flaky_reads = 1;
-        let (mut board, _) = board(unit);
+        let (mut board, _) = board(Unit { flaky_reads: 1, ..Unit::default() });
         assert!(board.read_nand(BOOT_SIZE, 2 * BLOCK, &[]).unwrap().1.is_empty());
     }
 

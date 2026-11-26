@@ -37,7 +37,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use unfr0zen_host::diamond3::boot;
+use unfr0zen_host::common::boot;
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::nand::Job;
 use unfr0zen_host::update;
@@ -80,7 +80,7 @@ fn main() -> eframe::Result<()> {
         eprintln!("unfr0zen is already running.");
         return Ok(());
     }
-    if let Err(error) = unfr0zen_host::diamond3::usb::init_hid() {
+    if let Err(error) = unfr0zen_host::common::usb::init_hid() {
         log::warn!("Could not start hidapi: {error}");
     }
     let mut viewport = egui::ViewportBuilder::default()
@@ -773,10 +773,12 @@ struct Row {
 
 impl App {
     fn new(ctx: &egui::Context, restart: Arc<AtomicBool>) -> App {
+        let form = Form::recalled(&form::remembered_path());
         let mut app = App {
             updates: Updates::check(ctx, restart),
             bus: Watcher::start(ctx.clone()),
-            form: Form::recalled(&form::remembered_path()),
+            developer_open: form.developer_options_on(),
+            form,
             ..App::default()
         };
         app.library.refresh();
@@ -854,16 +856,15 @@ impl App {
             }
             task => format!("Selected: {}", task.log_title()),
         });
-        let entry_point = self.form.entry_point;
         let run = match &task {
             Task::SetUp => self.form.config().map(|config| Run::start(config, None)),
             Task::BackupSetUp(out) => {
                 self.form.config().and_then(|config| backup_folder(out).map(|_| Run::start(config, Some(out.clone()))))
             }
-            Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB, entry_point)),
-            Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB, entry_point)),
-            Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, entry_point, progress))),
-            Task::Boot => Ok(Run::task(move |progress| unfr0zen_host::flow::boot(WAIT_USB, entry_point, progress))),
+            Task::Backup(out) => backup_folder(out).map(|_| Run::nand(Job::Backup(out.clone()), WAIT_USB)),
+            Task::Restore(image) => Ok(Run::nand(Job::Restore(image.clone()), WAIT_USB)),
+            Task::Uboot => Ok(Run::task(move |progress| boot::uboot(WAIT_USB, None, progress))),
+            Task::Boot => Ok(Run::task(move |progress| unfr0zen_host::flow::boot(WAIT_USB, None, progress))),
         };
         self.logs = LogContext::default();
         self.task = Some(task);
@@ -984,7 +985,7 @@ impl App {
                 self.logged = unfr0zen_host::log_path().is_some();
                 // U-Boot at its prompt: the page's terminal opens its console.
                 if self.task == Some(Task::Uboot) && result.is_ok() {
-                    self.uboot.auto_connect = Some(unfr0zen_host::diamond3::usb::RECOVERY);
+                    self.uboot.auto_connect = true;
                 }
                 self.logs.outcome = Some(result);
                 self.run = None;
@@ -1911,8 +1912,7 @@ impl App {
         self.uboot.ui(ui, idle);
     }
 
-    /// One unit the command acts on is on USB, in any mode: any Nest
-    /// Learning Thermostat to boot, a 3rd generation for recovery U-Boot.
+    /// One supported unit on USB in any mode. Recovery U-Boot needs an i.MX6.
     fn command_target_on_bus(&self, task: &Task) -> bool {
         matches!(self.bus.current(), Bus::One(seen) if command_devices(task).contains(&seen.device))
     }
@@ -1930,7 +1930,7 @@ impl App {
         ui.add_space(8.0);
         // Boot takes every generation there is to name.
         if task != Task::Boot {
-            ui.label(egui::RichText::new(tr!("command.gen3_only")).color(MUTED));
+            ui.label(egui::RichText::new(tr!("command.imx6_only")).color(MUTED));
         }
         if let Some(device) = other {
             ui.label(egui::RichText::new(tr!("command.connected_device", device = device.description())).color(WARN));
@@ -2354,8 +2354,8 @@ fn nav_icon(painter: &egui::Painter, page: Page, c: egui::Pos2, color: egui::Col
 /// The generations an advanced command acts on.
 fn command_devices(task: &Task) -> &'static [Device] {
     match task {
-        Task::Boot => &[Device::Diamond3, Device::J49, Device::Diamond],
-        _ => &[Device::Diamond3],
+        Task::Boot => &[Device::Diamond3, Device::J49, Device::Diamond, Device::Onyx],
+        _ => &[Device::Diamond3, Device::Onyx],
     }
 }
 
@@ -3005,7 +3005,7 @@ mod tests {
             label == ON_ACCENT
         };
         assert!(!continue_enabled(&mut release()), "nothing on USB");
-        assert!(!continue_enabled(&mut App { bus: on_usb(Device::Onyx), ..release() }), "a Thermostat E");
+        assert!(continue_enabled(&mut App { bus: on_usb(Device::Onyx), ..release() }), "a Thermostat E");
         assert!(continue_enabled(&mut App { bus: on_usb(Device::J49), ..release() }));
         assert!(
             continue_enabled(&mut App { steps_without_unit: true, ..App::default() }),
@@ -3526,7 +3526,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let settled = (0..4).map(|_| frame(vec![])).last().unwrap();
-        // Device, then entry point.
+        // Device.
         let (device, _) = text_at(&settled, "auto")[0];
         let press = |pressed| egui::Event::PointerButton {
             pos: device,
@@ -3791,7 +3791,6 @@ mod tests {
             "Credits",
             "BusyBox —",
             "the BusyBox project",
-            "CVE-2017-7932 and CVE-2017-7936 —",
             "Quarkslab",
             "cuckoo loader gen 1 —",
             "@guyman70718",
@@ -3806,7 +3805,7 @@ mod tests {
     fn main_page_controls_show_hints_on_hover() {
         for (page, label, hint) in [
             (Page::SetUp, "Back up and set up", "Set up the connected thermostat with the selected options"),
-            (Page::Boot, "Rescue", "Connect one Nest Learning Thermostat, finish any operation, close file pickers, and disconnect any open console first"),
+            (Page::Boot, "Rescue", "Connect one supported Nest thermostat, finish any operation, close file pickers, and disconnect any open console first"),
         ] {
             let context = egui::Context::default();
             install_fonts(&context);
@@ -3978,22 +3977,6 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_point_stays_chosen_while_greyed_for_another_generation() {
-        let entry_point = unfr0zen_host::diamond3::usb::EntryPoint::Cve20177936;
-        let mut app = App {
-            bus: on_usb(Device::J49),
-            page: Page::SetUp,
-            step: setup::Step::Review,
-            developer_open: true,
-            ..App::default()
-        };
-        app.form.entry_point = entry_point;
-        let shown = texts(&render_frames(&mut app, WINDOW, 4));
-        assert_eq!(app.form.entry_point, entry_point);
-        assert!(shown.iter().any(|t| t == entry_point.label()), "the greyed choice is the real one: {shown:?}");
-    }
-
-    #[test]
     fn only_the_u_boot_page_repeats_its_outcome_beside_its_button() {
         for (task, page, beside) in [(Task::Boot, Page::Boot, false), (Task::Uboot, Page::Uboot, true)] {
             let mut app = App { task: Some(task), page, popup_dismissed: true, ..App::default() };
@@ -4135,7 +4118,7 @@ mod tests {
         for device in [Device::Diamond3, Device::J49, Device::Diamond] {
             assert!(on(device).command_target_on_bus(&Task::Boot), "{device:?} boots");
         }
-        assert!(!on(Device::Onyx).command_target_on_bus(&Task::Boot), "the Thermostat E does not");
+        assert!(on(Device::Onyx).command_target_on_bus(&Task::Boot), "the Thermostat E does");
         assert!(on(Device::Diamond3).command_target_on_bus(&Task::Uboot));
         assert!(!on(Device::J49).command_target_on_bus(&Task::Uboot), "recovery U-Boot is the 3rd generation's");
         let none = App { bus: bus::Watcher::fixed(bus::Bus::Nothing), ..App::default() };

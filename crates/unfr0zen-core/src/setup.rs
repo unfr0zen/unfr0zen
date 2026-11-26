@@ -11,7 +11,7 @@ use base64::{
 };
 use regex::Regex;
 
-use crate::diamond3::scratch;
+use crate::common::scratch;
 use crate::nestlocal::{self, Matter, Mqtt, Overlay, Pki};
 use crate::shell::{sha256_hex, Volume};
 use crate::{device, Device, Result};
@@ -505,8 +505,8 @@ pub(crate) struct Rootfs {
 fn rootfs(target: Device) -> Result<&'static Rootfs> {
     match target {
         Device::Diamond3 => Ok(&crate::diamond3::rootfs::ROOTFS),
+        Device::Onyx => Ok(&crate::onyx::rootfs::ROOTFS),
         Device::Diamond | Device::J49 => Ok(&crate::j49::rootfs::ROOTFS),
-        Device::Onyx => device("Nest Thermostat E (onyx) is not supported"),
     }
 }
 
@@ -703,9 +703,6 @@ pub fn set_up_owned(
     if options.ssh_public_key.is_some() && !options.ssh {
         return device("--ssh-public-key needs --ssh");
     }
-    if options.theme.is_some() && !matches!(target, Device::Diamond | Device::J49 | Device::Diamond3) {
-        return device("customizable home screen themes are not available on this device");
-    }
     if options.theme.is_some() && !on_scratch {
         return device("customizable home screen themes need the unit's scratch volume");
     }
@@ -858,12 +855,18 @@ pub fn set_up_owned(
             let (_, _, line) = overlay.files.iter_mut().find(|(name, _, _)| name == nestlocal::OPTIONS).unwrap();
             line.pop();
             line.extend_from_slice(b" -external-temperature\n");
-            if target == Device::Diamond3 {
+            if matches!(target, Device::Diamond3 | Device::Onyx) {
                 let (_, _, product) =
                     overlay.files.iter_mut().find(|(name, _, _)| name == "etc/nestlabs/product.config").unwrap();
                 *product = nestlocal::stock_ble_on(&String::from_utf8_lossy(product)).into_bytes();
             }
         }
+    }
+    if target == Device::Onyx && options.matter.is_some() && !options.external_temperature {
+        let overlay = overlay.as_mut().unwrap();
+        let (_, _, product) =
+            overlay.files.iter_mut().find(|(name, _, _)| name == "etc/nestlabs/product.config").unwrap();
+        *product = nestlocal::stock_ble_on(&String::from_utf8_lossy(product)).into_bytes();
     }
     if let Some(overlay) = overlay.as_mut().filter(|_| on_scratch) {
         for (name, _, _) in &mut overlay.files {
@@ -892,7 +895,7 @@ pub fn set_up_owned(
         set_up_block_cloud(&mut tree, options.block_cloud)?;
     }
     fetch(volume, &mut tree, &mut originals, &[PROFILE], false, true)?;
-    if matches!(target, Device::Diamond | Device::Diamond3 | Device::J49) {
+    {
         fetch(volume, &mut tree, &mut originals, &[NLSLEEP], false, true)?;
         fetch(volume, &mut tree, &mut originals, &[WAKE_FILTER, FIXED_WAKE_PATTERNS], false, false)?;
         let ssh = options.ssh && matches!(target, Device::Diamond | Device::J49);
@@ -1053,15 +1056,14 @@ pub fn set_up_owned(
                 current
             };
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::ICON], false, false)?;
-            fetch(volume, &mut tree, &mut originals, &[crate::nlclient::GLYPH], false, false)?;
-            for (glyph, _) in crate::nlclient::SECTION_GLYPHS {
+            let glyphs = crate::nlclient::glyphs(target);
+            for (glyph, _) in &glyphs {
                 fetch(volume, &mut tree, &mut originals, &[glyph], false, false)?;
             }
             fetch(volume, &mut tree, &mut originals, &[crate::nlclient::VERSION], false, false)?;
             tree.insert(crate::nlclient::JOURNAL.into(), (journal, 0o600));
             tree.insert(crate::nlclient::ICON.into(), (crate::nlclient::ICON_BYTES.to_vec(), 0o644));
-            tree.insert(crate::nlclient::GLYPH.into(), (crate::nlclient::GLYPH_BYTES.to_vec(), 0o644));
-            for (glyph, bytes) in crate::nlclient::SECTION_GLYPHS {
+            for (glyph, bytes) in glyphs {
                 tree.insert(glyph.into(), (bytes.to_vec(), 0o644));
             }
             tree.insert(
@@ -1416,7 +1418,7 @@ fn restore_boot_artwork(volume: &mut impl Volume, tree: &mut Tree, originals: &m
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diamond3::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
+    use crate::common::rootfs::{FILES as ROOT_SHELL_FILES, GADGET_LINES, OLD_GETTY, SHELL_LINES};
     use crate::shell::{Digests, File};
     use std::collections::BTreeSet;
     use std::io::Read;
@@ -1434,6 +1436,16 @@ mod tests {
         /// Free bytes on the gen 3's scratch, apart from the root volume's.
         scratch_free: u64,
     }
+
+    const GADGET_ACTIONS: &str = r#"case "$1" in
+'start')
+    ${MODPROBE} ${USB_GADGET_MOD}.ko iSerialNumber=${SERIAL_NO}
+    ;;
+'stop')
+    ${MODPROBE} -r ${USB_GADGET_MOD}.ko
+    ;;
+esac
+"#;
 
     fn stock() -> Vec<(&'static str, u32, String)> {
         vec![
@@ -1465,7 +1477,7 @@ mod tests {
                 "etc/init.d/usb-gadget",
                 0o750,
                 format!(
-                    "if [ `unlocked` -eq \"1\" ]; then\n{}else\n  USB_GADGET_MOD=g_mass_storage\nfi\n",
+                    "if [ `unlocked` -eq \"1\" ]; then\n{}else\n  USB_GADGET_MOD=g_mass_storage\nfi\n{GADGET_ACTIONS}",
                     GADGET_LINES.0
                 ),
             ),
@@ -1558,20 +1570,137 @@ mod tests {
     }
 
     #[test]
-    fn onyx_is_rejected_before_setting_up() {
+    fn onyx_starts_the_usb_shell_with_the_gadget_and_can_turn_it_off() {
+        let mut volume = onyx(FakeVolume::new(stock()));
+        // Migrate a unit with the shell in init's respawn list.
+        volume.files.get_mut("etc/inittab").unwrap().2 =
+            format!("::sysinit:/etc/init.d/rcS{}", SHELL_LINES.0).into_bytes();
+        let set_up_shell = |volume: &mut FakeVolume, usb_shell| {
+            set_up_on_device(
+                volume,
+                Device::Onyx,
+                &Options { usb_shell, ssh: true, ..options() },
+                b"",
+                &mut no_pki,
+                false,
+                &|_, _| panic!("shell setup does not build a screen"),
+            )
+            .unwrap()
+        };
+        assert!(names(&set_up_shell(&mut volume, true)).contains("etc/inittab"));
+        assert!(volume.text("etc/inittab").contains(SHELL_LINES.1));
+        assert!(volume.text("etc/init.d/usb-gadget").contains("/usr/bin/setsid"));
+        assert!(set_up_shell(&mut volume, true).is_empty());
+        set_up_shell(&mut volume, false);
+        let gadget = volume.text("etc/init.d/usb-gadget");
+        assert!(gadget.contains(GADGET_LINES.1));
+        assert!(gadget.ends_with(GADGET_ACTIONS));
+        assert!(set_up_shell(&mut volume, false).is_empty());
+        assert!(volume.text("etc/ssh/sshd_config").contains("PermitRootLogin yes\n"));
+        assert_eq!(volume.text("usr/sbin/unlocked"), "#!/bin/sh\necho 1\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires ONYX_ROOTFS pointing to an extracted reference rootfs"]
+    fn onyx_reference_rootfs_accepts_setup_and_repeated_setup() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::Path;
+
+        fn read_tree(root: &Path, path: &Path, volume: &mut FakeVolume) {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let path = entry.unwrap().path();
+                let metadata = std::fs::symlink_metadata(&path).unwrap();
+                let name = path.strip_prefix(root).unwrap().to_str().unwrap().to_string();
+                let mode = metadata.permissions().mode() & 0o7777;
+                if metadata.is_dir() {
+                    volume.directories.insert(name, format!("0:0 {mode:o}"));
+                    read_tree(root, &path, volume);
+                } else if metadata.is_file() {
+                    volume.files.insert(name, ("0:0".into(), mode, std::fs::read(path).unwrap()));
+                }
+            }
+        }
+
+        let root = std::path::PathBuf::from(std::env::var_os("ONYX_ROOTFS").expect("ONYX_ROOTFS"));
         let mut volume = FakeVolume::new(Vec::new());
-        let error = set_up_on_device(
+        read_tree(&root, &root, &mut volume);
+        let pki = nestlocal::generate_pki().unwrap();
+        let object = std::fs::read(Path::new(env!("UNFR0ZEN_ROOT")).join("build/custom-screen.o")).unwrap();
+        let build = |source: &[u8], sections: &[crate::nlclient::menu::Section]| {
+            crate::nlclient::build(source, &object, sections)
+        };
+        let options = Options {
+            usb_shell: true,
+            ssh: true,
+            mqtt: Some(Mqtt { url: "tcp://broker:1883".into(), ..Mqtt::default() }),
+            matter: Some(Matter::from_pairing_code(nestlocal::DEFAULT_MATTER_CODE).unwrap()),
+            wake_filter: b"\x7fELF wake filter".to_vec(),
+            theme: Some(nestlocal::Overlay::default()),
+            doom: Some(nestlocal::Overlay::default()),
+            external_temperature: true,
+            ..options()
+        };
+        let changes = set_up_on_device(
             &mut volume,
             Device::Onyx,
-            &Options::default(),
-            b"",
-            &mut || panic!("unsupported device must not create keys"),
+            &options,
+            b"\x7fELF nestlocal",
+            &mut || Ok(pki.clone()),
             false,
-            &|_, _| panic!("unsupported device must not build a screen"),
+            &build,
         )
-        .unwrap_err();
-        assert!(error.to_string().contains("Nest Thermostat E (onyx) is not supported"));
-        assert!(volume.commands.is_empty());
+        .unwrap();
+        assert!(names(&changes).contains(crate::nlclient::BINARY));
+        assert!(volume.text("etc/nestlocal/options").contains("-external-temperature"));
+        assert!(volume.text(NLSLEEP).contains("libwakefilter.so"));
+        assert!(set_up_on_device(
+            &mut volume,
+            Device::Onyx,
+            &options,
+            b"\x7fELF nestlocal",
+            &mut no_pki,
+            false,
+            &build,
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn a_gen_e_muxes_the_wifi_host_wake_pad_before_powering_wifi() {
+        let setup = |volume: &mut FakeVolume| {
+            set_up_on_device(volume, Device::Onyx, &options(), b"", &mut no_pki, false, &|_, _| {
+                panic!("no screen without nlclient")
+            })
+        };
+        let mut volume = onyx(FakeVolume::new(stock()));
+        setup(&mut volume).unwrap();
+        assert_eq!(
+            volume.text("etc/init.d/wlan"),
+            "wlan_bcm_power_on() {\n    /sbin/devmem 0x020E044C 4 0x1008\n    /sbin/devmem 0x020E01C0 4 0x15\n \
+             ${ECHO} 1 > ${WL_REG_ON}\n ${SLEEP} 1\n}\n"
+        );
+        assert_eq!(volume.files["etc/init.d/wlan"].1, 0o750);
+        assert!(!names(&setup(&mut volume).unwrap()).contains("etc/init.d/wlan"), "applied once");
+        let mut without = FakeVolume::new(stock());
+        assert!(setup(&mut without).unwrap_err().to_string().contains("etc/init.d/wlan"));
+    }
+
+    #[test]
+    fn a_gen_e_gets_its_own_menu_glyphs() {
+        let build = FakeBuild::new();
+        build.makes(&[&build.stock()[..], b"settings screens"].concat());
+        let mut volume = onyx(with_nlclient(build.stock()));
+        set_up_on_device(&mut volume, Device::Onyx, &options(), b"ARMV7", &mut no_pki, false, &|_, _| {
+            Ok(build.0.borrow().clone())
+        })
+        .unwrap();
+        for (glyph, bytes) in crate::nlclient::GEN_E_GLYPHS {
+            assert_eq!(volume.files[glyph].2, bytes, "{glyph}");
+        }
+        assert!(!volume.files.contains_key(crate::nlclient::GLYPH));
+        assert!(crate::nlclient::SECTION_GLYPHS.iter().all(|(glyph, _)| !volume.files.contains_key(*glyph)));
     }
 
     fn public_key(kind: &str, fields: &[&[u8]]) -> String {
@@ -2147,11 +2276,27 @@ mod tests {
                 let pki = nestlocal::generate_pki().unwrap();
                 let mut volume = nestlocal_unit(Some(&pki));
                 volume.files.get_mut("etc/nestlabs/product.config").unwrap().2 = installed.clone().into_bytes();
-                set_up(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false)
-                    .unwrap();
+                set_up(
+                    &mut volume,
+                    &Options {
+                        external_temperature: true,
+                        mqtt: Some(Mqtt { url: "tcp://broker:1883".into(), ..Mqtt::default() }),
+                        ..options()
+                    },
+                    false,
+                )
+                .unwrap();
                 assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
-                set_up(&mut volume, &Options { external_temperature: true, mqtt: Some(mqtt()), ..options() }, false)
-                    .unwrap();
+                set_up(
+                    &mut volume,
+                    &Options {
+                        external_temperature: true,
+                        mqtt: Some(Mqtt { url: "tcp://broker:1883".into(), ..Mqtt::default() }),
+                        ..options()
+                    },
+                    false,
+                )
+                .unwrap();
                 assert!(volume.text("etc/nestlabs/product.config").contains("key=\"ble_disabled\" value=\"0\""));
                 set_up(&mut volume, &Options { mqtt: left_on, ..options() }, false).unwrap();
                 assert_eq!(volume.text("etc/nestlabs/product.config"), original);
@@ -2746,6 +2891,14 @@ mod tests {
         volume
     }
 
+    /// The gen E's Wi-Fi init script around its power-on, as 6.3-5 ships it.
+    const ONYX_WLAN: &str = "wlan_bcm_power_on() {\n ${ECHO} 1 > ${WL_REG_ON}\n ${SLEEP} 1\n}\n";
+
+    fn onyx(mut volume: FakeVolume) -> FakeVolume {
+        volume.files.insert("etc/init.d/wlan".into(), ("0:0".into(), 0o750, ONYX_WLAN.into()));
+        volume
+    }
+
     fn position(volume: &FakeVolume, name: &str) -> usize {
         volume
             .commands
@@ -2757,7 +2910,7 @@ mod tests {
     #[test]
     fn native_screen_backs_up_the_original_first_and_keeps_the_journal_last() {
         use crate::nlclient::{BINARY, GLYPH, ICON, JOURNAL, ORIGINAL};
-        let backup = crate::diamond3::scratch::name(ORIGINAL);
+        let backup = crate::common::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let output = [&build.stock()[..], b"settings screens"].concat();
         let journal = build.makes(&output);
@@ -2915,7 +3068,7 @@ mod tests {
     #[test]
     fn a_failed_nlclient_write_keeps_the_previous_journal() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
-        let backup = crate::diamond3::scratch::name(ORIGINAL);
+        let backup = crate::common::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let first = [&build.stock()[..], b"first screen"].concat();
         let old_journal = build.makes(&first);
@@ -2932,7 +3085,7 @@ mod tests {
     #[test]
     fn a_failed_journal_write_is_rebuilt_from_the_original_on_the_next_run() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
-        let backup = crate::diamond3::scratch::name(ORIGINAL);
+        let backup = crate::common::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         let first = [&build.stock()[..], b"first screen"].concat();
         let first_journal = build.makes(&first);
@@ -2976,7 +3129,7 @@ mod tests {
     #[test]
     fn a_new_screen_upgrades_through_the_old_journal_and_keeps_the_backup() {
         use crate::nlclient::{BINARY, JOURNAL, ORIGINAL};
-        let backup = crate::diamond3::scratch::name(ORIGINAL);
+        let backup = crate::common::scratch::name(ORIGINAL);
         let build = FakeBuild::new();
         // The first build changes stock bytes the second leaves alone.
         let mut first = build.stock();

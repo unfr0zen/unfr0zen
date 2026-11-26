@@ -7,5 +7,5 @@ pub mod fastboot;
 pub mod nand;
 pub mod recovery;
 pub mod rootfs;
-pub mod scratch;
+pub use crate::common::scratch;
 pub mod sdp;

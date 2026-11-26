@@ -1,0 +1,938 @@
+{
+  "version": 17,
+  "last_compatible_version": 16,
+  "boot_cpu": 0,
+  "strings": "description\u0000data\u0000type\u0000arch\u0000os\u0000compression\u0000load\u0000entry\u0000algo\u0000default\u0000kernel\u0000fdt\u0000key-name-hint\u0000sign-images\u0000timestamp\u0000value\u0000signer-name\u0000signer-version\u0000hashed-nodes\u0000hashed-strings\u0000",
+  "structure": [
+    {
+      "node": ""
+    },
+    {
+      "property": "timestamp",
+      "name_offset": 103,
+      "value": "5dd8370e"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "4e65737420466c617474656e656420496d616765205472656500"
+    },
+    {
+      "node": "images"
+    },
+    {
+      "node": "kernel@1"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "4c696e7578206b65726e656c00"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "6b65726e656c00"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "os",
+      "name_offset": 27,
+      "value": "6c696e757800"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "property": "load",
+      "name_offset": 42,
+      "value": "80008000"
+    },
+    {
+      "property": "entry",
+      "name_offset": 47,
+      "value": "80008000"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "1d5652c206b54263af2d6b9b914dc93a0dd50f56d50a5cafce67bf984b804866"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@1"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d6576742028446973706c61792d342e36292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "3e94470178ff9aa2dc841245b84fad58000272e2436fde7a6065e3692b1b05e5"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@2"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d6576742028446973706c61792d342e35292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "3e94470178ff9aa2dc841245b84fad58000272e2436fde7a6065e3692b1b05e5"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@3"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d6576742028446973706c61792d342e34292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "3e94470178ff9aa2dc841245b84fad58000272e2436fde7a6065e3692b1b05e5"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@4"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d70726f746f31312028446973706c61792d342e33292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "271d5e96afc9c1096bd2ae1ac0660d628ad3c32669e8c50752c293a08c41f1da"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@5"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d70726f746f2028446973706c61792d342e32292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "10d26b7ea88409d3e011b581e7d980bd5e843659ca36a8a3f5431464eb264f48"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@6"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d6666642028446973706c61792d342e31292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "f5d354138602f4d1b4f4141b0050417ace8b23b4abf78d9e7f27581d6e9f4a15"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "fdt@7"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "6f6e79782d6465762028446973706c61792d342e30292044544200"
+    },
+    {
+      "property": "type",
+      "name_offset": 17,
+      "value": "666c61745f647400"
+    },
+    {
+      "property": "arch",
+      "name_offset": 22,
+      "value": "61726d00"
+    },
+    {
+      "property": "compression",
+      "name_offset": 30,
+      "value": "6e6f6e6500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "d5b3592e065a995a9b4aab2f50a891388957db57c67a205a27fa6ca2db67381a"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "configurations"
+    },
+    {
+      "property": "default",
+      "name_offset": 58,
+      "value": "446973706c61792d342e36403100"
+    },
+    {
+      "node": "Display-4.6@1"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d6576742028446973706c61792d342e362900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403100"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "0000000000000077"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e364031002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744031002f696d616765732f66647440312f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "6edac00244dd0b23eaca48d9de927dfbd89485e98ff7fdfd5b3fcaafdb91b5b1949f36b34cc1794bdad74129ce1f807d59207f692aabf4ae677e0138f18b74c496036a04b82e5259a1b72cc90ee4a8a5b09a4cae2affadaccc2fe38e3d7dd4d4b6dba582dbe844f04f517f4dd45aabc38daf4f3f6dd7921a31943f96935cad4daf858b4f2680eb4391f5435e9ab9308ea0d9db9d7864b6068e0792414f479ef7545f78c9071b829dd522a9f241704ae77393c3fc232095a838b24c17289d498c6aea4626c776e7f25a77b3b8f3d921f3201e12d3e9bf46df70be1b96c245323461475da290474ef09d97578ef948977f528b778596d47ade531b58313f1bec80"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.5@2"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d6576742028446973706c61792d342e352900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403200"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e354032002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744032002f696d616765732f66647440322f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "500872f6e994e8581db54547a6ed53aafe9996795065b85ac6059cdf7a6cce99331af59699fa74b4f45b2b6ba1bc543d727cad02038ae899f53daefa47d97deb149edc4d03b2dcbc6508b6f141276ece58ec6f859f6e4ee42fc7746bfdfc8399059335153a8f30d39c3e20c3d5553cc44cb771aad26929c34391de6d55a38a5ce48fc8881fe60d1a26644a648b67f3741f1d5b7e751914e6f32b96ba44a54b5a555d74866874096a73561d03c47b0725de2e549e67142449ae258f44d0dfdf577e2c90d22f22ce14231835a446f44a994bd1069fd8123faed012780eb8102e6e9f9f6a994ca0b1e2ef2c103d08d8d45accb56560671b10e5fba6bb6013ce7e16"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.4@3"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d6576742028446973706c61792d342e342900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403300"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e344033002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744033002f696d616765732f66647440332f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "546bdcb6f1f919dda606cbf59120182853bb981b6d2e7b11feb965d030da6f8a571cd80d774f2d6b7d80b54a778c031b036459e9cc75dd8fdf6d42588e121fc97bdfecb1d8b9f5d33f34fb47739c797978e2b78eb0c94d09fb253f83f07979d0d30a5c451160e6d056aeb00b20836b9b718a79805ea4783dc1b69c59f0702696ce2a9ab08922b3bb35270b0a5b850693c5708ec3ef403377c661c9394765656edc8f3e27d2c958de99ddd79838ec6714db27b44b7f6af21688c492ba72b70307508bb3a3181bbda443268e4314ada3da17c1d3ea2f65875a8260eae85500b4debef49f49f92c8540ea9fd470a0e10b20df5966660e9d2969f1980adc9a73a691"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.3@4"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d70726f746f31312028446973706c61792d342e332900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403400"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e334034002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744034002f696d616765732f66647440342f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "838b0b3ce61d9af08a3e10763db0c7dff70a146eee3123ed9b487ab654d95a8c80c8b607ef6c29b214ec6f20542cc4adcb88768215814d13d68324584dbb41df21fc6778b24ef59c6b4bebe337fc217b7b3992d1ac7ffcf23ce55e85bdc05ba82aa686707a75959234055590b3cb62bb6d8fbe2030254c5fc4e2f4af0f59cb1b2a5055bd48fac3b4e3f5752d98e03e3a77f33c3341067550577fd2421da13cc489df01ed5c07320883aab7a487cd391e7ebd74903067221745deb394c3b309b60362947ce850735498f35f338d424677774981acf8b3c0e18b056628a5458cd71da5c73aaad5d9473bf73fd8de6ff7f7fb1e18253f595e5cc59af832273b08b0"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.2@5"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d70726f746f2028446973706c61792d342e322900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403500"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e324035002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744035002f696d616765732f66647440352f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "7eedfacfe6a062b6de833cf3892a3b3d5bb6f476583fc619008fd1a0a528b9d397e2633fdbf3eb636a8b9c321566d6fbcd11a27e7d702c8c60b0a5cbc7f23d71ff7e9b5269cebc115088b62faf815864c96e49a31ef4b71ca3eb3ef138e3b25201f063c8c510b9519ee4f5a1bb66a390e6d4e2315a44bfa3a93d86afba2f161c1b3589d1576d7452cdcf98ffb776a220950e9fa8a497da2de00eb5c53f52b549cd34a5f53fc34df875a315dae6a22f8d53563613b5652fe59c4f145bd2d0d662ba2966095dbc4bed5bfc38cdbcde5d3527813fb02d518a1f9b3a6f8eddc76c577fbf6184d77190e34336f8f80af547caea211cbc3e50fb6d52c043076cfeeb57"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.1@6"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d6666642028446973706c61792d342e312900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403600"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e314036002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744036002f696d616765732f66647440362f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "45115307cbb1c128ffc8ce83044aa06d84b7aced4b07d93514d8a453f20ea705197eac106e6bb1b55e3e7e07eb4842f45ab84a6f86c54fe9a4184981dc0e70e50dc4fe172f02b81a36f0804bd9bdb8f2bc9f60a29913889fd5b8167214e540d45004d69112cca602e56a5204d82697fc6fba5215c8f120741c91b5f5f2c3c8d278461f0a46a34e91de20b8dc595f0e89bc906cbef1a9bbc026306ce653007108e0837af1256517b5a35111d402c8c11de9adca5dabc80cd615ccac1b500e369229deafb5dbd01b1ccd8b99dca7f080a15342f15aa5239a192181c84f42dae11de21672a7cc74341dd501d453c9feaf12e5676922d36b0d06fa14e3fa9bff08dd"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "Display-4.0@7"
+    },
+    {
+      "property": "description",
+      "name_offset": 0,
+      "value": "426f6f74206f6e79782d6465762028446973706c61792d342e302900"
+    },
+    {
+      "property": "kernel",
+      "name_offset": 66,
+      "value": "6b65726e656c403100"
+    },
+    {
+      "property": "fdt",
+      "name_offset": 73,
+      "value": "666474403700"
+    },
+    {
+      "node": "hash@1"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "73686132353600"
+    },
+    {
+      "end": true
+    },
+    {
+      "node": "signature@1"
+    },
+    {
+      "property": "hashed-strings",
+      "name_offset": 159,
+      "value": "00000000000000ae"
+    },
+    {
+      "property": "hashed-nodes",
+      "name_offset": 146,
+      "value": "2f002f636f6e66696775726174696f6e732f446973706c61792d342e304037002f696d616765732f6b65726e656c4031002f696d616765732f6b65726e656c40312f686173684031002f696d616765732f6664744037002f696d616765732f66647440372f68617368403100"
+    },
+    {
+      "property": "signer-version",
+      "name_offset": 131,
+      "value": "323031352e30342d673866393361643338383200"
+    },
+    {
+      "property": "signer-name",
+      "name_offset": 119,
+      "value": "6d6b696d61676500"
+    },
+    {
+      "property": "value",
+      "name_offset": 113,
+      "value": "1bfa4a3ac88d33bad42eefce62e32a5edb2b97daccb340e9f579f1efcca7194be252e70d6a0dfdc0128582ff3e390cd02ae5c5660696fbafb483d356f9b0000a6d07b8da8a5ec38c531099628829cc8d0c477af571590a4e49bdce09a531c83987189764824d68129068169ca82327b4b85c71bded590eff8498c235347de707e339aefb5c9e4c3d67c4dfaddf1f4c864990ee09c8aaea433718e4c94210ba5a512e3c9dd704d6bc0048b9249c45fb67e0178c8237adc931ebabe10471c9a3727f963b59e19e910fdce4c84dfeaa925383aa176f478536138dbeac455cc603e9bbaaac8ef3a4a25f2c60a6880097bf58366614fcae88e20c0b590be16470bddd"
+    },
+    {
+      "property": "algo",
+      "name_offset": 53,
+      "value": "7368613235362c727361323034382c696d7800"
+    },
+    {
+      "property": "key-name-hint",
+      "name_offset": 77,
+      "value": "303100"
+    },
+    {
+      "property": "sign-images",
+      "name_offset": 91,
+      "value": "6b65726e656c0066647400"
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    },
+    {
+      "end": true
+    }
+  ]
+}

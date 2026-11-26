@@ -32,7 +32,12 @@ pub fn files(device: Device, version: &str, settings: Vec<u8>) -> Result<BTreeMa
         (BUNDLE.to_string(), crate::bundle::pack(bundled, version, None)?),
         (OPTIONS.to_string(), settings),
     ]);
-    if matches!(device, Device::J49 | Device::Diamond) {
+    if device == Device::Onyx {
+        files.insert("recovery-logo.bgrx.gz".into(), crate::onyx::assets::RECOVERY_LOGO.to_vec());
+        files.insert("board-init.sh".into(), crate::onyx::assets::INITRAMFS_BOARD.to_vec());
+    } else if device == Device::Diamond3 {
+        files.insert("board-init.sh".into(), crate::diamond3::assets::INITRAMFS_BOARD.to_vec());
+    } else if matches!(device, Device::J49 | Device::Diamond) {
         let mut entropy = vec![0; 64];
         getrandom::fill(&mut entropy).map_err(|e| failure(format!("random bytes for the unit: {e}")))?;
         files.insert(ENTROPY.to_string(), entropy);
@@ -102,4 +107,24 @@ pub fn apply(shell: &mut InitramfsShell<Port>, run_dir: &Path, device: Device) -
             format!("{} {}: {} -> {}\n", field("action"), field("name"), field("old"), field("new"))
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imx6_board_files_match_the_selected_device() {
+        let gen3 = files(Device::Diamond3, "0.0.0", Vec::new()).unwrap();
+        assert_eq!(gen3["board-init.sh"], crate::diamond3::assets::INITRAMFS_BOARD);
+        assert!(!gen3.contains_key("recovery-logo.bgrx.gz"));
+
+        let onyx = files(Device::Onyx, "0.0.0", Vec::new()).unwrap();
+        assert_eq!(onyx["board-init.sh"], crate::onyx::assets::INITRAMFS_BOARD);
+        assert_eq!(onyx["recovery-logo.bgrx.gz"], crate::onyx::assets::RECOVERY_LOGO);
+
+        let gen2 = files(Device::J49, "0.0.0", Vec::new()).unwrap();
+        assert!(!gen2.contains_key("board-init.sh"));
+        assert_eq!(gen2[ENTROPY].len(), 64);
+    }
 }

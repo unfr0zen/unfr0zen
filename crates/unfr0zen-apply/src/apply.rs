@@ -6,7 +6,7 @@ use std::process::Command;
 
 use serde_json::json;
 use unfr0zen_core::bundle::{self, Bundle, Settings};
-use unfr0zen_core::diamond3::scratch;
+use unfr0zen_core::common::scratch;
 use unfr0zen_core::local::LocalVolume;
 use unfr0zen_core::{nestlocal, nlclient, setup, Device, Error, Result};
 
@@ -99,6 +99,7 @@ fn failure(message: impl Into<String>) -> Error {
 fn device(name: &str) -> Result<Device> {
     match name {
         "diamond3" => Ok(Device::Diamond3),
+        "onyx" => Ok(Device::Onyx),
         "j49" => Ok(Device::J49),
         "diamond" => Ok(Device::Diamond),
         other => Err(failure(format!("the bundle is for a {other}, which unfr0zen-apply does not set up"))),

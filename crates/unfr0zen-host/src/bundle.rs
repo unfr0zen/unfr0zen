@@ -10,7 +10,6 @@ use unfr0zen_core::ed25519_dalek::SigningKey;
 use unfr0zen_core::{Device, Result};
 
 use crate::assets;
-use crate::flow::failure;
 
 /// The bundle for a device: nestlocal, the libraries and objects the setup
 /// installs or links, Thread's and Doom's overlays, and unfr0zen-apply and
@@ -20,9 +19,9 @@ use crate::flow::failure;
 /// view helper and the SSH server they lack.
 pub fn contents(device: Device) -> Result<(Files, BTreeMap<String, u32>)> {
     match device {
-        Device::Diamond3 => Ok(diamond3()),
+        // The gen E's is the gen 3's, named for it.
+        Device::Diamond3 | Device::Onyx => Ok(imx6()),
         Device::J49 | Device::Diamond => Ok(omap()),
-        Device::Onyx => Err(failure(format!("there is no setup bundle for the {}", device.name()))),
     }
 }
 
@@ -42,7 +41,7 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
         (bundle::PRE_SETUP.to_string(), (0o755, crate::j49::assets::PRE_SETUP.to_vec())),
-        (bundle::POST_SETUP.to_string(), (0o755, crate::diamond3::assets::POST_SETUP.to_vec())),
+        (bundle::POST_SETUP.to_string(), (0o755, crate::common::assets::POST_SETUP.to_vec())),
     ]);
     files.insert(bundle::RCS_SCREEN.into(), (0o644, assets::J49_RCS_SCREEN.to_vec()));
     let mut directories = BTreeMap::new();
@@ -58,18 +57,18 @@ fn omap() -> (Files, BTreeMap<String, u32>) {
     (files, directories)
 }
 
-fn diamond3() -> (Files, BTreeMap<String, u32>) {
+fn imx6() -> (Files, BTreeMap<String, u32>) {
     let mut files = common();
     files.extend([
         (bundle::APPLY.to_string(), (0o755, assets::apply())),
-        (bundle::PRE_SETUP.to_string(), (0o755, crate::diamond3::assets::PRE_SETUP.to_vec())),
-        (bundle::POST_SETUP.to_string(), (0o755, crate::diamond3::assets::POST_SETUP.to_vec())),
+        (bundle::PRE_SETUP.to_string(), (0o755, crate::common::assets::PRE_SETUP.to_vec())),
+        (bundle::POST_SETUP.to_string(), (0o755, crate::common::assets::POST_SETUP.to_vec())),
     ]);
     let mut directories = BTreeMap::new();
     let thread = assets::with_thread_radio(
         &assets::thread(),
-        crate::diamond3::assets::THREAD_RADIO,
-        crate::diamond3::assets::THREAD_RADIO_IDENTITY,
+        crate::common::assets::THREAD_RADIO,
+        crate::common::assets::THREAD_RADIO_IDENTITY,
     );
     bundle::add_overlay(&mut files, &mut directories, bundle::THREAD, &thread);
     bundle::add_overlay(&mut files, &mut directories, bundle::DOOM, &assets::doom());
@@ -119,7 +118,10 @@ mod tests {
         assert!(libraries.len() == 2 && libraries.iter().all(|(_, _, data)| data.starts_with(b"\x7fELF")));
         assert!(themes.iter().all(|(name, _, _)| name.starts_with("media/scratch/.unfr0zen/themes/")));
         assert!(themes.iter().any(|(name, _, _)| name.ends_with("/theme.lua")));
-        assert!(pack(Device::Onyx, "1.0.0", None).is_err());
+        let onyx = assemble(Device::Onyx, "1.0.0").unwrap();
+        assert_eq!(onyx.manifest.device, "onyx");
+        assert_eq!(onyx.files, bundle.files);
+        settings.options(&onyx).unwrap();
     }
 
     #[test]

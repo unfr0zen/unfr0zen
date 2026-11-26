@@ -4,6 +4,7 @@
 pub mod boot_branding;
 pub mod bulk;
 pub mod bundle;
+pub mod common;
 pub mod console;
 mod device;
 pub mod diamond3;
@@ -13,6 +14,7 @@ pub mod j49;
 pub mod local;
 pub mod nestlocal;
 pub mod nlclient;
+pub mod onyx;
 pub mod setup;
 pub mod shell;
 mod slot;

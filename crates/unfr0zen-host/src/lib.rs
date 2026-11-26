@@ -5,6 +5,7 @@
 
 pub mod assets;
 pub mod bundle;
+pub mod common;
 pub mod device;
 mod diamond;
 pub mod diamond3;
@@ -13,7 +14,7 @@ pub mod initramfs;
 pub mod j49;
 mod machine;
 pub mod nand;
-mod onyx;
+pub mod onyx;
 pub mod progress;
 pub mod update;
 pub mod usb;
