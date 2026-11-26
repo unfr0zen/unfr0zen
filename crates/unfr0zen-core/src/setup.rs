@@ -2079,15 +2079,15 @@ esac
         );
         assert!(!volume.files.contains_key(crate::nlclient::theme::BINDINGS));
 
-        // A build the themes were not reviewed on fails, after the screen's
+        // A compact UI build has no compatible dial, after the screen's
         // build had it, which keeps it for the bug report.
-        let Ok(unreviewed) = std::fs::read(firmware.join("nlclient-gen3-6.3-5")) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the 6.3-5 sample");
+        let Ok(unsupported) = std::fs::read(firmware.join("nlclient-gen3-5.6-7")) else {
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the compact sample");
             return;
         };
-        assert!(!crate::nlclient::theme::supported(&unreviewed));
+        assert!(!crate::nlclient::theme::supported(&unsupported));
         let mut volume = nestlocal_unit(Some(&pki));
-        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, unreviewed.clone()));
+        volume.files.insert(crate::nlclient::BINARY.into(), ("0:0".into(), 0o755, unsupported.clone()));
         let built = std::cell::RefCell::new(Vec::new());
         let error = set_up_on_device(&mut volume, Device::Diamond3, &on, b"ARMV7", &mut no_pki, true, &|source, _| {
             built.borrow_mut().push(source.to_vec());
@@ -2095,7 +2095,7 @@ esac
         })
         .unwrap_err();
         assert_eq!(error.to_string(), "built");
-        assert_eq!(*built.borrow(), [unreviewed]);
+        assert_eq!(*built.borrow(), [unsupported]);
     }
 
     #[test]

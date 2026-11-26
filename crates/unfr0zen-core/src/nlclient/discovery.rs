@@ -1,7 +1,7 @@
 //! Resolve modern native addresses from this ELF's imports, registrations and code.
 //! Compact UI builds use their own vtable and string layout checks.
 use super::{
-    arm::{Arm, Ins, Op, Value},
+    arm::{scalar_field, Arm, Ins, Op, Value},
     elf::{bytes, half, string, word, Elf},
 };
 use crate::shell::sha256_hex;
@@ -1413,54 +1413,149 @@ fn activity(
     let (mark, queue) = unique(candidates, "client user-activity notification")?;
     api.insert("native_mark_activity".into(), mark);
     layout.insert("ACTIVITY_QUEUE_OFFSET".into(), queue);
-    let vtable = primary_vtable(elf, "15nlClientGlobals")?;
-    let getter = if compact {
-        elf.read(vtable + 0x10)?
-    } else {
-        // The wake accessor is a plain pointer getter. Its body alone cannot
-        // distinguish the client from other globals members. Match it together
-        // with the activity method when a different virtual slot is in use.
-        const WAKE_ACCESSORS: &[(&str, &str)] = &[
-            (
-                "d20a9334999a57cab1d1b3be722d620a93ac0f7bcf045c0159ebb14d440e62ae",
-                "c2464febf08633d9c3590aeaab5e575e44f5051b0a2ef0c72c1e8c48c77b6f78",
-            ),
-            (
-                "3af30f083a4c08670babd148536788f0cb5fb9fbdacc9b90e744494243ec7d75",
-                "445fdc6dcaa120bf4ea5021a2e4567b98d7521597ab7c78b29c4dd041786da00",
-            ),
-            (
-                "8bbbe264f9f520cae2a822cde7db8a70b9fdf70f25e851057b6c3a92084061ce",
-                "f64f1b70a8d10042c1a41caf0eb444fadb9439923a73e5fe5ac03da9519b5d50",
-            ),
-            (
-                "55de876027c7c0b02a50251633adf6c9fc407f72d22b229e0d471f18aaf2eeb2",
-                "0c25ffcd002a4bb0bc3b788009e1f37d19c8e9a2d5695bdf02556f7a2bbfed93",
-            ),
-        ];
-        let mark_shape = arm.fingerprint(mark)?;
-        let mut getters = Vec::new();
-        for slot in [0x10, 0x18, 0x20] {
-            let getter = elf.read(vtable + slot)?;
-            if WAKE_ACCESSORS.contains(&(mark_shape.as_str(), arm.fingerprint(getter)?.as_str())) {
-                getters.push(getter);
-            }
-        }
-        // The payload checks the client's back-pointer before using this default.
-        if getters.is_empty() {
-            getters.push(elf.read(vtable + 0x18)?);
-        }
-        unique(getters, "validated client globals accessor")?
-    };
-    let code = arm.code(getter, Some(20))?;
-    require(
-        code.len() >= 2
-            && code[..2].iter().filter(|i| i.name == "ldr" && i.text.starts_with("r0, [r0, #")).count() == 1
-            && (code[1].name == "bx" || code[0].text == "ip, sp"),
-        "unknown client accessor ABI",
-    )?;
+    let getter = activity_client(elf, arm, if compact { 0x68 } else { 0x70 }, queue)?;
     api.insert("native_activity_client".into(), getter);
     Ok(())
+}
+/// The client is passed to the globals initializer as its third stack
+/// argument. Follow that argument from the initializer's prologue to its field.
+fn client_argument_field(arm: &Arm, initializer: u32) -> Result<u32> {
+    let mut stack = BTreeMap::from([("sp", 0i32)]);
+    let mut objects = BTreeSet::from(["r0"]);
+    let mut clients = BTreeSet::new();
+    let mut fields = Vec::new();
+    let code = arm.code(initializer, Some(128))?;
+    for ins in &code {
+        let ops = &ins.ops;
+        if matches!(ins.name.as_str(), "bl" | "blx" | "b") {
+            break;
+        }
+        if ins.name == "str" {
+            if let (Some(source), Some((base, offset, false))) = (ops[0].reg(), ops[1].mem()) {
+                if objects.contains(base) && clients.contains(source) && offset > 0 {
+                    fields.push(offset as u32);
+                }
+            }
+        }
+        let mut next_stack = None;
+        let mut next_object = false;
+        let mut next_client = false;
+        let dest = ops.first().and_then(Op::reg);
+        match ins.name.as_str() {
+            "push" | "vpush" => {
+                let width = if ins.name == "vpush" { 8 } else { 4 };
+                if let Some(&offset) = stack.get("sp") {
+                    stack.insert("sp", offset - width * ops.len() as i32);
+                }
+                continue;
+            }
+            "mov" => {
+                if let Some(source) = ops.get(1).and_then(Op::reg) {
+                    next_stack = stack.get(source).copied();
+                    next_object = objects.contains(source);
+                    next_client = clients.contains(source);
+                }
+            }
+            "add" | "sub" => {
+                if let (Some(source), Some(delta)) = (ops[1].reg(), ops[2].imm()) {
+                    next_stack =
+                        stack.get(source).map(|n| if ins.name == "add" { n + delta as i32 } else { n - delta as i32 });
+                }
+            }
+            "ldr" => {
+                if let Some((base, offset, false)) = ops[1].mem() {
+                    next_client = stack.get(base).is_some_and(|n| n + offset == 8);
+                }
+            }
+            "ldm" => {
+                let base = dest.and_then(|r| stack.get(r)).copied();
+                for (index, reg) in ops[1..].iter().filter_map(Op::reg).enumerate() {
+                    stack.remove(reg);
+                    objects.remove(reg);
+                    clients.remove(reg);
+                    if base.is_some_and(|offset| offset + index as i32 * 4 == 8) {
+                        clients.insert(reg);
+                    }
+                }
+                continue;
+            }
+            _ => {}
+        }
+        for register in &ins.writes {
+            stack.remove(register.as_str());
+            objects.remove(register.as_str());
+            clients.remove(register.as_str());
+        }
+        if let Some(dest) = dest {
+            if let Some(offset) = next_stack {
+                stack.insert(dest, offset);
+            }
+            if next_object {
+                objects.insert(dest);
+            }
+            if next_client {
+                clients.insert(dest);
+            }
+        }
+    }
+    unique(fields, "globals initializer client argument")
+}
+
+/// Find the globals constructor by its RTTI vtable, then its caller which
+/// stores the new globals on the client and passes the client and queue to
+/// the initializer. The initializer identifies the client pointer getter.
+fn activity_client(elf: &Elf, arm: &Arm, globals_field: i32, queue: u32) -> Result<u32> {
+    let vtable = primary_vtable(elf, "15nlClientGlobals")?;
+    let words = Words::new(elf);
+    let constructors: BTreeSet<_> = [vtable, vtable - 8]
+        .into_iter()
+        .flat_map(|address| references(elf, &words, address))
+        .filter_map(|index| arm.enclosing(words.at(index).0))
+        .collect();
+    let mut fields = Vec::new();
+    for (site, word) in words.iter() {
+        if !branch_target(site, word, true).is_some_and(|target| constructors.contains(&target)) {
+            continue;
+        }
+        let code = arm.code(site + 4, Some(80))?;
+        let Some(call) = code.iter().position(|i| i.name == "bl") else { continue };
+        let args = &code[..call];
+        let Some((global, client)) = args.iter().find_map(|i| {
+            if i.name != "str" {
+                return None;
+            }
+            let (base, offset, false) = i.ops[1].mem()? else { return None };
+            (offset == globals_field).then_some((i.ops[0].reg()?, base))
+        }) else {
+            continue;
+        };
+        if !args.iter().any(|i| i.name == "mov" && i.ops[0].reg() == Some("r0") && i.ops[1].reg() == Some(global))
+            || !args.iter().any(|i| i.name == "ldr" && i.ops[1].mem() == Some((client, queue as i32, false)))
+            || !args.iter().any(|i| {
+                i.name == "str"
+                    && i.ops[1].mem() == Some(("sp", 8, false))
+                    && (globals_field == 0x68 || i.ops[0].reg() == Some(client))
+            })
+        {
+            continue;
+        }
+        if let Ok(field) = client_argument_field(arm, code[call].ops[0].imm().unwrap()) {
+            fields.push(field);
+        }
+    }
+    let field = unique(fields, "globals client pointer field")?;
+    let mut getters = Vec::new();
+    for slot in (vtable..).step_by(4) {
+        let Ok(address) = elf.read(slot) else { break };
+        if !elf.text(address) {
+            break;
+        }
+        let Ok(code) = arm.body(address) else { continue };
+        if scalar_field(&code, false) == Some(field) {
+            getters.push(address);
+        }
+    }
+    unique(getters, "client globals accessor")
 }
 fn timer(elf: &Elf, arm: &Arm, imports: &BTreeMap<String, u32>) -> Result<u32> {
     let ctor =

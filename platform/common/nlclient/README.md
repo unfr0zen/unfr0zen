@@ -8,7 +8,7 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-The display-wake accessor uses paired function fingerprints to distinguish pointer getters.
+The display-wake accessor is resolved from the client pointer passed to the globals initializer.
 Unsupported ELF layouts, unknown instruction shapes, missing imports or
 unsupported relocations fail before device writes. The Legal Info factory and layer identify the settings ABI. On builds where
 Legal Info displays text, the WWN Equipment layer supplies the image and
@@ -89,7 +89,7 @@ for Zigbee. Back or completion stops those notifications and restores normal ina
 On 5.6-7, Matter takes `proinfoscreen` and Schedule takes `update`, which is
 registered but absent from the stock menu. System Info stays stock. The
 27-name array permits Schedule and up to two optional tiles: Zigbee, Matter
-or Doom. Themes have no reviewed preload for this firmware; enabling Doom
+or Doom. The compact ABI has no compatible theme dial; enabling Doom
 alongside both Zigbee and Matter is refused before writes.
 
 Each entry on the modern ABI is a stock screen whose factory builds unfr0zen's screen instead

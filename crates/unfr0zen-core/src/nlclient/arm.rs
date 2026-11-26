@@ -43,6 +43,58 @@ pub(super) struct Ins {
     pub ops: Vec<Op>,
     pub writes: Vec<String>,
 }
+/// A scalar getter, or the conditional setter immediately following it.
+/// Large fields are accessed either through an adjusted this pointer or a
+/// register containing the field offset.
+pub(super) fn scalar_field(code: &[Ins], setter: bool) -> Option<u32> {
+    let mut base = 0u32;
+    let mut indexed = None;
+    let mut loaded = None;
+    let mut written = None;
+    let mut compared = false;
+    for ins in code {
+        let op = &ins.ops;
+        match ins.name.as_str() {
+            "add" if ins.text.starts_with("r0, r0, #") => base = base.checked_add(op[2].imm()?)?,
+            "movw" => indexed = Some((op[0].reg()?, op[1].imm()?)),
+            "ldr" | "strne" => {
+                let register = op[0].reg()?;
+                let ("r0", offset, indirect) = op[1].mem()? else { return None };
+                let field = if indirect {
+                    let (index_register, offset) = indexed?;
+                    if !ins.text.ends_with(&format!("[r0, {index_register}]")) {
+                        return None;
+                    }
+                    base.checked_add(offset)?
+                } else {
+                    base.checked_add_signed(offset)?
+                };
+                if ins.name == "ldr" && loaded.is_none() && (setter || register == "r0") {
+                    loaded = Some((field, register));
+                } else if setter && ins.name == "strne" && register == "r1" && written.is_none() && compared {
+                    written = Some(field);
+                } else {
+                    return None;
+                }
+            }
+            "cmp" if setter => {
+                let (_, register) = loaded?;
+                compared = op[0].reg() == Some(register) && op[1].reg() == Some("r1");
+            }
+            "mov" if ins.text == "ip, sp" => {}
+            "sub" if ins.text == "fp, ip, #4" => {}
+            "push" | "ldm" | "pop" => {}
+            "bx" if ins.text == "lr" => {}
+            _ => return None,
+        }
+    }
+    let (field, _) = loaded?;
+    if setter && written != Some(field) {
+        return None;
+    }
+    Some(field)
+}
+
 type ConstructorStores = (BTreeMap<i32, Value>, Vec<Option<Value>>);
 
 pub(super) struct Arm<'a, 'b> {
@@ -137,6 +189,33 @@ impl<'a, 'b> Arm<'a, 'b> {
     pub fn enclosing(&self, address: u32) -> Option<u32> {
         let end = self.starts.partition_point(|&a| a <= address);
         self.starts.get(end.checked_sub(1)?).copied().filter(|&a| self.elf.text(a))
+    }
+    /// Instructions across the unwind extent, including code after literal
+    /// pools embedded between branches of a long UI method.
+    pub fn full_code(&self, address: u32) -> Result<Vec<Ins>> {
+        let end = self
+            .starts
+            .get(self.starts.partition_point(|&a| a <= address))
+            .copied()
+            .ok_or_else(|| crate::Error::Device("missing ARM end boundary".into()))?;
+        let size = end
+            .checked_sub(address)
+            .filter(|&n| (1..=0x10000).contains(&n))
+            .ok_or_else(|| crate::Error::Device("implausible ARM function length".into()))? as usize;
+        let section = self
+            .elf
+            .at(address)
+            .filter(|_| self.elf.text(address))
+            .ok_or_else(|| crate::Error::Device("ARM function outside sections".into()))?;
+        let data = bytes(self.elf.contents(section), (address - section.address) as usize, size)?;
+        let mut result = Vec::new();
+        let mut offset = 0;
+        while offset < data.len() {
+            let mut code = self.decode(address + offset as u32, &data[offset..])?;
+            offset += (code.len() * 4).max(4);
+            result.append(&mut code);
+        }
+        Ok(result)
     }
     pub fn code(&self, address: u32, size: Option<usize>) -> Result<Vec<Ins>> {
         if address & 3 != 0 || !self.elf.text(address) {
