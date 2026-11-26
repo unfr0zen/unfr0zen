@@ -232,8 +232,9 @@ gen 3's colours: black backgrounds, white text, `#00a3d9` selection,
 `#004157` fields being edited, `#666666` unselected rows and `#00a1f2`
 carousel tiles. unfr0zen's settings screens draw with the stock palette, so they
 follow it. Each colour comes from the corresponding gen 3 function. The
-patch finds the palette operations in ARM code and follows calls to the
-background layer's colour setter. It checks every site against the stock
+patch finds the palette operations through class vtables, call graphs and
+the uses of colour constants, including calls to the background layer's
+colour setter. It checks every site against the stock
 executable before writing. A missing or ambiguous required operation stops setup.
 
 The kernel's boot logo, Nest's cream disc, goes black too: a copy of the

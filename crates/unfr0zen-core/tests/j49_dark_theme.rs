@@ -40,14 +40,17 @@ fn dark_palette_edits_compose_with_both_screen_patches() {
     assert_eq!(&changed_output[..stock.len()], output);
     assert_eq!(&changed_output[stock.len()..], b"build metadata");
 
-    // The same palette operations occur at different addresses in these builds.
-    for name in ["nlclient-gen1-2019", "nlclient-gen2-5.9.1-6"] {
-        let Ok(stock) = std::fs::read(firmware.join(name)) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "missing {name}");
-            continue;
-        };
+    // Exercise every gen 1 and gen 2 executable in the reference corpus.
+    for path in std::fs::read_dir(&firmware).unwrap().map(|entry| entry.unwrap().path()).filter(|path| {
+        path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("nlclient-gen1-") || name.starts_with("nlclient-gen2-"))
+    }) {
+        let stock = std::fs::read(&path).unwrap();
         let mut dark = stock.clone();
-        dark_theme::patch(&stock, &mut dark).unwrap();
+        dark_theme::patch(&stock, &mut dark).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         let journal = Patch::parse(&Patch::journal(&stock, &dark).unwrap()).unwrap();
         assert_eq!(journal.apply(&dark, true).unwrap(), stock);
     }

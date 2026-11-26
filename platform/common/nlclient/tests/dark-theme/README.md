@@ -1,7 +1,7 @@
 # Gen 2 dark theme verification
 
-The dark theme locates the gen 1 and gen 2 palette operations using local
-instruction sequences and the background colour setter. The complete patch
+The dark theme locates the gen 1 and gen 2 palette operations using UI class
+vtables, calls, colour constants and their stores and uses. The complete patch
 requires all palette roles. Each edited word must still hold its stock value
 in the screen builder's output before any word is written.
 
@@ -33,8 +33,9 @@ the same functions:
 
 The test derives the set of changed bytes from stock and patched copies,
 checks that the same palette edits survive composition with both screen
-patches, and verifies exact undo. It also checks the palette resolver on
-gen 1 5.9.4-5 and gen 2 5.9.1-6.
+patches, and verifies exact undo. It checks every gen 1 and gen 2 reference
+executable and verifies that reordering independent palette stores leaves
+the dark output unchanged.
 
 ```sh
 NLCLIENT_REQUIRE_FIRMWARE=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme

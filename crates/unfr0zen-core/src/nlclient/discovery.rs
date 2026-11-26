@@ -219,7 +219,7 @@ fn registry(elf: &Elf) -> Result<Registry> {
 }
 /// The address of the one string `text` (with its NUL) in the read-only
 /// data, if it is there once.
-fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
+pub(super) fn string_address(elf: &Elf, text: &[u8]) -> Option<u32> {
     let mut found = Vec::new();
     for section in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 2 != 0 && s.flags & 4 == 0) {
         let data = elf.contents(section);
@@ -321,6 +321,11 @@ fn references(elf: &Elf, words: &Words, target: u32) -> Vec<usize> {
         }
     }
     found
+}
+
+pub(super) fn referencing_functions(elf: &Elf, arm: &Arm, address: u32) -> BTreeSet<u32> {
+    let words = Words::new(elf);
+    references(elf, &words, address).into_iter().filter_map(|i| arm.enclosing(words.at(i).0)).collect()
 }
 
 /// The target of the BL (or B, with `link` false) instruction `w` at `at`.

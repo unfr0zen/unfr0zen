@@ -306,11 +306,9 @@ static void poll_input(void) {
     struct input_event ev;
     for (int i = 0; i < n_inputs; i++) {
         while (read(inputs[i], &ev, sizeof ev) == sizeof ev) {
-            if (ev.type == EV_REL && ev.code == REL_DIAL) {
+            if (ev.type == EV_REL && (ev.code == REL_DIAL || ev.code == REL_X)) {
+                // The ring's counts run as the dial's, negative clockwise.
                 dial += ev.value;
-            } else if (ev.type == EV_REL && ev.code == REL_X) {
-                // The ring's counts run positive clockwise, the dial's negative.
-                dial -= ev.value;
             } else if (ev.type == EV_KEY && (ev.code == BUTTON || ev.code == POWER) && ev.value != 2) {
                 released |= button_down && !ev.value;
                 if (ev.value && !button_down)
