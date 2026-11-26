@@ -40,9 +40,10 @@ a change to one is expected in all three, plus docs/protocols/index.html. -->
 - [ ] Gen 1 (`diamond`)
 - [ ] Gen 2 (`j49`)
 - [ ] Gen 3 (`diamond3`)
+- [ ] Gen E (`onyx`)
 - [ ] Every generation this does not apply to is named below with the reason:
 
-<!-- e.g. gen 3: the change is in the j49 NAND flasher -->
+<!-- e.g. gen 3: the change is in the j49 NAND flasher; gen e: detection only -->
 
 ## Checklist
 

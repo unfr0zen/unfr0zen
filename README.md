@@ -51,13 +51,14 @@ in to Home Assistant on your own network.
 
 | Device                                    | Codename   | MQTT | Matter                          | Zigbee | External<br>temperature |
 | ----------------------------------------- | ---------- | :--: | :------------------------------ | :----: | :---------------------: |
+| Nest Thermostat E                         | `onyx`     |  ✅  | ✅&nbsp;Wi-Fi<br>✅&nbsp;Thread |   ✅   |           ✅            |
 | Nest Learning Thermostat (3rd generation) | `diamond3` |  ✅  | ✅&nbsp;Wi-Fi<br>✅&nbsp;Thread |   ✅   |           ✅            |
 | Nest Learning Thermostat (2nd generation) | `j49`      |  ✅  | ✅&nbsp;Wi-Fi<br>✅&nbsp;Thread |   ✅   |           ✅            |
 | Nest Learning Thermostat (1st generation) | `diamond`  |  ✅  | ✅&nbsp;Wi-Fi<br>—&nbsp;Thread  |   —    |           ✅            |
 
 ✅ supported · — not available
 
-<sub>No other model is supported: not the Nest Thermostat E, any other Nest thermostat, or another make.</sub>
+<sub>No other model is supported: not the Nest Thermostat 4th Generation, any other Nest thermostat, or another make.</sub>
 
 - **External temperature:** the thermostat regulates from a temperature you send
   it over MQTT, Matter or Zigbee (any thermometer in Home Assistant). Official
@@ -113,12 +114,16 @@ same one-time udev setup below; neither requests elevated privileges. Keep the
 sudo tee /etc/udev/rules.d/70-unfr0zen.rules > /dev/null <<'EOF'
 # i.MX ROM serial download, recovery U-Boot
 ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0071", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="007d", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="4ee0", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="4ee2", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 # unfr0zen initramfs shell and the Nest application's console
 ATTRS{idVendor}=="0525", ATTRS{idProduct}=="a4a7", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="0525", ATTRS{idProduct}=="a4a8", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="0525", ATTRS{idProduct}=="b4a4", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0030", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0031", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0054", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 # diamond/j49: OMAP boot ROM (and x-loader, the flasher), each application's gadget
 ATTRS{idVendor}=="0451", ATTRS{idProduct}=="d00e", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0001", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
@@ -162,11 +167,11 @@ Commands:
   verify    Compare a NAND backup with the NAND
   restore   Write a verified NAND backup back to the NAND
   boot      Boot the application firmware
-  uboot     Load recovery U-Boot over USB and leave it at its prompt (3rd generation)
+  uboot     Load recovery U-Boot over USB and leave it at its prompt (diamond3 and onyx)
   nlclient  Patch a local stock nlclient, or restore it from its undo journal
 
 Common options:
-  --device <GEN>         diamond, j49 or diamond3 instead of the USB identity
+  --device <GEN>         diamond, j49, diamond3 or onyx instead of the USB identity
   --mqtt <URL>          Relay to this MQTT broker
   --matter              Serve the unit over Matter (default code 0347-100-5534)
   --matter-thread       Serve Matter over Thread too (replaces Heat Link; excludes --zigbee)
@@ -219,7 +224,8 @@ Link base. On Windows, accept the WinUSB driver's administrator prompt
 ([Install](#install)). On Linux, add the [udev rule](#install) and reconnect
 the unit.
 
-**Windows stops with `ACM interface for 18d1:4ee0 did not appear` (3rd generation).**
+**Windows can't open the recovery ACM interface.**
+The error names `18d1:4ee0` on the 3rd generation or `18d1:4ee2` on the Thermostat E.
 An Android driver installed earlier has claimed the recovery device, so its
 console gets no COM port. While the thermostat is in recovery, open Device
 Manager, find **Android Bootloader Interface**, choose Update driver → Browse
@@ -272,7 +278,5 @@ under its shareware terms.
 - Gecko SDK / EmberZNet — [Silicon Labs](https://github.com/SiliconLabs/gecko_sdk)
 - doomgeneric — [ozkl](https://github.com/ozkl/doomgeneric)
 - DOOM — [id Software](https://github.com/id-Software/DOOM)
-- CVE-2017-7932 and CVE-2017-7936 — [Quarkslab](https://quarkslab.com)
-- diamond3 official loader — [@evan-hoddinott](https://github.com/evan-hoddinott)
-- cuckoo loader — [@ajb142](https://github.com/ajb142)
-- cuckoo loader gen 1 — [@guyman70718](https://github.com/guyman70718)
+- official loader — [@evan-hoddinott](https://github.com/evan-hoddinott)
+- cuckoo loader — [@ajb142](https://github.com/ajb142) [@guyman70718](https://github.com/guyman70718)

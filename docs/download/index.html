@@ -79,7 +79,7 @@
                 <li>It isn't signed, so SmartScreen may warn you: More info, then Run anyway.</li>
             </ol>
             <div class="note">1st and 2nd gen thermostats: the first run installs the boot ROM's WinUSB driver (<code>0451:d00e</code>), after an administrator prompt.</div>
-            <div class="note">3rd gen: if a run stops with <code>ACM interface for 18d1:4ee0 did not appear</code>, an Android driver installed earlier has claimed the recovery device. While the thermostat is in recovery, open Device Manager, find <b>Android Bootloader Interface</b>, choose Update driver → Browse my computer → Let me pick → Universal Serial Bus devices → <b>USB Composite Device</b>. The choice persists; run again.</div>
+            <div class="note">If the recovery ACM interface for <code>18d1:4ee0</code> (3rd generation) or <code>18d1:4ee2</code> (Thermostat E) does not appear, an Android driver may have claimed it. While the thermostat is in recovery, open Device Manager, find <b>Android Bootloader Interface</b>, choose Update driver → Browse my computer → Let me pick → Universal Serial Bus devices → <b>USB Composite Device</b>. Windows keeps the choice for the next run.</div>
         </div>
     </section>
 
@@ -96,11 +96,14 @@
 ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0071", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="007d", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="4ee0", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="4ee2", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 # unfr0zen initramfs shell and the Nest application's console
 ATTRS{idVendor}=="0525", ATTRS{idProduct}=="a4a7", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="0525", ATTRS{idProduct}=="a4a8", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="0525", ATTRS{idProduct}=="b4a4", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0030", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0031", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0054", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 # Diamond/j49: OMAP boot ROM (and x-loader, the flasher), each application's gadget
 ATTRS{idVendor}=="0451", ATTRS{idProduct}=="d00e", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
 ATTRS{idVendor}=="2464", ATTRS{idProduct}=="0001", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

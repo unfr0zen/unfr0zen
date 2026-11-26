@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Install · unfr0zen</title>
-    <meta name="description" content="Install unfr0zen on a 1st, 2nd or 3rd generation Nest Learning Thermostat, step by step.">
+    <meta name="description" content="Install unfr0zen on a supported Nest thermostat, step by step.">
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
     <link rel="icon" type="image/png" href="/assets/logo.png" sizes="256x256">
     <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -40,7 +40,7 @@
             <ul class="toc" aria-label="On this page">
                 <li><a href="#before">Before you start</a></li>
                 <li><a href="#app">Get the app</a></li>
-                <li><a href="#gen23">2nd &amp; 3rd generation</a></li>
+                <li><a href="#gen23">2nd &amp; 3rd generation and Thermostat E</a></li>
                 <li><a href="#gen1">1st generation</a></li>
                 <li><a href="#after">After setting up</a></li>
                 <li><a href="#trouble">Troubleshooting</a></li>
@@ -51,6 +51,12 @@
 
             <h2 id="before"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/></svg>Before you start</h2>
             <div class="cards">
+                <a class="card" href="#gen23">
+                    <span class="tag">No tools</span>
+                    <h3>Nest Thermostat E</h3>
+                    <p>Frosted display and white ring.</p>
+                    <dl><dt>Cable</dt><dd>micro-USB</dd><dt>Tools</dt><dd>none</dd></dl>
+                </a>
                 <a class="card" href="#gen23">
                     <span class="tag">No tools</span>
                     <h3>3rd generation</h3>
@@ -70,7 +76,7 @@
                     <dl><dt>Cable</dt><dd>mini-USB</dd><dt>Tools</dt><dd>small Phillips screwdriver, plastic pry tool, metal tweezers</dd></dl>
                 </a>
             </div>
-            <p>Not sure? Plug the display into the computer with the app open: the Set up page shows which generation it found. The Nest Thermostat E is recognised and refused.</p>
+            <p>Plug the display into the computer with the app open to see its model on the <b>Set up</b> page.</p>
             <ul>
                 <li><b>A USB cable that carries data.</b> Many cables only charge; they're the most common reason a thermostat isn't found. Plug it straight into the computer, not through a hub.</li>
                 <li><b>Some charge in the battery.</b> If the thermostat has been sitting unpowered, leave it on its base or on USB for a while first: it restarts several times during a run.</li>
@@ -110,8 +116,8 @@
             </ol>
             <p><b>On Linux:</b> unpack the download, run <code>./unfr0zen</code>, and add the USB rule shown on the <a href="/download/">download page</a> once, so the app can reach the thermostat.</p>
 
-            <h2 id="gen23"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></svg>2nd &amp; 3rd generation</h2>
-            <p>Both use the same steps, and the app walks you through them. You don't need any tools. Allow about half an hour.</p>
+            <h2 id="gen23"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></svg>2nd &amp; 3rd generation and Thermostat E</h2>
+            <p>The app walks you through these steps. You don't need any tools. Allow about half an hour.</p>
 
             <h3 class="stage"><span>1</span>Take the display off and plug it in</h3>
             <div class="figures">
@@ -324,7 +330,8 @@
                 <li><b>Windows, 1st or 2nd generation:</b> the app needs its USB driver, installed after the administrator prompt on the first run. Check that prompt was accepted with <b>Yes</b>.</li>
             </ul>
 
-            <h3>Windows, 3rd generation: the run stops with <code>ACM interface for 18d1:4ee0 did not appear</code></h3>
+            <h3>Windows can't open the 3rd generation or Thermostat E recovery console</h3>
+            <p>The run reports <code>ACM interface for 18d1:4ee0 did not appear</code> for the 3rd generation or <code>18d1:4ee2</code> for the Thermostat E.</p>
             <p>An Android driver installed earlier has taken over the thermostat while it's in recovery. Leave it plugged in, in recovery, and:</p>
             <ol class="steps">
                 <li>Open <b>Device Manager</b> and find <b>Android Bootloader Interface</b>.</li>
@@ -336,7 +343,7 @@
             <p>Allow it once under System Settings → Privacy &amp; Security, as in <a href="#app">Get the app</a>. In Terminal, this does the same:</p>
             <pre><code>xattr -dr com.apple.quarantine unfr0zen.app</code></pre>
 
-            <h3>2nd or 3rd generation: it doesn't enter USB download mode</h3>
+            <h3>2nd or 3rd generation or Thermostat E: it doesn't enter USB download mode</h3>
             <p>Hold the display in a little longer, until the screen goes dark. If the battery is low, leave the display on its base or on USB for a while and try again.</p>
 
             <h3>1st generation: nothing happens when plugged in</h3>
