@@ -79,6 +79,7 @@ jobs:
           name: Verify linked payloads, native bindings and optional patches
           command: |
             export NLCLIENT_FIRMWARE_DIR="$PWD/.work/reference-images/nlclient-goldens/firmware" NLCLIENT_REQUIRE_FIRMWARE=1
+            export NLCLIENT_REFERENCE_LLD="$(rustc --print target-libdir)/../bin/gcc-ld/ld.lld"
             cargo test --release --locked -p unfr0zen-core --lib nlclient::
             cargo test --release --locked -p unfr0zen-core --test nlclient_firmware --test legacy_nlclient --test j49_dark_theme
       - cargo-registry-store

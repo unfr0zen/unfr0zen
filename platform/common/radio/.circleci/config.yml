@@ -20,8 +20,6 @@ jobs:
 
   thread:
     executor: build-large
-    # Zig's ARMv7 C++ linker crashes on the hosted Arm executor.
-    resource_class: large
     steps:
       - checkout
       - keys
