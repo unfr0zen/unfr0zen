@@ -2045,7 +2045,7 @@ esac
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
         let Ok(stock_nlclient) = std::fs::read(firmware.join("nlclient-gen3-6.5-14")) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the gen 3 sample");
             return;
         };
         let pki = nestlocal::generate_pki().unwrap();
@@ -2082,7 +2082,7 @@ esac
         // A build the themes were not reviewed on fails, after the screen's
         // build had it, which keeps it for the bug report.
         let Ok(unreviewed) = std::fs::read(firmware.join("nlclient-gen3-6.3-5")) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the 6.3-5 sample");
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the 6.3-5 sample");
             return;
         };
         assert!(!crate::nlclient::theme::supported(&unreviewed));
@@ -2195,7 +2195,7 @@ esac
         let (Ok(source), Ok(object)) = (std::fs::read(firmware.join("nlclient-gen2-2019")), std::fs::read(object))
         else {
             assert!(
-                std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(),
+                std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(),
                 "strict checks need the j49 sample and screen object"
             );
             return;
@@ -2724,7 +2724,7 @@ esac
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware/nlclient-gen3-2025"));
         let Ok(source) = std::fs::read(&path) else {
-            assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need the gen 3 sample");
+            assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need the gen 3 sample");
             eprintln!("No private stock sample: {}", path.display());
             return;
         };

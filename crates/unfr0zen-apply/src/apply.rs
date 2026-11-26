@@ -331,7 +331,7 @@ fn run(
         };
         match nlclient::builder::build(source, object, sections) {
             Ok(built) => {
-                if built.manifest["reviewed"] == false || (themes && !nlclient::theme::supported(source)) {
+                if themes && !nlclient::theme::supported(source) {
                     fs::write(&stock, source)?;
                 }
                 log::info!("nlclient: {}", built.manifest["status"].as_str().unwrap_or_default());

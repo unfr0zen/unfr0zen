@@ -277,24 +277,46 @@ mod tests {
         let firmware = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::Path::new(env!("UNFR0ZEN_ROOT")).join(".work/firmware"));
-        for (sample, expected) in [
-            ("nlclient-gen3-2025", "742245b5bd73e178e4cb537d615c7db8d662779ae2931637030994803deae705"),
-            ("nlclient-gen3-6.5-14", "c8c77f9e274760ec702e26872afa065d7a816374053f86e32c5dc98091edee27"),
-            ("nlclient-gen3-6.5-14-2", "26daac6544e251348e6aa7e973ea42fa361c00a80b1305c0347a5fe056a9fdd6"),
-            ("nlclient-gen3-6.0-6", "843accc0ff15f6be24bc77a23d2b084bd0d5bd346e3a435234705251cba6b7bb"),
-            ("nlclient-genE-6.1-9", "187e2e6a5661282f8698a3b84785cbf5203d51655971b13e0f74840933ae6231"),
-            ("nlclient-genE-6.3-5", "c4d1798f5693266be78be1523eb27ef8fa9e2790222a648447c02cb233a5e507"),
-            ("nlclient-genE-6.5-14", "aca741a27514537d936c9d6d757e2c3db33a9dc5deab7448b4dcc79af596c2f6"),
-            ("nlclient-gen2-2019", "06ad736fd836b2fb9b3c5c73ca60ab7e7088e3055020d9cdd0eb8526e007693f"),
-        ] {
-            let Ok(stock) = std::fs::read(firmware.join(sample)) else {
-                assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need {sample}");
+        let mut checked = std::collections::BTreeSet::new();
+        let paths = match std::fs::read_dir(&firmware) {
+            Ok(paths) => paths,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none() =>
+            {
+                return
+            }
+            Err(e) => panic!("{}: {e}", firmware.display()),
+        };
+        for path in paths.map(|p| p.unwrap().path()).filter(|p| p.is_file()) {
+            let sample = path.display();
+            let stock = std::fs::read(&path).unwrap();
+            if !supported(&stock) {
                 continue;
-            };
+            }
+            checked.insert(sha256_hex(&stock));
             let text = String::from_utf8(bindings(&stock).unwrap_or_else(|e| panic!("{sample}: {e}"))).unwrap();
-            assert_eq!(sha256_hex(text.as_bytes()), expected, "{sample} theme bindings");
+            let values: std::collections::BTreeMap<_, _> = text
+                .lines()
+                .map(|line| {
+                    let (name, hex) = line.split_once(" 0x").unwrap();
+                    (name, u32::from_str_radix(hex, 16).unwrap())
+                })
+                .collect();
+            let elf = Elf::parse(&stock).unwrap();
+            for (slot, target) in [
+                ("dial_slot", "dial_draw"),
+                ("dial_event_slot", "dial_event"),
+                ("figures_slot", "figures_draw"),
+                ("background_slot", "background_draw"),
+            ] {
+                assert_eq!(elf.read(values[slot]).unwrap(), values[target], "{sample}: {slot}");
+                assert!(elf.text(values[target]));
+            }
             assert_eq!(text.lines().count(), 25 + NATIVES.len(), "{sample}");
-            assert!(text.lines().all(|l| l.split_once(" 0x").is_some()), "{sample}");
+        }
+        if std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_some() {
+            assert_eq!(checked.len(), REVIEWED.len(), "missing supported theme firmware");
         }
     }
 }

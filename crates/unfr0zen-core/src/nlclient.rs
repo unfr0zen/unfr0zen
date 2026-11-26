@@ -14,9 +14,6 @@ use crate::{device, Result};
 use sha2::Digest;
 use std::io::Read;
 
-/// The reviewed 5.6-7 build uses 32-byte strings and a distinct native UI ABI.
-pub const LEGACY_SHA256: &str = "e9b4f67b1e6c422a1bbe0c9bfd5aa6a63184010cc663b64374132553d393d741";
-
 /// Select the compact screen object by its timeout API. Discovery verifies
 /// the screen and layer layouts before the object can be linked.
 pub fn legacy_abi(source: &[u8]) -> bool {
@@ -42,7 +39,7 @@ pub const BINARY: &str = "nestlabs/sbin/nlclient";
 pub const ORIGINAL: &str = "etc/unfr0zen/nlclient.original";
 pub const JOURNAL: &str = "etc/unfr0zen/nlclient.undo.gz";
 /// The line the home screen shows: unfr0zen and the version of the app that set it up.
-/// A file, so the screen's object and its goldens do not change per revision.
+/// A file, so the same screen object can display any revision.
 pub const VERSION: &str = "etc/unfr0zen/version";
 pub const ICON: &str = "nestlabs/share/images/G_unfr0zen_192px.png";
 pub const ICON_BYTES: &[u8] =

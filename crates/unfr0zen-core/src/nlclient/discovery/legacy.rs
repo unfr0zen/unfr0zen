@@ -268,7 +268,7 @@ pub(super) fn survey(data: &[u8]) -> Result<Discovery> {
             *imports.get(symbol).ok_or_else(|| crate::Error::Device(format!("missing legacy import {symbol}")))?,
         );
     }
-    activity(&elf, &arm, &imports, None, &mut api, &mut layout)?;
+    activity(&elf, &arm, &imports, true, &mut api, &mut layout)?;
     layout.insert("GLOBALS_TIMER_OFFSET".into(), timer(&elf, &arm, &imports)?);
     let (sleep_default, sleep_active) = sleep_timeout(&elf).unwrap_or((0, 0));
     layout.insert("SLEEP_DEFAULT_OFFSET".into(), sleep_default);
@@ -313,7 +313,6 @@ pub(super) fn survey(data: &[u8]) -> Result<Discovery> {
         evidence.insert(name.clone(), arm.imports_called(address, &by_address)?.into_iter().collect());
     }
     let sha = sha256_hex(data);
-    let reviewed = sha == crate::nlclient::LEGACY_SHA256;
     Ok(Discovery {
         factory: account,
         native_api: api,
@@ -321,15 +320,7 @@ pub(super) fn survey(data: &[u8]) -> Result<Discovery> {
         anchors,
         fingerprints,
         evidence,
-        matches: BTreeMap::new(),
-        variant: reviewed.then(|| "gen3-5.6-7".into()),
         stock_sha256: sha,
-        validation: if reviewed {
-            "reviewed gen3-5.6-7 executable; guest acceptance required"
-        } else {
-            "structurally validated compact UI ABI; guest acceptance required"
-        }
-        .into(),
         framebuffer: None,
         dial: None,
     })

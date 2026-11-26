@@ -20,7 +20,7 @@ fn kernels() -> Vec<(String, Vec<u8>)> {
         kernels.push(("the sample's stock kernel".into(), stock));
     }
     if kernels.is_empty() {
-        assert!(std::env::var_os("NLCLIENT_REQUIRE_GOLDENS").is_none(), "strict checks need a j49 kernel");
+        assert!(std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none(), "strict checks need a j49 kernel");
         eprintln!("No j49 kernel; skipping the boot logo check");
     }
     kernels

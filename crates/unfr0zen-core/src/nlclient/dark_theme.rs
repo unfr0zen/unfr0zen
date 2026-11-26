@@ -33,7 +33,7 @@ fn colour(low: u32, high: u32, rd: u32, argb: u32) -> [(u32, u32); 2] {
 }
 
 /// The layer palette's slots (layer + offset) by role, as the gen 3 sets them.
-/// 0x2d7860 sets all of them and then their alpha bytes, so only RGB counts.
+/// The base palette setter writes their alpha bytes separately, so only RGB counts.
 fn palette() -> Vec<u32> {
     let mut code = vec![
         0xe1a05001, // mov r5, r1 (the fade, read after the alpha stores)

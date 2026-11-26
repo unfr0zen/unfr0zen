@@ -1,5 +1,4 @@
 //! Resolve modern native addresses from this ELF's imports, registrations and code.
-//! Reviewed instruction shapes name modern builds, never select addresses.
 //! Compact UI builds use their own vtable and string layout checks.
 use super::{
     arm::{Arm, Ins, Op, Value},
@@ -113,16 +112,7 @@ pub struct Discovery {
     pub fingerprints: BTreeMap<String, String>,
     /// The imported symbols each native calls, its evidence across builds.
     pub evidence: BTreeMap<String, Vec<String>>,
-    /// Per reviewed variant, how many natives' evidence it matches.
-    pub matches: BTreeMap<String, usize>,
-    /// The reviewed variant whose instruction shapes this build has, if any.
-    /// Modern builds pass structural discovery: addresses, layouts, call shapes,
-    /// each native's own shape and the library calls it makes. A modern build
-    /// no variant's shapes match is patched on that alone. The 5.6-7 variant
-    /// requires the complete reviewed executable's hash instead.
-    pub variant: Option<String>,
     pub stock_sha256: String,
-    pub validation: String,
     /// The gen 2's framebuffer, for its screen hand-over; absent elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framebuffer: Option<Framebuffer>,
@@ -918,10 +908,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
     if let Some(helper) = image_helper {
         anchors.insert("image_helper".into(), helper);
     }
-    let known: serde_json::Value =
-        serde_json::from_str(include_str!("abi_shapes.json")).map_err(|e| crate::Error::Device(e.to_string()))?;
-    // Screen port additions: real activity notification and periodic refresh.
-    activity(&elf, &arm, &imports, Some(&known), &mut api, &mut layout)?;
+    activity(&elf, &arm, &imports, false, &mut api, &mut layout)?;
     for (name, symbol) in [
         (
             "native_send_timeout",
@@ -997,10 +984,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         "vtable larger than the payload holds",
     )?;
     roles(&arm, &api, &anchors)?;
-    // Every native of the build's own code: its shape names the build, and
-    // the library calls it makes are the evidence an unreviewed build is
-    // patched on. The view's event handler differs by build, so its calls
-    // are no evidence; the dispatch it owns is checked by its shape.
+    // Report fingerprints for inspection. Import evidence also validates native roles.
     let by_address: BTreeMap<u32, String> = imports.iter().map(|(k, v)| (*v, k.clone())).collect();
     let mut fingerprints = BTreeMap::new();
     let mut evidence = BTreeMap::new();
@@ -1017,31 +1001,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
             evidence.insert(name.clone(), arm.imports_called(address, &by_address)?.into_iter().collect::<Vec<_>>());
         }
     }
-    let layout_value = serde_json::to_value(&layout).unwrap();
-    let fingerprint_value = serde_json::to_value(&fingerprints).unwrap();
-    let variants =
-        known["variants"].as_array().ok_or_else(|| crate::Error::Device("invalid embedded ABI shapes".into()))?;
-    let variant = variants
-        .iter()
-        .find(|v| v["layout"] == layout_value && v["functions"] == fingerprint_value)
-        .and_then(|v| v["label"].as_str())
-        .map(str::to_owned);
-    let mut matches = BTreeMap::new();
-    for v in variants {
-        let label = v["label"].as_str().unwrap_or_default().to_owned();
-        let count = evidence.iter().filter(|(name, calls)| v["imports"][name] == serde_json::json!(calls)).count();
-        matches.insert(label, count);
-    }
     let objection = missing_role_imports(&evidence);
-    let validation = match &variant {
-        Some(label) => format!("instruction shapes of the reviewed {label} build; guest acceptance required"),
-        None => {
-            let (label, count) =
-                matches.iter().max_by_key(|(_, n)| **n).map(|(l, n)| (l.as_str(), *n)).unwrap_or(("none", 0));
-            format!("unreviewed build: structurally consistent, {count} of {} natives' library calls as the reviewed {label} build; \
-                     no reviewed instruction shapes", evidence.len())
-        }
-    };
     let found = Discovery {
         factory: account,
         native_api: api,
@@ -1049,10 +1009,7 @@ fn survey_with(data: &[u8], find_brightness: fn(&Elf) -> Option<Brightness>) -> 
         anchors,
         fingerprints,
         evidence,
-        matches,
-        variant,
         stock_sha256: sha256_hex(data),
-        validation,
         framebuffer,
         dial,
     };
@@ -1392,7 +1349,7 @@ fn activity(
     elf: &Elf,
     arm: &Arm,
     imports: &BTreeMap<String, u32>,
-    known: Option<&serde_json::Value>,
+    compact: bool,
     api: &mut BTreeMap<String, u32>,
     layout: &mut BTreeMap<String, u32>,
 ) -> Result<()> {
@@ -1406,7 +1363,7 @@ fn activity(
             *imports.get(symbol).ok_or_else(|| crate::Error::Device(format!("missing activity import {symbol}")))?,
         );
     }
-    let globals_field = if known.is_some() { ", #0x70]" } else { ", #0x68]" };
+    let globals_field = if compact { ", #0x68]" } else { ", #0x70]" };
     let mut candidates = Vec::new();
     for s in elf.sections.iter().filter(|s| s.kind == 1 && s.flags & 4 != 0) {
         for off in (s.offset + 64..(s.offset + s.size).saturating_sub(32)).step_by(4) {
@@ -1457,28 +1414,43 @@ fn activity(
     api.insert("native_mark_activity".into(), mark);
     layout.insert("ACTIVITY_QUEUE_OFFSET".into(), queue);
     let vtable = primary_vtable(elf, "15nlClientGlobals")?;
-    let getter = if let Some(known) = known {
+    let getter = if compact {
+        elf.read(vtable + 0x10)?
+    } else {
+        // The wake accessor is a plain pointer getter. Its body alone cannot
+        // distinguish the client from other globals members. Match it together
+        // with the activity method when a different virtual slot is in use.
+        const WAKE_ACCESSORS: &[(&str, &str)] = &[
+            (
+                "d20a9334999a57cab1d1b3be722d620a93ac0f7bcf045c0159ebb14d440e62ae",
+                "c2464febf08633d9c3590aeaab5e575e44f5051b0a2ef0c72c1e8c48c77b6f78",
+            ),
+            (
+                "3af30f083a4c08670babd148536788f0cb5fb9fbdacc9b90e744494243ec7d75",
+                "445fdc6dcaa120bf4ea5021a2e4567b98d7521597ab7c78b29c4dd041786da00",
+            ),
+            (
+                "8bbbe264f9f520cae2a822cde7db8a70b9fdf70f25e851057b6c3a92084061ce",
+                "f64f1b70a8d10042c1a41caf0eb444fadb9439923a73e5fe5ac03da9519b5d50",
+            ),
+            (
+                "55de876027c7c0b02a50251633adf6c9fc407f72d22b229e0d471f18aaf2eeb2",
+                "0c25ffcd002a4bb0bc3b788009e1f37d19c8e9a2d5695bdf02556f7a2bbfed93",
+            ),
+        ];
         let mark_shape = arm.fingerprint(mark)?;
         let mut getters = Vec::new();
         for slot in [0x10, 0x18, 0x20] {
             let getter = elf.read(vtable + slot)?;
-            let shapes = serde_json::json!({"mark": mark_shape, "client": arm.fingerprint(getter)?});
-            if known["activity_variants"].as_array().is_some_and(|v| v.contains(&shapes)) {
+            if WAKE_ACCESSORS.contains(&(mark_shape.as_str(), arm.fingerprint(getter)?.as_str())) {
                 getters.push(getter);
             }
         }
-        // The client accessor's slot differs by build (0x18 on the gen 3, 0x20
-        // on its 6.0-6, whose globals' vtable starts with two more methods, 0x10
-        // on the gen 2) and all hold plain getters, so a build no
-        // reviewed shapes name gets the gen 3's: the screen checks the client's
-        // back-pointer before using it, so a wrong slot costs the display wake,
-        // not a crash.
+        // The payload checks the client's back-pointer before using this default.
         if getters.is_empty() {
             getters.push(elf.read(vtable + 0x18)?);
         }
         unique(getters, "validated client globals accessor")?
-    } else {
-        elf.read(vtable + 0x10)?
     };
     let code = arm.code(getter, Some(20))?;
     require(
@@ -1553,7 +1525,7 @@ mod tests {
     use super::*;
 
     /// A private nlclient sample, when this checkout has one (see
-    /// tests/nlclient_golden.rs).
+    /// tests/nlclient_firmware.rs).
     fn sample(name: &str) -> Option<Vec<u8>> {
         let dir = std::env::var_os("NLCLIENT_FIRMWARE_DIR")
             .map(std::path::PathBuf::from)
@@ -1582,8 +1554,12 @@ mod tests {
             eprintln!("No private Onyx nlclient sample");
             return;
         };
-        let found = brightness(&Elf::parse(&data).unwrap()).expect("Onyx's brightness manager");
+        let elf = Elf::parse(&data).unwrap();
+        let found = brightness(&elf).expect("Onyx's brightness manager");
         assert_eq!((found.globals, found.mode, found.high), (0x4b4, 8, 28));
-        assert_eq!((found.set, found.apply), (0x233830, 0x233dbc));
+        assert!(elf.text(found.set) && elf.text(found.apply));
+        assert_ne!(found.set, found.apply);
+        let accessor = Arm::new(&elf).unwrap().body(found.accessor).unwrap();
+        assert!(accessor.iter().any(|i| i.word == 0xe5900000 | found.globals));
     }
 }

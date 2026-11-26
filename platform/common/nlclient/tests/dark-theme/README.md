@@ -9,13 +9,13 @@ The edits give the settings screens the colours the gen 3's nlclient sets in
 the same functions:
 
 - the 32 light screens' background colour (`0xffeff1e7`, passed to the
-  background layer's SetColor at 0x17d838) becomes black;
+  background layer's SetColor) becomes black;
 - the Settings carousel's tiles become `#00a1f2`, their titles white and
   their subtitles `#bfeaff`;
 - Equipment's and Proview's background fades keep their alpha and lose
   their colour;
-- the layer palette, set both by the nlLayer constructor (0x2d7a98) and by
-  the base palette call (0x2d7860), takes the gen 3's roles: white text,
+- the layer palette, set both by the nlLayer constructor and by
+  the base palette call, takes the gen 3's roles: white text,
   `#c4c4c4` secondary text, `#666666` unselected rows and field outlines,
   `#00a3d9` selection, `#004157` fields being edited, black field fills and
   dialog backgrounds, `#e0e0e0` for the last slot;
@@ -29,20 +29,15 @@ the same functions:
 - Equipment detection's title, which it sets to black after the palette,
   becomes white.
 
-## Golden checks
+## Firmware checks
 
-`j49-5.9.4-5.json` was produced by an independent script that finds the
-background calls by scanning for SetColor calls, rather than from the Rust
-table. It records every edit as (address, stock word, new word), and the
-digest and size of the stock executable with only these edits applied.
-
-The strict test compares every edited word and the complete output digest on
-gen 2 5.9.4-5, checks composition with the settings screen and external
-temperature patch, and checks patching and undo on gen 1 5.9.4-5 and gen 2
-5.9.1-6.
+The test derives the set of changed bytes from stock and patched copies,
+checks that the same palette edits survive composition with both screen
+patches, and verifies exact undo. It also checks the palette resolver on
+gen 1 5.9.4-5 and gen 2 5.9.1-6.
 
 ```sh
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme
+NLCLIENT_REQUIRE_FIRMWARE=1 cargo test --locked -p unfr0zen-core --lib --test j49_dark_theme
 ```
 
 ## Boot logo
@@ -55,5 +50,5 @@ logo is found by its `linux_logo` structure and accepted only with Nest's
 palette, by its SHA-256.
 
 ```sh
-J49_NAND=nand.bin NLCLIENT_REQUIRE_GOLDENS=1 cargo test --locked --release -p unfr0zen-core --test j49_logo
+J49_NAND=nand.bin NLCLIENT_REQUIRE_FIRMWARE=1 cargo test --locked --release -p unfr0zen-core --test j49_logo
 ```

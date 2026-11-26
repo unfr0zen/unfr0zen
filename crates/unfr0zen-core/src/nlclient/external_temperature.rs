@@ -7,6 +7,21 @@ const STOCK_SHA: &str = "67596bb71d0225a3b54966e96cc19bc469c0e593ee72e37bfe96fc3
 const HOOK: u32 = 0x47e88;
 const COMMAND_TABLE: u32 = 0x4ef920;
 const HANDLER: u32 = 0x14173c;
+const COMMAND_COUNT: u32 = 0x141bc4;
+const RUN_FLAG: u32 = 0x141c74;
+const READ_CALL: u32 = 0x141d40;
+const OPEN_CALL: u32 = 0x141c7c;
+const SENSOR_MENU: u32 = 0x14282c;
+const CONFIGURE: u32 = 0x19a668;
+const POST_READING: u32 = 0x141858;
+const POST_REPLY: u32 = 0x14185c;
+const SETTINGS_ENTRY: u32 = 0x11474c;
+const MOCK_SENSORS: u32 = 0x47e94;
+const TEMPERATURE_CALL: u32 = 0x237af4;
+const TEMPERATURE_RESULT: u32 = 0x237afc;
+const OPERATOR_NEW: u32 = 0x2ad84;
+const CONSTRUCTOR: u32 = 0x141b2c;
+const CREATE_THREAD: u32 = 0x2bf24;
 const COMMAND: &[u8] = b"kryptonitedata\0";
 const RETRY_REPLY: &[u8] = b"Retry\0";
 
@@ -54,10 +69,10 @@ fn startup(address: u32) -> Result<Vec<u8>> {
     ];
     for (index, target, opcode) in [
         (4, address + 25 * 4, 0x1a000000),
-        (6, 0x2ad84, 0xeb000000),
+        (6, OPERATOR_NEW, 0xeb000000),
         (8, address + 25 * 4, 0x0a000000),
-        (11, 0x141b2c, 0xeb000000),
-        (23, 0x2bf24, 0xeb000000),
+        (11, CONSTRUCTOR, 0xeb000000),
+        (23, CREATE_THREAD, 0xeb000000),
         (28, HOOK + 4, 0xea000000),
     ] {
         code[index] = branch(address + index as u32 * 4, target, opcode)?;
@@ -190,18 +205,18 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     let elf = Elf::parse(stock)?;
     let hook = elf.offset(HOOK)?;
     let table = elf.offset(COMMAND_TABLE)?;
-    let limit = elf.offset(0x141bc4)?;
-    let run_flag = elf.offset(0x141c74)?;
-    let read = elf.offset(0x141d40)?;
-    let open = elf.offset(0x141c7c)?;
-    let menu = elf.offset(0x14282c)?;
-    let configure = elf.offset(0x19a668)?;
-    let post = elf.offset(0x141858)?;
-    let reply = elf.offset(0x14185c)?;
-    let visible = elf.offset(0x11474c)?;
-    let simulation = elf.offset(0x47e94)?;
-    let temperature = elf.offset(0x237af4)?;
-    let temperature_result = elf.offset(0x237afc)?;
+    let limit = elf.offset(COMMAND_COUNT)?;
+    let run_flag = elf.offset(RUN_FLAG)?;
+    let read = elf.offset(READ_CALL)?;
+    let open = elf.offset(OPEN_CALL)?;
+    let menu = elf.offset(SENSOR_MENU)?;
+    let configure = elf.offset(CONFIGURE)?;
+    let post = elf.offset(POST_READING)?;
+    let reply = elf.offset(POST_REPLY)?;
+    let visible = elf.offset(SETTINGS_ENTRY)?;
+    let simulation = elf.offset(MOCK_SENSORS)?;
+    let temperature = elf.offset(TEMPERATURE_CALL)?;
+    let temperature_result = elf.offset(TEMPERATURE_RESULT)?;
     for (offset, expected) in [
         (hook, 0xe3051140),
         (limit, 0xe3560068),
@@ -286,14 +301,14 @@ fn extend(stock: &[u8], output: &mut Vec<u8>, screen_object: &[u8]) -> Result<()
     code[read_at..read_at + read_code.len()].copy_from_slice(&read_code);
     code.extend(screen.bytes);
     let jump = branch(HOOK, address, 0xea000000)?;
-    let read_jump = branch(0x141d40, read_address, 0xeb000000)?;
-    let socket_jump = branch(0x141c7c, socket_address, 0xeb000000)?;
-    let menu_jump = branch(0x14282c, screen.entry, 0xeb000000)?;
-    let guard_jump = branch(0x19a668, guard_address, 0xea000000)?;
-    let post_jump = branch(0x141858, post_entry, 0xeb000000)?;
-    let reply_jump = branch(0x14185c, reply_address, 0xea000000)?;
-    let temperature_jump = branch(0x237af4, temperature_address, 0xeb000000)?;
-    let result_jump = branch(0x237afc, result_address, 0xea000000)?;
+    let read_jump = branch(READ_CALL, read_address, 0xeb000000)?;
+    let socket_jump = branch(OPEN_CALL, socket_address, 0xeb000000)?;
+    let menu_jump = branch(SENSOR_MENU, screen.entry, 0xeb000000)?;
+    let guard_jump = branch(CONFIGURE, guard_address, 0xea000000)?;
+    let post_jump = branch(POST_READING, post_entry, 0xeb000000)?;
+    let reply_jump = branch(POST_REPLY, reply_address, 0xea000000)?;
+    let temperature_jump = branch(TEMPERATURE_CALL, temperature_address, 0xeb000000)?;
+    let result_jump = branch(TEMPERATURE_RESULT, result_address, 0xea000000)?;
     output.resize(start, 0);
     output.extend(code);
     let size = u32::try_from(output.len() - offset)
@@ -348,37 +363,72 @@ mod tests {
     }
 
     #[test]
-    fn emitted_payload_matches_the_independent_assembler_golden() {
-        let golden: serde_json::Value = serde_json::from_str(include_str!(concat!(
-            env!("UNFR0ZEN_ROOT"),
-            "/platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.json"
-        )))
-        .unwrap();
-        assert_eq!(STOCK_SHA, golden["stock_sha256"].as_str().unwrap());
-        let address = golden["entry"].as_u64().unwrap() as u32;
-        let mut code = startup(address).unwrap();
-        assert_eq!(address + code.len() as u32, golden["read_entry"].as_u64().unwrap() as u32);
-        code.extend(
-            bounded_read(
-                address + code.len() as u32,
-                golden["ui_symbols"]["rcs_read_command"].as_u64().unwrap() as u32,
-            )
-            .unwrap(),
-        );
-        assert_eq!(address + code.len() as u32, golden["socket_entry"].as_u64().unwrap() as u32);
-        code.extend(reusable_socket(address + code.len() as u32).unwrap());
-        assert_eq!(address + code.len() as u32, golden["temperature_entry"].as_u64().unwrap() as u32);
-        code.extend(control_reading(address + code.len() as u32).unwrap());
-        code.extend(control_result(address + code.len() as u32).unwrap());
-        assert_eq!(address + code.len() as u32, golden["guard_entry"].as_u64().unwrap() as u32);
-        code.extend(screen_guard(address + code.len() as u32).unwrap());
-        let reply = address + code.len() as u32;
-        code.extend(sample_reply(reply, reply + 28 + COMMAND.len() as u32).unwrap());
-        code.extend(COMMAND);
-        code.extend(RETRY_REPLY);
-        code.resize(align(code.len(), 4).unwrap(), 0);
-        assert_eq!(code.len(), golden["machine_payload_size"].as_u64().unwrap() as usize);
-        assert_eq!(sha256_hex(&code), golden["machine_payload_sha256"].as_str().unwrap());
+    fn machine_instructions_match_the_arm_assembler() {
+        let tmp = tempfile::tempdir().unwrap();
+        let object = tmp.path().join("reference.o");
+        let source = std::path::Path::new(env!("UNFR0ZEN_ROOT"))
+            .join("platform/common/nlclient/tests/external-temperature/j49-5.9.4-5.S");
+        let compiled = std::process::Command::new("clang")
+            .args(["--target=arm-none-eabi", "-march=armv7-a", "-c"])
+            .arg(source)
+            .arg("-o")
+            .arg(&object)
+            .output();
+        let compiled = match compiled {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    && std::env::var_os("NLCLIENT_REQUIRE_FIRMWARE").is_none() =>
+            {
+                return
+            }
+            result => result.unwrap(),
+        };
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let object = std::fs::read(object).unwrap();
+        let elf = Elf::parse(&object).unwrap();
+        let text = elf.section(".text").unwrap();
+        let symtab = elf.section(".symtab").unwrap();
+        let strings = elf.contents(&elf.sections[symtab.link]);
+        let base = 0x520000;
+        let mut labels = std::collections::BTreeMap::new();
+        for at in (symtab.offset..symtab.offset + symtab.size).step_by(16) {
+            if half(&object, at + 14).unwrap() as usize != elf.section(".rel.text").unwrap().info {
+                continue;
+            }
+            let name = super::super::elf::string(strings, word(&object, at).unwrap() as usize).unwrap();
+            labels.insert(name, base + word(&object, at + 4).unwrap());
+        }
+        let mut emitted = startup(base).unwrap();
+        for (name, code) in [
+            ("bounded_read", bounded_read(labels["bounded_read"], base).unwrap()),
+            ("reusable_socket", reusable_socket(labels["reusable_socket"]).unwrap()),
+            ("control_reading", control_reading(labels["control_reading"]).unwrap()),
+            ("control_result", control_result(labels["control_result"]).unwrap()),
+            ("screen_guard", screen_guard(labels["screen_guard"]).unwrap()),
+            ("sample_reply", sample_reply(labels["sample_reply"], labels["retry_reply"]).unwrap()),
+        ] {
+            assert_eq!(base + emitted.len() as u32, labels[name], "{name}");
+            emitted.extend(code);
+        }
+        assert_eq!(base + emitted.len() as u32, labels["command_name"]);
+        emitted.extend(COMMAND);
+        emitted.extend(RETRY_REPLY);
+        emitted.resize(align(emitted.len(), 4).unwrap(), 0);
+        let mut expected = elf.contents(text).to_vec();
+        // A relocatable assembly supplies the instructions and local branches.
+        // Externally linked operands are checked on the actual mapped stock patch.
+        let rel = elf.section(".rel.text").unwrap();
+        for at in (rel.offset..rel.offset + rel.size).step_by(8) {
+            let offset = word(&object, at).unwrap() as usize;
+            let width = match word(&object, at + 4).unwrap() & 255 {
+                2 => 4,       // ABS32
+                28 | 29 => 3, // CALL/JUMP24 immediate, preserving condition and opcode
+                kind => panic!("unexpected assembler relocation {kind}"),
+            };
+            expected[offset..offset + width].fill(0);
+            emitted[offset..offset + width].fill(0);
+        }
+        assert_eq!(emitted, expected);
     }
 
     #[test]
@@ -387,3 +437,6 @@ mod tests {
         assert!(branch(0x1000, 0x4000000, 0xea000000).is_err());
     }
 }
+
+#[cfg(test)]
+mod firmware_tests;

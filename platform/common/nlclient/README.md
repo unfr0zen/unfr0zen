@@ -8,8 +8,7 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-Reviewed ABI shapes are recorded in
-[`abi_shapes.json`](../../../crates/unfr0zen-core/src/nlclient/abi_shapes.json).
+The display-wake accessor uses paired function fingerprints to distinguish pointer getters.
 Unsupported ELF layouts, unknown instruction shapes, missing imports or
 unsupported relocations fail before device writes. The Legal Info factory and layer identify the settings ABI. On builds where
 Legal Info displays text, the WWN Equipment layer supplies the image and
@@ -222,7 +221,7 @@ immediate restarts with connections in TIME_WAIT.
 
 The code shares the screen's executable segment and undo journal. Deselecting
 the option removes these patches while retaining the settings screen. The
-[RCS golden and acceptance process](tests/external-temperature/README.md)
+[RCS tests](tests/external-temperature/README.md)
 cover the additional native bindings and layouts.
 
 ## Gen 1 and gen 2 dark theme
@@ -245,8 +244,7 @@ is, and U-Boot falls back to it should the copy not load.
 
 The edits share the screen's undo journal, so a run without the option
 restores the light colours while retaining the settings screen, and puts
-back an undarkened kernel. The [dark theme
-golden](tests/dark-theme/README.md) lists every edit and the patched digest.
+back an undarkened kernel. The [dark theme tests](tests/dark-theme/README.md) check palette edits and undo.
 
 ## Runtime and build requirements
 
@@ -327,16 +325,12 @@ unknown allocated section or relocation. It does not synthesize veneers.
 
 ```sh
 cargo test -p unfr0zen-core -p unfr0zen-host -p unfr0zen-cli
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --test nlclient_golden
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --lib native_screen_patch_is_automatic
+NLCLIENT_REQUIRE_FIRMWARE=1 cargo test -p unfr0zen-core --test nlclient_firmware
+NLCLIENT_REQUIRE_FIRMWARE=1 cargo test -p unfr0zen-core --lib native_screen_patch_is_automatic
 ```
 
-Goldens from all three untouched dumps pin discovery, native API, planned
-patch, linked payload/symbols, output and decompressed undo journal against
-the independent Python/lld reference. They contain addresses and hashes,
-never firmware. See [tests/README.md](tests/README.md) for sample provenance,
-strict mode, toolchain details and the optional same-object `ld.lld` check.
-Private samples are kept under `.work/firmware/` or `NLCLIENT_FIRMWARE_DIR`.
+The tests discover bindings in the private samples and compare the payload
+linker with LLVM. See [tests/README.md](tests/README.md) for the test inputs.
 Tests also cover moved ELF addresses, corrupted ABI rejection, unsupported
 relocations, patch/undo round trips and recovery dry run/idempotence/upgrades,
 including interrupted executable or journal writes.
