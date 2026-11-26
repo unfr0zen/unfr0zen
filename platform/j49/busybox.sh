@@ -20,9 +20,18 @@ version=1.37.0
 sha256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
 tarball=$root/.work/j49/busybox-$version.tar.bz2
 mkdir -p "$root/.work/j49"
+# busybox.net, else Debian's copy of the same release tarball: the hash below
+# accepts only the pinned bytes, whichever answers.
 if [ ! -f "$tarball" ]; then
-    curl -fsSL -o "$tarball.part" "https://busybox.net/downloads/busybox-$version.tar.bz2"
-    mv "$tarball.part" "$tarball"
+    for url in "https://busybox.net/downloads/busybox-$version.tar.bz2" \
+        "https://deb.debian.org/debian/pool/main/b/busybox/busybox_$version.orig.tar.bz2"; do
+        if curl -fsSL --connect-timeout 30 --retry 3 -o "$tarball.part" "$url"; then
+            mv "$tarball.part" "$tarball"
+            break
+        fi
+        echo "busybox $version: $url failed" >&2
+    done
+    [ -f "$tarball" ] || exit 1
 fi
 echo "$sha256  $tarball" | sha256sum -c - >/dev/null || {
     echo "$tarball is not the pinned busybox $version" >&2

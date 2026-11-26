@@ -1,0 +1,69 @@
+diff --git a/drivers/usb/gadget/f_fastboot.c b/drivers/usb/gadget/f_fastboot.c
+index d12636cc377..fbace4c39b6 100644
+--- a/drivers/usb/gadget/f_fastboot.c
++++ b/drivers/usb/gadget/f_fastboot.c
+@@ -15,6 +15,7 @@
+ #include <env.h>
+ #include <errno.h>
+ #include <fastboot.h>
++#include <fastboot-internal.h>
+ #include <log.h>
+ #include <malloc.h>
+ #include <linux/usb/ch9.h>
+@@ -612,6 +613,45 @@ static void do_acmd_complete(struct usb_ep *ep, struct usb_request *req)
+ 		fastboot_acmd_complete();
+ }
+ 
++/*
++ * Upload: the IN request points straight at RAM, one chunk at a time, each
++ * queued from the previous one's completion; then the request gets its own
++ * buffer back and carries the final OKAY.
++ */
++#define UPLOAD_CHUNK	(256 * 1024)
++
++static struct {
++	const u8 *next;
++	unsigned int left;
++	void *buf;
++} upload;
++
++static void upload_complete(struct usb_ep *ep, struct usb_request *req)
++{
++	unsigned int len;
++
++	if (!req->status && upload.left) {
++		len = min(upload.left, (unsigned int)UPLOAD_CHUNK);
++		req->buf = (void *)upload.next;
++		req->length = len;
++		upload.next += len;
++		upload.left -= len;
++		if (!usb_ep_queue(ep, req, 0))
++			return;
++	}
++	req->buf = upload.buf;
++	req->complete = fastboot_complete;
++	fastboot_tx_write_str(req->status || upload.left ? "FAILupload" : "OKAY");
++}
++
++static void upload_start(void)
++{
++	upload.next = fastboot_buf_addr;
++	upload.left = fastboot_upload_size;
++	upload.buf = fastboot_func->in_req->buf;
++	fastboot_func->in_req->complete = upload_complete;
++}
++
+ static void rx_handler_command(struct usb_ep *ep, struct usb_request *req)
+ {
+ 	char *cmdbuf = req->buf;
+@@ -633,7 +673,9 @@ static void rx_handler_command(struct usb_ep *ep, struct usb_request *req)
+ 		fastboot_fail("buffer overflow", response);
+ 	}
+ 
+-	if (!strncmp("DATA", response, 4)) {
++	if (!strncmp("DATA", response, 4) && cmd == FASTBOOT_COMMAND_UPLOAD) {
++		upload_start();
++	} else if (!strncmp("DATA", response, 4)) {
+ 		req->complete = rx_handler_dl_image;
+ 		req->length = rx_bytes_expected(ep);
+ 	}

@@ -1,5 +1,5 @@
 diff --git a/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c b/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
-index 1ee54b025da..cfb62ceef73 100644
+index 1ee54b025da..64c92453910 100644
 --- a/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
 +++ b/board/freescale/mx6sx_17x17_val/mx6sx_17x17_val.c
 @@ -16,6 +16,12 @@
@@ -15,7 +15,7 @@ index 1ee54b025da..cfb62ceef73 100644
  #include <fsl_esdhc_imx.h>
  #include <mmc.h>
  #include <miiphy.h>
-@@ -264,11 +270,41 @@ void ldo_mode_set(int ldo_bypass)
+@@ -264,16 +270,47 @@ void ldo_mode_set(int ldo_bypass)
  
  int dram_init(void)
  {
@@ -58,7 +58,21 @@ index 1ee54b025da..cfb62ceef73 100644
  static iomux_v3_cfg_t const uart1_pads[] = {
  	MX6_PAD_GPIO1_IO04__UART1_TX | MUX_PAD_CTRL(UART_PAD_CTRL),
  	MX6_PAD_GPIO1_IO05__UART1_RX | MUX_PAD_CTRL(UART_PAD_CTRL),
-@@ -687,6 +723,7 @@ int board_ehci_hcd_init(int port)
+ };
+ 
++#ifdef CONFIG_FSL_ESDHC_IMX
+ #ifndef CONFIG_MXC_SPI
+ static iomux_v3_cfg_t const usdhc2_pads[] = {
+ 	MX6_PAD_SD2_CLK__USDHC2_CLK | MUX_PAD_CTRL(USDHC_PAD_CTRL),
+@@ -313,6 +350,7 @@ static iomux_v3_cfg_t const usdhc4_pads[] = {
+ 	MX6_PAD_SD4_DATA6__USDHC4_DATA6 | MUX_PAD_CTRL(USDHC_PAD_CTRL),
+ 	MX6_PAD_SD4_DATA7__USDHC4_DATA7 | MUX_PAD_CTRL(USDHC_PAD_CTRL),
+ };
++#endif
+ 
+ static void setup_iomux_uart(void)
+ {
+@@ -687,6 +725,7 @@ int board_ehci_hcd_init(int port)
  
  int board_init(void)
  {
@@ -66,7 +80,7 @@ index 1ee54b025da..cfb62ceef73 100644
  	/* address of boot parameters */
  	gd->bd->bi_boot_params = PHYS_SDRAM + 0x100;
  
-@@ -732,8 +769,43 @@ static const struct boot_mode board_boot_modes[] = {
+@@ -732,8 +771,43 @@ static const struct boot_mode board_boot_modes[] = {
  };
  #endif
  
@@ -110,7 +124,7 @@ index 1ee54b025da..cfb62ceef73 100644
  #ifdef CONFIG_CMD_BMODE
  	add_board_boot_modes(board_boot_modes);
  #endif
-@@ -742,6 +814,11 @@ int board_late_init(void)
+@@ -742,6 +816,11 @@ int board_late_init(void)
  	board_late_mmc_env_init();
  #endif
  

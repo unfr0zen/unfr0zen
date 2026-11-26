@@ -1,0 +1,13 @@
+diff --git a/include/configs/pcl063.h b/include/configs/pcl063.h
+index 38dcee05359..3ac3217a832 100644
+--- a/include/configs/pcl063.h
++++ b/include/configs/pcl063.h
+@@ -53,7 +53,7 @@
+ 	"kernel_addr_r=0x81000000\0" \
+ 	"pxefile_addr_r=0x87100000\0" \
+ 	"ramdisk_addr_r=0x82100000\0" \
+-	"scriptaddr=0x87000000\0" \
++	"scriptaddr=0x00908000\0" \
+ 	BOOTENV
+ 
+ #define BOOT_TARGET_DEVICES(func) \

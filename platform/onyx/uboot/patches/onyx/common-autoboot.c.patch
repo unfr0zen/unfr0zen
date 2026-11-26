@@ -1,0 +1,22 @@
+diff --git a/common/autoboot.c b/common/autoboot.c
+index 1752dd58483..705a9eb432c 100644
+--- a/common/autoboot.c
++++ b/common/autoboot.c
+@@ -464,7 +464,7 @@ const char *bootdelay_process(void)
+ 	if (IS_ENABLED(CONFIG_OF_CONTROL))
+ 		bootdelay = ofnode_conf_read_int("bootdelay", bootdelay);
+ 
+-#if defined(is_boot_from_usb)
++#if defined(is_boot_from_usb) && !defined(CONFIG_NEST_USB_RECOVERY)
+ 	if (is_boot_from_usb() && env_get("bootcmd_mfg")) {
+ 		disconnect_from_pc();
+ 		printf("Boot from USB for mfgtools\n");
+@@ -495,7 +495,7 @@ const char *bootdelay_process(void)
+ 	else
+ 		s = env_get("bootcmd");
+ 
+-#if defined(is_boot_from_usb)
++#if defined(is_boot_from_usb) && !defined(CONFIG_NEST_USB_RECOVERY)
+ 	if (is_boot_from_usb() && env_get("bootcmd_mfg")) {
+ 		s = env_get("bootcmd_mfg");
+ 		printf("Run bootcmd_mfg: %s\n", s);

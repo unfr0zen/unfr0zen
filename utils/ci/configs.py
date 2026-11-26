@@ -31,8 +31,8 @@ builds and passes again on what the job made. Nothing later finds those keys.
 The build image's tag is the Dockerfile's SHA-256, twelve hex
 digits, as utils/ci/.circleci/config.yml publishes it. The configs are
 rendered on their way: a line naming __ZBWAKE_RELEASE__ is repeated for each
-gen 3 release of platform/diamond3/zbwake/releases, as the zbwake job's step
-for that release. A fork's pull
+gen 3 or Onyx release in the boards' zbwake/releases files, as the zbwake
+job's step for that release. A fork's pull
 request (FORK=true) is rendered without the docker-hub context and the
 executors' Docker Hub credentials, and never publishes the image: the image is
 public, and a fork's code gets no secret.
@@ -58,7 +58,8 @@ import tempfile
 
 COMMON = ".circleci/common.yml"
 RENDERED = "/tmp/circleci-configs"
-ZBWAKE_RELEASES = "platform/diamond3/zbwake/releases"
+ZBWAKE_BOARDS = ["platform/diamond3/zbwake", "platform/onyx/zbwake"]
+ZBWAKE_RELEASES = [f"{board}/releases" for board in ZBWAKE_BOARDS]
 NONE = ".circleci/none.yml"
 DOCKERFILE = "utils/ci/Dockerfile"
 IMAGE = "unfr0zen/unfr0zen-build"
@@ -66,7 +67,7 @@ IMAGE = "unfr0zen/unfr0zen-build"
 # The configs defining the app's jobs: each module's, then its own.
 APP = [
     "platform/diamond3/.circleci/config.yml",
-    "platform/diamond3/zbwake/.circleci/config.yml",
+    "platform/common/zbwake/.circleci/config.yml",
     "platform/j49/.circleci/config.yml",
     "platform/diamond/.circleci/config.yml",
     "platform/common/radio/.circleci/config.yml",
@@ -86,18 +87,24 @@ CONFIGS = {
 
 
 ZBWAKE_SOURCES = [
-    "platform/diamond3/zbwake/.circleci/config.yml",
-    "platform/diamond3/zbwake/build.sh",
-    "platform/diamond3/zbwake/zbwake.c",
-    "platform/diamond3/zbwake/Kbuild",
-]
+    "platform/common/zbwake/.circleci/config.yml",
+    "platform/common/zbwake/build.sh",
+    "platform/common/zbwake/zbwake.c",
+    "platform/common/zbwake/Kbuild",
+] + [f"{board}/{name}" for board in ZBWAKE_BOARDS for name in ("board.h", "board.conf")]
 
 # module: its sources as git paths, the config defining its job among them,
 # the modules it takes, and whether it builds in the build image. Each is the
 # job of that name.
 MODULES = {
     "recovery": {
-        "paths": ["platform/diamond3/.circleci/config.yml", "platform/diamond3/bootstrap", "platform/diamond3/uboot"]
+        "paths": [
+            "platform/diamond3/.circleci/config.yml",
+            "platform/diamond3/bootstrap",
+            "platform/diamond3/uboot",
+            "platform/onyx/uboot",
+            "platform/common/uboot",
+        ]
     },
     "j49": {"paths": ["platform/j49"]},
     "j49-kernel": {
@@ -110,7 +117,7 @@ MODULES = {
         "image": False,
     },
     "diamond-xloader": {"paths": ["platform/diamond"], "image": False},
-    "zbwake": {"paths": ZBWAKE_SOURCES + [ZBWAKE_RELEASES]},
+    "zbwake": {"paths": ZBWAKE_SOURCES + ZBWAKE_RELEASES},
     "radio": {"paths": ["platform/common/radio"]},
     "thread": {"paths": ["platform/common/radio/.circleci/config.yml", "platform/common/radio/thread"]},
     "doom": {"paths": ["platform/common/doom"]},
@@ -165,8 +172,13 @@ APP_JOBS = list(MODULES) + ["test", "clippy", "app-linux-x86_64", "app-windows-x
 
 
 def releases():
-    with open(ZBWAKE_RELEASES) as f:
-        return f.read().split()
+    result = []
+    for board in ZBWAKE_BOARDS:
+        with open(f"{board}/board.conf") as f:
+            config = dict(line.split("=", 1) for line in f.read().splitlines())
+        with open(f"{board}/releases") as f:
+            result.extend(config["prefix"] + release for release in f.read().split())
+    return result
 
 
 def inputs():

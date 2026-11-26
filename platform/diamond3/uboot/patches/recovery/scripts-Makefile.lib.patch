@@ -1,0 +1,14 @@
+diff --git a/scripts/Makefile.lib b/scripts/Makefile.lib
+index ac45a884785..5b69733b4d5 100644
+--- a/scripts/Makefile.lib
++++ b/scripts/Makefile.lib
+@@ -425,7 +425,8 @@ cmd_efi_objcopy = $(OBJCOPY) -j .header -j .text -j .sdata -j .data -j \
+ $(obj)/%.efi: $(obj)/%_efi.so
+ 	$(call cmd,efi_objcopy)
+ 
+-KBUILD_EFILDFLAGS = -nostdlib -zexecstack -znocombreloc -znorelro
++# The bare-metal ARM linker has no RELRO to turn off.
++KBUILD_EFILDFLAGS = -nostdlib -zexecstack -znocombreloc $(if $(CONFIG_ARM),,-znorelro)
+ KBUILD_EFILDFLAGS += $(call ld-option,--no-warn-rwx-segments)
+ quiet_cmd_efi_ld = LD      $@
+ cmd_efi_ld = $(LD) $(KBUILD_EFILDFLAGS) -T $(EFI_LDS_PATH) \

@@ -1,15 +1,15 @@
 #!/bin/sh
 # Build what the app installs on the thermostat, into build/: the diamond3's
-# ROM bootstrap, boot wrapper and recovery U-Boot, the OMAP boards' x-loaders, NAND
+# ROM bootstrap and boot wrapper, diamond3's and onyx's recovery U-Boot, the OMAP boards' x-loaders, NAND
 # flasher, dropbear and kernel with a USB serial port, the radio's firmware and zbwake.ko for each
-# gen3 release, nestlocal for ARMv7 carrying them, unfr0zen-apply, Doom, and the UNFR0ZEN
+# gen3 and Onyx release, nestlocal for ARMv7 carrying them, unfr0zen-apply, Doom, and the UNFR0ZEN
 # screen's object for the app to link into the unit's nlclient. The build logs
 # go to .work/.
 #
 #     utils/build-firmware.sh
 #
 # On macOS this builds inside Docker, from utils/ci/Dockerfile; on Linux with the native
-# toolchains (see README.md). JOBS=N limits the parallel make jobs (default 8).
+# toolchains (see BUILDING.md). JOBS=N limits the parallel make jobs (default 8).
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -20,7 +20,7 @@ export NESTLOCAL_TARGET_DIR="${NESTLOCAL_TARGET_DIR:-.work/nestlocal-target}"
 
 if [ "$(uname -s)" = Darwin ]; then
     command -v docker >/dev/null || {
-        echo "Missing build tool: docker. See README.md." >&2
+        echo "Missing build tool: docker. See BUILDING.md." >&2
         exit 1
     }
     image=unfr0zen-build
@@ -33,20 +33,24 @@ if [ "$(uname -s)" = Darwin ]; then
             -e HOME=/tmp -e CARGO_HOME="$root/.work/cargo" -e JOBS -e NESTLOCAL_RADIO -e NESTLOCAL_RADIO_EM357 -e NESTLOCAL_ZBWAKE -e NESTLOCAL_TARGET_DIR "$image" "$@"
     }
 else
+    build_tools="cargo cargo-zigbuild"
+    if [ "${1:-}" != apply ]; then
+        build_tools="$build_tools git make gcc bc bison flex python3 clang cmake ninja arm-none-eabi-gcc \
+            arm-none-eabi-as arm-none-eabi-ld arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump \
+            arm-linux-gnueabihf-gcc arm-linux-gnueabihf-ar arm-linux-gnueabihf-strip"
+    fi
     missing=
-    for tool in git make gcc bc bison flex python3 clang cmake ninja arm-none-eabi-gcc arm-none-eabi-as arm-none-eabi-ld \
-        arm-none-eabi-objcopy arm-none-eabi-nm arm-none-eabi-objdump arm-linux-gnueabihf-gcc arm-linux-gnueabihf-ar \
-        arm-linux-gnueabihf-strip cargo cargo-zigbuild; do
+    for tool in $build_tools; do
         command -v "$tool" >/dev/null || missing="$missing $tool"
     done
     [ -z "$missing" ] || {
-        echo "Missing build tools:$missing. See README.md." >&2
+        echo "Missing build tools:$missing. See BUILDING.md." >&2
         exit 1
     }
-    python3 -c 'import PIL' 2>/dev/null || {
-        echo "The boot logo needs Pillow (python3-pil). See README.md." >&2
+    if [ "${1:-}" != apply ] && ! python3 -c 'import PIL' 2>/dev/null; then
+        echo "The boot logo needs Pillow (python3-pil). See BUILDING.md." >&2
         exit 1
-    }
+    fi
     if command -v rustup >/dev/null; then
         rustup target add "$nestlocal_target" armv7-unknown-linux-musleabihf >/dev/null 2>&1 || true
     fi
@@ -69,17 +73,20 @@ if [ "${1:-}" = apply ]; then
     step apply sh crates/unfr0zen-apply/build.sh
     exit 0
 fi
-# `utils/build-firmware.sh nestlocal` rebuilds nestlocal alone, carrying the
-# radio images and zbwake.ko already in build/.
+# `utils/build-firmware.sh nestlocal` rebuilds nestlocal, carrying the radio
+# images already in build/ and up-to-date zbwake.ko builds.
 if [ "${1:-}" = nestlocal ]; then
     export NESTLOCAL_RADIO="$root/build/radio/radio.bin"
     export NESTLOCAL_RADIO_EM357="$root/build/radio-em357-zigbee/radio.bin"
     export NESTLOCAL_ZBWAKE="$root/build/zbwake"
+    step zbwake sh platform/common/zbwake/build.sh build/zbwake
+    [ ! -f build/j49/zbwake.ko ] || cp build/j49/zbwake.ko build/zbwake/j49.ko
     step nestlocal sh platform/common/radio/thread/nestlocal.sh
     exit 0
 fi
 run python3 platform/diamond3/bootstrap/build_bootstrap.py
 step recovery sh platform/diamond3/uboot/build_uboot.sh
+step recovery-onyx sh platform/onyx/uboot/build_uboot.sh
 step j49 sh platform/j49/build.sh build/j49
 step j49-dropbear sh platform/j49/dropbear.sh build/j49
 step j49-busybox sh platform/j49/busybox.sh build/j49
@@ -129,8 +136,8 @@ echo "Fetching the radio's SDK into .work/zigbee-sdk"
 run sh platform/common/radio/fetch-sdk.sh .work/zigbee-sdk >/dev/null
 export NESTLOCAL_RADIO="$root/build/radio/radio.bin"
 export NESTLOCAL_RADIO_EM357="$root/build/radio-em357-zigbee/radio.bin"
-# zbwake.ko for each gen3 release: those missing or older than their sources.
-step zbwake sh platform/diamond3/zbwake/build.sh build/zbwake
+# zbwake.ko for each gen3 and Onyx release: those missing or older than their sources.
+step zbwake sh platform/common/zbwake/build.sh build/zbwake
 # The j49's, built with its kernel, beside them for nestlocal to carry.
 [ ! -f build/j49/zbwake.ko ] || cp build/j49/zbwake.ko build/zbwake/j49.ko
 export NESTLOCAL_ZBWAKE="$root/build/zbwake"

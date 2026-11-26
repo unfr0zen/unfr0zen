@@ -1,0 +1,51 @@
+diff --git a/arch/arm/mach-imx/mx6/Kconfig b/arch/arm/mach-imx/mx6/Kconfig
+index a7a04350600..a570866128b 100644
+--- a/arch/arm/mach-imx/mx6/Kconfig
++++ b/arch/arm/mach-imx/mx6/Kconfig
+@@ -551,6 +551,19 @@ config TARGET_MX6UL_9X9_EVK
+ 	select FSL_BLOB
+ 	select ARCH_MISC_INIT
+ 
++config TARGET_MX6UL_ONYX
++	bool "mx6ul_onyx (Nest Thermostat E recovery)"
++	depends on MX6UL
++	select BOARD_LATE_INIT
++	select DM
++	select DM_THERMAL
++	select IMX_MODULE_FUSE
++	imply CMD_DM
++	help
++	  Recovery for the Nest Thermostat E, loaded into memory through the
++	  signed SDP loader's factory USB boot path with the unit's DRAM
++	  already up: no SPL, no storage boot.
++
+ config TARGET_MX6UL_14X14_EVK
+ 	bool "mx6ul_14x14_evk"
+ 	depends on MX6UL
+@@ -873,7 +886,26 @@ source "board/freescale/mx6sx_19x19_val/Kconfig"
+ source "board/freescale/mx6ul_14x14_evk/Kconfig"
+ source "board/freescale/mx6ul_14x14_ddr3_val/Kconfig"
+ source "board/freescale/mx6ul_14x14_lpddr2_val/Kconfig"
++if TARGET_MX6UL_ONYX
++config NEST_USB_RECOVERY
++	bool "Use the RAM recovery ACM console instead of manufacturing boot"
++	depends on USB_FUNCTION_ACM && ENV_IS_NOWHERE
++	select CYCLIC
++	help
++	  Honor CONFIG_BOOTCOMMAND when entered via ROM USB download.
++	  Omit validation-board NAND and manufacturing boot environment entries.
++
++config SYS_BOARD
++	default "mx6ul_14x14_lpddr2_val"
++config SYS_VENDOR
++	default "freescale"
++config SYS_CONFIG_NAME
++	default "mx6ul_onyx"
++config TEXT_BASE
++	default 0x82000000
++endif
+ source "board/freescale/mx6ullevk/Kconfig"
++
+ source "board/freescale/mx6ull_ddr3_val/Kconfig"
+ source "board/bosch/acc/Kconfig"
+ source "board/grinn/liteboard/Kconfig"

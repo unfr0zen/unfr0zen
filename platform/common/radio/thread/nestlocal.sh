@@ -5,7 +5,7 @@
 # shared objects) into build/thread, with nestlocal copied to
 # build/nestlocal-armv7 for the app.
 # nestlocal carries the radio images (radio.sh) and zbwake.ko for each release
-# (platform/diamond3/zbwake/build.sh, the j49's beside them as j49.ko): their
+# (platform/common/zbwake/build.sh for gen 3 and Onyx, the j49's beside them as j49.ko): their
 # paths are NESTLOCAL_RADIO, NESTLOCAL_RADIO_EM357 and NESTLOCAL_ZBWAKE.
 # libwakefilter.so (platform/common/wakefilter), which the app installs beside
 # nestlocal for Matter, builds here too, into build/wakefilter, and so does

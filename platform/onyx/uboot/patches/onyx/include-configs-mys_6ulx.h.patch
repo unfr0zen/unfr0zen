@@ -1,0 +1,13 @@
+diff --git a/include/configs/mys_6ulx.h b/include/configs/mys_6ulx.h
+index 2571098d06c..f782fe1bc8d 100644
+--- a/include/configs/mys_6ulx.h
++++ b/include/configs/mys_6ulx.h
+@@ -41,7 +41,7 @@
+ 	"kernel_addr_r=0x81000000\0" \
+ 	"pxefile_addr_r=0x87100000\0" \
+ 	"ramdisk_addr_r=0x82100000\0" \
+-	"scriptaddr=0x87000000\0" \
++	"scriptaddr=0x00908000\0" \
+ 	BOOTENV
+ 
+ #define BOOT_TARGET_DEVICES(func) \

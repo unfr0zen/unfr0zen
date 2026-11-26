@@ -1,18 +1,19 @@
 #!/bin/sh
 # Builds zbwake.ko, the kernel module that makes the radio's nHOST_INT a wake
-# source, for gen3 firmware releases: OUT/RELEASE.ko from Nest's published
-# kernel source for each (nest-learning-thermostat/RELEASE/linux-imx for 5.6,
-# linux-imx-4.1.15 for later releases), configured as Nest's release builds are
-# (diamond3_defconfig and diamond3_release_fragment, with hung-task detection
-# disabled on 5.6, matching the units' /proc/config.gz). The kernel
+# source, for the supported boards' firmware releases. The board's zbwake
+# directory names the kernel source, output prefix and GPIO configuration.
+# The kernel is configured with each board's defconfig and release
+# fragment, which give the units' /proc/config.gz; the gen3's 5.6 predates
+# linux-imx-4.1.15 and builds from its linux-imx, with hung-task detection
+# disabled as on those units. The kernel
 # checks the CRCs of the symbols a module uses; they come from genksyms over
 # the objects that export them, so no kernel is built. Needs git, make, bc, a
 # host gcc and arm-none-eabi-gcc (the build image has them); ZBWAKE_JOBS
 # releases at a time (default 4).
 #
-#     platform/diamond3/zbwake/build.sh OUT RELEASE...    (the releases: releases)
-#     platform/diamond3/zbwake/build.sh OUT               every release of releases whose
-#                                       OUT/RELEASE.ko is missing or older than
+#     platform/common/zbwake/build.sh OUT RELEASE...   (board-prefixed when required)
+#     platform/common/zbwake/build.sh OUT              every listed release whose
+#                                       module is missing or older than
 #                                       the files in this directory
 set -eu
 
@@ -21,14 +22,29 @@ set -eu
     exit 2
 }
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+platform=$(CDPATH= cd -- "$dir/../.." && pwd)
 mkdir -p "$1"
 out=$(CDPATH= cd -- "$1" && pwd)
 shift
+board_dir() {
+    case "$1" in
+        *-*) board=${1%%-*} ;;
+        *) board=diamond3 ;; # The original, unprefixed module names.
+    esac
+    printf '%s/%s/zbwake\n' "$platform" "$board"
+}
 if [ $# -eq 0 ]; then
     # shellcheck disable=SC2013 # the releases are words
-    for release in $(cat "$dir/releases"); do
+    for release in $(
+        for config in "$platform"/*/zbwake/board.conf; do
+            prefix=
+            # shellcheck source=/dev/null
+            . "$config"
+            sed "s/^/$prefix/" "$(dirname "$config")/releases"
+        done
+    ); do
         ko=$out/$release.ko
-        [ -f "$ko" ] && [ -z "$(find "$dir" -newer "$ko")" ] || set -- "$@" "$release"
+        [ -f "$ko" ] && [ -z "$(find "$dir" "$(board_dir "$release")" -newer "$ko")" ] || set -- "$@" "$release"
     done
     [ $# -gt 0 ] || {
         echo "zbwake.ko is up to date for every release"
@@ -43,38 +59,41 @@ common_symbols="irq_set_irq_wake|printk|module_layout|__aeabi_unwind_cpp_pr0|req
 build() { # build RELEASE
     release=$1
     tree=$work/$release
+    config_dir=$(board_dir "$release")
+    board=$(basename "$(dirname "$config_dir")")
+    prefix=
+    source=
+    # shellcheck source=/dev/null
+    . "$config_dir/board.conf"
+    version=${release#"$prefix"}
     # GCC 14 diagnoses annotations and host-tool patterns in these kernels.
     hostcc="gcc -fcommon -Wno-dangling-pointer"
     cflags="-Wno-attributes -Wno-missing-attributes -Wno-attribute-alias"
-    case "$release" in
-        5.6)
-            repo=linux-imx
-            compiler=4
-            symbols="__gpio_to_irq|$common_symbols"
-            crcs=10
-            hostcc="$hostcc -Wno-unused-function"
-            ;;
-        *)
-            repo=linux-imx-4.1.15
-            compiler=5
-            symbols="gpio_to_desc|gpiod_to_irq|$common_symbols"
-            crcs=11
-            ;;
-    esac
-    git clone -q --depth 1 "https://nest-open-source.googlesource.com/nest-learning-thermostat/$release/$repo" "$tree"
+    compiler=5
+    symbols="gpio_to_desc|gpiod_to_irq|$common_symbols"
+    crcs=11
+    if [ "$board" = diamond3 ] && [ "$version" = 5.6 ]; then
+        source=linux-imx
+        compiler=4
+        symbols="__gpio_to_irq|$common_symbols"
+        crcs=10
+        hostcc="$hostcc -Wno-unused-function"
+    fi
+    git clone -q --depth 1 "https://nest-open-source.googlesource.com/nest-learning-thermostat/$version/$source" "$tree"
     cd "$tree"
     # These kernels select a header for the compiler's major version; newer
     # GCC versions use the latest header available in each tree. The host
     # tools predate -fno-common being the default.
     gcc_version=$(arm-none-eabi-gcc -dumpversion | cut -d. -f1)
-    [ -f "include/linux/compiler-gcc$gcc_version.h" ] ||
+    if [ -f "include/linux/compiler-gcc$compiler.h" ] && [ ! -f "include/linux/compiler-gcc$gcc_version.h" ]; then
         cp "include/linux/compiler-gcc$compiler.h" "include/linux/compiler-gcc$gcc_version.h"
+    fi
     # With module versioning the kernel skips the release in vermagic, so
     # releases with the same CRCs get the same module.
     m() { make -s CROSS_COMPILE=arm-none-eabi- HOSTCC="$hostcc" KCFLAGS="$cflags" LOCALVERSION= "$@"; }
-    scripts/kconfig/merge_config.sh -m arch/arm/configs/diamond3_defconfig \
-        arch/arm/configs/diamond3_release_fragment >/dev/null
-    [ "$release" != 5.6 ] || scripts/config --disable DETECT_HUNG_TASK
+    scripts/kconfig/merge_config.sh -m "arch/arm/configs/${board}_defconfig" \
+        "arch/arm/configs/${board}_release_fragment" >/dev/null
+    [ "$source" != linux-imx ] || scripts/config --disable DETECT_HUNG_TASK
     m olddefconfig
     : >.scmversion
     m modules_prepare
@@ -89,7 +108,7 @@ build() { # build RELEASE
         return 1
     }
     mkdir "$tree-module"
-    cp "$dir/zbwake.c" "$dir/Kbuild" "$tree-module/"
+    cp "$dir/zbwake.c" "$dir/Kbuild" "$config_dir/board.h" "$tree-module/"
     m M="$tree-module" modules
     cp "$tree-module/zbwake.ko" "$out/$release.ko"
     cd /

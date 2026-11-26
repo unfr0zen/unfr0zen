@@ -1,0 +1,21 @@
+diff --git a/arch/arm/mach-imx/mx6/clock.c b/arch/arm/mach-imx/mx6/clock.c
+index 6d454565f30..9f697f52bf9 100644
+--- a/arch/arm/mach-imx/mx6/clock.c
++++ b/arch/arm/mach-imx/mx6/clock.c
+@@ -51,7 +51,15 @@ void setup_gpmi_io_clk(u32 cfg)
+ 		     MXC_CCM_CCGR4_RAWNAND_U_GPMI_INPUT_APB_MASK |
+ 		     MXC_CCM_CCGR4_PL301_MX6QPER1_BCH_MASK);
+ 
+-#if defined(CONFIG_MX6SX)
++#if defined(CONFIG_TARGET_MX6UL_ONYX)
++	/* Onyx runs the GPMI and BCH cores from PLL2 PFD2 divided by four. */
++	clrbits_le32(&imx_ccm->cscmr1, MXC_CCM_CSCMR1_GPMI_CLK_SEL |
++		     MXC_CCM_CSCMR1_BCH_CLK_SEL);
++	clrsetbits_le32(&imx_ccm->cscdr1, MXC_CCM_CSCDR1_GPMI_PODF_MASK |
++			MXC_CCM_CSCDR1_BCH_PODF_MASK,
++			(3 << MXC_CCM_CSCDR1_GPMI_PODF_OFFSET) |
++			(3 << MXC_CCM_CSCDR1_BCH_PODF_OFFSET));
++#elif defined(CONFIG_MX6SX)
+ 	clrbits_le32(&imx_ccm->CCGR4, MXC_CCM_CCGR4_QSPI2_ENFC_MASK);
+ 
+ 	clrsetbits_le32(&imx_ccm->cs2cdr,

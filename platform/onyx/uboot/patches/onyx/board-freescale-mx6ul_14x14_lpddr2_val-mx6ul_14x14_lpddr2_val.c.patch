@@ -1,0 +1,193 @@
+diff --git a/board/freescale/mx6ul_14x14_lpddr2_val/mx6ul_14x14_lpddr2_val.c b/board/freescale/mx6ul_14x14_lpddr2_val/mx6ul_14x14_lpddr2_val.c
+index 2d33afcfee7..f708ca7c7c8 100644
+--- a/board/freescale/mx6ul_14x14_lpddr2_val/mx6ul_14x14_lpddr2_val.c
++++ b/board/freescale/mx6ul_14x14_lpddr2_val/mx6ul_14x14_lpddr2_val.c
+@@ -20,6 +20,9 @@
+ #include <asm/io.h>
+ #include <common.h>
+ #include <env.h>
++#include <cyclic.h>
++#include <fsl_wdog.h>
++#include <g_dnl.h>
+ #include <fsl_esdhc_imx.h>
+ #include <i2c.h>
+ #include <linux/sizes.h>
+@@ -28,11 +31,13 @@
+ #include <linux/delay.h>
+ #include <linux/sizes.h>
+ #include <mmc.h>
++#include <mxs_nand.h>
+ #include <netdev.h>
+ #include <power/pmic.h>
+ #include <power/pfuze100_pmic.h>
+ #include "../common/pfuze.h"
+ #include <usb.h>
++#include <linux/usb/gadget.h>
+ #include <usb/ehci-ci.h>
+ #include <asm/mach-imx/video.h>
+ 
+@@ -106,6 +111,9 @@ struct i2c_pads_info i2c_pad_info1 = {
+ 
+ int dram_init(void)
+ {
++#if defined(CONFIG_TARGET_MX6UL_ONYX)
++	writel(0xB0070000, (void *)0x8500004C);
++#endif
+ 	gd->ram_size = PHYS_SDRAM_SIZE;
+ 
+ 	return 0;
+@@ -117,6 +125,7 @@ static iomux_v3_cfg_t const uart1_pads[] = {
+ };
+ 
+ 
++#ifdef CONFIG_FSL_ESDHC_IMX
+ static iomux_v3_cfg_t const usdhc1_pads[] = {
+ 	MX6_PAD_SD1_CLK__USDHC1_CLK | MUX_PAD_CTRL(USDHC_PAD_CTRL),
+ 	MX6_PAD_SD1_CMD__USDHC1_CMD | MUX_PAD_CTRL(USDHC_PAD_CTRL),
+@@ -141,6 +150,7 @@ static iomux_v3_cfg_t const usdhc1_pads[] = {
+ 	/* RST_B */
+ 	MX6_PAD_NAND_WP_B__GPIO4_IO11 | MUX_PAD_CTRL(NO_PAD_CTRL),
+ };
++#endif
+ 
+ #if !defined(CONFIG_CMD_NAND)
+ 
+@@ -197,14 +207,18 @@ static iomux_v3_cfg_t const nand_pads[] = {
+ 	MX6_PAD_NAND_CLE__RAWNAND_CLE | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_NAND_ALE__RAWNAND_ALE | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_NAND_CE0_B__RAWNAND_CE0_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
++#ifndef CONFIG_TARGET_MX6UL_ONYX
+ 	MX6_PAD_NAND_CE1_B__RAWNAND_CE1_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_CSI_MCLK__RAWNAND_CE2_B   | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_CSI_PIXCLK__RAWNAND_CE3_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
++#endif
+ 	MX6_PAD_NAND_RE_B__RAWNAND_RE_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_NAND_WE_B__RAWNAND_WE_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_NAND_WP_B__RAWNAND_WP_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
+ 	MX6_PAD_NAND_READY_B__RAWNAND_READY_B | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
++#ifndef CONFIG_TARGET_MX6UL_ONYX
+ 	MX6_PAD_NAND_DQS__RAWNAND_DQS | MUX_PAD_CTRL(GPMI_PAD_CTRL2),
++#endif
+ };
+ 
+ static void setup_gpmi_nand(void)
+@@ -820,13 +834,56 @@ void ldo_mode_set(int ldo_bypass)
+ 
+ int board_early_init_f(void)
+ {
++#if defined(CONFIG_TARGET_MX6UL_ONYX)
++	writel(0xB0070001, (void *)0x85000050);
++#endif
+ 	setup_iomux_uart();
+ 
+ 	return 0;
+ }
+ 
++#if defined(CONFIG_TARGET_MX6UL_ONYX) && defined(CONFIG_NEST_USB_RECOVERY)
++static void recovery_watchdog_service(void *ctx)
++{
++	struct watchdog_regs *wdog = (void *)WDOG1_BASE_ADDR;
++
++	writew(0x5555, &wdog->wsr);
++	writew(0xaaaa, &wdog->wsr);
++}
++
++static void recovery_watchdog_start(void)
++{
++	struct watchdog_regs *wdog = (void *)WDOG1_BASE_ADDR;
++	const u16 timeout = CONFIG_WATCHDOG_TIMEOUT_MSECS / 500 - 1;
++
++	writew(SET_WCR_WT(timeout) | WCR_WDE | WCR_SRS | WCR_WDA, &wdog->wcr);
++	recovery_watchdog_service(NULL);
++}
++
++int board_usb_console_ready(void)
++{
++	static struct cyclic_info *watchdog;
++
++	/* Leave the initial deadline in place until the host opens ACM. */
++	if (!watchdog) {
++		watchdog = cyclic_register(recovery_watchdog_service, 100000,
++					   "recovery-watchdog", NULL);
++		if (!watchdog)
++			return -ENOMEM;
++	}
++	recovery_watchdog_service(NULL);
++	return 0;
++}
++#endif
++
+ int board_init(void)
+ {
++#if defined(CONFIG_TARGET_MX6UL_ONYX)
++	writel(0xB0070002, (void *)0x85000054);
++#endif
++#if defined(CONFIG_TARGET_MX6UL_ONYX) && defined(CONFIG_NEST_USB_RECOVERY)
++	recovery_watchdog_start();
++#endif
+ 	/* Address of boot parameters */
+ 	gd->bd->bi_boot_params = PHYS_SDRAM + 0x100;
+ 
+@@ -873,17 +930,50 @@ static const struct boot_mode board_boot_modes[] = {
+ };
+ #endif
+ 
++#if defined(CONFIG_TARGET_MX6UL_ONYX) && defined(CONFIG_VIDEO_MXS)
++int onyx_display_init(void);
++void onyx_display_off(void);
++
++void board_quiesce_devices(void)
++{
++	onyx_display_off();
++}
++#endif
++
+ int board_late_init(void)
+ {
++#if defined(CONFIG_TARGET_MX6UL_ONYX)
++	writel(0xB0070003, (void *)0x85000058);
++#endif
++#if defined(CONFIG_TARGET_MX6UL_ONYX) && defined(CONFIG_VIDEO_MXS)
++	{	int ret = onyx_display_init();
++		writel(ret ? (0xD15E0000 | (-ret & 0xFFFF)) : 0xD15E0001, (void *)0x85000060);
++		if (ret) printf("Display: logo unavailable (%d)\n", ret);
++	}
++#endif
+ #ifdef CONFIG_CMD_BMODE
+ 	add_board_boot_modes(board_boot_modes);
+ #endif
++#if defined(CONFIG_TARGET_MX6UL_ONYX) && defined(CONFIG_NAND_MXS)
++	/* The host reads it before any NAND access. */
++	env_set("nand_geometry", mxs_nand_geometry_state());
++#endif
+ 
+ #ifdef CONFIG_ENV_IS_IN_MMC
+ 	board_late_mmc_env_init();
+ #endif
+ 
++#ifdef CONFIG_NEST_USB_RECOVERY
++	{
++		int usb = usb_gadget_initialize(0);
++
++		writel(usb, (void *)0x8500005C);
++		writel(0xB0070004, (void *)0x85000058);
++		return usb;
++	}
++#else
+ 	return 0;
++#endif
+ }
+ 
+ u32 get_board_rev(void)
+@@ -893,7 +983,11 @@ u32 get_board_rev(void)
+ 
+ int checkboard(void)
+ {
++#ifdef CONFIG_TARGET_MX6UL_ONYX
++	puts("Board: Nest Thermostat E (onyx) recovery\n");
++#else
+ 	puts("Board: MX6UL 14X14 LPDDR2 Validation\n");
++#endif
+ 
+ 	return 0;
+ }

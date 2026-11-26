@@ -45,12 +45,12 @@ fi
 cp "$dir/recovery.config" "$tree/.config"
 make -C "$tree" CROSS_COMPILE=arm-none-eabi- olddefconfig
 # The boot logo is generated outside the tree, which stays clean.
-python3 "$dir/uboot_logo.py" "$dir/boot-logo.png" \
+python3 "$repo_dir/platform/common/uboot/uboot_logo.py" "$repo_dir/platform/common/uboot/boot-logo.png" \
     "$repo_dir/.work/boot-logo.bmp.gz"
 make -C "$tree" CROSS_COMPILE=arm-none-eabi- -j"${JOBS:-8}" \
     NEST_BOOT_LOGO="$repo_dir/.work/boot-logo.bmp.gz" u-boot-dtb.bin
 cp "$tree/u-boot-dtb.bin" "$repo_dir/build/u-boot-recovery.bin"
-python3 "$dir/record_uboot_build.py" "$tree" "$repo_dir/build/u-boot-recovery.bin"
+python3 "$repo_dir/platform/common/uboot/record_uboot_build.py" "$tree" "$repo_dir/build/u-boot-recovery.bin"
 # Google's official SDP loader, from their open-source repository; the app
 # embeds it for the official-loader entry point.
 official="$repo_dir/build/u-boot-sdp-official.hab"

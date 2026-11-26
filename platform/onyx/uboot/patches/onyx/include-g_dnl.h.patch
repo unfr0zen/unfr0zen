@@ -1,0 +1,12 @@
+diff --git a/include/g_dnl.h b/include/g_dnl.h
+index 050b618f51e..8ca91629eb7 100644
+--- a/include/g_dnl.h
++++ b/include/g_dnl.h
+@@ -45,5 +45,7 @@ void g_dnl_trigger_detach(void);
+ void g_dnl_clear_detach(void);
+ int run_usb_dnl_gadget(int usbctrl_index, char *usb_dnl_gadget);
+ int board_usb_gadget_port_auto(void);
++/* Called once ACM is configured and the host has asserted DTR. */
++int board_usb_console_ready(void);
+ 
+ #endif /* __G_DOWNLOAD_H_ */

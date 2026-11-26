@@ -21,7 +21,7 @@ sha256=783f50ea27b17c16da89578fafdb6decfa44bb8f6590e5698a4e4d3672dc53d4
 tarball=$root/.work/j49/dropbear-$version.tar.bz2
 mkdir -p "$root/.work/j49"
 if [ ! -f "$tarball" ]; then
-    curl -fsSL -o "$tarball.part" "https://matt.ucc.asn.au/dropbear/releases/dropbear-$version.tar.bz2"
+    curl -fsSL --connect-timeout 30 --retry 3 -o "$tarball.part" "https://matt.ucc.asn.au/dropbear/releases/dropbear-$version.tar.bz2"
     mv "$tarball.part" "$tarball"
 fi
 echo "$sha256  $tarball" | sha256sum -c - >/dev/null || {

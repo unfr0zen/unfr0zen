@@ -1,0 +1,226 @@
+diff --git a/drivers/mtd/nand/raw/mxs_nand.c b/drivers/mtd/nand/raw/mxs_nand.c
+index bfc65b80b13..eae06fa7193 100644
+--- a/drivers/mtd/nand/raw/mxs_nand.c
++++ b/drivers/mtd/nand/raw/mxs_nand.c
+@@ -33,6 +33,8 @@
+ #include <linux/sizes.h>
+ #include <linux/types.h>
+ #include <linux/math64.h>
++#include <u-boot/crc.h>
++#include <asm/unaligned.h>
+ 
+ #define	MXS_NAND_DMA_DESCRIPTOR_COUNT		4
+ 
+@@ -1191,33 +1193,14 @@ void mxs_nand_dump_geo(struct mtd_info *mtd)
+ 		geo->block_mark_bit_offset);
+ }
+ 
+-/*
+- * At this point, the physical NAND Flash chips have been identified and
+- * counted, so we know the physical geometry. This enables us to make some
+- * important configuration decisions.
+- *
+- * The return value of this function propagates directly back to this driver's
+- * board_nand_init(). Anything other than zero will cause this driver to
+- * tear everything down and declare failure.
+- */
+-int mxs_nand_setup_ecc(struct mtd_info *mtd)
++/* Programs the BCH engine with the controller's current geometry. */
++static void mxs_nand_program_bch(struct mtd_info *mtd)
+ {
+ 	struct nand_chip *nand = mtd_to_nand(mtd);
+ 	struct mxs_nand_info *nand_info = nand_get_controller_data(nand);
+ 	struct bch_geometry *geo = &nand_info->bch_geometry;
+ 	struct mxs_bch_regs *bch_regs = nand_info->bch_regs;
+ 	uint32_t tmp;
+-	int ret;
+-
+-	nand_info->en_randomizer = 0;
+-	nand_info->oobsize = mtd->oobsize;
+-	nand_info->writesize = mtd->writesize;
+-
+-	ret = mxs_nand_set_geometry(mtd, geo);
+-	if (ret)
+-		return ret;
+-
+-	mxs_nand_dump_geo(mtd);
+ 
+ 	/* Configure BCH and set NFC geometry */
+ 	mxs_reset_block(&bch_regs->hw_bch_ctrl_reg);
+@@ -1252,6 +1235,34 @@ int mxs_nand_setup_ecc(struct mtd_info *mtd)
+ 
+ 	/* Enable BCH complete interrupt */
+ 	writel(BCH_CTRL_COMPLETE_IRQ_EN, &bch_regs->hw_bch_ctrl_set);
++}
++
++/*
++ * At this point, the physical NAND Flash chips have been identified and
++ * counted, so we know the physical geometry. This enables us to make some
++ * important configuration decisions.
++ *
++ * The return value of this function propagates directly back to this driver's
++ * board_nand_init(). Anything other than zero will cause this driver to
++ * tear everything down and declare failure.
++ */
++int mxs_nand_setup_ecc(struct mtd_info *mtd)
++{
++	struct nand_chip *nand = mtd_to_nand(mtd);
++	struct mxs_nand_info *nand_info = nand_get_controller_data(nand);
++	struct bch_geometry *geo = &nand_info->bch_geometry;
++	int ret;
++
++	nand_info->en_randomizer = 0;
++	nand_info->oobsize = mtd->oobsize;
++	nand_info->writesize = mtd->writesize;
++
++	ret = mxs_nand_set_geometry(mtd, geo);
++	if (ret)
++		return ret;
++
++	mxs_nand_dump_geo(mtd);
++	mxs_nand_program_bch(mtd);
+ 
+ 	return 0;
+ }
+@@ -1604,6 +1615,123 @@ int mxs_nand_init_spl(struct nand_chip *nand)
+ 	return 0;
+ }
+ 
++#define MXS_NAND_UBI_EC_MAGIC	0x55424923
++#define MXS_NAND_UBI_EC_CRC_LEN	60
++/* Erase counter headers a geometry must decode, of the blocks scanned. */
++#define MXS_NAND_PROBE_HEADERS	8
++#define MXS_NAND_PROBE_BLOCKS	64
++/* Pages that fail any geometry: factory bad blocks among those scanned. */
++#define MXS_NAND_PROBE_FAILURES	2
++
++static char mxs_nand_geometry[64] = "unchecked";
++
++const char *mxs_nand_geometry_state(void)
++{
++	return mxs_nand_geometry;
++}
++
++/*
++ * The first page of the block at @offs: 1 when it decodes cleanly into a
++ * UBI erase counter header, 0 when it is erased, -1 otherwise.
++ */
++static int mxs_nand_probe_block(struct mtd_info *mtd, loff_t offs, u8 *buf)
++{
++	size_t len = 0;
++	u32 i;
++	int ret;
++
++	ret = mtd_read(mtd, offs, mtd->writesize, &len, buf);
++	if ((ret < 0 && ret != -EUCLEAN) || len != mtd->writesize)
++		return -1;
++	for (i = 0; i < mtd->writesize && buf[i] == 0xff; i++)
++		;
++	if (i == mtd->writesize)
++		return 0;
++	if (get_unaligned_be32(buf) != MXS_NAND_UBI_EC_MAGIC)
++		return -1;
++	if ((crc32(0, buf, MXS_NAND_UBI_EC_CRC_LEN) ^ 0xffffffff) !=
++	    get_unaligned_be32(buf + MXS_NAND_UBI_EC_CRC_LEN))
++		return -1;
++	return 1;
++}
++
++static void mxs_nand_use_geometry(struct mtd_info *mtd,
++				  const struct bch_geometry *geo)
++{
++	struct nand_chip *nand = mtd_to_nand(mtd);
++	struct mxs_nand_info *nand_info = nand_get_controller_data(nand);
++
++	nand_info->bch_geometry = *geo;
++	mxs_nand_program_bch(mtd);
++	nand->ecc.size = geo->ecc_chunkn_size;
++	nand->ecc.strength = geo->ecc_strength;
++	mtd->ecc_step_size = geo->ecc_chunkn_size;
++	mtd->ecc_strength = geo->ecc_strength;
++	mtd->bitflip_threshold = DIV_ROUND_UP(geo->ecc_strength * 3, 4);
++}
++
++/*
++ * Keeps the BCH geometry the unit's own system wrote with: the chip's
++ * reported ECC requirement is not always the one its kernel decoded, and a
++ * mismatched layout reads every page as uncorrectable and writes pages the
++ * system cannot read. Each candidate must decode the UBI partition's erase
++ * counter headers cleanly. Without one that does, the NAND is left
++ * read-only and its bad block table untouched, since rebuilding it needs a
++ * readable one.
++ */
++static void mxs_nand_verify_geometry(struct mtd_info *mtd, loff_t start)
++{
++	struct nand_chip *nand = mtd_to_nand(mtd);
++	struct mxs_nand_info *nand_info = nand_get_controller_data(nand);
++	const struct bch_geometry chosen = nand_info->bch_geometry;
++	/* The most the OOB holds: the legacy layout. */
++	const unsigned int most = ((mtd->oobsize - MXS_NAND_METADATA_SIZE) * 8 /
++				   (13 * (mtd->writesize / SZ_512))) & ~1U;
++	struct bch_geometry geo;
++	unsigned int i, strength, block, headers, failures;
++	u8 *buf;
++
++	buf = malloc(mtd->writesize);
++	/* The chip's reported layout, then the legacy one, then the rest. */
++	for (i = 0; buf && i <= most / 2; i++) {
++		strength = i ? most + 2 - 2 * i : chosen.ecc_strength;
++		if (i && strength == chosen.ecc_strength)
++			continue;
++		geo = chosen;
++		if (mxs_nand_calc_ecc_layout_by_info(&geo, mtd, strength,
++						     SZ_512))
++			continue;
++		mxs_nand_use_geometry(mtd, &geo);
++		headers = 0;
++		failures = 0;
++		for (block = 0; block < MXS_NAND_PROBE_BLOCKS &&
++		     headers < MXS_NAND_PROBE_HEADERS &&
++		     failures <= MXS_NAND_PROBE_FAILURES; block++) {
++			int found = mxs_nand_probe_block(mtd,
++				start + (loff_t)block * mtd->erasesize, buf);
++
++			headers += found > 0;
++			failures += found < 0;
++		}
++		printf("NAND: BCH%u/512: %u UBI headers, %u unreadable\n",
++		       geo.ecc_strength, headers, failures);
++		if (headers >= MXS_NAND_PROBE_HEADERS &&
++		    failures <= MXS_NAND_PROBE_FAILURES) {
++			snprintf(mxs_nand_geometry, sizeof(mxs_nand_geometry),
++				 "verified bch%u/512", geo.ecc_strength);
++			free(buf);
++			return;
++		}
++	}
++	free(buf);
++	mxs_nand_use_geometry(mtd, &chosen);
++	mtd->flags &= ~MTD_WRITEABLE;
++	nand->options |= NAND_SKIP_BBTSCAN;
++	snprintf(mxs_nand_geometry, sizeof(mxs_nand_geometry),
++		 "unverified: oob %u, bch2-%u/512 tried", mtd->oobsize, most);
++	printf("NAND: no geometry reads the UBI partition; read-only\n");
++}
++
+ int mxs_nand_init_ctrl(struct mxs_nand_info *nand_info)
+ {
+ 	struct mtd_info *mtd;
+@@ -1684,6 +1812,17 @@ int mxs_nand_init_ctrl(struct mxs_nand_info *nand_info)
+ 		mtd->_block_markbad = mxs_nand_hook_block_markbad;
+ 	}
+ 
++	if (nand_info->dev) {
++		u32 start;
++
++		if (!dev_read_u32(nand_info->dev, "nest,probe-ubi-offset",
++				  &start))
++			mxs_nand_verify_geometry(mtd, start);
++	}
++	printf("Recovery NAND: %s, BCH%u/%u\n",
++	       (mtd->flags & MTD_WRITEABLE) ? "RW" : "RO",
++	       nand->ecc.strength, nand->ecc.size);
++
+ 	err = nand_register(0, mtd);
+ 	if (err)
+ 		goto err_free_buffers;

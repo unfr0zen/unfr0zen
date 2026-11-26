@@ -1,0 +1,32 @@
+diff --git a/drivers/video/mxsfb.c b/drivers/video/mxsfb.c
+index a6496194792..1e0731f7d78 100644
+--- a/drivers/video/mxsfb.c
++++ b/drivers/video/mxsfb.c
+@@ -305,8 +305,10 @@ static int mxs_of_get_timings(struct udevice *dev,
+ 		return -EINVAL;
+ 	}
+ 
+-	priv->disp_dev = video_link_get_next_device(dev);
+-	if (priv->disp_dev) {
++	/* Without a video link graph, the display node's timings are used. */
++	if (IS_ENABLED(CONFIG_VIDEO_LINK))
++		priv->disp_dev = video_link_get_next_device(dev);
++	if (IS_ENABLED(CONFIG_VIDEO_LINK) && priv->disp_dev) {
+ 		ret = video_link_get_display_timings(timings);
+ 		if (ret) {
+ 			dev_err(dev, "failed to get any video link display timings\n");
+@@ -444,8 +446,12 @@ static int mxs_video_bind(struct udevice *dev)
+ {
+ 	struct video_uc_plat *plat = dev_get_uclass_plat(dev);
+ 
+-	/* Max size supported by LCDIF, because in bind, we can't probe panel */
+-	plat->size = ALIGN(1920 * 1080 *4 * 2, MMU_SECTION_SIZE);
++	if (IS_ENABLED(CONFIG_TARGET_MX6UL_ONYX))
++		/* The fixed 320x320x32 panel needs one MMU section. */
++		plat->size = ALIGN(320 * 320 * BYTES_PP, MMU_SECTION_SIZE);
++	else
++		/* Max LCDIF size, since the panel cannot be probed in bind. */
++		plat->size = ALIGN(1920 * 1080 * 4 * 2, MMU_SECTION_SIZE);
+ 	plat->align = MMU_SECTION_SIZE;
+ 
+ 	return 0;

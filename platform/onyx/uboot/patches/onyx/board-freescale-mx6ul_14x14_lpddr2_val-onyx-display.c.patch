@@ -1,0 +1,266 @@
+diff --git a/board/freescale/mx6ul_14x14_lpddr2_val/onyx-display.c b/board/freescale/mx6ul_14x14_lpddr2_val/onyx-display.c
+new file mode 100644
+index 00000000000..621d6bda29a
+--- /dev/null
++++ b/board/freescale/mx6ul_14x14_lpddr2_val/onyx-display.c
+@@ -0,0 +1,260 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * The retail Onyx's Tianma TM025ZDZ01 panel and LM3695 backlight.
++ * Panel settings from Nest's r61529a1 Linux driver, copyright 2014 Nest, Inc.
++ */
++#include <common.h>
++#include <command.h>
++#include <dm.h>
++#include <gzip.h>
++#include <i2c.h>
++#include <malloc.h>
++#include <mapmem.h>
++#include <video.h>
++#include <asm/arch/clock.h>
++#include <asm/arch/imx-regs.h>
++#include <asm/io.h>
++#include <asm/arch/mx6-pins.h>
++#include <asm/gpio.h>
++#include <asm/mach-imx/iomux-v3.h>
++#include <asm/mach-imx/regs-lcdif.h>
++#include <linux/delay.h>
++
++#define PANEL_SCLK	IMX_GPIO_NR(1, 28)
++#define PANEL_CS	IMX_GPIO_NR(1, 29)
++#define PANEL_MOSI	IMX_GPIO_NR(1, 30)
++#define PANEL_MISO	IMX_GPIO_NR(1, 31)
++#define PANEL_RESET	IMX_GPIO_NR(3, 4)
++#define BL_ENABLE	IMX_GPIO_NR(4, 16)
++#define GPIO_PAD_CTRL	(MUX_PAD_CTRL(0x1008) | MUX_MODE_SION)
++#define PANEL_SIZE	320
++#define FRAME_MS	16
++
++static const iomux_v3_cfg_t display_pads[] = {
++	MX6_PAD_UART4_TX_DATA__GPIO1_IO28 | GPIO_PAD_CTRL,
++	MX6_PAD_UART4_RX_DATA__GPIO1_IO29 | GPIO_PAD_CTRL,
++	MX6_PAD_UART5_TX_DATA__GPIO1_IO30 | GPIO_PAD_CTRL,
++	MX6_PAD_UART5_RX_DATA__GPIO1_IO31 | GPIO_PAD_CTRL,
++	MX6_PAD_LCD_RESET__GPIO3_IO04 | GPIO_PAD_CTRL,
++	MX6_PAD_NAND_DQS__GPIO4_IO16 | GPIO_PAD_CTRL,
++};
++
++/* Mode 3, with a ninth bit before each byte to select command or data. */
++static u8 panel_word(u16 word, int bits)
++{
++	u8 input = 0;
++
++	while (bits--) {
++		gpio_set_value(PANEL_SCLK, 0);
++		gpio_set_value(PANEL_MOSI, !!(word & BIT(bits)));
++		udelay(1);
++		gpio_set_value(PANEL_SCLK, 1);
++		input = (input << 1) | (gpio_get_value(PANEL_MISO) > 0);
++		udelay(1);
++	}
++	return input;
++}
++
++static void panel_write(u8 cmd, const u8 *data, size_t len)
++{
++	gpio_set_value(PANEL_CS, 0);
++	panel_word(cmd, 9);
++	while (len--)
++		panel_word(0x100 | *data++, 9);
++	gpio_set_value(PANEL_CS, 1);
++}
++
++#define PANEL_WRITE(cmd, ...) do { \
++	const u8 data[] = { __VA_ARGS__ }; \
++	panel_write(cmd, data, sizeof(data)); \
++} while (0)
++
++static u32 panel_id(void)
++{
++	u32 id = 0;
++	int i;
++
++	PANEL_WRITE(0xf5);
++	gpio_set_value(PANEL_CS, 0);
++	panel_word(0xbf, 9);
++	panel_word(0, 8);	/* Dummy byte before the ID. */
++	for (i = 0; i < 4; i++)
++		id = (id << 8) | panel_word(0, 8);
++	gpio_set_value(PANEL_CS, 1);
++	PANEL_WRITE(0xf6);
++	return id;
++}
++
++static int panel_init(void)
++{
++	const u8 gamma[] = {
++		0x05, 0x0d, 0x1a, 0x28, 0x3c, 0x51, 0x3b, 0x31, 0x2b, 0x27, 0x23, 0x13,
++		0x05, 0x0d, 0x1a, 0x28, 0x3c, 0x51, 0x3b, 0x31, 0x2b, 0x27, 0x23, 0x13,
++	};
++	u32 id;
++
++	mdelay(10);
++	gpio_set_value(PANEL_RESET, 1);
++	mdelay(10);
++	PANEL_WRITE(0x01);	/* Software reset. */
++	mdelay(5 * FRAME_MS);
++	PANEL_WRITE(0xb0, 0x04);	/* Enable manufacturer commands. */
++	id = panel_id();
++	if (id != 0x01221529) {
++		printf("Display: unexpected Renesas panel ID %08x\n", id);
++		return -ENODEV;
++	}
++
++	PANEL_WRITE(0xb3, 0x02, 0x00, 0x00, 0x01);
++	PANEL_WRITE(0xb4, 0x00);
++	PANEL_WRITE(0xc0, 0x13, 0x3f, 0x40, 0x10, 0x00, 0x01, 0x00, 0x55);
++	PANEL_WRITE(0xc1, 0x13, 0x29, 0x08, 0x08, 0x00);
++	PANEL_WRITE(0xc4, 0x57, 0x00, 0x05, 0x03);
++	PANEL_WRITE(0xc6, 0x1c);
++	panel_write(0xc8, gamma, sizeof(gamma));
++	panel_write(0xc9, gamma, sizeof(gamma));
++	panel_write(0xca, gamma, sizeof(gamma));
++	PANEL_WRITE(0xd0, 0x99, 0x06, 0x08, 0x20, 0x0a, 0x04, 0x01, 0x00,
++		    0x08, 0x01, 0x00, 0x06, 0x01, 0x00, 0x00, 0x20);
++	mdelay(50);
++	PANEL_WRITE(0xd1, 0x02, 0x1c, 0x1c, 0x36);
++	PANEL_WRITE(0x36, 0xc1);
++	PANEL_WRITE(0x3a, 0x77);	/* 24-bit RGB. */
++	PANEL_WRITE(0x2a, 0x00, 0x00, 0x01, 0x3f);
++	PANEL_WRITE(0x2b, 0x00, 0x00, 0x01, 0x3f);
++	mdelay(50);
++	PANEL_WRITE(0x11);	/* Sleep out. */
++	mdelay(6 * FRAME_MS);
++	PANEL_WRITE(0x29);	/* Display on. */
++	mdelay(FRAME_MS);
++	return 0;
++}
++
++static int backlight_on(void)
++{
++	const u8 settings[][2] = {
++		{ 0x10, 0x7d },	/* 1 MHz boost, 21 V OVP, one string, enable. */
++		{ 0x10, 0x7d },
++		{ 0x11, 0x03 },	/* Dither divisor. */
++		{ 0x12, 0x03 },	/* Ramp time step. */
++		{ 0x13, 1024 & 7 },
++		{ 0x14, 1024 >> 3 },
++	};
++	struct udevice *chip;
++	int i, ret;
++
++	gpio_set_value(BL_ENABLE, 1);
++	mdelay(5);
++	ret = i2c_get_chip_for_busnum(1, 0x63, 1, &chip);
++	if (ret) {
++		gpio_set_value(BL_ENABLE, 0);
++		return ret;
++	}
++	for (i = 0; i < ARRAY_SIZE(settings); i++) {
++		ret = dm_i2c_reg_write(chip, settings[i][0], settings[i][1]);
++		if (ret) {
++			gpio_set_value(BL_ENABLE, 0);
++			return ret;
++		}
++	}
++	return 0;
++}
++
++extern const u8 boot_logo_gz[], boot_logo_gz_end[];
++
++static int draw_logo(struct udevice *video)
++{
++	const size_t size = 54 + PANEL_SIZE * PANEL_SIZE * 3;
++	unsigned long len = boot_logo_gz_end - boot_logo_gz;
++	void *bmp = malloc(size);
++	int ret;
++
++	if (!bmp)
++		return -ENOMEM;
++	ret = gunzip(bmp, size, (unsigned char *)boot_logo_gz, &len);
++	if (!ret)
++		ret = video_bmp_display(video, map_to_sysmem(bmp), 0, 0, false);
++	free(bmp);
++	return ret;
++}
++
++int onyx_display_init(void)
++{
++	const struct {
++		unsigned int gpio;
++		const char *name;
++		int value;
++	} pins[] = {
++		{ BL_ENABLE, "backlight enable", 0 },
++		{ PANEL_CS, "panel select", 1 },
++		{ PANEL_SCLK, "panel clock", 1 },
++		{ PANEL_MOSI, "panel mosi", 0 },
++		{ PANEL_MISO, "panel miso", -1 },
++		{ PANEL_RESET, "panel reset", 0 },
++	};
++	struct udevice *video;
++	int i, ret;
++
++	imx_iomux_v3_setup_multiple_pads(display_pads, ARRAY_SIZE(display_pads));
++	for (i = 0; i < ARRAY_SIZE(pins); i++) {
++		ret = gpio_request(pins[i].gpio, pins[i].name);
++		if (ret)
++			return ret;
++		ret = pins[i].value < 0 ? gpio_direction_input(pins[i].gpio) :
++			gpio_direction_output(pins[i].gpio, pins[i].value);
++		if (ret)
++			return ret;
++	}
++
++	/* Supply the DPI clock and sync signals before releasing the panel. */
++	enable_lcdif_clock(MX6UL_LCDIF1_BASE_ADDR, true);
++	ret = uclass_first_device_err(UCLASS_VIDEO, &video);
++	if (ret)
++		return ret;
++	ret = draw_logo(video);
++	if (ret)
++		return ret;
++	ret = panel_init();
++	if (ret)
++		return ret;
++	return backlight_on();
++}
++
++void onyx_display_off(void)
++{
++	struct udevice *chip;
++	struct mxs_lcdif_regs *regs = (void *)MX6UL_LCDIF1_BASE_ADDR;
++
++	/* Ramp the backlight to zero, then disable the driver. */
++	if (!i2c_get_chip_for_busnum(1, 0x63, 1, &chip)) {
++		dm_i2c_reg_write(chip, 0x13, 0);
++		dm_i2c_reg_write(chip, 0x14, 0);
++		mdelay(10);
++		dm_i2c_reg_write(chip, 0x10, 0);
++	}
++	gpio_set_value(BL_ENABLE, 0);
++	/* Display off, then reset low. */
++	PANEL_WRITE(0x28);
++	mdelay(FRAME_MS);
++	PANEL_WRITE(0x10);
++	mdelay(5 * FRAME_MS);
++	gpio_set_value(PANEL_RESET, 0);
++	/* Stop the LCDIF. */
++	writel(LCDIF_CTRL_RUN, &regs->hw_lcdif_ctrl_clr);
++}
++
++/* The stock U-Boot handoff uses go, not bootm's board quiesce hook. */
++static int do_displayoff(struct cmd_tbl *cmdtp, int flag, int argc,
++			 char *const argv[])
++{
++	onyx_display_off();
++	if (gpio_get_value(BL_ENABLE) != 0 ||
++	    enable_lcdif_clock(MX6UL_LCDIF1_BASE_ADDR, false)) {
++		puts("## Error: display shutdown failed\n");
++		return CMD_RET_FAILURE;
++	}
++	return CMD_RET_SUCCESS;
++}
++
++U_BOOT_CMD(displayoff, 1, 0, do_displayoff,
++	   "turn off the backlight and panel for the stock U-Boot handoff", "");

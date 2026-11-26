@@ -1,0 +1,13 @@
+diff --git a/include/configs/ti_armv7_keystone2.h b/include/configs/ti_armv7_keystone2.h
+index a47f0902a26..959f795736d 100644
+--- a/include/configs/ti_armv7_keystone2.h
++++ b/include/configs/ti_armv7_keystone2.h
+@@ -118,7 +118,7 @@
+ 	"addr_ubi=0x82000000\0"						\
+ 	"addr_secdb_key=0xc000000\0"					\
+ 	"name_kern=zImage\0"						\
+-	"addr_mon=0x87000000\0"						\
++	"addr_mon=0x00908000\0"						\
+ 	"addr_non_sec_mon=0x0c097fc0\0"					\
+ 	"addr_load_sec_bm=0x0c09c000\0"					\
+ 	"run_mon=mon_install ${addr_mon}\0"				\

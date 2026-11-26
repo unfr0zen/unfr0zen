@@ -26,7 +26,7 @@ from pathlib import Path
 
 REPOSITORY = "unfr0zen/unfr0zen"
 VENDOR = 0xFFF1
-PRODUCTS = {"diamond3": 0x8001, "j49": 0x8002, "diamond": 0x8003}
+PRODUCTS = {"diamond3": 0x8001, "j49": 0x8002, "diamond": 0x8003, "onyx": 0x8004}
 FILE_ID = 0x1BEEF11E
 SHA256 = 1  # IANA Named Information Hash Algorithm
 MANUFACTURER = 0x10D6  # Nest Labs, nestlocal's zigbee::zcl::MANUFACTURER_CODE

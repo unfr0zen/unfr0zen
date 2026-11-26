@@ -1,0 +1,23 @@
+diff --git a/include/configs/mx6ul_onyx.h b/include/configs/mx6ul_onyx.h
+new file mode 100644
+index 00000000000..dc7dd924b15
+--- /dev/null
++++ b/include/configs/mx6ul_onyx.h
+@@ -0,0 +1,17 @@
++/* The Thermostat E recovery: the LPDDR2 validation board's machinery with
++ * the unit's 128 MiB and the USB console's boot command. */
++#ifndef __MX6UL_ONYX_CONFIG_H
++#define __MX6UL_ONYX_CONFIG_H
++
++#include "mx6ul_val.h"
++
++/* The host supplies the kernel and initramfs over USB. */
++#undef CFG_EXTRA_ENV_SETTINGS
++#define CFG_EXTRA_ENV_SETTINGS \
++	"console=ttymxc0\0" \
++	"fdt_high=0xffffffff\0" \
++	"initrd_high=0xffffffff\0"
++
++#define PHYS_SDRAM_SIZE			SZ_128M
++
++#endif

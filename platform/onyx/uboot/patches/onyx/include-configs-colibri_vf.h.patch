@@ -1,0 +1,13 @@
+diff --git a/include/configs/colibri_vf.h b/include/configs/colibri_vf.h
+index 60f31389fd4..467cd02614a 100644
+--- a/include/configs/colibri_vf.h
++++ b/include/configs/colibri_vf.h
+@@ -20,7 +20,7 @@
+ 	"kernel_addr_r=0x81000000\0" \
+ 	"pxefile_addr_r=0x87100000\0" \
+ 	"ramdisk_addr_r=0x82100000\0" \
+-	"scriptaddr=0x87000000\0"
++	"scriptaddr=0x00908000\0"
+ 
+ #define UBOOT_UPDATE \
+ 	"update_uboot=nand erase.part u-boot && " \

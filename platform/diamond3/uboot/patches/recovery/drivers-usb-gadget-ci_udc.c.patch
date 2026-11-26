@@ -1,5 +1,5 @@
 diff --git a/drivers/usb/gadget/ci_udc.c b/drivers/usb/gadget/ci_udc.c
-index 329f5cab65b..ad2e079b9d3 100644
+index 329f5cab65b..7907f08d911 100644
 --- a/drivers/usb/gadget/ci_udc.c
 +++ b/drivers/usb/gadget/ci_udc.c
 @@ -824,7 +824,7 @@ void udc_irq(void)
@@ -67,3 +67,13 @@ index 329f5cab65b..ad2e079b9d3 100644
  	return 0;
  }
  
+@@ -1453,7 +1459,8 @@ static int ci_udc_otg_probe(struct udevice *dev)
+ 
+ 	ehci_mx6_phy_init(ehci, &priv->phy_data, dev_seq(dev));
+ 
+-	if (ci_udc_otg_phy_mode(dev) != USB_INIT_DEVICE)
++	if (usb_get_dr_mode(dev_ofnode(&priv->otgdev)) != USB_DR_MODE_PERIPHERAL &&
++	    ci_udc_otg_phy_mode(dev) != USB_INIT_DEVICE)
+ 		return -ENODEV;
+ 
+ 	priv->ctrl.hccr = (struct ehci_hccr *)((ulong)&ehci->caplength);
