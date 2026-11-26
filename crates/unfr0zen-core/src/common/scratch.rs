@@ -1,6 +1,6 @@
-//! The gen 3's scratch volume (ubi0:scratch, 177 MB, mounted at
+//! The i.MX6 boards' scratch volume (ubi0:scratch, mounted at
 //! /media/scratch) holds unfr0zen's programs and data, keeping them off the
-//! root volume (71 MB): nestlocal, the update engine, Doom, Thread, the
+//! root volume: nestlocal, the update engine, Doom, Thread, the
 //! themes and the stock backups. What stays on root is what the unit's own
 //! programs read at their stock paths (nlclient, its preloads, scripts and
 //! settings) and nestlocal's keys and options. The unit boots and heats

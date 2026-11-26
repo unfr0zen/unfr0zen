@@ -4,7 +4,7 @@
 // While Doom runs nlclient may keep running (nlclient's patch hands its
 // display over to the process in /var/run/unfr0zen/screen.owner): Doom
 // grabs the ring and the button, so nlclient sees none of them, and on the
-// way out puts back the page nlclient showed and pans to it.
+// way out puts back both of nlclient's pages and pans to the one it showed.
 //
 // Display: the gen 3's 480x640 panel (fb0, 32 bpp, two pages) is mounted on
 // its side with the round face in its top 480x480; the gen 1's and gen 2's is
@@ -22,7 +22,8 @@
 // selects (answering yes to any question). Holding the button for three
 // seconds quits.
 //
-// Sound: the piezo (pwm-beeper) plays one tone at a time. Effects are
+// Sound: the piezo (pwm-beeper, or on the gen E the PWM channel and enable
+// line its product.config names) plays one tone at a time. Effects are
 // Doom's own PC speaker sounds (the DP lumps); music is the score played
 // one note at a time, its highest note held, while no effect sounds.
 
@@ -91,8 +92,9 @@ static int xrgb;
 static int *source;
 // The console's mode before Doom took it, put back on the way out.
 static int tty = -1, tty_mode = KD_TEXT;
-// The page shown before Doom took the display, and where it was.
+// The pages before Doom took the display, and which one was shown.
 static uint8_t *before;
+static size_t before_size;
 static uint32_t before_y;
 
 static uint32_t now_ms(void) {
@@ -140,13 +142,14 @@ static void light_up(void) {
 }
 
 static void restore_display(void) {
-    if (tty >= 0)
-        ioctl(tty, KDSETMODE, tty_mode);
     if (before) {
-        memcpy(fb + (size_t)before_y * stride, before, (size_t)var.yres * stride);
+        // nlclient can pan to either page as soon as it owns the display again.
+        memcpy(fb, before, before_size);
         var.yoffset = before_y;
         ioctl(fb_fd, FBIOPAN_DISPLAY, &var);
     }
+    if (tty >= 0)
+        ioctl(tty, KDSETMODE, tty_mode);
 }
 
 static void init_display(void) {
@@ -185,9 +188,10 @@ static void init_display(void) {
     fb = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
     if (fb == MAP_FAILED)
         die("fb0 mmap");
-    if (var.yoffset + var.yres <= var.yres_virtual && (before = malloc((size_t)var.yres * stride))) {
+    if (var.yoffset + var.yres <= var.yres_virtual && (before = malloc(size))) {
         before_y = var.yoffset;
-        memcpy(before, fb + (size_t)before_y * stride, (size_t)var.yres * stride);
+        before_size = size;
+        memcpy(before, fb, size);
     }
     memset(fb, 0, size);
     ioctl(fb_fd, FBIOBLANK, FB_BLANK_UNBLANK);
@@ -368,14 +372,128 @@ int DG_GetKey(int *pressed, unsigned char *key) {
 // --- The piezo -------------------------------------------------------
 
 static int piezo = -1;
+/* The gen E's piezo, which has no pwm-beeper: its PWM channel's files and
+ * its amplifier's enable line, at its level on (`enable_on`) and as Doom
+ * found it (`enable_was`). */
+static int pwm_period = -1, pwm_duty = -1, pwm_enable = -1, piezo_enable = -1;
+static char enable_on, enable_was;
+
+static int has_piezo(void) { return piezo >= 0 || pwm_enable >= 0; }
+
+static void put(int fd, const char *text) {
+    if (pwrite(fd, text, strlen(text), 0) < 0) {
+    }
+}
+
+static void put_number(int fd, long value) {
+    char text[16];
+    snprintf(text, sizeof text, "%ld", value);
+    put(fd, text);
+}
 
 static void tone(int hz) {
     static int playing = -1;
-    if (piezo < 0 || hz == playing)
+    if (!has_piezo() || hz == playing)
         return;
-    struct input_event ev = {.type = EV_SND, .code = SND_TONE, .value = hz};
-    if (write(piezo, &ev, sizeof ev) == sizeof ev)
-        playing = hz;
+    if (piezo >= 0) {
+        struct input_event ev = {.type = EV_SND, .code = SND_TONE, .value = hz};
+        if (write(piezo, &ev, sizeof ev) == sizeof ev)
+            playing = hz;
+        return;
+    }
+    if (hz > 0) {
+        long period = 1000000000L / hz;
+        // A duty cycle longer than the new period is refused: cleared first.
+        put(pwm_duty, "0");
+        put_number(pwm_period, period);
+        put_number(pwm_duty, period / 2);
+        put(pwm_enable, "1");
+    } else {
+        put(pwm_enable, "0");
+    }
+    playing = hz;
+}
+
+/* The number product.config gives `key` (`<a key="KEY" value="N"/>`), or -1. */
+static int config_number(const char *config, const char *key) {
+    char quoted[64];
+    snprintf(quoted, sizeof quoted, "\"%s\"", key);
+    const char *at = strstr(config, quoted);
+    if (!at || !(at = strstr(at, "value")) || !(at = strchr(at, '"')))
+        return -1;
+    return atoi(at + 1);
+}
+
+/* Opens `dir`/`name`, exporting `number` through `export` first when `dir`
+ * is not there yet. */
+static int open_exported(const char *export, int number, const char *dir, const char *name, int flags) {
+    char path[160];
+    if (access(dir, F_OK) != 0) {
+        int fd = open(export, O_WRONLY);
+        if (fd >= 0) {
+            put_number(fd, number);
+            close(fd);
+        }
+    }
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    return open(path, flags);
+}
+
+/* product.config describes the physical level; sysfs value is logical. */
+static char piezo_level(int active_high, int active_low) { return ((active_high > 0) != (active_low > 0)) ? '1' : '0'; }
+
+/* The gen E's piezo: the PWM channel and enable line nlclient beeps with. */
+static void open_pwm_piezo(void) {
+    char config[16384];
+    int fd = open("/etc/nestlabs/product.config", O_RDONLY);
+    if (fd < 0)
+        return;
+    ssize_t n = read(fd, config, sizeof config - 1);
+    close(fd);
+    config[n > 0 ? n : 0] = 0;
+    int chip = config_number(config, "beep_controller"), channel = config_number(config, "beep_pwm_number");
+    int gpio = config_number(config, "beep_enable_gpio"), active_high = config_number(config, "beep_active_high");
+    if (chip < 0 || channel < 0)
+        return;
+    char export[64], dir[96];
+    snprintf(export, sizeof export, "/sys/class/pwm/pwmchip%d/export", chip);
+    snprintf(dir, sizeof dir, "/sys/class/pwm/pwmchip%d/pwm%d", chip, channel);
+    pwm_period = open_exported(export, channel, dir, "period", O_WRONLY);
+    pwm_duty = open_exported(export, channel, dir, "duty_cycle", O_WRONLY);
+    int enable = open_exported(export, channel, dir, "enable", O_WRONLY);
+    if (pwm_period < 0 || pwm_duty < 0 || enable < 0) {
+        if (enable >= 0)
+            close(enable);
+        return;
+    }
+    put(enable, "0");
+    pwm_enable = enable;
+    if (gpio < 0)
+        return;
+    snprintf(dir, sizeof dir, "/sys/class/gpio/gpio%d", gpio);
+    int direction = open_exported("/sys/class/gpio/export", gpio, dir, "direction", O_RDWR);
+    piezo_enable = open_exported("/sys/class/gpio/export", gpio, dir, "value", O_RDWR);
+    fd = open_exported("/sys/class/gpio/export", gpio, dir, "active_low", O_RDONLY);
+    char inverted = '0';
+    if (fd >= 0) {
+        if (pread(fd, &inverted, 1, 0) != 1)
+            inverted = '0';
+        close(fd);
+    }
+    char was = 0;
+    if (piezo_enable < 0 || pread(piezo_enable, &was, 1, 0) != 1) {
+        if (direction >= 0)
+            close(direction);
+        return;
+    }
+    if (direction >= 0) {
+        put(direction, "out");
+        close(direction);
+    }
+    enable_was = was;
+    enable_on = piezo_level(active_high, inverted == '1');
+    if (pwrite(piezo_enable, &enable_on, 1, 0) != 1)
+        fprintf(stderr, "doom: piezo enable: %s\n", strerror(errno));
 }
 
 static void open_piezo(void) {
@@ -401,7 +519,9 @@ static void open_piezo(void) {
     if (dir)
         closedir(dir);
     if (piezo < 0)
-        fprintf(stderr, "doom: no pwm-beeper, so no sound\n");
+        open_pwm_piezo();
+    if (!has_piezo())
+        fprintf(stderr, "doom: no piezo, so no sound\n");
 }
 
 static pthread_mutex_t sound_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -528,7 +648,7 @@ static void *sound_thread(void *arg) {
 
 static boolean sfx_init(boolean use_sfx_prefix) {
     (void)use_sfx_prefix;
-    return piezo >= 0;
+    return has_piezo();
 }
 
 static void sfx_shutdown(void) {
@@ -685,6 +805,10 @@ static void silence(void) {
         if (write(piezo, &ev, sizeof ev) < 0) {
         }
     }
+    if (pwm_enable >= 0)
+        put(pwm_enable, "0");
+    if (piezo_enable >= 0 && pwrite(piezo_enable, &enable_was, 1, 0) < 0) {
+    }
 }
 
 static void quit(int sig) {
@@ -708,7 +832,7 @@ void DG_Init(void) {
     signal(SIGTERM, quit);
     signal(SIGINT, quit);
     pthread_t t;
-    if (piezo >= 0)
+    if (has_piezo())
         pthread_create(&t, NULL, sound_thread, NULL);
 }
 

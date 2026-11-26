@@ -5,7 +5,8 @@
 use std::time::Duration;
 
 pub use crate::bulk::Bulk;
-use crate::diamond3::recovery::{Fastboot, RAM_LIMIT};
+use crate::common::recovery::Fastboot;
+use crate::diamond3::recovery::RAM_LIMIT;
 use crate::{device, Error, Result};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);

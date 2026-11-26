@@ -320,11 +320,17 @@ impl Store {
     /// a new revision: nlclient commits it, which is when it takes a display
     /// wake request (settings_ui::request_wake). False when there is none.
     pub fn resend(&self, key: &str) -> bool {
+        self.resend_after(key, 0, 0).is_some()
+    }
+
+    /// Resend with a version newer than both the stored and the client's
+    /// copy, even if the wall clock has not been set yet.
+    pub fn resend_after(&self, key: &str, revision: i64, timestamp: i64) -> Option<Object> {
         let (object, subs) = {
             let mut inner = self.inner.lock().unwrap();
-            let Some(o) = inner.objects.get_mut(key) else { return false };
-            o.revision += 1;
-            o.timestamp = now_ms();
+            let o = inner.objects.get_mut(key)?;
+            o.revision = o.revision.max(revision).saturating_add(1);
+            o.timestamp = now_ms().max(o.timestamp.max(timestamp).saturating_add(1));
             let object = o.clone();
             (object, inner.subs.values().cloned().collect::<Vec<_>>())
         };
@@ -332,7 +338,7 @@ impl Store {
         for sub in subs {
             let _ = sub.try_send(vec![object.clone()]);
         }
-        true
+        Some(object)
     }
 
     /// Server-side changes, for a held subscribe, until the subscription is

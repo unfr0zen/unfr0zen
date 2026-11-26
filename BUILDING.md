@@ -33,6 +33,7 @@ Give the Docker VM at least 8 GiB of memory. With 2 GiB the nestlocal build is k
 # Debian / Ubuntu
 sudo apt install build-essential pkg-config git curl bc bison flex libssl-dev \
     gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
+    gcc-arm-linux-gnueabihf libc6-dev-armhf-cross \
     libstdc++-arm-none-eabi-dev cmake ninja-build python3-pil libudev-dev clang
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # zig 0.16.0: unpack https://ziglang.org/download/ and put zig on your PATH
@@ -46,6 +47,11 @@ rustup default stable
 # All distributions
 cargo install --locked cargo-zigbuild@0.23.4
 ```
+
+On Arch, install `arm-linux-gnueabihf-gcc` from the AUR for the theme library.
+On x86-64, LuaJIT builds 32-bit host tools. Install `libc6-dev-i386` and the
+matching `lib32gcc-*-dev` package on Debian or Ubuntu, or `lib32-glibc` and
+`lib32-gcc-libs` on Arch.
 
 Plus [Docker](https://docs.docker.com/engine/install/) for the 1st and 2nd
 generations' x-loader and the 2nd generation's USB-serial kernel. Without
@@ -79,6 +85,9 @@ utils/build-firmware.sh
 
 On Windows, and where `CI` is set, cargo does not run it: `build/` must already
 be there.
+
+To rebuild only the Thermostat E recovery image, run
+`platform/onyx/uboot/build_uboot.sh`.
 
 The executable is `target/release/unfr0zen` (`unfr0zen.exe` on Windows). On
 Linux and macOS, run with arguments, it is the command-line tool.

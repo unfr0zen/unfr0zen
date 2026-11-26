@@ -1,7 +1,7 @@
 version: 2.1
 
-# The gen 3's boot chain: the ROM bootstrap and boot wrapper, and the recovery
-# U-Boot from the pinned submodule and its patches.
+# The gen 3's ROM bootstrap and boot wrapper, and both i.MX6 boards' recovery
+# U-Boot from the pinned submodule and their patches.
 
 jobs:
   recovery:
@@ -13,7 +13,7 @@ jobs:
           module: recovery
       - module-build:
           module: recovery
-          command: git submodule update --init --depth 1 platform/diamond3/uboot/upstream && python3 platform/diamond3/bootstrap/build_bootstrap.py && sh platform/diamond3/uboot/build_uboot.sh
+          command: git submodule update --init --depth 1 platform/diamond3/uboot/upstream && python3 platform/diamond3/bootstrap/build_bootstrap.py && sh platform/diamond3/uboot/build_uboot.sh && sh platform/onyx/uboot/build_uboot.sh
       - module-store:
           module: recovery
-          outputs: build/u-boot-sdp-official.hab build/rom-stage.imx build/boot-wrapper.bin build/u-boot-recovery.bin build/u-boot-recovery.json
+          outputs: build/u-boot-sdp-official.hab build/u-boot-sdp-onyx.hab build/rom-stage.imx build/boot-wrapper.bin build/u-boot-recovery.bin build/u-boot-recovery.json build/u-boot-recovery-onyx.bin build/u-boot-recovery-onyx.json build/onyx/recovery-logo.bgrx.gz

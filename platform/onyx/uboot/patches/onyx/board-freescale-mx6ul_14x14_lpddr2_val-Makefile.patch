@@ -1,0 +1,14 @@
+diff --git a/board/freescale/mx6ul_14x14_lpddr2_val/Makefile b/board/freescale/mx6ul_14x14_lpddr2_val/Makefile
+index e056bae1572..7faffa9a9ef 100644
+--- a/board/freescale/mx6ul_14x14_lpddr2_val/Makefile
++++ b/board/freescale/mx6ul_14x14_lpddr2_val/Makefile
+@@ -4,3 +4,9 @@
+ #
+ 
+ obj-y  := mx6ul_14x14_lpddr2_val.o
++
++ifdef CONFIG_TARGET_MX6UL_ONYX
++obj-$(CONFIG_VIDEO_MXS) += onyx-display.o boot_logo.o
++AFLAGS_boot_logo.o := -DNEST_BOOT_LOGO='"$(NEST_BOOT_LOGO)"'
++$(obj)/boot_logo.o: $(NEST_BOOT_LOGO)
++endif

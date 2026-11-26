@@ -4,6 +4,7 @@
 mod diamond;
 mod diamond3;
 mod j49;
+mod onyx;
 
 use std::sync::OnceLock;
 
@@ -71,12 +72,17 @@ pub struct Ble {
 
 pub struct Device {
     pub name: &'static str,
-    /// The Nest Learning Thermostat generation: 1, 2 or 3.
+    /// The model generation: 1, 2, 3, or 4 for the Thermostat E.
     pub generation: u8,
-    /// The 802.15.4 radio nestlocal drives, where it has one.
+    /// The fixed 802.15.4 radio configuration. Onyx selects its target at runtime.
     pub radio: Option<Radio>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub ble: Option<Ble>,
+    /// The name of the UART hciattach brings nlclient's Bluetooth controller
+    /// up from, where nlclient scans for sensors through bluez itself (the
+    /// gen E's), for the stand-in sensor to take over.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub hci: Option<&'static str>,
     /// The round display's width in pixels, which the settings screen's
     /// images are drawn for.
     pub display: usize,
@@ -84,6 +90,11 @@ pub struct Device {
 }
 
 impl Device {
+    /// The Thermostat E's Broadcom controller is served by BlueZ.
+    pub fn bluez(&self) -> bool {
+        self.generation == 4
+    }
+
     /// The gen 1 and gen 2: an AM3703 with a WL127x, the same nlclient and
     /// the same sleep.
     pub fn omap(&self) -> bool {
@@ -97,7 +108,11 @@ impl Device {
 pub fn current() -> &'static Device {
     static CURRENT: OnceLock<&'static Device> = OnceLock::new();
     CURRENT.get_or_init(|| {
-        if gen1(&std::fs::read_to_string("/proc/cmdline").unwrap_or_default()) {
+        let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+        let compatible = std::fs::read("/proc/device-tree/compatible").unwrap_or_default();
+        if is_onyx(&cmdline, &compatible) {
+            &onyx::DEVICE
+        } else if gen1(&cmdline) {
             &diamond::DEVICE
         } else if j49::DEVICE.radio.as_ref().is_some_and(|radio| std::path::Path::new(radio.reset).exists()) {
             &j49::DEVICE
@@ -105,6 +120,13 @@ pub fn current() -> &'static Device {
             &diamond3::DEVICE
         }
     })
+}
+
+fn is_onyx(cmdline: &str, compatible: &[u8]) -> bool {
+    cmdline
+        .split_whitespace()
+        .any(|arg| arg.strip_prefix("nlmodel=Display-4").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+        || compatible.split(|&byte| byte == 0).any(|name| name == b"nest,onyx" || name.starts_with(b"nestlabs,onyx-"))
 }
 
 /// Whether the kernel's command line names a gen 1's model.
@@ -116,6 +138,9 @@ fn gen1(cmdline: &str) -> bool {
 
 /// This unit's 802.15.4 radio.
 pub fn radio() -> Result<&'static Radio, String> {
+    if current().name == "onyx" {
+        return onyx::radio();
+    }
     current().radio.as_ref().ok_or_else(|| format!("the {} has no 802.15.4 radio nestlocal drives", current().name))
 }
 
@@ -135,16 +160,29 @@ mod tests {
     }
 
     #[test]
+    fn onyx_is_identified_by_its_model_or_kernel_device_tree() {
+        assert!(is_onyx("nlmodel=Display-4.6", b""));
+        assert!(is_onyx("", b"nestlabs,onyx-evt\0fsl,imx6ul\0"));
+        assert!(!is_onyx("nlmodel=Display-40.1", b"fsl,imx6ul\0"));
+        assert_eq!(onyx::DEVICE.display, 320);
+        assert!(!onyx::DEVICE.omap());
+    }
+
+    #[test]
     fn each_embedded_image_carries_the_makefiles_version() {
         let makefile = include_str!(concat!(env!("UNFR0ZEN_ROOT"), "/platform/common/radio/Makefile"));
         let wanted: u16 = makefile.lines().find_map(|l| l.strip_prefix("VERSION = ")).unwrap().trim().parse().unwrap();
-        for device in [&diamond3::DEVICE, &j49::DEVICE] {
-            let radio = device.radio.as_ref().unwrap();
+        for (name, radio) in [
+            ("diamond3", diamond3::DEVICE.radio.as_ref().unwrap()),
+            ("j49", j49::DEVICE.radio.as_ref().unwrap()),
+            ("onyx EM357", &onyx::EM357),
+            ("onyx EM3581", &onyx::EM3581),
+        ] {
             let version = radio
                 .zigbee_image
                 .get(radio.version_at..radio.version_at + 2)
                 .map(|b| u16::from_le_bytes([b[0], b[1]]));
-            assert_eq!(version, (!radio.zigbee_image.is_empty()).then_some(wanted), "{}", device.name);
+            assert_eq!(version, (!radio.zigbee_image.is_empty()).then_some(wanted), "{name}");
         }
     }
 }

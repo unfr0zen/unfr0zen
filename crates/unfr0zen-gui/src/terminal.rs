@@ -51,12 +51,14 @@ fn with_ids(ports: Vec<Candidate>, ids: &[Id]) -> Vec<Candidate> {
 pub const SHELLS: &[Id] = &[
     unfr0zen_host::diamond3::usb::APP_ACM,
     unfr0zen_host::diamond3::usb::INITRAMFS,
+    unfr0zen_host::onyx::usb::APP_ACM,
+    unfr0zen_host::onyx::usb::INITRAMFS,
     unfr0zen_host::j49::usb::APP,
     unfr0zen_host::j49::usb::DIAMOND_APP,
 ];
 
 /// Recovery U-Boot's console.
-pub const RECOVERY: &[Id] = &[unfr0zen_host::diamond3::usb::RECOVERY];
+pub const RECOVERY: &[Id] = &[unfr0zen_host::diamond3::usb::RECOVERY, unfr0zen_host::onyx::usb::RECOVERY];
 
 /// What the window keeps of an open port.
 struct Connection {
@@ -113,9 +115,8 @@ pub struct Terminal {
     scrollback: Arc<Mutex<Scrollback>>,
     /// The text as last built, the scrollback version it shows, and the cursor.
     layout: Option<(u64, egui::text::LayoutJob, usize)>,
-    /// A port to connect to as soon as it is listed: the recovery console
-    /// once U-Boot is loaded.
-    pub auto_connect: Option<Id>,
+    /// Open the recovery console once its port is listed.
+    pub auto_connect: bool,
     pub error: Option<String>,
 }
 
@@ -131,7 +132,7 @@ impl Terminal {
             connection: None,
             scrollback: Arc::default(),
             layout: None,
-            auto_connect: None,
+            auto_connect: false,
             error: None,
         }
     }
@@ -215,13 +216,11 @@ impl Terminal {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
         self.refresh();
-        if let Some(id) = self.auto_connect {
-            if let Some(port) = self.ports.iter().find(|p| p.id == id) {
+        if self.auto_connect && idle && !self.connected() {
+            if let [port] = self.ports.as_slice() {
                 self.chosen = Some(port.name.clone());
-                self.auto_connect = None;
-                if idle && !self.connected() {
-                    self.connect(ui.ctx().clone());
-                }
+                self.auto_connect = false;
+                self.connect(ui.ctx().clone());
             }
         }
         // The thread's end closes the connection on the window's side.
@@ -766,15 +765,18 @@ mod tests {
         let bridge = Candidate { name: "/dev/cu.usbserial-1001".into(), id: (0x10c4, 0xea60) };
         let shell = Candidate { name: "/dev/cu.usbmodem14".into(), id: (0x2464, 0x0030) };
         let recovery = Candidate { name: "/dev/cu.usbmodem12".into(), id: (0x18d1, 0x4ee0) };
-        let all = vec![bridge, shell.clone(), recovery.clone()];
+        let onyx = Candidate { name: "/dev/cu.usbmodem13".into(), id: unfr0zen_host::onyx::usb::RECOVERY };
+        let all = vec![bridge, shell.clone(), recovery.clone(), onyx.clone()];
         assert_eq!(with_ids(all.clone(), SHELLS), [shell]);
-        assert_eq!(with_ids(all, RECOVERY), [recovery]);
+        assert_eq!(with_ids(all, RECOVERY), [recovery, onyx]);
     }
 
     #[test]
     fn a_candidate_is_named_by_its_unit() {
         let port = Candidate { name: "/dev/cu.usbmodem1".into(), id: (0x2464, 0x0030) };
         assert_eq!(port.label(), "Nest gen 3 (diamond3) · app — /dev/cu.usbmodem1");
+        let onyx = Candidate { name: "COM4".into(), id: unfr0zen_host::onyx::usb::RECOVERY };
+        assert_eq!(onyx.label(), "Nest Thermostat E (onyx) · recovery — COM4");
         let other = Candidate { name: "COM3".into(), id: (0x1234, 0x0001) };
         assert_eq!(other.label(), "1234:0001 — COM3");
     }

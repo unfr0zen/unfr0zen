@@ -13,7 +13,14 @@ jobs:
           module: doom
       - module-build:
           module: doom
-          command: git submodule update --init --depth 1 platform/common/doom/doomgeneric && sh platform/common/doom/build.sh build/doom-armv7
+          command: |
+            git submodule update --init --depth 1 platform/common/doom/doomgeneric
+            cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections \
+              -D_DEFAULT_SOURCE -DFEATURE_SOUND -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
+              -Iplatform/common/doom/doomgeneric/doomgeneric -Iplatform/common/doom/compat \
+              platform/common/doom/tests/platform_test.c -o /tmp/doom-platform-test
+            /tmp/doom-platform-test
+            sh platform/common/doom/build.sh build/doom-armv7
       - module-store:
           module: doom
           outputs: build/doom-armv7

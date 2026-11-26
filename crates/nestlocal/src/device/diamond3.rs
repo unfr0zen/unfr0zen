@@ -10,27 +10,30 @@ pub static DEVICE: Device = Device {
     // 0x08002000 with its address table at 0x08004000, past Nest's 16 KiB
     // bootloader. Nest's wpantund.conf has TXPowerMode 2: the alternate
     // transmit path, into the board's amplifier.
-    radio: Some(Radio {
-        spi: "/dev/spidev_em35x",
-        reset: "/sys/bus/platform/devices/0.em35x-gpios/reset",
-        host_int: "/sys/bus/platform/devices/0.em35x-gpios/irq",
-        wake: Some("/sys/bus/platform/devices/0.em35x-gpios/wake"),
-        chip_select: None,
-        zigbee_image: include_bytes!(concat!(env!("OUT_DIR"), "/radio-em3581.bin")),
-        version_at: 0x2058,
-        selects_zigbee: true,
-        tx_power_mode: 0x0002,
-    }),
+    radio: Some(RADIO),
     ble: Some(Ble {
         uart: "/dev/ttyble0",
         node: "/dev/ttymxc4",
         reset: "/sys/bus/platform/devices/0.ble0-da14580-gpios/reset",
         firmware: "/usr/share/dialog/data/firmware/nl_ble_peripheral_app_firmware.bin",
     }),
+    hci: None,
     display: 480,
     // The sensor MCU's backplate detect line, and the i.MX USB charger.
     power: Power {
         backplate: "/sys/bus/platform/devices/0.sensor-mcu-gpios/detect#/value",
         usb: "/sys/class/power_supply/imx_usb_charger/online",
     },
+};
+
+pub const RADIO: Radio = Radio {
+    spi: "/dev/spidev_em35x",
+    reset: "/sys/bus/platform/devices/0.em35x-gpios/reset",
+    host_int: "/sys/bus/platform/devices/0.em35x-gpios/irq",
+    wake: Some("/sys/bus/platform/devices/0.em35x-gpios/wake"),
+    chip_select: None,
+    zigbee_image: include_bytes!(concat!(env!("OUT_DIR"), "/radio-em3581.bin")),
+    version_at: 0x2058,
+    selects_zigbee: true,
+    tx_power_mode: 0x0002,
 };

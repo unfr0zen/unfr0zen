@@ -1,4 +1,6 @@
 //! Matter BTP over the unit's DA14580 peripheral stack and UART GTL transport.
+#[cfg(target_os = "linux")]
+mod bluez;
 #[cfg(any(target_os = "linux", test))]
 mod gtl;
 #[cfg(target_os = "linux")]
@@ -41,6 +43,9 @@ pub async fn run(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &
 
 #[cfg(target_os = "linux")]
 async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &str) -> std::io::Result<()> {
+    if crate::device::current().bluez() {
+        return bluez::serve(matter, comm, btp, serial).await.map_err(std::io::Error::other);
+    }
     use embassy_futures::select::{select, Either};
     use std::io::{Error, ErrorKind};
     let mut uart = uart::Uart::open()?;

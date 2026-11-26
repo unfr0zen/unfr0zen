@@ -1,0 +1,11 @@
+diff --git a/include/usb/usb_mx6_common.h b/include/usb/usb_mx6_common.h
+index 1d8029ab95f..93e61902530 100644
+--- a/include/usb/usb_mx6_common.h
++++ b/include/usb/usb_mx6_common.h
+@@ -14,5 +14,5 @@ struct ehci_mx6_phy_data {
+ 	void __iomem *anatop_addr;
+ };
+ 
+-void ehci_mx6_phy_init(struct usb_ehci *ehci, struct ehci_mx6_phy_data *phy_data, int index);
++int ehci_mx6_phy_init(struct usb_ehci *ehci, struct ehci_mx6_phy_data *phy_data, int index);
+ #endif /* __USB_MX6_COMMON_H__ */

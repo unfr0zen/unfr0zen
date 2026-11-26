@@ -8,17 +8,17 @@ The object is compiled once with the firmware when building the app.
 
 Rust discovery reads ELF imports, screen registrations, ARM call graphs and
 address-independent instruction fingerprints. Capstone's ARM decoder is statically linked.
-The audited ABI shapes in `abi_shapes.json` (the gen 3's 5.9.4-5, 6.0-6, 6.3-5, 6.4-8
-and both 6.5-14 builds, the gen 1 and gen 2's 5.9.4-5, and the gen 2's 5.9.1-6)
-remain supported; this does not infer arbitrary C++ semantics. Unsupported ELF
-layouts, unknown instruction shapes, missing imports or unsupported relocations
-fail before device writes. No firmware hash selects native addresses for this
-ABI, with one exception: the gen 2's 5.9.1-6 Legal Info layer shows random
-text instead of an image (an index at +0xa0, its string at +0xa4, the nlLayer
-part at +0xc0), so the nine text and image natives other builds are found
-through it come from a table that its complete stock executable's SHA-256
-selects. Each is the reviewed 5.9.4-5 native's instruction shape, at the same
-distance from its neighbours; discovery still checks every native's shape.
+Reviewed ABI shapes are recorded in
+[`abi_shapes.json`](../../../crates/unfr0zen-core/src/nlclient/abi_shapes.json).
+Unsupported ELF layouts, unknown instruction shapes, missing imports or
+unsupported relocations fail before device writes. No firmware hash selects
+native addresses for this ABI, with one exception: the gen 2's 5.9.1-6 Legal
+Info layer shows random text instead of an image (an index at +0xa0, its
+string at +0xa4, the nlLayer part at +0xc0), so the text and image natives
+other builds are found through it come from a table that its complete stock
+executable's SHA-256 selects. Each is the reviewed 5.9.4-5 native's
+instruction shape, at the same distance from its neighbours; discovery still
+checks every native's shape.
 
 The gen 3's 5.6-7 has a distinct ABI: 32-byte strings and compact vtables.
 It uses `custom-screen-legacy.o` and bindings guarded by the complete reviewed
@@ -32,7 +32,8 @@ always present and the others only when that feature was installed
 (`--zigbee`, `--matter`, `--themes`,
 `--doom`), and **UNFR0ZEN** in Legal Info's place, just before Reset. Each
 tile shows its own 80px glyph (`G_unfr0zen_<section>_80px.png`; UNFR0ZEN's is
-`G_unfr0zen_glyph_80px.png`) above its name. An entry opens its page
+`G_unfr0zen_glyph_80px.png`) above its name. The Thermostat E uses opaque white
+52 px glyphs from `assets/gen-e/`. An entry opens its page
 directly, and Back on that page returns to the menu. The UNFR0ZEN page has the
 **192×192 unfr0zen icon**, the line “unfr0zen” with the version of the app
 that set up the unit (`/etc/unfr0zen/version`), and DONE only. A separate
@@ -118,7 +119,7 @@ sections (Doom, or the first stock entry the unit lists, which varies), the
 wrapper inserts SCHEDULE MODE before returning the original screen. All original list slots and
 both temperature sentinels stay.
 Modern clients use a non-owning screen-pointer vector, grown through the native
-vector helper: inserting at the end, or on 6.0-6's older libstdc++ appending
+vector helper: inserting at the end, or on the older libstdc++ of 6.0-6 and the gen E's 6.1-9 appending
 (`_M_emplace_back_aux`, `MENU_GROW_APPENDS`); older clients use fixed name and screen arrays with checked
 capacity and live counter invariants. Unknown insertion, lookup or growth shapes
 are refused before patching. No ELF data relocations or additional writable
@@ -133,13 +134,13 @@ that process owns the display; Doom's launcher uses it. The check is live
 moment the owner exits or dies; a stale file does nothing. Discovery picks
 one of two kinds (`layout_HANDOVER`), or none, which patches without it:
 
-- **1, EGL** (gen 3 from 6.x): nlclient's one `eglSwapBuffers` call (the
-  `swap_call_slot` anchor) goes through `custom_swap`, which skips presenting
+- **1, EGL**. nlclient's `eglSwapBuffers` call (the `swap_call_slot` anchor)
+  goes through `custom_swap`, which skips presenting
   while the display is owned. A thread of nlclient's own lights the display
   every 2 s meanwhile, as a command from Home Assistant does, since the
   owner grabs the ring and the button.
-- **2, framebuffer** (gen 1 and gen 2, and the 2019 gen 3): nlclient draws straight into
-  its own mapping of fb0's two pages (`nlARMFramebuffer`, found by its RTTI)
+- **2, framebuffer**. nlclient draws into its own mapping of fb0's two
+  pages (`nlARMFramebuffer`, found by its RTTI)
   and pans between them in its vtable's third method. That slot goes through
   `custom_flip`: while the display is owned it maps private memory over that
   mapping in place (`mmap` `MAP_FIXED`), so nlclient draws unseen, pans
@@ -283,7 +284,7 @@ The generated **undo journal** records changed original bytes, injected bytes,
 and both hashes. It is generated per device, never used as a prebuilt shortcut:
 
 - `/nestlabs/share/images/G_unfr0zen_192px.png` and the menu glyphs
-  (`G_unfr0zen_*_80px.png`)
+  (`G_unfr0zen_*_80px.png`; on the gen E, `G_unfr0zen_*_52px.png`)
 - `/etc/unfr0zen/nlclient.undo.gz`
 - `/etc/unfr0zen/nlclient.original` — full original executable, root-only (mode 600);
   on the gen 3 `/media/scratch/.unfr0zen/backup/nlclient.original`, on its scratch

@@ -15,8 +15,29 @@ PIDFILE=/var/run/nestlocal.pid
 OPTIONS=/etc/nestlocal/options
 [ -f "$OPTIONS" ] || OPTIONS=/media/system-config/nestlocal.options
 
+# Every nestlocal process, by its executable: either volume's, or one whose
+# file was replaced. Not by name, which this script's own shell also has. Not
+# the BLE stand-in's PTY holder (ble-pty), a fork that outlives nestlocal's
+# restarts (crates/nestlocal/src/sensor/port.rs).
+running() {
+    for process in /proc/[0-9]*; do
+        case "$(readlink "$process/exe" 2>/dev/null)" in
+            */nestlocal | */"nestlocal (deleted)")
+                [ "$(cat "$process/comm" 2>/dev/null)" = ble-pty ] || echo "${process#/proc/}"
+                ;;
+        esac
+    done
+}
+
 case "${1}" in
     start)
+        # One instance: rcS and monit can both start it at boot. One running
+        # (or starting) stays, and monit gets its pid.
+        pids=$(running)
+        if [ -n "$pids" ]; then
+            [ -s ${PIDFILE} ] || echo "$pids" | head -n 1 >${PIDFILE}
+            exit 0
+        fi
         # A radio that will not flash or attach must not take MQTT and Wi-Fi Matter down with it.
         if grep -q -- '-matter-thread' "$OPTIONS"; then
             /etc/init.d/nestlocal-thread start || echo "nestlocal: Thread transport unavailable; serving without it" >&2
@@ -39,8 +60,18 @@ case "${1}" in
         done
         ;;
     stop)
-        # By name: one started from the other volume stops as well.
-        start-stop-daemon -K -q -p ${PIDFILE} -n nestlocal
+        pids=$(running)
+        if [ -n "$pids" ]; then
+            # shellcheck disable=SC2086 # one pid per word
+            kill $pids 2>/dev/null
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                [ -n "$(running)" ] || break
+                sleep 1
+            done
+            pids=$(running)
+            # shellcheck disable=SC2086
+            [ -z "$pids" ] || kill -9 $pids 2>/dev/null
+        fi
         rm -f ${PIDFILE}
         [ ! -x /etc/init.d/nestlocal-thread ] || /etc/init.d/nestlocal-thread stop
         ;;

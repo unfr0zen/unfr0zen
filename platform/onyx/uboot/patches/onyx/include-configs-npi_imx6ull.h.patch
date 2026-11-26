@@ -1,0 +1,13 @@
+diff --git a/include/configs/npi_imx6ull.h b/include/configs/npi_imx6ull.h
+index 5f933391cc0..c2746f3b58c 100644
+--- a/include/configs/npi_imx6ull.h
++++ b/include/configs/npi_imx6ull.h
+@@ -46,7 +46,7 @@
+ 	"kernel_addr_r=0x81000000\0" \
+ 	"pxefile_addr_r=0x87100000\0" \
+ 	"ramdisk_addr_r=0x82100000\0" \
+-	"scriptaddr=0x87000000\0" \
++	"scriptaddr=0x00908000\0" \
+ 	"root=/dev/mmcblk0p2 rootwait\0" \
+ 	BOOTENV
+ 

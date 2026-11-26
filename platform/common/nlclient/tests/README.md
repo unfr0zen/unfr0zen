@@ -12,6 +12,9 @@ committed. The corresponding private samples live in `.work/firmware/`:
 
 | Sample                            | SHA256                                                             |
 | --------------------------------- | ------------------------------------------------------------------ |
+| `nlclient-genE-6.1-9` (6.1-9)     | `5da23c395b1ee0b258bc1d8a7a5a76931e778cf25afa8846e81245b38d088ca3` |
+| `nlclient-genE-6.3-5` (6.3-5)     | `6bdf8634147c4adb4e0ac03dfc7fc8e3313c1c424420eb22f721a0012adaaf25` |
+| `nlclient-genE-6.5-14` (6.5-14)   | `be7410378c46ea13c72d2db6ac71be92c44519b7bfe8a72490c691cef584afb4` |
 | `nlclient-gen3-2025` (6.4-8)      | `d28f3e8ec232c4ef122f72ceb1028ddf480a0ad8454677bfc9e818a13cbb7c52` |
 | `nlclient-gen3-6.3-5` (6.3-5)     | `7bc7e152ecee09ed993264f6d50c134b14a5464a3b4d294671c32f9ff1ec95e3` |
 | `nlclient-gen3-6.5-14` (6.5-14)   | `3f1c68d3ab1a86dc3ea1807c7c0bd0e0e33475efb895d6cb17c5389bcabc94d2` |
@@ -38,18 +41,26 @@ keep their PC-relative addressing. These are independent Python/lld
 reference results, recorded before deleting the Python implementation.
 
 ```sh
-NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --test nlclient_golden
+NLCLIENT_REQUIRE_GOLDENS=1 cargo test -p unfr0zen-core --test nlclient_golden \
+  --test legacy_nlclient --test j49_dark_theme --test j49_external_temperature
 ```
 
-`NLCLIENT_FIRMWARE_DIR` changes the private sample directory;
+`NLCLIENT_FIRMWARE_DIR` changes the private sample directory (an absolute
+path: cargo runs the tests from the crate's directory);
 `NLCLIENT_OBJECT` changes the compiled screen object (default
 `build/custom-screen.o`). Use the build image's compiler to reproduce these
 exact bytes. Golden linking needs the object but no firmware. The full-stage
-checks need the original samples; strict mode fails if any baseline is missing.
-Ordinary public CI can check all three payloads without shipping firmware.
+checks need the original samples. Strict mode fails if any golden lacks its
+sample, and if any sample in the directory has no golden (in `golden/`, or
+`legacy/` for the 5.6-7 ABI), so every reviewed build is enforced; the 5.6-7
+sample is found in that directory by its hash.
+Ordinary public CI can check every payload without shipping firmware.
+The gen3-6.3-5 and gen3-6.5-14-2 references record the linked payload
+and output size; strict full-file verification also requires recording
+their output and undo-journal hashes from the matching stock samples.
 
 When `ld.lld` is present, a second test compares the Rust linker against
-`ld.lld -O0` using exactly the same object and bindings for all three variants.
+`ld.lld -O0` using exactly the same object and bindings for every variant.
 `NLCLIENT_REFERENCE_LLD` selects its path. This is an optional developer
 reference check, never part of recovery or a runtime requirement.
 

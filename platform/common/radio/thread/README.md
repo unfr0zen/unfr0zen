@@ -65,7 +65,8 @@ record only after the bridge acknowledges the SPI command. nestlocal declines
 sleep while the host is busy, the radio interrupt is low, or less than 200 ms
 remain before that alarm. This policy also applies when Matter uses Wi-Fi
 alongside `thread0`. The radio, bridge, daemon and nestlocal must all use matching
-builds; the SPI handshake checks protocol version 2. `zbwake.ko` version 2 holds
+builds; the SPI handshake checks protocol version 2. `zbwake.ko` version 2
+(`2-onyx` for the Thermostat E) holds
 the CPU awake for 100 ms on each IRQ to protect SPI transfers during suspend
 preparation. Reboot after replacing an already loaded older module.
 
@@ -129,7 +130,8 @@ docker run --rm -v "$PWD:$PWD" -w "$PWD" \
 ```
 
 `build.sh` first rebuilds the `zbwake.ko` modules whose build is missing or
-older than the sources in `platform/diamond3/zbwake/`.
+older than the sources in `platform/common/zbwake/`, including the Onyx
+releases listed in `platform/onyx/zbwake/releases`.
 
 `SDK`, `GSDK`, `OT`, `OT_BUILD`, `OT_HOST_BUILD`, `NESTLOCAL_ZBWAKE` and
 `NESTLOCAL_RADIO` (`NESTLOCAL_RADIO_EM357` for the gen2's Zigbee image) can select existing checkouts, build directories and the

@@ -89,7 +89,7 @@ pub fn theme() -> Overlay {
     files.extend(
         THEMES
             .iter()
-            .map(|(name, data)| (format!("{}/{name}", unfr0zen_core::diamond3::scratch::THEMES), 0o644, data.to_vec())),
+            .map(|(name, data)| (format!("{}/{name}", unfr0zen_core::common::scratch::THEMES), 0o644, data.to_vec())),
     );
     Overlay { directories: Vec::new(), files }
 }

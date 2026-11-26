@@ -8,7 +8,7 @@ pub enum Device {
     Diamond3,
     /// Nest gen 2, TI AM3703, JFFS2 root slots.
     J49,
-    /// Nest Thermostat E, i.MX6UL; detection only.
+    /// Nest Thermostat E, i.MX6UL, UBIFS root slots.
     Onyx,
 }
 

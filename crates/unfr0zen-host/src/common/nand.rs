@@ -31,13 +31,14 @@ use std::path::Path;
 
 pub use unfr0zen_core::diamond3::nand::NAND_SIZE;
 use unfr0zen_core::diamond3::nand::{
-    all_chunks, fcb_matches, image_firmware, relocate_ubi, restore_chunks, Peb, BLOCK, BOOT_CONTROL, BOOT_SIZE, UBI_END,
+    chunks_with_limit, fcb_matches, image_firmware, relocate_ubi, restore_chunks, Peb, BLOCK, BOOT_CONTROL, BOOT_SIZE,
+    UBI_END,
 };
 use unfr0zen_core::shell::sha256_hex;
 use unfr0zen_core::Result;
 
-use super::usb;
-use super::{connect_recovery, find_unit, reach_recovery, report_silicon, Board, EntryPoint};
+use crate::common::recovery::{connect_recovery, find_unit, reach_recovery, report_silicon, start_firmware, Board};
+use crate::common::usb::Target;
 use crate::device;
 use crate::flow::{failure, seconds, start_log, HandBack};
 use crate::nand::{
@@ -66,14 +67,14 @@ fn each_chunk(
     progress: &mut dyn Progress,
     verb: &str,
     chunks: &[(u32, u32)],
-    kept: impl Fn(u32) -> bool,
+    kept: impl Fn(u32, u32) -> bool,
     mut step: impl FnMut(u32, u32) -> Result<()>,
 ) -> Result<()> {
     let total: u64 = chunks.iter().map(|c| u64::from(c.1)).sum();
     stage_with(progress, &format!("{verb} NAND"), |progress| {
         let mut done = 0;
         for &(offset, size) in chunks {
-            if kept(offset) {
+            if kept(offset, size) {
                 log::info!("NAND {offset:#x}+{size:#x} kept from an earlier run");
             } else {
                 progress.transfer(done, size.into(), total);
@@ -94,12 +95,12 @@ pub(crate) fn run(
     job: &Job,
     unit: device::Unit,
     wait_usb: std::time::Duration,
-    entry_point: EntryPoint,
     progress: &mut dyn Progress,
     confirm: &mut dyn FnMut(&str) -> bool,
     cancel: &device::CancelFlag,
 ) -> Result<String> {
     let recorded = if let Job::Restore(image) = job { recorded_sha256(image)? } else { String::new() };
+    let target = Target(unit.device);
     let (port, id) = find_unit(progress, wait_usb, false, unit, cancel)?;
     // Checked while the boot ROM waits, before anything is loaded into it.
     let mut copies = Vec::new();
@@ -113,8 +114,8 @@ pub(crate) fn run(
     if let Job::Restore(image) = job {
         log::info!("{} matches its SHA-256 {recorded}", image.display());
     }
-    let port = reach_recovery(progress, port, id, entry_point)?;
-    let mut board = connect_recovery(progress, &port)?;
+    let port = reach_recovery(progress, port, id, target)?;
+    let mut board = connect_recovery(progress, &port, target)?;
     report_silicon(progress, &mut board);
     let bad = bad_blocks(progress, &mut board)?;
     let mut unit = Unit { board, port, bad };
@@ -135,8 +136,8 @@ pub(crate) fn run(
         }
     };
     let Unit { board, port, .. } = unit;
-    stage(progress, "Chainload stock U-Boot from NAND", || board.boot_vendor())?;
-    stage(progress, "Wait for the application firmware", || usb::wait_restored_application(seconds(120), &port))?;
+    start_firmware(progress, board)?;
+    stage(progress, "Wait for the application firmware", || target.wait_restored(seconds(120), &port))?;
     Ok(message)
 }
 
@@ -197,8 +198,8 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     each_chunk(
         progress,
         "Back up",
-        &all_chunks(),
-        |offset| part(offset).exists(),
+        &chunks_with_limit(0, NAND_SIZE, unit.board.buffer_capacity().min(0x400_0000) as u32),
+        |offset, size| fs::metadata(part(offset)).is_ok_and(|metadata| metadata.len() == u64::from(size)),
         |offset, size| {
             let part = part(offset);
             let (data, uncorrectable) = unit.board.read_nand(offset, size, &unit.bad)?;
@@ -212,7 +213,7 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
         },
     )?;
     let mut listed = unit.bad.clone();
-    for (offset, _) in all_chunks() {
+    for (offset, _) in chunks_with_limit(0, NAND_SIZE, unit.board.buffer_capacity().min(0x400_0000) as u32) {
         listed.extend(read_bad_blocks(&part(offset).with_extension("bad"))?.unwrap_or_default());
     }
     let uncorrectable = listed.len() - unit.bad.len();
@@ -222,7 +223,7 @@ fn backup(unit: &mut Unit, progress: &mut dyn Progress, out: &Path, parts: &Path
     file(
         &partial,
         File::create(&partial).and_then(|mut image| {
-            for (offset, _) in all_chunks() {
+            for (offset, _) in chunks_with_limit(0, NAND_SIZE, unit.board.buffer_capacity().min(0x400_0000) as u32) {
                 io::copy(&mut File::open(parts.join(format!("{offset:08x}.bin")))?, &mut image)?;
             }
             Ok(())
@@ -265,8 +266,8 @@ fn verify(unit: &mut Unit, progress: &mut dyn Progress, image: &Path) -> Result<
     each_chunk(
         progress,
         "Verify",
-        &all_chunks(),
-        |_| false,
+        &chunks_with_limit(0, NAND_SIZE, unit.board.buffer_capacity().min(0x400_0000) as u32),
+        |_, _| false,
         |offset, size| {
             let mut expected = read_at(image, offset.into(), size as usize)?;
             erase_blocks(&mut expected, offset, &listed);
@@ -324,7 +325,10 @@ fn restore(
     } else {
         progress.waiting("The FCB is missing or points elsewhere; it will be regenerated from the image");
     }
-    let chunks = restore_chunks(keep);
+    let ranges = restore_chunks(keep);
+    let start = ranges[0].0;
+    let end = ranges.last().map_or(start, |(offset, size)| offset + size);
+    let chunks = chunks_with_limit(start, end, unit.board.buffer_capacity().min(0x400_0000) as u32);
     let (start, end) = (chunks[0].0, chunks.last().map_or(0, |c| c.0 + c.1));
     let (mut lost, mut in_ubi) = (Vec::new(), false);
     for &block in unit.bad.iter().filter(|&&block| (start..end).contains(&block)) {
@@ -371,7 +375,7 @@ fn restore(
         progress,
         "Restore",
         &chunks,
-        |_| false,
+        |_, _| false,
         |offset, size| {
             unit.board.write_nand(offset, &chunk_to_write(image, offset, size, &moves, &unit.bad)?, &unit.bad)
         },
@@ -433,18 +437,11 @@ mod tests {
         let image = dir.join("nand.bin");
         fs::write(&image, b"image").unwrap();
         fs::write(checksum_path(&image), "sum  nand.bin\n").unwrap();
-        let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::SDP };
+        let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: crate::diamond3::usb::SDP };
         let mut seen = Seen::default();
-        assert!(run(
-            &Job::Restore(image),
-            unit,
-            Duration::ZERO,
-            EntryPoint::Auto,
-            &mut seen,
-            &mut |_| false,
-            &Default::default()
-        )
-        .is_err());
+        assert!(
+            run(&Job::Restore(image), unit, Duration::ZERO, &mut seen, &mut |_| false, &Default::default()).is_err()
+        );
         assert_eq!(seen.steps, ["Check the image's SHA-256"]);
         assert!(!seen.notes.iter().any(|note| note.starts_with("Detailed log")), "{:?}", seen.notes);
         fs::remove_dir_all(dir).unwrap();
@@ -466,11 +463,11 @@ mod tests {
         let image = dir.join("nand.bin");
         fs::write(&image, b"image").unwrap();
         fs::write(checksum_path(&image), "sum  nand.bin\n").unwrap();
-        let unit = device::Unit { device: device::Device::Diamond3, port: "1".into(), id: usb::APP_ACM };
+        let unit =
+            device::Unit { device: device::Device::Diamond3, port: "1".into(), id: crate::diamond3::usb::APP_ACM };
         let cancel = device::CancelFlag::new(true.into());
         let mut steps = Steps(Vec::new());
-        assert!(run(&Job::Restore(image), unit, Duration::ZERO, EntryPoint::Auto, &mut steps, &mut |_| false, &cancel)
-            .is_err());
+        assert!(run(&Job::Restore(image), unit, Duration::ZERO, &mut steps, &mut |_| false, &cancel).is_err());
         assert_eq!(steps.0, [device::WAIT_USB_BOOT_STAGE]);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -512,7 +509,7 @@ mod tests {
                 &mut progress,
                 verb,
                 &[(0, 4), (4, 4), (8, 4)],
-                |_| false,
+                |_, _| false,
                 |offset, _| {
                     attempted.push(offset);
                     if offset == 4 {
@@ -538,7 +535,7 @@ mod tests {
             &mut progress,
             "Back up",
             &[(0, 4), (4, 4)],
-            |offset| offset == 0,
+            |offset, _| offset == 0,
             |offset, _| {
                 attempted.push(offset);
                 Ok(())

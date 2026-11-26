@@ -102,12 +102,13 @@ pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
         // Allocates, moves the old elements, frees them and stores the new
         // buffer's begin, end and capacity: inserting the value at the
         // position, or (appending) reading it from the second argument.
-        let shape: &[u32] = if found.appends {
-            &[0xe5993000, 0x17873004, 0xe5867000, 0xe9860030]
+        let shapes: &[&[u32]] = if found.appends {
+            // The gen E's build stores the three words one at a time.
+            &[&[0xe5993000, 0x17873004, 0xe5867000, 0xe9860030], &[0xe890000c, 0xe5867000, 0xe5864004, 0xe5865008]]
         } else {
-            &[0xe8900180, 0xe585b000, 0xe5858004, 0xe5854008]
+            &[&[0xe8900180, 0xe585b000, 0xe5858004, 0xe5854008]]
         };
-        if !shape.iter().all(|w| grow.iter().any(|i| i.word == *w))
+        if !shapes.iter().any(|shape| shape.iter().all(|w| grow.iter().any(|i| i.word == *w)))
             || !imports.get("_Znwj").is_some_and(|address| calls.contains(address))
             || !["_ZdlPv", "_ZdlPvj"]
                 .iter()
@@ -132,7 +133,10 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
         let Some(lookup) = ins.ops.first().and_then(|o| o.imm()) else { continue };
         let after = &words[i + 1..];
         let before = &words[i - 7..i];
-        if after.len() >= 9 && after[0] == 0xe3500000 && after[1] == 0xe58d0008 {
+        if after.len() >= 9
+            && ((after[0] == 0xe3500000 && after[1] == 0xe58d0008)
+                || (after[0] == 0xe58d0008 && after[1] == 0xe3500000))
+        {
             let object = (after[3] >> 16) & 15;
             if after[2] >> 24 != 0x0a
                 || after[3] != 0xe5901074 | (object << 16)
@@ -159,7 +163,10 @@ fn sites(arm: &Arm, at: u32) -> Result<Vec<Insertion>> {
                 next_register: 0,
                 appends: false,
             });
-        } else if after.len() >= 12 && after[0] == 0xe3500000 && after[1] == 0xe58d0000 {
+        } else if after.len() >= 12
+            && ((after[0] == 0xe3500000 && after[1] == 0xe58d0000)
+                || (after[0] == 0xe58d0000 && after[1] == 0xe3500000))
+        {
             // An older libstdc++'s push_back: the screen stored at the end
             // when there is room (and the end is not null), appended by
             // _M_emplace_back_aux(vector, &screen) when there is not.
@@ -356,7 +363,7 @@ fn bounds(elf: &Elf, list: u32, count: usize) -> Vec<u32> {
             let literal = if w & (1 << 23) != 0 { pc.wrapping_add(w & 0xfff) } else { pc.wrapping_sub(w & 0xfff) };
             let Ok(value) = elf.read(literal) else { continue };
             let (mut register, mut base) = ((w >> 12) & 0xf, value);
-            for j in i + 1..(i + 16).min(code.len() / 4) {
+            for j in i + 1..(i + 32).min(code.len() / 4) {
                 let x = at(j).unwrap();
                 let address = section.address + j as u32 * 4;
                 // ADD Rd, pc, Rm

@@ -1,0 +1,13 @@
+diff --git a/tools/sunxi_toc0.c b/tools/sunxi_toc0.c
+index 7a8d74bb8e4..20a9f06f242 100644
+--- a/tools/sunxi_toc0.c
++++ b/tools/sunxi_toc0.c
+@@ -412,7 +412,7 @@ err:
+  * This function is only expected to work with images created by mkimage.
+  */
+ static int toc0_verify_cert_item(const uint8_t *buf, uint32_t len, RSA *fw_key,
+-				 uint8_t digest[static SHA256_DIGEST_LENGTH])
++				 uint8_t *digest)
+ {
+ 	const struct toc0_cert_item *cert_item = (const void *)buf;
+ 	uint8_t cert_digest[SHA256_DIGEST_LENGTH];

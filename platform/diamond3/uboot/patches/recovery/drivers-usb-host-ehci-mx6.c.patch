@@ -1,0 +1,14 @@
+diff --git a/drivers/usb/host/ehci-mx6.c b/drivers/usb/host/ehci-mx6.c
+index b01fc0f232b..662f4ea6204 100644
+--- a/drivers/usb/host/ehci-mx6.c
++++ b/drivers/usb/host/ehci-mx6.c
+@@ -632,7 +632,9 @@ err_regulator:
+ 	if (priv->vbus_supply)
+ 		regulator_set_enable(priv->vbus_supply, false);
+ #endif
++#if CONFIG_IS_ENABLED(DM_REGULATOR)
+ err_phy:
++#endif
+ #if CONFIG_IS_ENABLED(PHY) && !defined(CONFIG_IMX8)
+ 	generic_shutdown_phy(&priv->phy);
+ #endif

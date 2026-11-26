@@ -1,0 +1,13 @@
+diff --git a/include/mxs_nand.h b/include/mxs_nand.h
+index bb5b84b8c26..16763d5bf32 100644
+--- a/include/mxs_nand.h
++++ b/include/mxs_nand.h
+@@ -100,6 +100,8 @@ int mxs_nand_setup_ecc(struct mtd_info *mtd);
+ void mxs_nand_mode_fcb_62bit(struct mtd_info *mtd);
+ void mxs_nand_mode_fcb_40bit(struct mtd_info *mtd);
+ void mxs_nand_mode_normal(struct mtd_info *mtd);
++/* The geometry check's outcome: "verified bchN/512", "unverified" or "unchecked". */
++const char *mxs_nand_geometry_state(void);
+ u32 mxs_nand_mark_byte_offset(struct mtd_info *mtd);
+ u32 mxs_nand_mark_bit_offset(struct mtd_info *mtd);
+ void mxs_nand_get_layout(struct mtd_info *mtd, struct mxs_nand_layout *l);

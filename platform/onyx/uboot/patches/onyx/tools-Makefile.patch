@@ -1,0 +1,21 @@
+diff --git a/tools/Makefile b/tools/Makefile
+index e13effbb66a..2f536f98ffd 100644
+--- a/tools/Makefile
++++ b/tools/Makefile
+@@ -260,7 +260,15 @@ HOSTCFLAGS_sha512.o := -pedantic -DCONFIG_SHA512 -DCONFIG_SHA384
+ quiet_cmd_wrap = WRAP    $@
+ cmd_wrap = echo "\#include <../$(patsubst $(obj)/%,%,$@)>" >$@
+ 
+-$(obj)/boot/%.c $(obj)/common/%.c $(obj)/env/%.c $(obj)/lib/%.c:
++# One rule per directory: GNU make 4.4 treats a pattern rule with several
++# targets as building them all at once.
++$(obj)/boot/%.c:
++	$(call cmd,wrap)
++$(obj)/common/%.c:
++	$(call cmd,wrap)
++$(obj)/env/%.c:
++	$(call cmd,wrap)
++$(obj)/lib/%.c:
+ 	$(call cmd,wrap)
+ 
+ clean-dirs := lib common

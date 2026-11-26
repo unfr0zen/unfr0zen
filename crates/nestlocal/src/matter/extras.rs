@@ -1172,6 +1172,9 @@ mod tests {
     fn screen_brightness_auto_is_a_switch_reading_what_the_unit_shows() {
         let unit = nest(crate::fields! {}, crate::fields! {"can_heat" => true});
         let switches = Switches { dataver: Dataver::new(0), all: switches(&unit), nest: unit.clone() };
+        assert!(switches.on_off(ctx(SCREEN_BRIGHTNESS_AUTO)).unwrap(), "an unset preference is automatic");
+        switches.set(SCREEN_BRIGHTNESS_AUTO, Some(false)).unwrap();
+        assert_eq!(field(&unit, "device", crate::brightness::AUTO), Value::Bool(false));
         assert!(!switches.on_off(ctx(SCREEN_BRIGHTNESS_AUTO)).unwrap());
         switches.set(SCREEN_BRIGHTNESS_AUTO, Some(true)).unwrap();
         assert_eq!(field(&unit, "device", crate::brightness::AUTO), Value::Bool(true));

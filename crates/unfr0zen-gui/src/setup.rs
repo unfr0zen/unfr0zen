@@ -98,7 +98,7 @@ impl App {
 
     /// One unit unfr0zen supports is on USB: the steps past Connect need it.
     fn connected(&self) -> bool {
-        matches!(self.bus.current(), Bus::One(seen) if seen.device != Device::Onyx)
+        matches!(self.bus.current(), Bus::One(_))
     }
 
     /// The steps past Connect can be shown: a supported unit is on USB, or
@@ -292,13 +292,6 @@ impl App {
                     ui.label(
                         egui::RichText::new(format!("{}\n{mode}", seen.device.description())).color(MUTED).size(12.5),
                     );
-                    if seen.device == Device::Onyx {
-                        ui.add_space(10.0);
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(tr!("setup.unsupported_unit")).color(WARN).size(13.0))
-                                .wrap(),
-                        );
-                    }
                 }
             });
         });
@@ -360,8 +353,7 @@ impl App {
                     if self.developer_open {
                         ui.add_space(10.0);
                         ui.spacing_mut().item_spacing.y = 8.0;
-                        let bus = self.bus.current();
-                        self.form.developer_ui(ui, &bus);
+                        self.form.developer_ui(ui);
                     }
                 });
             });
@@ -1089,7 +1081,7 @@ fn unit_ring(ui: &mut egui::Ui, bus: &Bus) {
         );
         return;
     };
-    let ring = if device == Device::Onyx { WARN } else { ACCENT };
+    let ring = ACCENT;
     painter.circle_stroke(c, size * 0.5 - 11.0, egui::Stroke::new(2.0, ring));
     let (big, name) = match device {
         Device::Diamond3 => (tr!("setup.gen3"), tr!("setup.learning_thermostat")),
@@ -1189,9 +1181,6 @@ pub(crate) fn numbered(ui: &mut egui::Ui, number: usize, text: &str) {
 fn bus_pill(ui: &mut egui::Ui, bus: &Bus) {
     let (text, fg, bg, dot) = match bus {
         Bus::Nothing => (tr!("setup.waiting_for_unit"), TEXT, CARD, DIM),
-        Bus::One(seen) if seen.device == Device::Onyx => {
-            (tr!("setup.unsupported_short"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN)
-        }
         Bus::One(_) => (tr!("setup.found_unit"), OK_LIGHT, OK_FILL, OK),
         Bus::Several(_) => (tr!("setup.several_units"), WARN, egui::Color32::from_rgb(0x2e, 0x1d, 0x12), WARN),
     };

@@ -41,7 +41,7 @@ use crate::store::Store;
 use crate::weather::Outdoor;
 use crate::{bridge, logf, settings_ui};
 
-/// Where the setup installs the themes (unfr0zen-core's diamond3::scratch::THEMES),
+/// Where the setup installs the themes (unfr0zen-core's common::scratch::THEMES),
 /// one directory each. A scratch volume wiped since leaves only stock.
 const INSTALLED: &str = "/media/scratch/.unfr0zen/themes";
 

@@ -1,4 +1,4 @@
-//! The initramfs's busybox shell on its USB ACM gadget (platform/diamond3/initramfs-init):
+//! The initramfs's busybox shell on its USB ACM gadget (platform/common/imx6/initramfs-init):
 //! a raw tty without echo or prompt, the slot mounted at /mnt. Port of
 //! InitramfsShell in unfr0zen.py.
 
@@ -52,7 +52,7 @@ pub trait Volume {
     }
     /// Whether the scratch volume is reachable under the volume
     /// (media/scratch), where the setup keeps unfr0zen's programs and data
-    /// (diamond3::scratch). A root slot set up in memory has only itself.
+    /// (common::scratch). A root slot set up in memory has only itself.
     fn scratch(&self) -> bool {
         true
     }
@@ -250,6 +250,37 @@ impl<S: Serial> InitramfsShell<S> {
             return device(format!("{name} changed while it was read"));
         }
         Ok(Some((owner, mode, data)))
+    }
+
+    /// Readies the root volume for its own init, as the kernel leaves it at a
+    /// boot from NAND: read-write, with nothing mounted on it.
+    pub fn prepare_hand_over(&mut self) -> Result<()> {
+        self.run(
+            "sync; unmounted=0; \
+             for dir in $(awk '$2 ~ \"^/mnt/\" { print $2 }' /proc/mounts | sort -r); do \
+                 umount \"$dir\" || unmounted=1; \
+             done; [ $unmounted = 0 ] && mount -o remount,rw /mnt",
+        )
+        .map(drop)
+    }
+
+    /// Leaves the i.MX6 initramfs for the volume's own init, on the kernel
+    /// already running (platform/common/imx6/initramfs-init), once
+    /// prepare_hand_over has readied the volume: its ACM shell goes away and
+    /// the application firmware's gadget comes up instead.
+    pub fn hand_over(mut self) -> Result<()> {
+        self.port.write_all(b"sync; touch /hand-over; kill $(pidof cat)\n")?;
+        self.port.drain(Instant::now() + Duration::from_secs(5))?;
+        Ok(())
+    }
+
+    /// Powers the unit off from Linux, on a board whose power-off (WDOG_B to
+    /// its PMIC) comes back as a power-on reset: it boots its installed
+    /// firmware from NAND.
+    pub fn power_cycle(mut self) -> Result<()> {
+        self.port.write_all(b"sync; mount -o remount,ro /mnt; poweroff -f\n")?;
+        self.port.drain(Instant::now() + Duration::from_secs(5))?;
+        Ok(())
     }
 
     /// Restarts the unit from Linux: it boots its installed firmware, or lands in SDP.

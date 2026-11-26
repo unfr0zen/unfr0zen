@@ -64,7 +64,7 @@
             <ul>
                 <li><b>nestlocal.</b> MQTT, Matter, Zigbee, home screen themes and Doom are served by nestlocal, which any of them installs on the thermostat.</li>
                 <li><b>Wi-Fi.</b> MQTT and Matter use Wi-Fi, joined from the thermostat's Settings → Network. The network doesn't need internet access. Zigbee needs no Wi-Fi: the clock and updates come over Zigbee too, so a 2nd or 3rd generation thermostat whose Wi-Fi has failed works fully with Zigbee.</li>
-                <li><b>Generations.</b> 1st, 2nd and 3rd generation. The 1st has MQTT, Matter over Wi-Fi and the external temperature: no Zigbee or Matter over Thread (its radio is on a UART), and no USB shell. The Nest Thermostat E is detected and refused.</li>
+                <li><b>Device support.</b> See the <a href="/#devices">supported-device table</a>. The 1st generation has no USB shell.</li>
                 <li><b>Command line.</b> On Linux and macOS, the app's executable run with arguments; Windows has the app only.</li>
                 <li><b>Linux.</b> Run the app and CLI as your normal user, after the <a href="/download/">one-time USB permission setup</a>. Run logs: <code>~/.local/share/unfr0zen/logs/</code>, or <code>$XDG_DATA_HOME/unfr0zen/logs/</code> when set.</li>
                 <li><b>Your own integration.</b> The MQTT topics, Zigbee clusters and Matter endpoints are documented under <a href="/protocols/">Protocols</a>.</li>
@@ -101,6 +101,7 @@
             <ul class="chips">
                 <li>Eco and the eco temperatures</li><li>Humidity</li><li>Target humidity</li><li>Occupancy</li><li>°C/°F</li><li>Backplate temperature</li><li>Battery, in percent and volts, and external power</li><li>Fan and its timer</li><li>Fan schedule: on/off, minutes per hour, start and end hours</li><li>Auto-Schedule</li><li>Home/Away Assist</li><li>Sunblock</li><li>Early-On</li><li>Eco heat and cool limits</li><li>Leaf, Early-On, Sunblock, safety shutoff and filter indicators</li><li>Heating, cooling and fan running</li><li>Each wired HVAC stage running</li><li>Time to temperature</li><li>Filter runtime</li><li>IP address</li><li>MQTT reconnects, MQTT last disconnect and wakes (diagnostic)</li><li>Wi-Fi signal</li><li>Screen timeout and always on</li><li>Screen brightness and auto</li><li>Wake screen</li><li>Clear schedule</li>
             </ul>
+            <p>Automatic screen brightness is on by default. A saved manual level of 0% or a missing manual level with Auto off defaults to 66% at startup; other saved choices are retained.</p>
             <p>With the equipment for them:</p>
             <ul class="chips">
                 <li>Filter reminder and its reset</li><li>Hot water state, schedule and boost</li><li>Humidifier and dehumidifier state</li><li>Humidity control</li>
@@ -233,7 +234,7 @@ data:
             <p>On a coordinator with per-device keys, a router needs its own trust-centre link key to help others join. If the thermostat still has only the global key, enable pairing again.</p>
             <p>To move networks: <b>Settings → Zigbee → Enable pairing</b>. The thermostat leaves its network, forgets its credentials and looks for one permitting joins for 30 seconds; on timeout it stays off any network until pairing is enabled again or nestlocal restarts.</p>
             <h3>Sleep</h3>
-            <p>The radio routes while the thermostat sleeps and wakes it for a message, on the 2nd generation's kernel and the 3rd generation's 5.8 to 6.1 kernels; on others, messages wait until the unit wakes. The 2nd generation doesn't sleep with a USB cable connected.</p>
+            <p>The radio routes while the thermostat sleeps and wakes it for a message when a matching wake module is available: the 2nd generation's kernel, the 3rd generation's 5.8 to 6.1 kernels, and the Thermostat E's supported 5.7 to 6.5 kernels. On others, messages wait until the unit wakes. The 2nd generation doesn't sleep with a USB cable connected.</p>
 
             <h2 id="external-temperature"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>External temperature</h2>
             <div class="table-scroll">
@@ -305,11 +306,11 @@ data:
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>--work-dir DIR</code></td><td data-label="What it does">Where each run keeps its records, in a folder named by its time: the root slot it set up, the changes it made and, with Matter, the pairing code (default: the runs folder in unfr0zen's data directory).</td></tr>
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>--nand-image FILE</code></td><td data-label="What it does">1st or 2nd generation: sets up a raw NAND image (2112-byte pages) in place instead of a unit.</td></tr>
                         <tr><td data-label="App">Entry point</td><td data-label="CLI"><code>--entry-point ENTRY_POINT</code></td><td data-label="What it does">3rd generation: how its boot ROM is entered for recovery: <code>auto</code> (default) tries the official loader, then CVE-2017-7932, then CVE-2017-7936; or <code>official-loader</code>, <code>cve-2017-7932</code>, <code>cve-2017-7936</code>. It applies to a setup, backup, restore and booting the application, in the app and the CLI.</td></tr>
-                        <tr><td data-label="App">Device</td><td data-label="CLI"><code>--device diamond|j49|diamond3</code></td><td data-label="What it does">The generation (1st, 2nd, 3rd) to expect instead of the one identified on USB. The app applies it to a setup only.</td></tr>
+                        <tr><td data-label="App">Device</td><td data-label="CLI"><code>--device diamond|j49|diamond3|onyx</code></td><td data-label="What it does">The device to expect instead of the one identified on USB. The app applies it to setup only.</td></tr>
                         <tr><td data-label="App">Dark theme</td><td data-label="CLI"><code>--dark-theme</code></td><td data-label="What it does">1st and 2nd generation, Nest firmware 5.9.4-5: shows the settings screens in the 3rd generation's dark colours, and the boot logo on black. The app offers it when a 1st or 2nd generation is connected. A run without it brings back the light colours.</td></tr>
                         <tr><td data-label="App">Works With Nest boiler</td><td data-label="CLI"><code>--wwn-boiler</code></td><td data-label="What it does">Needs Zigbee or Thread. See <a href="#zigbee">Zigbee</a>.</td></tr>
-                        <tr><td data-label="App">Rescue</td><td data-label="CLI"><code>unfr0zen boot</code></td><td data-label="What it does">Boots the application firmware from any mode: a 3rd generation through recovery U-Boot, a 1st or 2nd generation by restarting the flasher an interrupted run left on USB.</td></tr>
-                        <tr><td data-label="App">Not available</td><td data-label="CLI"><code>unfr0zen uboot</code></td><td data-label="What it does">3rd generation: loads recovery U-Boot and leaves it at its prompt.</td></tr>
+                        <tr><td data-label="App">Rescue</td><td data-label="CLI"><code>unfr0zen boot</code></td><td data-label="What it does">Boots the application firmware. The 3rd generation and Thermostat E use recovery U-Boot to start the stock loader. The 1st and 2nd generation restart the flasher an interrupted run left on USB.</td></tr>
+                        <tr><td data-label="App">U-Boot terminal</td><td data-label="CLI"><code>unfr0zen uboot</code></td><td data-label="What it does">Loads recovery U-Boot on the 3rd generation or Thermostat E and waits for its prompt.</td></tr>
                         <tr><td data-label="App">Serial console</td><td data-label="CLI">Not available</td><td data-label="What it does">A terminal on the USB root shell of a unit unfr0zen set up.</td></tr>
                         <tr><td data-label="App">Offered at start</td><td data-label="CLI"><code>unfr0zen update</code></td><td data-label="What it does">Installs the latest release.</td></tr>
                     </tbody>
@@ -329,9 +330,9 @@ data:
                 </table>
             </div>
             <ul>
-                <li><b>Backup.</b> The whole NAND as an image with a <code>.sha256</code> beside it. On the 3rd generation: 512 MiB, ECC-corrected, with a <code>.bad</code> list of its bad and unreadable blocks. On the 1st and 2nd: raw pages with OOB, unclean blocks read until two reads agree. Nothing is written during a backup.</li>
+                <li><b>Backup.</b> The whole NAND as an image with a <code>.sha256</code> beside it. The 3rd generation and Thermostat E produce a 512 MiB ECC-corrected image and a <code>.bad</code> list of bad and unreadable blocks. The 1st and 2nd generation save raw pages with OOB and reread unclean blocks until two reads agree.</li>
                 <li><b>Resume.</b> <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file.</li>
-                <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again. On the 3rd, a UBI block that falls on one of the chip's bad blocks is written to a free one instead, so another unit's image restores too, unless it has a UBI fastmap.</li>
+                <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again. On the 3rd generation and Thermostat E, a UBI block that falls on one of the chip's bad blocks is written to a free one. Images with a UBI fastmap require matching locations, and the Thermostat E requires an Onyx image.</li>
             </ul>
 
             <h2 id="themes"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Home screen themes</h2>

@@ -164,8 +164,14 @@ fn main() {
     if let (true, Some(ble)) =
         (config.external_temperature || matter_takes_ble(&config), device::current().ble.as_ref())
     {
-        if let Err(e) = sensor::port::start_holder(ble) {
+        if let Err(e) = sensor::port::start_holder(ble.uart) {
             logf!("BLE stand-in: {e}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let (true, Some(link)) = (config.external_temperature, device::current().hci) {
+        if let Err(e) = sensor::port::start_holder(link) {
+            logf!("external temperature: the stand-in controller's PTY: {e}");
         }
     }
     entropy::seed();
@@ -187,7 +193,7 @@ fn prepare_settings(config: &flags::Config) {
         if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
             logf!("external temperature: {e}");
         }
-    } else if device::current().ble.is_some() || device::current().omap() {
+    } else if device::current().ble.is_some() || device::current().hci.is_some() || device::current().omap() {
         let store = store::Store::new(&config.state);
         let settings = device::current().omap().then_some(std::path::Path::new(path));
         let where_id = sensor::where_id(&store, &config.serial, settings);
@@ -199,7 +205,7 @@ fn prepare_settings(config: &flags::Config) {
     }
 }
 
-/// The stand-in sensor over gen 3 BLE or the gen 1's and gen 2's loopback RCS input, or gone
+/// The stand-in sensor over gen 3 BLE, the gen E's Bluetooth controller or the gen 1's and gen 2's loopback RCS input, or gone
 /// from a unit that no longer has the option.
 fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc<sensor::Sensor>> {
     let identity = std::path::Path::new(&config.external_temperature_store);
@@ -208,7 +214,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         return None;
     }
     let device = device::current();
-    if device.ble.is_none() && !device.omap() {
+    if device.ble.is_none() && device.hci.is_none() && !device.omap() {
         logf!("external temperature: this unit has no supported sensor transport");
         return None;
     }
@@ -238,9 +244,10 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
     #[cfg(target_os = "linux")]
     {
-        let result = match device.ble.as_ref() {
-            Some(ble) => sensor::port::start(Some(sensor.clone()), ble, config.matter),
-            None => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
+        let result = match (device.ble.as_ref(), device.hci) {
+            (Some(ble), _) => sensor::port::start(Some(sensor.clone()), ble, config.matter),
+            (None, Some(link)) => sensor::hci::start(sensor.clone(), link),
+            (None, None) => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
         };
         if let Err(e) = result {
             logf!("external temperature: {e}");
@@ -265,7 +272,7 @@ async fn run(config: flags::Config) {
         }
     }
     // nestlocal.init holds nlclient back until here; its first commit takes
-    // the screen timeout.
+    // the screen timeout and brightness.
     if std::fs::create_dir_all(settings_ui::DIR).is_ok() {
         screen::republish(&store, &config.serial);
         brightness::republish(&store, &config.serial);
@@ -371,7 +378,7 @@ async fn run(config: flags::Config) {
     if let Some(bridge) = &bridge {
         bridge.start_schedule_control();
     }
-    if device::current().name == "diamond3" {
+    if matches!(device::current().name, "diamond3" | "onyx") {
         scratch::check();
     }
     if config.doom {
@@ -404,6 +411,7 @@ async fn run(config: flags::Config) {
         origin: config.origin,
         verbose: config.verbose,
         hold: config.hold,
+        display_replay: std::sync::Mutex::new(Some(format!("device.{}", config.serial))),
     });
     let stopped = cloud.serve(&config.listen, tls).await;
     fatal!("{stopped}");

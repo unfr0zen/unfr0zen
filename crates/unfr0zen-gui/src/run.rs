@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use unfr0zen_host::diamond3::usb::EntryPoint;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::{run_after_backup, CancelFlag, Config, Phase, Progress};
 
@@ -90,9 +89,9 @@ impl Run {
     }
 
     /// A whole-NAND backup or restore.
-    pub fn nand(job: Job, wait_usb: Duration, entry_point: EntryPoint) -> Self {
+    pub fn nand(job: Job, wait_usb: Duration) -> Self {
         Self::spawn(move |progress, tx, cancel| {
-            nand::run(&job, wait_usb, None, entry_point, progress, &mut |question| confirm(&tx, question), &cancel)
+            nand::run(&job, wait_usb, None, progress, &mut |question| confirm(&tx, question), &cancel)
         })
     }
 

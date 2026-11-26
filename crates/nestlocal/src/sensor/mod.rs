@@ -3,12 +3,14 @@
 //! sensor falls silent, so nestlocal gives it one: a sensor registered as a
 //! paired one is, whose beacons come from an external thermometer's readings
 //! (set/external_temperature, or a Zigbee or Matter write) through a stand-in
-//! for the BLE chip (port.rs, chip.rs, beacon.rs) on gen 3, or a patched
-//! loopback RCS input (socket.rs) on gen 1 and gen 2. Both use the same paired identity
+//! for the BLE chip (port.rs, chip.rs, beacon.rs) on gen 3, a Bluetooth
+//! controller of nestlocal's own (hci.rs) on the gen E, or a patched loopback
+//! RCS input (socket.rs) on gen 1 and gen 2. All use the same paired identity
 //! and room assignment through nlclient's cloud buckets.
 
 pub mod beacon;
 pub mod chip;
+pub mod hci;
 #[cfg(target_os = "linux")]
 pub mod port;
 pub mod socket;

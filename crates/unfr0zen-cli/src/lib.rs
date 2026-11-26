@@ -10,8 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use unfr0zen_host::diamond3::boot;
-use unfr0zen_host::diamond3::usb::EntryPoint;
+use unfr0zen_host::common::boot;
 use unfr0zen_host::flow::default_data_dir;
 use unfr0zen_host::nand::{self, Job};
 use unfr0zen_host::update;
@@ -46,7 +45,7 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     nand_image: Option<PathBuf>,
     /// the unit's generation (default: identified on USB, or from the NAND's U-Boot environment in USB download mode)
-    #[arg(long, global = true, value_parser = parse_device, value_name = "diamond|j49|diamond3")]
+    #[arg(long, global = true, value_parser = parse_device, value_name = "diamond|j49|diamond3|onyx")]
     device: Option<Device>,
     /// sync time from HOST instead of time.nest.com (default pool.ntp.org)
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "HOST", help_heading = "Root filesystem options")]
@@ -102,9 +101,6 @@ struct Args {
     /// run a Heat Link model (Display-3.x, Display-5.x) as heating a Works With Nest boiler through W1; without it firmware 6.4-8 can stop on H71 with no Heat Link (needs --zigbee or --matter-thread)
     #[arg(long, help_heading = "Root filesystem options")]
     wwn_boiler: bool,
-    /// how the 3rd generation's boot ROM is entered for recovery: auto, cve-2017-7932, cve-2017-7936 or official-loader
-    #[arg(long, global = true)]
-    entry_point: Option<EntryPoint>,
     /// Customizable home screen themes: a few built in, picked from the THEMES settings entry and drawn in place of the dial; needs a firmware the themes support
     #[arg(long, help_heading = "Root filesystem options")]
     themes: bool,
@@ -147,9 +143,9 @@ enum Command {
         #[arg(long)]
         discover: bool,
     },
-    /// diamond3: load recovery U-Boot over USB and leave it at its prompt; prints its serial port
+    /// diamond3 and onyx: load recovery U-Boot over USB and leave it at its prompt; prints its serial port
     Uboot,
-    /// Boot the application firmware: diamond3 through recovery and the stock U-Boot when needed,
+    /// Boot the application firmware: diamond3 and onyx through recovery and the stock U-Boot when needed,
     /// diamond and j49 by restarting a flasher an interrupted run left on USB
     Boot,
     // A diamond3's whole 512 MiB NAND as an ECC-corrected image (2048-byte
@@ -173,7 +169,8 @@ fn parse_device(value: &str) -> Result<Device, String> {
         "diamond" => Ok(Device::Diamond),
         "j49" => Ok(Device::J49),
         "diamond3" => Ok(Device::Diamond3),
-        _ => Err("expected diamond, j49 or diamond3".into()),
+        "onyx" => Ok(Device::Onyx),
+        _ => Err("expected diamond, j49, diamond3 or onyx".into()),
     }
 }
 
@@ -206,7 +203,6 @@ impl Args {
             matter_code: self.matter_code.clone(),
             zigbee: self.zigbee,
             wwn_boiler: self.wwn_boiler,
-            entry_point: self.entry_point.unwrap_or_default(),
             themes: self.themes,
             doom: self.doom,
             external_temperature: self.external_temperature,
@@ -299,12 +295,12 @@ pub fn main() {
     let fail =
         |message: String| -> ! { Args::command().error(clap::error::ErrorKind::ValueValidation, message).exit() };
 
-    if args.device.is_some_and(|d| d != Device::Diamond3)
-        && matches!(args.command.as_ref(), Some(Command::Boot | Command::Uboot))
+    if args.device.is_some_and(|d| !matches!(d, Device::Diamond3 | Device::Onyx))
+        && matches!(args.command.as_ref(), Some(Command::Uboot))
     {
-        fail("boot and uboot are diamond3-only".into());
+        fail("uboot requires diamond3 or onyx".into());
     }
-    if args.device == Some(Device::Diamond3) && args.nand_image.is_some() {
+    if matches!(args.device, Some(Device::Diamond3 | Device::Onyx)) && args.nand_image.is_some() {
         fail("--nand-image is a gen 1 or gen 2 NAND image".into());
     }
     let options = args.setup_inputs().build().unwrap_or_else(|e| fail(e.to_string()));
@@ -320,7 +316,6 @@ pub fn main() {
     let config = Config {
         options,
         omap: args.device,
-        entry_point: args.entry_point.unwrap_or_default(),
         wait_usb: Duration::from_secs(args.wait_usb),
         wait_shell: Duration::from_secs(args.wait_shell),
         work_dir,
@@ -334,25 +329,16 @@ pub fn main() {
             None => run(&config, &mut progress, &cancel),
         },
         Some(Command::Nlclient { .. }) => unreachable!("handled before USB setup"),
-        Some(Command::Uboot) => boot::uboot(config.wait_usb, config.entry_point, &mut progress),
-        Some(Command::Boot) => unfr0zen_host::flow::boot(config.wait_usb, config.entry_point, &mut progress),
+        Some(Command::Uboot) => boot::uboot(config.wait_usb, config.omap, &mut progress),
+        Some(Command::Boot) => unfr0zen_host::flow::boot(config.wait_usb, config.omap, &mut progress),
         Some(Command::Backup { out }) => {
             let job = Job::Backup(out.clone().unwrap_or_else(nand::default_backup));
-            nand::run(
-                &job,
-                config.wait_usb,
-                config.omap,
-                config.entry_point,
-                &mut progress,
-                &mut confirm_restore,
-                &cancel,
-            )
+            nand::run(&job, config.wait_usb, config.omap, &mut progress, &mut confirm_restore, &cancel)
         }
         Some(Command::Verify { image }) => nand::run(
             &Job::Verify(image.clone()),
             config.wait_usb,
             config.omap,
-            config.entry_point,
             &mut progress,
             &mut confirm_restore,
             &cancel,
@@ -361,7 +347,6 @@ pub fn main() {
             &Job::Restore(image.clone()),
             config.wait_usb,
             config.omap,
-            config.entry_point,
             &mut progress,
             &mut confirm_restore,
             &cancel,
@@ -498,42 +483,5 @@ mod logged_arguments_tests {
             "Arguments: --zigbee --root-password *** --mqtt=mqtt://***@broker.lan:1883 \
                     --mqtt-user *** --matter-code=*** --mqtt-ca ca.pem"
         );
-    }
-}
-
-#[cfg(test)]
-mod entry_point_tests {
-    use super::{Args, EntryPoint};
-    use clap::{CommandFactory, Parser};
-
-    #[test]
-    fn every_command_takes_the_entry_point() {
-        for command in
-            [&["uboot"][..], &["boot"], &["backup"], &["verify", "nand.bin"], &["restore", "nand.bin"], &["update"]]
-        {
-            let line = [&["unfr0zen"], command, &["--entry-point", "official-loader"]].concat();
-            let args = Args::try_parse_from(&line).unwrap_or_else(|e| panic!("{line:?}: {e}"));
-            assert_eq!(args.entry_point, Some(EntryPoint::OfficialLoader), "{line:?}");
-        }
-        let setup = Args::try_parse_from(["unfr0zen", "--entry-point", "official-loader"]).unwrap();
-        assert_eq!(setup.entry_point, Some(EntryPoint::OfficialLoader));
-        assert!(Args::try_parse_from(["unfr0zen", "backup", "--entry-point", "nope"]).is_err());
-    }
-
-    #[test]
-    fn options_go_after_a_command_the_entry_point_like_the_others() {
-        for option in [&["--entry-point", "official-loader"][..], &["--wait-usb", "5"], &["--device", "diamond3"]] {
-            let before = [&["unfr0zen"], option, &["backup"]].concat();
-            assert!(Args::try_parse_from(&before).is_err(), "{before:?}");
-            let after = [&["unfr0zen", "backup"][..], option].concat();
-            assert!(Args::try_parse_from(&after).is_ok(), "{after:?}");
-        }
-    }
-
-    #[test]
-    fn help_names_the_entry_point_option_by_what_it_takes() {
-        let help = Args::command().render_long_help().to_string();
-        assert!(help.contains("--entry-point <ENTRY_POINT>"), "{help}");
-        assert!(!help.contains("TECHNIQUE"), "{help}");
     }
 }

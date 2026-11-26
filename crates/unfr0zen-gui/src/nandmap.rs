@@ -237,11 +237,11 @@ fn part_kind(name: &str) -> Kind {
 /// Reads the image block by block.
 pub fn read(path: &Path, device: Device) -> std::io::Result<Map> {
     let raw_block = match device {
-        Device::Diamond3 => diamond3::nand::BLOCK as usize,
+        Device::Diamond3 | Device::Onyx => diamond3::nand::BLOCK as usize,
         _ => j49::nand::BLOCK_RAW,
     };
     let total = std::fs::metadata(path)?.len() as usize / raw_block;
-    let listed = (device == Device::Diamond3)
+    let listed = (matches!(device, Device::Diamond3 | Device::Onyx))
         .then(|| nand::read_bad_blocks(&nand::bad_blocks_path(path)))
         .transpose()
         .unwrap_or_else(|e| {
@@ -257,7 +257,7 @@ type BlockTest = fn(&[u8]) -> bool;
 /// `listed`: the offsets of the blocks a gen 3 image's list names as bad.
 fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u32]>) -> std::io::Result<Map> {
     let (raw_block, block_size, bad, erased): (usize, usize, BlockTest, BlockTest) = match device {
-        Device::Diamond3 => (
+        Device::Diamond3 | Device::Onyx => (
             diamond3::nand::BLOCK as usize,
             diamond3::nand::BLOCK as usize,
             |_| false,
@@ -287,7 +287,7 @@ fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u3
         } else {
             Block::Data
         };
-        if device != Device::Diamond3 {
+        if !matches!(device, Device::Diamond3 | Device::Onyx) {
             table.block(&buffer);
         } else {
             let found = ubi_block(&buffer);
@@ -314,7 +314,7 @@ fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u3
         blocks.push(block);
     }
     let (mut partitions, mut owners) = match device {
-        Device::Diamond3 => diamond3_layout(ubi, total),
+        Device::Diamond3 | Device::Onyx => diamond3_layout(ubi, total),
         _ => omap_layout(table.into_table(), total),
     };
     // A free block is no volume's until UBI maps it.
@@ -373,7 +373,7 @@ fn scan(mut reader: impl Read, total: usize, device: Device, listed: Option<&[u3
         slots,
         by_volume,
         block_size,
-        shows_bad: device != Device::Diamond3 || listed.is_some(),
+        shows_bad: !matches!(device, Device::Diamond3 | Device::Onyx) || listed.is_some(),
     })
 }
 

@@ -1,5 +1,5 @@
 diff --git a/arch/arm/mach-imx/cmd_nandbcb.c b/arch/arm/mach-imx/cmd_nandbcb.c
-index d747770c0e3..904d1b26944 100644
+index d747770c0e3..e112d289e85 100644
 --- a/arch/arm/mach-imx/cmd_nandbcb.c
 +++ b/arch/arm/mach-imx/cmd_nandbcb.c
 @@ -411,6 +411,40 @@ static void encode_hamming_13_8(void *_src, void *_ecc, size_t size)
@@ -43,9 +43,11 @@ index d747770c0e3..904d1b26944 100644
  #endif
  
  static u32 calc_chksum(void *buf, size_t size)
-@@ -552,10 +586,26 @@ static int read_fcb(struct boot_config *boot_cfg, struct fcb_block *fcb,
+@@ -551,12 +585,30 @@ static int read_fcb(struct boot_config *boot_cfg, struct fcb_block *fcb,
+ 	if (ret)
  		goto fcb_raw_page_err;
  
++#if !defined(CONFIG_MX6UL) && !defined(CONFIG_MX6ULL)
  	if ((plat_config.misc_flags & FCB_ENCODE_HAMMING) &&
 -	    (plat_config.misc_flags & FCB_LAYOUT_RESV_12B))
 -		memcpy(fcb, fcb_raw_page + 12, sizeof(struct fcb_block));
@@ -72,9 +74,11 @@ index d747770c0e3..904d1b26944 100644
 +		ret = 0;
 +	}
  
++#endif
  fcb_raw_page_err:
  	kfree(fcb_raw_page);
-@@ -687,6 +737,12 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
+ 
+@@ -687,6 +739,12 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
  	if (ret)
  		return ret;
  
@@ -87,7 +91,7 @@ index d747770c0e3..904d1b26944 100644
  	/* dbbtpages == 0 if no bad blocks */
  	if (dbbt->dbbtpages > 0) {
  		to = off + 4 * mtd->writesize + actual_size - size;
-@@ -697,6 +753,11 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
+@@ -697,6 +755,11 @@ static int read_dbbt(struct boot_config *boot_cfg, struct dbbt_block *dbbt,
  
  		if (ret)
  			return ret;
@@ -99,7 +103,7 @@ index d747770c0e3..904d1b26944 100644
  	}
  
  	return 0;
-@@ -1239,8 +1300,9 @@ void dump_structure(struct boot_config *boot_cfg, struct fcb_block *fcb,
+@@ -1239,8 +1302,9 @@ void dump_structure(struct boot_config *boot_cfg, struct fcb_block *fcb,
  		P1(dbbtpages);
  	#undef P1
  
@@ -111,7 +115,7 @@ index d747770c0e3..904d1b26944 100644
  
  	if (!(plat_config.misc_flags & FIRMWARE_EXTRA_ONE)) {
  		printf("Firmware: image #0 @ 0x%x size 0x%x\n",
-@@ -1350,7 +1412,7 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+@@ -1350,7 +1414,7 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
  	/* read fcb */
  	fcb_not_found = 1;
  	off = 0;
@@ -120,7 +124,7 @@ index d747770c0e3..904d1b26944 100644
  		if (fcb_not_found) {
  			ret = read_fcb(boot_cfg, &fcb, off);
  
-@@ -1366,22 +1428,30 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+@@ -1366,22 +1430,30 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
  
  			if (ret < 0)
  				goto dbbt_page_copy_err;
@@ -158,7 +162,7 @@ index d747770c0e3..904d1b26944 100644
  		if (dbbt_not_found) {
  			ret = read_dbbt(boot_cfg, &dbbt, dbbt_data_page, off);
  
-@@ -1398,25 +1468,24 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
+@@ -1398,25 +1470,24 @@ static int nandbcb_dump(struct boot_config *boot_cfg)
  
  			if (ret < 0)
  				goto dbbt_page_copy_err;
@@ -193,3 +197,15 @@ index d747770c0e3..904d1b26944 100644
  	dump_structure(boot_cfg, &fcb, &dbbt, dbbt_data_page);
  
  dbbt_page_copy_err:
+@@ -1446,10 +1517,7 @@ static int do_nandbcb_dump(int argc, char * const argv[])
+ 		return CMD_RET_FAILURE;
+ 
+ 	ret = nandbcb_dump(&cfg);
+-	if (ret)
+-		return ret;
+-
+-	return ret;
++	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
+ }
+ 
+ static int do_nandbcb_init(int argc, char * const argv[])

@@ -28,6 +28,7 @@ fn main() {
         ["pack", device, version, out] => {
             let device = match device {
                 "diamond3" => Device::Diamond3,
+                "onyx" => Device::Onyx,
                 "j49" => Device::J49,
                 "diamond" => Device::Diamond,
                 other => fail(format!("no bundle for {other}")),
