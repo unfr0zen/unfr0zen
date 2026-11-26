@@ -57,7 +57,6 @@ pub fn build(source: &[u8], object: &[u8], sections: &[super::menu::Section]) ->
         ("layout_MENU_NAMES_REGISTER".into(), insertion.names_register),
         ("layout_MENU_SCREENS_REGISTER".into(), insertion.screens_register),
         ("layout_MENU_NEXT_REGISTER".into(), insertion.next_register),
-        ("layout_MENU_HAS_DOOM".into(), u32::from(sections.contains(&super::menu::Section::Doom))),
         ("layout_MENU_GROW_APPENDS".into(), u32::from(insertion.appends)),
     ]);
     externals.extend(menu_bindings.clone());

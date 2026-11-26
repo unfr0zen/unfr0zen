@@ -29,6 +29,6 @@ for variant in custom_screen custom_screen_legacy rcs_screen; do
             ;;
     esac
     clang --target=arm-linux-gnueabihf -march=armv7-a -marm -mfpu=vfpv3-d16 -mfloat-abi=hard \
-        -std=c11 -O2 -fPIE -ffreestanding -fno-builtin -fno-stack-protector -fno-unwind-tables \
+        -std=c11 -O2 -fPIE -ffreestanding -fno-builtin -fno-stack-protector -fno-jump-tables -fno-unwind-tables \
         -fno-asynchronous-unwind-tables -Wall -Wextra -Werror $flags -c "$dir/src/$name.c" -o "$1/$output"
 done

@@ -72,10 +72,6 @@ pub(super) fn insertion(elf: &Elf, sections: &[Section]) -> Result<Insertion> {
     }
     let found = found.pop().unwrap();
     let arranged = arranged_with_abi(&names, sections, super::legacy_abi(elf.data))?;
-    let section_count = Section::ALL.iter().filter(|section| sections.contains(section)).count();
-    if !sections.contains(&Section::Doom) && arranged.get(1 + section_count).map(String::as_str) != Some("slideshow") {
-        return device("settings menu insertion requires Slideshow after the optional sections");
-    }
     if super::legacy_abi(elf.data) && arranged.len() + 1 > 27 {
         return device("5.6-7 settings name capacity: choose at most two of Zigbee, Matter and Doom");
     }

@@ -505,9 +505,6 @@ fn without_features_the_settings_menu_and_its_loop_are_four_entries_shorter() {
             menu["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_owned()).collect::<Vec<_>>()
         };
         let shown = names(none.0);
-        assert_eq!(all["bindings"]["layout_MENU_HAS_DOOM"], 1);
-        assert_eq!(none.0["bindings"]["layout_MENU_HAS_DOOM"], 0);
-        assert_eq!(shown[1], "slideshow");
         assert_eq!(shown.len() + 4, names(all).len(), "{}", path.display());
         assert!(!shown.iter().any(|n| ["account", "update", "proinfoscreen", "templock"].contains(&n.as_str())));
         assert_eq!(shown[shown.len() - 3..], ["legalinfo", "reset", "temperature"]);
