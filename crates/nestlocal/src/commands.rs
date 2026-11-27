@@ -451,7 +451,7 @@ impl Bridge {
                 let v = float(arg).ok_or("expected a temperature")?;
                 let first = !sensor.has_reading();
                 sensor.set(v)?;
-                if first {
+                if first && !crate::sensor::paired_chosen(&self.store, &self.serial, &sensor.bucket) {
                     sensor.select_when_ready(&self.store, &self.serial);
                 }
                 logf!("external temperature: reading {v} °C");
@@ -585,6 +585,19 @@ mod tests {
         assert_eq!(b.fields("external_temperature", "21.5"), Ok(None));
         assert_eq!(sensor.reading(), Some(21.5));
         assert!(crate::sensor::selected(&b.store, &b.serial, &sensor.bucket), "the first reading selects it");
+        let other = test_bridge();
+        let sensor = crate::sensor::Sensor::open(
+            &std::env::temp_dir().join(format!("nestlocal-first-{}.json", std::process::id())),
+            "S",
+            std::path::Path::new("/nonexistent"),
+            std::time::Duration::from_secs(1800),
+        )
+        .unwrap();
+        other.attach_sensor(sensor.clone());
+        let fields = fields! {"active_rcs_sensors" => vec!["kryptonite.18B43000AAAA1111"]};
+        other.store.merge(&format!("rcs_settings.{}", other.serial), &fields, 0, 0, true);
+        assert_eq!(other.fields("external_temperature", "21.5"), Ok(None));
+        assert!(!crate::sensor::selected(&other.store, &other.serial, &sensor.bucket), "a paired one chosen stays");
         for bad in ["unavailable", "", "NaN", "95"] {
             assert!(b.fields("external_temperature", bad).is_err(), "{bad}");
         }

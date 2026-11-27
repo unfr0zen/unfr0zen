@@ -180,6 +180,11 @@ fn main() {
     runtime.block_on(run(config));
 }
 
+/// How many paired sensors nlclient may have, or none where it cannot hear them.
+fn sensor_room(config: &flags::Config, stand_in: bool) -> Option<usize> {
+    sensor::roster::room(stand_in, matter_takes_ble(config))
+}
+
 /// nlclient's settings file, as it should be when nlclient starts.
 fn prepare_settings(config: &flags::Config) {
     let path = &config.settings;
@@ -189,11 +194,35 @@ fn prepare_settings(config: &flags::Config) {
         Err(e) => fatal!("{e}"),
     }
     let identity = std::path::Path::new(&config.external_temperature_store);
+    // First: what comes next may be all that stands between a key and its loss.
+    if device::current().ble.is_some() {
+        let stand_in = sensor::stand_in_id(identity);
+        let (sensors, path) = (std::path::Path::new(&config.sensors), std::path::Path::new(path));
+        if let Err(e) = sensor::roster::prepare(
+            sensors,
+            path,
+            stand_in.as_deref(),
+            sensor_room(config, config.external_temperature),
+        ) {
+            logf!("sensors: {e}");
+        }
+    }
     if !config.external_temperature {
         if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
             logf!("external temperature: {e}");
         }
     } else if device::current().ble.is_some() || device::current().hci.is_some() || device::current().omap() {
+        // Its place comes first, after the sensors' keys are kept: with six paired, one is set aside.
+        if device::current().ble.is_some() {
+            let stand_in = sensor::stand_in_id(identity);
+            if let Err(e) = sensor::roster::make_room(
+                std::path::Path::new(&config.sensors),
+                std::path::Path::new(path),
+                stand_in.as_deref(),
+            ) {
+                logf!("sensors: {e}");
+            }
+        }
         let store = store::Store::new(&config.state);
         let settings = device::current().omap().then_some(std::path::Path::new(path));
         let where_id = sensor::where_id(&store, &config.serial, settings);
@@ -231,6 +260,11 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
             return None;
         }
     };
+    // Gen 1 and gen 2 nlclient takes its one sensor through its RCS input.
+    if !device.omap() && !sensor::fits(std::path::Path::new(&config.settings), &sensor.bucket) {
+        logf!("external temperature: nlclient has no room for another sensor");
+        return None;
+    }
     let omap = device.omap();
     let where_id = sensor::where_id(store, &config.serial, omap.then_some(std::path::Path::new(&config.settings)));
     sensor::ensure_buckets(store, &config.serial, &sensor.bucket, where_id.as_deref());
@@ -238,7 +272,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         // Its Sensors view lists the sensor under the room, so it follows a move.
         sensor::keep_location(store, &config.serial, &sensor.bucket);
     } else {
-        sensor::keep_selected(store, &config.serial, &sensor);
+        sensor::keep_selected(store, &config.serial, Some(&sensor));
     }
     let (known, shared) = (store.clone(), format!("shared.{}", config.serial));
     sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
@@ -263,6 +297,16 @@ async fn run(config: flags::Config) {
     structure::ensure_structure(&store, &config.serial);
     tokio::spawn(store.clone().save_changes());
     let sensor = start_sensor(&config, &store);
+    // A stand-in that did not start leaves nlclient its own Bluetooth, and the paired sensors.
+    let roster = device::current().ble.is_some().then(|| {
+        let room = sensor_room(&config, sensor.is_some());
+        let roster = sensor::roster::Roster::new(std::path::Path::new(&config.sensors), room);
+        roster.watch(&store, &config.serial);
+        if sensor.is_none() {
+            sensor::keep_selected(&store, &config.serial, None);
+        }
+        roster
+    });
     #[cfg(target_os = "linux")]
     if let (true, false, Some(ble)) =
         (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref())
@@ -412,6 +456,7 @@ async fn run(config: flags::Config) {
         verbose: config.verbose,
         hold: config.hold,
         display_replay: std::sync::Mutex::new(Some(format!("device.{}", config.serial))),
+        roster,
     });
     let stopped = cloud.serve(&config.listen, tls).await;
     fatal!("{stopped}");

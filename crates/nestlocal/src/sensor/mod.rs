@@ -13,6 +13,7 @@ pub mod chip;
 pub mod hci;
 #[cfg(target_os = "linux")]
 pub mod port;
+pub mod roster;
 pub mod socket;
 
 use std::io;
@@ -46,6 +47,24 @@ const SELECT_AFTER: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const SELECT_AFTER: Duration = Duration::from_millis(10);
 const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
+
+/// The sensors nlclient has room for: its Bluetooth asserts there are fewer
+/// when one is added.
+const MOST_SENSORS: usize = 6;
+
+/// Whether nlclient's settings leave room for the sensor beside the paired ones.
+fn has_room(settings: &[u8], bucket: &str) -> bool {
+    let key = format!("{bucket}.key");
+    nlsettings::keys(settings)
+        .filter(|name| name.starts_with("kryptonite.") && name.ends_with(".key") && *name != key)
+        .count()
+        < MOST_SENSORS
+}
+
+/// has_room, of the file; one that cannot be read keeps nothing out.
+pub fn fits(settings: &Path, bucket: &str) -> bool {
+    std::fs::read(settings).map_or(true, |settings| has_room(&settings, bucket))
+}
 
 /// The sensor's description. The gen 1's and gen 2's Sensors view names it
 /// after its room, where a description would be a second label.
@@ -124,6 +143,11 @@ fn write_identity(path: &Path, identity: &Identity) -> io::Result<()> {
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)
+}
+
+/// The stand-in's id, if it ever was made.
+pub fn stand_in_id(path: &Path) -> Option<String> {
+    read_identity(path).map(|identity| identity.id)
 }
 
 /// The identity at path, made on first use.
@@ -380,6 +404,9 @@ pub fn prepare_settings(path: &Path, settings: &Path, serial: &str, where_id: Op
     let bucket = format!("kryptonite.{}", identity.id);
     let key = parse_key(&identity.key).ok_or_else(|| io::Error::other("bad key"))?;
     let original = std::fs::read(settings)?;
+    if !has_room(&original, &bucket) {
+        return Err(io::Error::other(format!("nlclient has {MOST_SENSORS} sensors, and room for no other")));
+    }
     let mut b = original.clone();
     let where_id = where_id.unwrap_or(DEFAULT_WHERE);
     for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", description().to_string())]
@@ -506,8 +533,23 @@ pub fn select(store: &Store, serial: &str, bucket: &str) {
     choose(store, serial, bucket, true);
 }
 
+/// The paired sensors nlclient has chosen, the stand-in apart.
+fn paired_choice(settings: &crate::json::Fields, stand_in: Option<&str>) -> Vec<Value> {
+    let mut active = listed(settings.get("active_rcs_sensors"));
+    active.retain(|v| v.as_str().is_some_and(|bucket| !bucket.is_empty() && stand_in != Some(bucket)));
+    active
+}
+
+/// Whether a paired sensor is chosen: the stand-in's first reading leaves it so.
+pub fn paired_chosen(store: &Store, serial: &str, stand_in: &str) -> bool {
+    store.get(&format!("rcs_settings.{serial}")).is_some_and(|o| !paired_choice(&o.value, Some(stand_in)).is_empty())
+}
+
+/// The stand-in chosen, or, if not `active`, the backplate or the paired sensor
+/// that is.
 fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
     let key = format!("rcs_settings.{serial}");
+    let paired = store.get(&key).map(|o| paired_choice(&o.value, Some(bucket))).unwrap_or_default();
     let mut associated = listed(store.get(&key).as_ref().and_then(|o| o.value.get("associated_rcs_sensors")));
     if !associated.iter().any(|v| v == bucket) {
         associated.push(bucket.into());
@@ -515,7 +557,7 @@ fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
     store.merge(
         &key,
         &fields! {
-            "active_rcs_sensors" => if active { vec![Value::from(bucket)] } else { Vec::new() },
+            "active_rcs_sensors" => if active { vec![Value::from(bucket)] } else { paired },
             "associated_rcs_sensors" => associated,
             "rcs_control_setting" => "OVERRIDE",
             "multiroom_active" => false,
@@ -537,7 +579,9 @@ fn choose(store: &Store, serial: &str, bucket: &str, active: bool) {
 /// Not at once: this watch runs inside nlclient's own update, whose answer
 /// would carry the new revision and timestamp without the values, and nlclient
 /// would take itself to be up to date. Later, the change reaches it as a push.
-pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: &Arc<Sensor>) {
+///
+/// A paired sensor that was chosen is chosen again, with the stand-in or without.
+pub fn keep_selected(store: &Arc<Store>, serial: &str, sensor: Option<&Arc<Sensor>>) {
     keep_selected_by(store, serial, sensor, || {
         let id = socket::client_process()?;
         Some(Client { id, age: socket::client_age(id.1)? })
@@ -564,29 +608,41 @@ struct Client {
 fn keep_selected_by(
     store: &Arc<Store>,
     serial: &str,
-    sensor: &Arc<Sensor>,
+    sensor: Option<&Arc<Sensor>>,
     process: impl Fn() -> Option<Client> + Send + Sync + 'static,
 ) {
     let process = Arc::new(process);
     let key = format!("rcs_settings.{serial}");
+    let bucket = sensor.map(|sensor| sensor.bucket.clone());
+    let chosen = store.get(&key).map(|o| paired_choice(&o.value, bucket.as_deref())).unwrap_or_default();
+    let chosen = Arc::new(Mutex::new(chosen));
     let waiting = Arc::new(AtomicBool::new(false));
-    let (again, answer_serial, answer_sensor) = (store.clone(), serial.to_string(), sensor.clone());
+    let (again, answer_serial, answer_sensor) = (store.clone(), serial.to_string(), sensor.cloned());
     let watching = process.clone();
     store.watch(move |o| {
-        if o.key != key || o.value.get("rcs_control_setting").and_then(Value::as_str) != Some("OFF") {
+        if o.key != key {
             return;
         }
-        if watching().is_some_and(|client| client.age >= STARTUP) {
+        let off = o.value.get("rcs_control_setting").and_then(Value::as_str) == Some("OFF");
+        if !off || watching().is_some_and(|client| client.age >= STARTUP) {
+            *chosen.lock().unwrap() = paired_choice(&o.value, bucket.as_deref());
             return;
         }
         if waiting.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (store, serial, sensor, waiting) =
-            (again.clone(), answer_serial.clone(), answer_sensor.clone(), waiting.clone());
+        let (store, serial, sensor, waiting, chosen, key) =
+            (again.clone(), answer_serial.clone(), answer_sensor.clone(), waiting.clone(), chosen.clone(), key.clone());
         std::thread::spawn(move || {
             std::thread::sleep(SELECT_AFTER);
             waiting.store(false, Ordering::SeqCst);
+            let paired = chosen.lock().unwrap().clone();
+            if !paired.is_empty() {
+                let fields = fields! {"active_rcs_sensors" => paired, "rcs_control_setting" => "OVERRIDE"};
+                store.merge(&key, &fields, 0, 0, false);
+                return;
+            }
+            let Some(sensor) = sensor else { return };
             if sensor.has_reading() {
                 sensor.select_when_ready(&store, &serial);
             } else {
@@ -597,6 +653,8 @@ fn keep_selected_by(
     // An OFF that is the one stored is no change, and the watch does not hear it: with one
     // stored, a new process first takes the association back, so that its OFF is one. This
     // looks every WATCH_EVERY, and nlclient's OFF comes later than that after it starts.
+    // With an OFF stored no paired sensor is chosen, and only the stand-in is to be.
+    let Some(sensor) = sensor else { return };
     let (store, sensor, serial) = (Arc::downgrade(store), Arc::downgrade(sensor), serial.to_string());
     std::thread::spawn(move || {
         let mut last = process().map(|client| client.id);
@@ -844,6 +902,29 @@ mod tests {
     }
 
     #[test]
+    fn there_is_no_seventh_sensor() {
+        let dir = dir("seventh");
+        let (path, settings) = (dir.join("sensor.json"), dir.join("settings"));
+        let with = |count: usize| {
+            let entry = |i: usize| {
+                let name = format!("kryptonite.18B4{i}");
+                format!("  <s key=\"{name}.key\" value=\"a\"/>\n  <s key=\"{name}.seqno\" value=\"1\"/>\n")
+            };
+            format!("<settings>\n{}</settings>\n", (0..count).map(entry).collect::<String>())
+        };
+        std::fs::write(&settings, with(6)).unwrap();
+        assert!(prepare_settings(&path, &settings, "S", None).is_err());
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), with(6), "left as it was");
+        std::fs::write(&settings, with(5)).unwrap();
+        prepare_settings(&path, &settings, "S", None).unwrap();
+        prepare_settings(&path, &settings, "S", Some("room")).unwrap();
+        let bucket = format!("kryptonite.{}", read_identity(&path).unwrap().id);
+        assert!(fits(&settings, &bucket) && !fits(&settings, "kryptonite.OTHER"));
+        let b = std::fs::read(&settings).unwrap();
+        assert_eq!(nlsettings::value(&b, &format!("{bucket}.whereid")).unwrap(), b"room", "it is itself the sixth");
+    }
+
+    #[test]
     fn base64_as_nlclient_decodes_it() {
         assert_eq!(base64(&parse_key("00112233445566778899aabbccddeeff").unwrap()), "ABEiM0RVZneImaq7zN3u/w==");
     }
@@ -871,7 +952,7 @@ mod tests {
         let store = temp_store();
         store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
         ensure_buckets(&store, "S", &sensor.bucket, None);
-        keep_selected_by(&store, "S", &sensor, || None);
+        keep_selected_by(&store, "S", Some(&sensor), || None);
         let setting = || store.get("rcs_settings.S").unwrap().value;
         let off = || {
             store.merge(
@@ -910,7 +991,7 @@ mod tests {
         // nlclient's process, whose start the test moves by its pid and age.
         let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
         let running = process.clone();
-        keep_selected_by(&store, "S", &sensor, move || *running.lock().unwrap());
+        keep_selected_by(&store, "S", Some(&sensor), move || *running.lock().unwrap());
         let setting = || store.get("rcs_settings.S").unwrap().value;
         let settle = || std::thread::sleep(SELECT_AFTER * 20 + WATCH_EVERY * 20);
         // The screen's backplate comes with OFF, as nlclient's start-up does.
@@ -966,7 +1047,7 @@ mod tests {
         select(&store, "S", &sensor.bucket);
         let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
         let running = process.clone();
-        keep_selected_by(&store, "S", &sensor, move || *running.lock().unwrap());
+        keep_selected_by(&store, "S", Some(&sensor), move || *running.lock().unwrap());
         std::thread::sleep(WATCH_EVERY * 20);
         // It starts again with the sensor selected, and makes no OFF.
         *process.lock().unwrap() = Some(Client { id: (200, 2), age: Duration::ZERO });
@@ -1002,6 +1083,117 @@ mod tests {
         assert!(sensor.next_report(boot_time()).is_none());
         known.store(true, Ordering::SeqCst);
         assert!(sensor.next_report(boot_time()).is_some());
+    }
+
+    /// A chosen paired sensor stays chosen when nestlocal restarts, when nlclient
+    /// starts and says OFF, and when the stand-in has a reading.
+    #[test]
+    fn a_paired_sensor_chosen_stays_through_restarts_and_the_stand_ins_readings() {
+        const REAL: &str = "kryptonite.18B43000AAAA1111";
+        let dir = dir("paired");
+        let open =
+            || Sensor::open(&dir.join("sensor.json"), "S", &dir.join("none"), Duration::from_secs(1800)).unwrap();
+        let sensor = open();
+        let store = temp_store();
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        let pick = |active: Value, control: &str| {
+            let fields = fields! {"active_rcs_sensors" => active, "rcs_control_setting" => control};
+            store.merge("rcs_settings.S", &fields, 0, 0, true)
+        };
+        let active = || store.get("rcs_settings.S").unwrap().value["active_rcs_sensors"].clone();
+        let settle = || std::thread::sleep(SELECT_AFTER * 20 + WATCH_EVERY * 20);
+        pick(json!([REAL]), "OVERRIDE");
+        // nestlocal starts.
+        ensure_buckets(&store, "S", &sensor.bucket, None);
+        assert_eq!(active(), json!([REAL]));
+        let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
+        let running = process.clone();
+        keep_selected_by(&store, "S", Some(&sensor), move || *running.lock().unwrap());
+        assert!(paired_chosen(&store, "S", &sensor.bucket), "the first reading is to leave it");
+        sensor.set(20.0).unwrap();
+        // nlclient starts, and says OFF.
+        *process.lock().unwrap() = Some(Client { id: (200, 2), age: Duration::ZERO });
+        settle();
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([REAL]), "not the stand-in, though it has a reading");
+        assert_eq!(store.get("rcs_settings.S").unwrap().value["rcs_control_setting"], "OVERRIDE");
+        // nlclient has run for a while: an OFF now is the screen's.
+        process.lock().unwrap().as_mut().unwrap().age = STARTUP;
+        // The backplate chosen on the screen, then: it stays, and no sensor comes back for it.
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([]));
+        assert!(!paired_chosen(&store, "S", &sensor.bucket));
+        // The stand-in chosen is not a paired one.
+        pick(json!([sensor.bucket]), "OVERRIDE");
+        assert!(!paired_chosen(&store, "S", &sensor.bucket));
+        *process.lock().unwrap() = Some(Client { id: (300, 3), age: Duration::ZERO });
+        settle();
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([sensor.bucket]), "and is chosen again as ever");
+    }
+
+    #[test]
+    fn a_paired_sensor_switched_off_is_not_put_back() {
+        const ID: &str = "18B43000AAAA1111";
+        let dir = dir("switched-off");
+        let path = dir.join("sensors.json");
+        let file = |enabled: bool| {
+            let sensor = json!({"id": ID, "key": "00112233445566778899aabbccddeeff", "enabled": enabled});
+            std::fs::write(&path, json!({"sensors": [sensor]}).to_string()).unwrap();
+        };
+        let store = temp_store();
+        store.merge("link.S", &fields! {"structure" => "structure.home"}, 0, 0, false);
+        let pick = |active: Value, control: &str| {
+            let fields = fields! {"active_rcs_sensors" => active, "rcs_control_setting" => control};
+            store.merge("rcs_settings.S", &fields, 0, 0, true)
+        };
+        let active = || store.get("rcs_settings.S").unwrap().value["active_rcs_sensors"].clone();
+        let settle = || std::thread::sleep(SELECT_AFTER * 20 + WATCH_EVERY * 20);
+        file(true);
+        let roster = roster::Roster::new(&path, Some(6));
+        roster.apply(&store, "S", true);
+        let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: STARTUP })));
+        let running = process.clone();
+        keep_selected_by(&store, "S", None, move || *running.lock().unwrap());
+        let bucket = format!("kryptonite.{ID}");
+        pick(json!([bucket]), "OVERRIDE");
+        // Switched off while it is chosen, and nlclient then starts.
+        file(false);
+        roster.apply(&store, "S", true);
+        *process.lock().unwrap() = Some(Client { id: (200, 2), age: Duration::ZERO });
+        settle();
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([]), "not put back");
+    }
+
+    #[test]
+    fn a_paired_sensor_is_kept_where_there_is_no_stand_in() {
+        const REAL: &str = "kryptonite.18B43000AAAA1111";
+        let store = temp_store();
+        let pick = |active: Value, control: &str| {
+            let fields = fields! {"active_rcs_sensors" => active, "rcs_control_setting" => control};
+            store.merge("rcs_settings.S", &fields, 0, 0, true)
+        };
+        let active = || store.get("rcs_settings.S").unwrap().value["active_rcs_sensors"].clone();
+        let settle = || std::thread::sleep(SELECT_AFTER * 20);
+        let process = Arc::new(Mutex::new(Some(Client { id: (100, 1), age: Duration::ZERO })));
+        let running = process.clone();
+        keep_selected_by(&store, "S", None, move || *running.lock().unwrap());
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([]), "nothing was chosen");
+        pick(json!([REAL]), "OVERRIDE");
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([REAL]));
+        process.lock().unwrap().as_mut().unwrap().age = STARTUP;
+        pick(json!([]), "OFF");
+        settle();
+        assert_eq!(active(), json!([]), "the screen's backplate");
     }
 
     #[test]
