@@ -47,6 +47,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("seed-structure", Kind::Text, "", "what an older nestlocal.init passes: set structure_id in this settings file, then exit"),
     ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id"),
     ("serial", Kind::Text, "", "the unit's serial (default: the hostname, which the unit sets to it)"),
+    ("sensors", Kind::Text, "/media/data/nestlocal-sensors.json", "the paired Nest Temperature Sensors, with their keys (sensor/roster.rs)"),
     ("settings", Kind::Text, "/media/user-config/settings.config", "nlclient's settings file"),
     ("stale", Kind::Duration, "5m", "availability goes offline when nlclient has made no request for this long"),
     ("state", Kind::Text, "/media/data/nestlocal.json", "bucket store"),
@@ -88,6 +89,7 @@ pub struct Config {
     pub prepare_settings: bool,
     /// An older nestlocal.init's settings file, structure_id alone to seed.
     pub seed_structure: String,
+    pub sensors: String,
     pub serial: String,
     pub settings: String,
     pub stale: Duration,
@@ -267,6 +269,7 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         origin: get("origin"),
         prepare_settings: flag("prepare-settings"),
         seed_structure: get("seed-structure"),
+        sensors: get("sensors"),
         serial: get("serial"),
         settings: get("settings"),
         stale: duration("stale"),

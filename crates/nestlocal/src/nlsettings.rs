@@ -27,6 +27,20 @@ pub fn entries<'a>(b: &'a [u8], key: &str) -> Vec<(usize, usize, &'a [u8])> {
     found
 }
 
+/// Every entry's key.
+pub fn keys(b: &[u8]) -> impl Iterator<Item = &str> {
+    const OPEN: &[u8] = br#"<s key=""#;
+    let mut rest = b;
+    std::iter::from_fn(move || {
+        let start = find(rest, OPEN)? + OPEN.len();
+        rest = &rest[start..];
+        let len = rest.iter().position(|&c| c == b'"')?;
+        let key = &rest[..len];
+        rest = &rest[len..];
+        Some(std::str::from_utf8(key).unwrap_or_default())
+    })
+}
+
 /// The first value key has.
 pub fn value<'a>(b: &'a [u8], key: &str) -> Option<&'a [u8]> {
     entries(b, key).first().map(|(_, _, value)| *value)

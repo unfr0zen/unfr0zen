@@ -13,6 +13,7 @@ pub mod chip;
 pub mod hci;
 #[cfg(target_os = "linux")]
 pub mod port;
+pub mod roster;
 pub mod socket;
 
 use std::io;
@@ -46,6 +47,24 @@ const SELECT_AFTER: Duration = Duration::from_secs(2);
 #[cfg(test)]
 const SELECT_AFTER: Duration = Duration::from_millis(10);
 const DEFAULT_WHERE: &str = "00000000-0000-0000-0000-00010000000c";
+
+/// The sensors nlclient has room for: its Bluetooth asserts there are fewer
+/// when one is added.
+const MOST_SENSORS: usize = 6;
+
+/// Whether nlclient's settings leave room for the sensor beside the paired ones.
+fn has_room(settings: &[u8], bucket: &str) -> bool {
+    let key = format!("{bucket}.key");
+    nlsettings::keys(settings)
+        .filter(|name| name.starts_with("kryptonite.") && name.ends_with(".key") && *name != key)
+        .count()
+        < MOST_SENSORS
+}
+
+/// has_room, of the file; one that cannot be read keeps nothing out.
+pub fn fits(settings: &Path, bucket: &str) -> bool {
+    std::fs::read(settings).map_or(true, |settings| has_room(&settings, bucket))
+}
 
 /// The sensor's description. The gen 1's and gen 2's Sensors view names it
 /// after its room, where a description would be a second label.
@@ -124,6 +143,11 @@ fn write_identity(path: &Path, identity: &Identity) -> io::Result<()> {
         file.sync_all()?;
     }
     std::fs::rename(&tmp, path)
+}
+
+/// The stand-in's id, if it ever was made.
+pub fn stand_in_id(path: &Path) -> Option<String> {
+    read_identity(path).map(|identity| identity.id)
 }
 
 /// The identity at path, made on first use.
@@ -380,6 +404,9 @@ pub fn prepare_settings(path: &Path, settings: &Path, serial: &str, where_id: Op
     let bucket = format!("kryptonite.{}", identity.id);
     let key = parse_key(&identity.key).ok_or_else(|| io::Error::other("bad key"))?;
     let original = std::fs::read(settings)?;
+    if !has_room(&original, &bucket) {
+        return Err(io::Error::other(format!("nlclient has {MOST_SENSORS} sensors, and room for no other")));
+    }
     let mut b = original.clone();
     let where_id = where_id.unwrap_or(DEFAULT_WHERE);
     for (name, value) in [("key", base64(&key)), ("whereid", where_id.to_string()), ("desc", description().to_string())]
@@ -841,6 +868,29 @@ mod tests {
         );
         assert_eq!(nlsettings::value(&b, &format!("{bucket}.whereid")).unwrap(), b"room");
         assert_eq!(nlsettings::value(&b, "a").unwrap(), b"1", "the rest stays");
+    }
+
+    #[test]
+    fn there_is_no_seventh_sensor() {
+        let dir = dir("seventh");
+        let (path, settings) = (dir.join("sensor.json"), dir.join("settings"));
+        let with = |count: usize| {
+            let entry = |i: usize| {
+                let name = format!("kryptonite.18B4{i}");
+                format!("  <s key=\"{name}.key\" value=\"a\"/>\n  <s key=\"{name}.seqno\" value=\"1\"/>\n")
+            };
+            format!("<settings>\n{}</settings>\n", (0..count).map(entry).collect::<String>())
+        };
+        std::fs::write(&settings, with(6)).unwrap();
+        assert!(prepare_settings(&path, &settings, "S", None).is_err());
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), with(6), "left as it was");
+        std::fs::write(&settings, with(5)).unwrap();
+        prepare_settings(&path, &settings, "S", None).unwrap();
+        prepare_settings(&path, &settings, "S", Some("room")).unwrap();
+        let bucket = format!("kryptonite.{}", read_identity(&path).unwrap().id);
+        assert!(fits(&settings, &bucket) && !fits(&settings, "kryptonite.OTHER"));
+        let b = std::fs::read(&settings).unwrap();
+        assert_eq!(nlsettings::value(&b, &format!("{bucket}.whereid")).unwrap(), b"room", "it is itself the sixth");
     }
 
     #[test]
