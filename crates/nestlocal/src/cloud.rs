@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 use crate::json::{decode_object, Fields};
 use crate::liveness::{InFlight, Liveness};
 use crate::logf;
+use crate::sensor::roster::Roster;
 use crate::store::{now_ms, Object, Store};
 use crate::weather::Outdoor;
 
@@ -45,6 +46,8 @@ pub struct Cloud {
     /// The device bucket to replay once at startup, so nlclient applies the
     /// restored display requests even when its cached buckets match.
     pub display_replay: Mutex<Option<String>>,
+    /// The paired sensors, whose keys nlclient asks for.
+    pub roster: Option<Arc<Roster>>,
 }
 
 /// An object as the device expects it: revision and timestamp ahead of
@@ -124,7 +127,7 @@ fn redact_auth(v: &str) -> String {
     }
 }
 
-fn base64_decode(s: &str) -> Option<Vec<u8>> {
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let value = |c: u8| match c {
         b'A'..=b'Z' => Some(c - b'A'),
         b'a'..=b'z' => Some(c - b'a' + 26),
@@ -257,6 +260,7 @@ impl Cloud {
             "/passphrase" => self.reply(&json!({"value": "LOCAL00", "expires": now_ms() + 3_600_000})),
             "/upload" => self.reply(&json!({"status": "ok"})), // logs and diagnostics: dropped
             "/schedules/create" => self.create_schedule(body),
+            "/kryptonite/devicekey" => self.sensor_key(body),
             _ if path.starts_with("/transport/") => self.transport(path, body),
             _ if path.starts_with("/weather/") => self.weather(uri.query()),
             _ if path.starts_with("/pro_info/") => empty(StatusCode::NOT_FOUND),
@@ -338,6 +342,21 @@ impl Cloud {
             self.store.merge(&key, &Fields::new(), 0, 1, true);
         }
         self.reply(&json!({"bucket_id": key, "status": "success"}))
+    }
+
+    /// nlclient has heard a sensor its structure lists and has no key for it:
+    /// "kryptoniteId=...&beaconPacket=...". Its answer is the key in base64,
+    /// and nothing else; it is not logged.
+    fn sensor_key(&self, body: &[u8]) -> Response<Body> {
+        let id = query_value(std::str::from_utf8(body).ok(), "kryptoniteId");
+        let Some(key) = self.roster.as_ref().and_then(|roster| roster.key(&id)) else {
+            logf!("sensors: nlclient asked for the key of {id:?}, which is not one of them");
+            return empty(StatusCode::NOT_FOUND);
+        };
+        logf!("sensors: nlclient has heard {id} and got its key");
+        let mut r = Response::new(Body { full: Some(Bytes::from(key)), held: None, live: None });
+        r.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+        r
     }
 
     fn bad_json() -> Response<Body> {
@@ -504,7 +523,29 @@ mod tests {
             verbose: false,
             hold: Duration::from_secs(290),
             display_replay: Mutex::new(None),
+            roster: None,
         }
+    }
+
+    #[tokio::test]
+    async fn nlclient_gets_a_paired_sensors_key() {
+        let path = std::env::temp_dir().join(format!("nestlocal-devicekey-{}.json", std::process::id()));
+        let sensors = r#"{"sensors": [{"id": "18B43000AAAA1111", "key": "00112233445566778899aabbccddeeff"}]}"#;
+        std::fs::write(&path, sensors).unwrap();
+        let mut c = cloud();
+        crate::structure::ensure_structure(&c.store, "S");
+        let ask = "kryptoniteId=18B43000AAAA1111&beaconPacket=AAECAwQFBgcICQoLDA0ODxA%3D";
+        assert_eq!(call(&c, "/kryptonite/devicekey", ask).await.0, StatusCode::NOT_FOUND);
+        let roster = Roster::new(&path, Some(6));
+        roster.apply(&c.store, "S", false);
+        c.roster = Some(roster);
+        let (status, _, body) = call(&c, "/kryptonite/devicekey", ask).await;
+        // As nlclient decodes it: the whole body, 16 bytes.
+        assert_eq!((status, body.as_str()), (StatusCode::OK, "ABEiM0RVZneImaq7zN3u/w=="));
+        for other in ["kryptoniteId=18B43000BBBB2222&beaconPacket=AA", "kryptoniteId=", "", "{}"] {
+            assert_eq!(call(&c, "/kryptonite/devicekey", other).await.0, StatusCode::NOT_FOUND, "{other}");
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 
     async fn call(c: &Cloud, path: &str, body: &str) -> (StatusCode, HeaderMap, String) {

@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::chip::Chip;
+use super::relay::{line, Relay, RESTART_BLE};
 use super::Sensor;
 use crate::device::Ble;
 use crate::logf;
@@ -39,9 +40,6 @@ const SLEEP_FIRMWARE: &str = "/usr/share/dialog/data/firmware/nl_ble_sleep_firmw
 const DECOY: &str = "ble-reset";
 /// The PTY's holder, as an abstract socket's name.
 const HOLDER: &[u8] = b"nestlocal-ble-pty";
-/// A byte nlclient's BLE reader does not expect between messages: it restarts
-/// its BLE, reset line and firmware upload and all.
-const RESTART_BLE: u8 = 0x02;
 
 /// The real reset GPIO's directory, once the decoy covers its name.
 static REAL_RESET: OnceLock<String> = OnceLock::new();
@@ -349,12 +347,15 @@ fn run(sensor: Option<Arc<Sensor>>, master: OwnedFd, inotify: OwnedFd, value: Pa
 }
 
 /// Puts the stand-in in place, then runs it. Returns once nlclient may start.
-pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool) -> io::Result<()> {
+/// With `relay` the real chip is behind it (relay.rs), and Matter cannot have it.
+pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool, relay: bool) -> io::Result<()> {
     fs::create_dir_all(DIR)?;
     let (inotify, value) = cover_reset(ble)?;
     let (master, had_one) = fetch_master()?;
     if had_one {
-        write_all(master.as_raw_fd(), &[RESTART_BLE]);
+        if !relay {
+            write_all(master.as_raw_fd(), &[RESTART_BLE]);
+        }
         logf!("BLE stand-in: asked nlclient to start its BLE over");
     }
     let mut ends = [0 as RawFd; 2];
@@ -368,6 +369,25 @@ pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool) -> io
             // SAFETY: the pipe lives as long as the process; one byte is readable.
             unsafe { libc::write(signal, b"x".as_ptr().cast(), 1) };
         });
+    }
+    if relay {
+        let sensors: Vec<_> = sensor.into_iter().collect();
+        let ids: Vec<u64> = sensors.iter().map(|sensor| sensor.id()).collect();
+        let ends = line::Ends {
+            master,
+            uart: PathBuf::from(ble.node),
+            reset: PathBuf::from(reset_dir(ble)),
+            inotify,
+            value,
+            wake,
+            sensors,
+            stop: Arc::default(),
+            unsent: Box::new(line::unsent),
+        };
+        let relay = Relay::new(&ids, had_one);
+        std::thread::Builder::new().name("ble-relay".into()).spawn(move || line::run(ends, relay))?;
+        logf!("BLE relay: nlclient's BLE goes to {} through {}", ble.node, ble.uart);
+        return Ok(());
     }
     std::thread::Builder::new().name("ble-stand-in".into()).spawn(move || run(sensor, master, inotify, value, wake))?;
     if !matter {

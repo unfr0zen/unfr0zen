@@ -19,6 +19,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("device-name-file", Kind::Text, "", "file holding the unit's name in Home Assistant and Matter (its NodeLabel), <serial> standing for the unit's serial; empty keeps the last, at first \"Nest Thermostat\""),
     ("doom", Kind::Bool, "false", "offer Doom in the settings menu's DOOM entry and launch it from there (doom.rs)"),
     ("themes", Kind::Bool, "false", "offer customizable home screen themes in the settings menu's THEMES entry, drawn in nlclient by the theme preload (theme/)"),
+    ("ble-relay", Kind::Bool, "false", "with -external-temperature on gen 3: keep the real BLE chip behind the stand-in, for paired sensors to be heard beside it (sensor/relay.rs); not with -matter"),
     ("external-temperature", Kind::Bool, "false", "regulate from an external thermometer's readings, as a Nest Temperature Sensor nlclient hears (sensor/); gen 1 and gen 2 need the nlclient RCS input patch"),
     ("external-temperature-store", Kind::Text, "/media/data/nestlocal-sensor.json", "where the stand-in sensor's identity is kept"),
     ("external-temperature-timeout", Kind::Duration, "30m", "how long the last reading counts; nlclient goes back to the backplate about 11.5 minutes after that"),
@@ -47,6 +48,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
     ("seed-structure", Kind::Text, "", "what an older nestlocal.init passes: set structure_id in this settings file, then exit"),
     ("prepare-settings", Kind::Bool, "false", "prepare nlclient's settings file for its start, then exit (nestlocal.init): structure_id"),
     ("serial", Kind::Text, "", "the unit's serial (default: the hostname, which the unit sets to it)"),
+    ("sensors", Kind::Text, "/media/data/nestlocal-sensors.json", "the paired Nest Temperature Sensors, with their keys (sensor/roster.rs)"),
     ("settings", Kind::Text, "/media/user-config/settings.config", "nlclient's settings file"),
     ("stale", Kind::Duration, "5m", "availability goes offline when nlclient has made no request for this long"),
     ("state", Kind::Text, "/media/data/nestlocal.json", "bucket store"),
@@ -57,6 +59,7 @@ const FLAGS: &[(&str, Kind, &str, &str)] = &[
 ];
 
 pub struct Config {
+    pub ble_relay: bool,
     pub cert: String,
     pub discovery: String,
     pub device_name_file: String,
@@ -88,6 +91,7 @@ pub struct Config {
     pub prepare_settings: bool,
     /// An older nestlocal.init's settings file, structure_id alone to seed.
     pub seed_structure: String,
+    pub sensors: String,
     pub serial: String,
     pub settings: String,
     pub stale: Duration,
@@ -236,7 +240,11 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         get("matter-discriminator").parse::<u16>().ok().filter(|d| *d < 4096).ok_or_else(|| {
             Some(format!("invalid value {:?} for flag -matter-discriminator", get("matter-discriminator")))
         })?;
+    if flag("ble-relay") && (!flag("external-temperature") || flag("matter") || flag("matter-thread")) {
+        return Err(Some("-ble-relay goes with -external-temperature, and not with Matter".into()));
+    }
     Ok(Config {
+        ble_relay: flag("ble-relay"),
         cert: get("cert"),
         discovery: get("discovery"),
         device_name_file: get("device-name-file"),
@@ -267,6 +275,7 @@ pub fn parse(args: &[String]) -> Result<Config, Option<String>> {
         origin: get("origin"),
         prepare_settings: flag("prepare-settings"),
         seed_structure: get("seed-structure"),
+        sensors: get("sensors"),
         serial: get("serial"),
         settings: get("settings"),
         stale: duration("stale"),
