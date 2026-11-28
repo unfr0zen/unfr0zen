@@ -24,13 +24,15 @@ const SERVICE_PATH: &str = "/org/unfr0zen/matter/service";
 const C1_PATH: &str = "/org/unfr0zen/matter/service/c1";
 const C2_PATH: &str = "/org/unfr0zen/matter/service/c2";
 const AD_PATH: &str = "/org/unfr0zen/matter/advertisement";
+/// The ATT MTU every LE link has.
+const MIN_MTU: u16 = 23;
 const SERVICE_UUID: &str = "0000fff6-0000-1000-8000-00805f9b34fb";
 const C1_UUID: &str = "18ee2ef5-263d-4559-959f-4f9c429f9d11";
 const C2_UUID: &str = "18ee2ef5-263d-4559-959f-4f9c429f9d12";
 
 enum Event {
-    Write { peer: BtAddr, mtu: u16, value: Vec<u8> },
-    Notify { peer: BtAddr, mtu: u16, socket: Async<UnixDatagram> },
+    Write { peer: BtAddr, mtu: Option<u16>, value: Vec<u8> },
+    Notify { peer: Option<BtAddr>, mtu: Option<u16>, socket: Async<UnixDatagram> },
 }
 
 fn peer(path: &ObjectPath<'_>) -> zbus::fdo::Result<BtAddr> {
@@ -45,14 +47,21 @@ fn peer(path: &ObjectPath<'_>) -> zbus::fdo::Result<BtAddr> {
     Ok(BtAddr(bytes.try_into().map_err(|_| invalid())?))
 }
 
-fn options(values: &HashMap<&str, Value<'_>>) -> zbus::fdo::Result<(BtAddr, u16)> {
-    let bad = || zbus::fdo::Error::InvalidArgs("device and MTU are required".into());
-    let path: ObjectPath<'_> = values.get("device").ok_or_else(bad)?.try_into().map_err(|_| bad())?;
-    let mtu: u16 = values.get("mtu").ok_or_else(bad)?.try_into().map_err(|_| bad())?;
-    if !(23..=517).contains(&mtu) {
+/// The peer and the ATT MTU, where BlueZ gives them: the Thermostat E's BlueZ
+/// 5.47 gives a write's device without its MTU, and a subscription's MTU (as
+/// "MTU") without its device.
+fn options(values: &HashMap<&str, Value<'_>>) -> zbus::fdo::Result<(Option<BtAddr>, Option<u16>)> {
+    let bad = || zbus::fdo::Error::InvalidArgs("invalid device or MTU".into());
+    let peer = values
+        .get("device")
+        .map(|path| ObjectPath::try_from(path).map_err(|_| bad()).and_then(|path| peer(&path)))
+        .transpose()?;
+    let mtu: Option<u16> =
+        values.get("mtu").or_else(|| values.get("MTU")).map(|mtu| mtu.try_into().map_err(|_| bad())).transpose()?;
+    if mtu.is_some_and(|mtu| !(23..=517).contains(&mtu)) {
         return Err(bad());
     }
-    Ok((peer(&path)?, mtu))
+    Ok((peer, mtu))
 }
 
 struct Service;
@@ -85,6 +94,7 @@ impl C1 {
     }
     async fn write_value(&self, value: Vec<u8>, args: HashMap<&str, Value<'_>>) -> zbus::fdo::Result<()> {
         let (peer, mtu) = options(&args)?;
+        let peer = peer.ok_or_else(|| zbus::fdo::Error::InvalidArgs("the write names no device".into()))?;
         self.0
             .send(Event::Write { peer, mtu, value })
             .await
@@ -129,7 +139,7 @@ impl C2 {
                 .send(Event::Notify { peer, mtu, socket })
                 .await
                 .map_err(|_| zbus::fdo::Error::Failed("Matter BLE stopped".into()))?;
-            Ok((remote.into(), mtu))
+            Ok((remote.into(), mtu.unwrap_or(MIN_MTU)))
         }
         .await;
         if result.is_err() {
@@ -239,8 +249,11 @@ pub async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial:
     crate::logf!("matter BLE: BlueZ peripheral ready");
     let mut socket: Option<Async<UnixDatagram>> = None;
     let mut connected: Option<BtAddr> = None;
+    // The peer whose handshake request BTP holds: commissioners write it
+    // before they subscribe for the response.
+    let mut writer: Option<BtAddr> = None;
     let mut closed_since: Option<Instant> = None;
-    let mut mtu = 23;
+    let mut mtu = MIN_MTU;
     let mut advertising = false;
     loop {
         let open = !matches!(matter.comm_window_state(), CommWindowState::Closed);
@@ -254,6 +267,7 @@ pub async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial:
         {
             socket = None;
             connected = None;
+            writer = None;
             acquired.store(false, Ordering::SeqCst);
             super::CONNECTED.store(false, Ordering::SeqCst);
             btp.reset();
@@ -285,20 +299,32 @@ pub async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial:
         {
             Either3::First(Ok(Event::Write { peer, mtu: received_mtu, value })) => {
                 if connected.is_none_or(|connected| connected == peer) {
-                    mtu = received_mtu;
+                    if socket.is_some() {
+                        // The subscriber BlueZ named no device for.
+                        connected = Some(peer);
+                    }
+                    mtu = received_mtu.unwrap_or(mtu);
+                    writer = Some(peer);
                     btp.process_incoming(Some(mtu), peer, &value).map_err(|e| format!("BTP input: {e:?}"))?;
                 }
             }
             Either3::First(Ok(Event::Notify { peer, mtu: received_mtu, socket: notifier })) => {
-                btp.reset();
-                connected = Some(peer);
-                mtu = received_mtu;
+                // Without a device named, the subscriber is the peer that wrote,
+                // or the next to write.
+                let peer = peer.or(writer);
+                if peer.is_none() || writer != peer {
+                    btp.reset();
+                }
+                connected = peer;
+                mtu = received_mtu.unwrap_or(mtu);
                 socket = Some(notifier);
                 super::CONNECTED.store(true, Ordering::SeqCst);
             }
             Either3::Second(Ok(0)) => {
                 socket = None;
                 connected = None;
+                writer = None;
+                mtu = MIN_MTU;
                 acquired.store(false, Ordering::SeqCst);
                 super::CONNECTED.store(false, Ordering::SeqCst);
                 btp.reset();
@@ -316,10 +342,15 @@ mod tests {
     #[test]
     fn peer_options_accept_an_address_and_reject_invalid_mtu() {
         let path = ObjectPath::try_from("/org/bluez/hci0/dev_12_34_56_78_9A_BC").unwrap();
-        let mut args = HashMap::from([("device", Value::from(path)), ("mtu", Value::from(247u16))]);
-        assert_eq!(options(&args).unwrap(), (BtAddr([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]), 247));
+        let address = BtAddr([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]);
+        let mut args = HashMap::from([("device", Value::from(path)), ("link", Value::from("LE"))]);
+        assert_eq!(options(&args).unwrap(), (Some(address), None), "BlueZ 5.47's write");
+        args.insert("mtu", Value::from(247u16));
+        assert_eq!(options(&args).unwrap(), (Some(address), Some(247)));
         args.insert("mtu", Value::from(22u16));
         assert!(options(&args).is_err());
+        let subscription = HashMap::from([("MTU", Value::from(517u16))]);
+        assert_eq!(options(&subscription).unwrap(), (None, Some(517)), "BlueZ 5.47's subscription");
         assert!(peer(&ObjectPath::try_from("/org/bluez/hci0/dev_12_34").unwrap()).is_err());
     }
 }
