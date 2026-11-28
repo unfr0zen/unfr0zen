@@ -75,10 +75,17 @@ pub struct Da14580 {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Ble {
     Da14580(Da14580),
-    /// The gen E's BCM43341: the name of the UART hciattach brings it up
-    /// from, where nlclient scans for sensors through bluez itself, for the
-    /// stand-in sensor to take over.
-    Hci(&'static str),
+    Hci(Hci),
+}
+
+/// The gen E's BCM43341, an HCI controller hciattach brings up for bluez, which
+/// nlclient scans for sensors through and Matter commissions over.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub struct Hci {
+    /// The name of its UART, which the stand-in sensor points at its PTY.
+    pub uart: &'static str,
+    /// The device tree alias of the UART itself, whose ttymxc differs by board.
+    pub alias: &'static str,
 }
 
 pub struct Device {

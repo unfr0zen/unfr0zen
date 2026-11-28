@@ -167,8 +167,8 @@ fn main() {
         }
     }
     #[cfg(target_os = "linux")]
-    if let (true, Some(device::Ble::Hci(link))) = (config.external_temperature, &device::current().ble) {
-        if let Err(e) = sensor::port::start_holder(link) {
+    if let (true, Some(device::Ble::Hci(hci))) = (config.external_temperature, &device::current().ble) {
+        if let Err(e) = sensor::port::start_holder(hci.uart) {
             logf!("external temperature: the stand-in controller's PTY: {e}");
         }
     }
@@ -244,7 +244,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     {
         let result = match &device.ble {
             Some(device::Ble::Da14580(chip)) => sensor::port::start(Some(sensor.clone()), chip, config.matter),
-            Some(device::Ble::Hci(link)) => sensor::hci::start(sensor.clone(), link),
+            Some(device::Ble::Hci(hci)) => sensor::hci::start(sensor.clone(), hci),
             None => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
         };
         if let Err(e) = result {
