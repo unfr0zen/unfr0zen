@@ -62,6 +62,9 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
     let mut peer = None;
     let mut mtu = 23;
     let mut pending = None;
+    // The indication awaiting confirmation, and when it last failed.
+    let mut indication = Vec::new();
+    let mut failed: Option<Instant> = None;
     let mut closed_since = None;
     let mut packet = [0; gtl::MAX_VALUE];
     loop {
@@ -76,6 +79,7 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
             advertising = false;
             peer = None;
             pending = None;
+            failed = None;
             CONNECTED.store(false, Ordering::SeqCst);
             btp.reset();
         }
@@ -85,6 +89,10 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
         }
         if pending.is_some_and(|at: Instant| at.elapsed() > Duration::from_secs(5)) {
             return Err(Error::new(ErrorKind::TimedOut, "BLE indication confirmation timed out"));
+        }
+        if pending.is_some() && failed.is_some_and(|at| at.elapsed() >= Duration::from_millis(50)) {
+            uart.send(0x20, &indication).await?;
+            failed = None;
         }
         if peer.is_some() && pending.is_none() {
             let len = btp
@@ -96,6 +104,7 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
                 body.extend_from_slice(&packet[..len]);
                 uart.send(0x20, &body).await?;
                 pending = Some(Instant::now());
+                indication = body;
             }
         }
         // The tick checks commissioning changes and BTP acknowledgement deadlines.
@@ -117,6 +126,7 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
             (0x16, _) => {
                 peer = None;
                 pending = None;
+                failed = None;
                 // The peripheral firmware resumes advertising after disconnect.
                 advertising = true;
                 CONNECTED.store(false, Ordering::SeqCst);
@@ -135,9 +145,15 @@ async fn serve(matter: &Matter<'_>, comm: &BasicCommData, btp: &Btp, serial: &st
                 }
             }
             // 0x21 reports request errors; 0x24 confirms delivery to the central.
+            // Commissioners subscribe to C2 once their handshake write is
+            // confirmed, so the response is refused until then: it is sent
+            // again within the confirmation deadline.
             (0x21, [2, 1, _, _, status]) => {
                 if *status != 0 {
-                    return Err(Error::other(format!("BLE indication failed: {status}")));
+                    if pending.is_none() {
+                        return Err(Error::other(format!("BLE indication failed: {status}")));
+                    }
+                    failed = Some(Instant::now());
                 }
             }
             (0x24, [2, 1, _, _, 1]) => pending = None,
