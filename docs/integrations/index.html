@@ -326,12 +326,14 @@ data:
                         <tr><td data-label="App">Back up unit</td><td data-label="CLI"><code>unfr0zen backup [OUT]</code></td></tr>
                         <tr><td data-label="App">Not available</td><td data-label="CLI"><code>unfr0zen verify IMAGE</code></td></tr>
                         <tr><td data-label="App">Restore to unit, Restore from file</td><td data-label="CLI"><code>unfr0zen restore IMAGE</code></td></tr>
+                        <tr><td data-label="App">Not available</td><td data-label="CLI"><code>unfr0zen sensors IMAGE OUT</code></td></tr>
                     </tbody>
                 </table>
             </div>
             <ul>
                 <li><b>Backup.</b> The whole NAND as an image with a <code>.sha256</code> beside it. The 3rd generation and Thermostat E produce a 512 MiB ECC-corrected image and a <code>.bad</code> list of bad and unreadable blocks. The 1st and 2nd generation save raw pages with OOB and reread unclean blocks until two reads agree.</li>
                 <li><b>Resume.</b> <code>unfr0zen backup OUT</code> with the same OUT resumes an interrupted backup; the app, and a run without OUT, start a new file.</li>
+                <li><b>Sensors.</b> 3rd generation: writes the Nest Temperature Sensors paired with the unit in a backup of its NAND, with their keys, to OUT, in the format of nestlocal's sensors file (<code>/media/data/nestlocal-sensors.json</code>). It reads the backup only, never the unit, and refuses an OUT that exists. On Linux and macOS OUT is readable by you only: it holds the keys, so keep it private. The ids are printed, the keys never.</li>
                 <li><b>Restore.</b> Verifies the image against the <code>.sha256</code>, asks, then writes it back. On the 1st and 2nd generation the factory-bad blocks must match the chip's, only differing blocks are rewritten, and an interrupted restore is run again. On the 3rd generation and Thermostat E, a UBI block that falls on one of the chip's bad blocks is written to a free one. Images with a UBI fastmap require matching locations, and the Thermostat E requires an Onyx image.</li>
             </ul>
 

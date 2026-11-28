@@ -9,3 +9,4 @@ pub mod recovery;
 pub mod rootfs;
 pub use crate::common::scratch;
 pub mod sdp;
+pub mod sensors;
