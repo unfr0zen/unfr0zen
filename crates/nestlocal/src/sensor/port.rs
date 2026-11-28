@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use super::chip::Chip;
 use super::Sensor;
-use crate::device::Ble;
+use crate::device::Da14580;
 use crate::logf;
 use crate::settings_ui::DIR;
 
@@ -47,7 +47,7 @@ const RESTART_BLE: u8 = 0x02;
 static REAL_RESET: OnceLock<String> = OnceLock::new();
 
 /// The directory that resets the real chip.
-pub fn reset_dir(ble: &Ble) -> String {
+pub fn reset_dir(ble: &Da14580) -> String {
     REAL_RESET.get().cloned().unwrap_or_else(|| ble.reset.to_string())
 }
 
@@ -76,7 +76,7 @@ fn c_path(path: &Path) -> io::Result<CString> {
 
 /// Covers the reset GPIO with the decoy, keeping a way to the real one, and
 /// watches the decoy's value file.
-fn cover_reset(ble: &Ble) -> io::Result<(OwnedFd, PathBuf)> {
+fn cover_reset(ble: &Da14580) -> io::Result<(OwnedFd, PathBuf)> {
     let real = fs::canonicalize(ble.reset)?;
     let real_c = c_path(&real)?;
     // A decoy from an earlier run: nothing else mounts over this GPIO.
@@ -263,7 +263,7 @@ pub(super) fn fetch_master() -> io::Result<(OwnedFd, bool)> {
 
 /// Gives the real chip Nest's sleep firmware, as nlclient does when it has no
 /// use for BLE: left in its boot ROM the chip would draw more.
-fn sleep_real_chip(ble: &'static Ble) {
+fn sleep_real_chip(ble: &'static Da14580) {
     let reset = reset_dir(ble);
     let status = std::process::Command::new("/nestlabs/sbin/da-loader")
         .args([ble.node, SLEEP_FIRMWARE, "57600", "no-rtscts", &reset])
@@ -349,7 +349,7 @@ fn run(sensor: Option<Arc<Sensor>>, master: OwnedFd, inotify: OwnedFd, value: Pa
 }
 
 /// Puts the stand-in in place, then runs it. Returns once nlclient may start.
-pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Ble, matter: bool) -> io::Result<()> {
+pub fn start(sensor: Option<Arc<Sensor>>, ble: &'static Da14580, matter: bool) -> io::Result<()> {
     fs::create_dir_all(DIR)?;
     let (inotify, value) = cover_reset(ble)?;
     let (master, had_one) = fetch_master()?;

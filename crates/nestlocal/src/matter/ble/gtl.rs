@@ -84,8 +84,9 @@ pub fn firmware(stock: &[u8]) -> io::Result<Vec<u8>> {
     // Keep the full name in the scan response; GAPM's advertising name is truncated.
     patched[0x3e56] = 0; // movs r1, #0: no space allotted to the advertising name
     patched[0x6c54..0x6c56].copy_from_slice(&[0xf6, 0xff]);
-    // Matter commissioners subscribe before writing their BTP handshake.
-    // Keep the pre-handshake states when CCCD changes, preserving the profile's flags.
+    // Keep the pre-handshake states when CCCD changes, preserving the
+    // profile's flags, in whichever order a commissioner subscribes and writes
+    // its BTP handshake.
     for (offset, state) in [(0x7778, 20), (0x7780, 20), (0x77c8, 21), (0x77d0, 21), (0x7868, 23), (0x7870, 23)] {
         patched[offset..offset + 4].copy_from_slice(&0x20005f43u32.to_le_bytes());
         patched[offset + 5] = state;

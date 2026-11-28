@@ -4,4 +4,4 @@
 use super::{Device, OMAP_POWER};
 
 pub static DEVICE: Device =
-    Device { name: "diamond", generation: 1, radio: None, ble: None, hci: None, display: 320, power: OMAP_POWER };
+    Device { name: "diamond", generation: 1, radio: None, ble: None, display: 320, power: OMAP_POWER };
