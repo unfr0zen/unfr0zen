@@ -708,7 +708,7 @@ impl mode_select::ClusterHandler for ExternalTemperature {
     }
 }
 
-/// Which sensor regulates, as a choice of two: Home Assistant names a Boolean
+/// Which sensor regulates, as a choice of three: Home Assistant names a Boolean
 /// State only as a door, a leak or rain, and a choice shows these words. The
 /// unit decides, so choosing the other one is refused.
 pub struct TemperatureSource {
@@ -716,11 +716,12 @@ pub struct TemperatureSource {
     pub nest: Arc<Nest>,
 }
 
-const TEMPERATURE_SOURCES: [&str; 2] = ["backplate", "external"];
+const TEMPERATURE_SOURCES: [&str; 3] = ["backplate", "external", "sensor"];
 
 impl TemperatureSource {
     fn mode(&self) -> u8 {
-        u8::from(self.nest.temperature_source() == Some(TEMPERATURE_SOURCES[1]))
+        let source = self.nest.temperature_source();
+        TEMPERATURE_SOURCES.iter().position(|name| source == Some(name)).unwrap_or(0) as u8
     }
 }
 

@@ -11,6 +11,7 @@
 pub mod beacon;
 pub mod chip;
 pub mod hci;
+pub mod heard;
 #[cfg(target_os = "linux")]
 pub mod port;
 pub mod socket;
@@ -651,6 +652,7 @@ pub fn withdraw(path: &Path, store: &Store, serial: &str) {
 }
 
 /// Whether nlclient has this sensor selected, as opposed to the backplate.
+#[cfg(test)]
 pub fn selected(store: &Store, serial: &str, bucket: &str) -> bool {
     store
         .get(&format!("rcs_settings.{serial}"))

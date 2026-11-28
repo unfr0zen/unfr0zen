@@ -32,6 +32,8 @@ pub struct Occupancy {
     /// What the watchers were last told.
     shown: Mutex<bool>,
     watchers: Mutex<Vec<Watcher>>,
+    /// The sensors nlclient hears, from the same log.
+    pub heard: crate::sensor::heard::Heard,
 }
 
 impl Occupancy {
@@ -50,13 +52,14 @@ impl Occupancy {
         *self.last.lock().unwrap() = Some(t);
     }
 
-    /// Calls f whenever occupied changes.
+    /// Calls f whenever occupied changes, or the sensors heard do.
     pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         self.watchers.lock().unwrap().push(Box::new(f));
     }
 
     /// Takes an event log line: a detection later than the last moves it.
     fn line(&self, line: &str) {
+        self.heard.line(line);
         if let Some(t) = detection(line) {
             let mut last = self.last.lock().unwrap();
             if last.is_none_or(|l| t > l) {
@@ -69,7 +72,7 @@ impl Occupancy {
     fn update(&self, now: i64) {
         let occupied = self.occupied_at(now);
         let changed = std::mem::replace(&mut *self.shown.lock().unwrap(), occupied) != occupied;
-        if changed {
+        if self.heard.update(now) || changed {
             for w in self.watchers.lock().unwrap().iter() {
                 w();
             }

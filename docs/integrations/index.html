@@ -265,7 +265,7 @@ data:
                 <li>A reading counts for 30 minutes, repeated to the thermostat every minute. About 11.5 minutes after it lapses, the thermostat goes back to its own sensor until the next reading.</li>
                 <li>Choosing the backplate in the Sensors menu lasts until the thermostat restarts. After a restart, the next reading switches it back to the external temperature.</li>
                 <li>While the thermostat uses the external temperature, it reports that reading as its current temperature over MQTT, Zigbee and Matter.</li>
-                <li>Home Assistant shows <b>External temperature</b>, the reading while it counts, and <b>Temperature source</b>, <code>external</code> or <code>backplate</code>. Zigbee2MQTT shows Temperature source only. On Matter both are selects: Temperature source shows the source, and choosing the other one is refused.</li>
+                <li>Home Assistant shows <b>External temperature</b>, the reading while it counts, and <b>Temperature source</b>, <code>external</code>, <code>sensor</code> (a paired Nest Temperature Sensor) or <code>backplate</code>. Zigbee2MQTT shows Temperature source only, as <code>external</code> or <code>backplate</code>: a paired sensor shows as <code>backplate</code>. On Matter both are selects: Temperature source shows the source, and choosing another one is refused.</li>
                 <li>Installing again without the option removes the sensor from the thermostat, its Sensors menu entry included, and undoes the gen 1 and 2 input patch or restores the gen 3 Bluetooth setting.</li>
             </ul>
 
