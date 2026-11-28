@@ -56,10 +56,11 @@ pub struct ChipSelect {
     pub pad: &'static str,
 }
 
-/// The DA14580 BLE peripheral, a transport for Matter commissioning (on
-/// Linux only).
+/// The gen 3's DA14580 BLE peripheral, running Nest's firmware, which
+/// nlclient speaks GTL to; a transport for Matter commissioning (on Linux
+/// only).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub struct Ble {
+pub struct Da14580 {
     /// The name nlclient opens the chip's UART by.
     pub uart: &'static str,
     /// The UART itself.
@@ -70,6 +71,16 @@ pub struct Ble {
     pub firmware: &'static str,
 }
 
+/// The unit's Bluetooth LE chip, by how nlclient reaches it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub enum Ble {
+    Da14580(Da14580),
+    /// The gen E's BCM43341: the name of the UART hciattach brings it up
+    /// from, where nlclient scans for sensors through bluez itself, for the
+    /// stand-in sensor to take over.
+    Hci(&'static str),
+}
+
 pub struct Device {
     pub name: &'static str,
     /// The model generation: 1, 2, 3, or 4 for the Thermostat E.
@@ -78,11 +89,6 @@ pub struct Device {
     pub radio: Option<Radio>,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub ble: Option<Ble>,
-    /// The name of the UART hciattach brings nlclient's Bluetooth controller
-    /// up from, where nlclient scans for sensors through bluez itself (the
-    /// gen E's), for the stand-in sensor to take over.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub hci: Option<&'static str>,
     /// The round display's width in pixels, which the settings screen's
     /// images are drawn for.
     pub display: usize,
@@ -92,7 +98,15 @@ pub struct Device {
 impl Device {
     /// The Thermostat E's Broadcom controller is served by BlueZ.
     pub fn bluez(&self) -> bool {
-        self.generation == 4
+        matches!(self.ble, Some(Ble::Hci(_)))
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn da14580(&self) -> Option<&Da14580> {
+        match &self.ble {
+            Some(Ble::Da14580(chip)) => Some(chip),
+            _ => None,
+        }
     }
 
     /// The gen 1 and gen 2: an AM3703 with a WL127x, the same nlclient and

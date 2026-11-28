@@ -1,6 +1,6 @@
 //! The Thermostat E (onyx, i.MX6UL, 320-pixel LCD).
 
-use super::{diamond3, Device, Power, Radio};
+use super::{diamond3, Ble, Device, Power, Radio};
 use std::sync::OnceLock;
 
 const STOCK_IMAGES: [&str; 2] =
@@ -68,8 +68,7 @@ pub static DEVICE: Device = Device {
     name: "onyx",
     generation: 4,
     radio: None,
-    ble: None,
-    hci: Some("/dev/ttyble0"),
+    ble: Some(Ble::Hci("/dev/ttyble0")),
     display: 320,
     power: Power {
         backplate: "/sys/bus/platform/devices/0.sensor-mcu-gpios/detect#/value",

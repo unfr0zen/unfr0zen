@@ -15,9 +15,8 @@ pub struct Uart {
 impl Uart {
     pub fn open() -> io::Result<Self> {
         let ble = crate::device::current()
-            .ble
-            .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this unit has no BLE peripheral"))?;
+            .da14580()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "this unit has no DA14580"))?;
         if !crate::sensor::port::owns_chip() && !crate::sensor::port::stock_ble_off()? {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "stock BLE owns the radio"));
         }
@@ -150,7 +149,7 @@ impl Drop for Uart {
             libc::tcsetattr(fd, libc::TCSANOW, &self.saved);
             libc::ioctl(fd, libc::TIOCNXCL);
         }
-        if let Some(ble) = &crate::device::current().ble {
+        if let Some(ble) = crate::device::current().da14580() {
             let _ = std::fs::write(format!("{}/value", crate::sensor::port::reset_dir(ble)), b"1");
         }
     }

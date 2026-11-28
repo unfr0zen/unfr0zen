@@ -161,15 +161,13 @@ fn main() {
     }
 
     #[cfg(target_os = "linux")]
-    if let (true, Some(ble)) =
-        (config.external_temperature || matter_takes_ble(&config), device::current().ble.as_ref())
-    {
+    if let (true, Some(ble)) = (config.external_temperature || matter_takes_ble(&config), device::current().da14580()) {
         if let Err(e) = sensor::port::start_holder(ble.uart) {
             logf!("BLE stand-in: {e}");
         }
     }
     #[cfg(target_os = "linux")]
-    if let (true, Some(link)) = (config.external_temperature, device::current().hci) {
+    if let (true, Some(device::Ble::Hci(link))) = (config.external_temperature, &device::current().ble) {
         if let Err(e) = sensor::port::start_holder(link) {
             logf!("external temperature: the stand-in controller's PTY: {e}");
         }
@@ -193,7 +191,7 @@ fn prepare_settings(config: &flags::Config) {
         if let Err(e) = sensor::forget_settings(identity, std::path::Path::new(path)) {
             logf!("external temperature: {e}");
         }
-    } else if device::current().ble.is_some() || device::current().hci.is_some() || device::current().omap() {
+    } else if device::current().ble.is_some() || device::current().omap() {
         let store = store::Store::new(&config.state);
         let settings = device::current().omap().then_some(std::path::Path::new(path));
         let where_id = sensor::where_id(&store, &config.serial, settings);
@@ -214,7 +212,7 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
         return None;
     }
     let device = device::current();
-    if device.ble.is_none() && device.hci.is_none() && !device.omap() {
+    if device.ble.is_none() && !device.omap() {
         logf!("external temperature: this unit has no supported sensor transport");
         return None;
     }
@@ -244,10 +242,10 @@ fn start_sensor(config: &flags::Config, store: &Arc<store::Store>) -> Option<Arc
     sensor.introduce_with(move || known.get(&shared)?.value.get("current_temperature")?.as_f64());
     #[cfg(target_os = "linux")]
     {
-        let result = match (device.ble.as_ref(), device.hci) {
-            (Some(ble), _) => sensor::port::start(Some(sensor.clone()), ble, config.matter),
-            (None, Some(link)) => sensor::hci::start(sensor.clone(), link),
-            (None, None) => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
+        let result = match &device.ble {
+            Some(device::Ble::Da14580(chip)) => sensor::port::start(Some(sensor.clone()), chip, config.matter),
+            Some(device::Ble::Hci(link)) => sensor::hci::start(sensor.clone(), link),
+            None => sensor::socket::start(sensor.clone(), store.clone(), config.serial.clone()),
         };
         if let Err(e) = result {
             logf!("external temperature: {e}");
@@ -265,7 +263,7 @@ async fn run(config: flags::Config) {
     let sensor = start_sensor(&config, &store);
     #[cfg(target_os = "linux")]
     if let (true, false, Some(ble)) =
-        (matter_takes_ble(&config), config.external_temperature, device::current().ble.as_ref())
+        (matter_takes_ble(&config), config.external_temperature, device::current().da14580())
     {
         if let Err(e) = sensor::port::start(None, ble, true) {
             logf!("matter BLE: stand-in: {e}");

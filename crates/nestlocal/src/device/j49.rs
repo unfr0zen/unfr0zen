@@ -26,7 +26,6 @@ pub static DEVICE: Device = Device {
     }),
     // No BLE.
     ble: None,
-    hci: None,
     display: 320,
     power: OMAP_POWER,
 };
